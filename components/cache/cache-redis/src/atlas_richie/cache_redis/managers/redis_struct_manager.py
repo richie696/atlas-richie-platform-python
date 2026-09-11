@@ -35,6 +35,8 @@ helper (read-modify-write under an optimistic lock).
 
 from __future__ import annotations
 
+import time
+import uuid
 from typing import Any, Callable, TypeVar
 
 import redis as redis_lib
@@ -43,6 +45,11 @@ from atlas_richie.cache_core.ops.struct_ops import StructOps
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
+from .redis_string_manager import (
+    _make_stampede_lock_key,
+    _stampede_acquire,
+    _stampede_release,
+)
 
 T = TypeVar("T")
 
@@ -148,8 +155,41 @@ class RedisStructManager(StructOps):
         timeout_millis: int,
         db_loader: Callable[[], Any],
     ) -> Any:
-        raise NotImplementedError(
-            "RedisStructManager.get_with_lock is implemented in R-220 M4."
+        """防缓存击穿：结构化对象（``StructOps.get_with_lock``）。
+
+        命中直接返回；未命中则获取本方法的 stampede 锁（与
+        ``LockFunction`` 业务锁**独立**），调用 ``db_loader`` 回源，
+        回写缓存。其他并发 caller 在锁被持有时进入短暂的轮询重试，
+        超出等待预算则返回 ``None``，由调用方决定是否再次重试。
+
+        Args:
+            key: 缓存键
+            clazz: 反序列化目标类型
+            timeout_millis: 缓存 TTL（毫秒），同时也是 stampede 锁
+                的持有超时
+            db_loader: 回源加载器；返回 ``None`` 表示无值（不写缓存）
+
+        Returns:
+            缓存值；未命中且加载失败时为 ``None``。
+
+        Raises:
+            ValueError: ``timeout_millis <= 0`` 或 ``db_loader`` 为
+                ``None``。
+
+        English
+        --------
+        Stampede-proof struct load. On cache hit, returns the cached
+        value directly. On cache miss, acquires a per-key stampede
+        lock (independent of any application-level ``LockFunction``
+        lock), invokes ``db_loader`` on the lock-holder, writes the
+        result back to the cache, and returns. Concurrent waiters
+        that lose the lock race enter a short polling loop and
+        re-read the cache; if the winner hasn't published within
+        the wait budget, returns ``None``.
+        """
+        return self._stampede_load(
+            key, clazz, timeout_millis, db_loader,
+            wait_budget_millis=int(timeout_millis),
         )
 
     def get_with_lock_typed(
@@ -159,9 +199,101 @@ class RedisStructManager(StructOps):
         timeout_millis: int,
         db_loader: Callable[[], Any],
     ) -> Any:
-        raise NotImplementedError(
-            "RedisStructManager.get_with_lock_typed is implemented in R-220 M4."
+        """防缓存击穿：结构化对象（运行时类型版本）。
+
+        与 ``get_with_lock`` 行为一致，仅参数 ``reference`` 表达的是
+        运行时类型（替代 Java ``TypeReference<T>`` — Python 保留泛型
+        信息，裸 ``type[T]`` 即可）。
+
+        Args:
+            key: 缓存键
+            reference: 运行时解析的目标类型
+            timeout_millis: 缓存 TTL（毫秒）
+            db_loader: 回源加载器
+
+        Returns:
+            缓存值；未命中且加载失败时为 ``None``。
+        """
+        return self._stampede_load(
+            key, reference, timeout_millis, db_loader,
+            wait_budget_millis=int(timeout_millis),
         )
+
+    # ── Stampede-prevention shared helper (M4) ─────────────────────
+
+    def _stampede_load(
+        self,
+        key: str,
+        clazz: type,
+        timeout_millis: int,
+        db_loader: Callable[[], Any],
+        *,
+        wait_budget_millis: int,
+    ) -> Any:
+        """Shared implementation for `get_with_lock` + `get_with_lock_typed`.
+
+        Returns the cached value (on hit) or the loaded value
+        (after a successful db_loader round-trip). Returns ``None``
+        if the db_loader returned ``None`` or if a competing
+        stampede lock holder didn't publish within the wait budget.
+        """
+        if timeout_millis <= 0:
+            raise ValueError("timeout_millis must be > 0")
+        if db_loader is None:
+            raise ValueError("db_loader is required")
+
+        # 1. Fast path: cache hit → return immediately.
+        cached = self.get(key, clazz)
+        if cached is not None:
+            return cached
+
+        # 2. Cache miss: try to acquire the per-key stampede lock.
+        request_id = uuid.uuid4().hex
+        lock_key = _make_stampede_lock_key(self._backend, key)
+        client = self._backend.raw_client()
+        if not _stampede_acquire(client, lock_key, request_id, timeout_millis):
+            return self._wait_for_publication(
+                key, clazz, wait_budget_millis=wait_budget_millis
+            )
+
+        try:
+            # 3. We hold the stampede lock — re-check the cache.
+            cached = self.get(key, clazz)
+            if cached is not None:
+                return cached
+            # 4. Still missing → invoke the db_loader.
+            value = db_loader()
+            if value is None:
+                return None
+            # 5. Publish: caller-supplied TTL verbatim (no anti-
+            #    avalanche offset; the `*_with_lock` path is the
+            #    canonical write path).
+            self.set_with_ttl(key, value, timeout_millis)
+            return value
+        finally:
+            try:
+                _stampede_release(client, lock_key, request_id)
+            except Exception:
+                # Release failures are non-fatal: the lock will
+                # expire on its own via the PX TTL.
+                pass
+
+    def _wait_for_publication(
+        self, key: str, clazz: type, *, wait_budget_millis: int
+    ) -> Any:
+        """Poll the cache for up to `wait_budget_millis` (50ms cadence).
+
+        Returns the published value, or ``None`` if no one published
+        within the budget.
+        """
+        deadline = time.monotonic() + (wait_budget_millis / 1000.0)
+        poll_interval_seconds = 0.05
+        while time.monotonic() < deadline:
+            time.sleep(poll_interval_seconds)
+            cached = self.get(key, clazz)
+            if cached is not None:
+                return cached
+        return None
 
 
 __all__ = ["RedisStructManager"]

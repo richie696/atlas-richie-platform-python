@@ -51,6 +51,8 @@ helper applies anti-avalanche to the supplied TTL.
 from __future__ import annotations
 
 import secrets as _secrets
+import time
+import uuid
 from typing import Any, Callable, Collection, Set as _PySet, TypeVar
 
 from atlas_richie.cache_core.function.set_function import SetFunction
@@ -59,6 +61,11 @@ from atlas_richie.cache_core.ops.collection_ops import CollectionOps
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
+from .redis_string_manager import (
+    _make_stampede_lock_key,
+    _stampede_acquire,
+    _stampede_release,
+)
 
 T = TypeVar("T")
 
@@ -211,8 +218,44 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         timeout_millis: int,
         db_loader: Callable[[], _PySet[T] | None],
     ) -> _PySet[T]:
-        raise NotImplementedError(
-            "RedisCollectionManager.get_with_lock is implemented in R-220 M4."
+        """防缓存击穿：Set 类型（底层 ``CollectionOps`` 入口）。
+
+        命中直接返回；未命中则获取本方法的 stampede 锁（与
+        ``LockFunction`` 业务锁**独立**），调用 ``db_loader`` 回源，
+        回写缓存。其他并发 caller 在锁被持有时进入短暂的轮询重试，
+        超出等待预算则返回空集，由调用方决定是否再次重试。
+
+        Args:
+            key: 缓存键
+            clazz: 集合元素类型（反序列化目标）
+            timeout_millis: 缓存 TTL（毫秒），同时也是 stampede 锁
+                的持有超时
+            db_loader: 回源加载器；返回 ``None`` 或空集表示无值
+                （不写缓存）
+
+        Returns:
+            集合值；未命中且加载失败时为空集。
+
+        Raises:
+            ValueError: ``timeout_millis <= 0`` 或 ``db_loader`` 为
+                ``None``。
+
+        English
+        --------
+        Stampede-proof Set load (low-level ``CollectionOps`` entry).
+        On cache hit, returns the cached value directly. On cache
+        miss, acquires a per-key stampede lock (independent of any
+        application-level ``LockFunction`` lock the caller may also
+        be holding), invokes ``db_loader`` on the lock-holder, writes
+        the result back to the cache, and returns. Concurrent waiters
+        that lose the lock race enter a short polling loop and
+        re-read the cache; if the winner hasn't published within the
+        wait budget, returns ``set()`` and lets the caller decide
+        whether to retry.
+        """
+        return self._stampede_load_set(
+            key, clazz, timeout_millis, db_loader,
+            wait_budget_millis=int(timeout_millis),
         )
 
     # ══════════════════════════════════════════════════════════════
@@ -226,10 +269,124 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         db_loader: Callable[[], _PySet[T] | None],
         timeout_millis: int,
     ) -> _PySet[T]:
-        raise NotImplementedError(
-            "get_from_set_with_lock is implemented in R-220 M4 "
-            "(Bloom + L2 + Redis lock)."
+        """防缓存击穿：Set 类型（业务级便捷方法）。
+
+        与 ``CollectionOps.get_with_lock`` 行为一致，仅参数顺序不同
+        （``key, reference, db_loader, timeout_millis``），便于业务代码
+        按 (资源键, 元素类型, 加载器, 超时) 的自然顺序书写。镜像
+        ``cn.richie696.component.cache.function.SetFunction.getFromSetWithLock``。
+
+        Args:
+            key: 缓存键
+            reference: 集合元素类型
+            db_loader: 回源加载器
+            timeout_millis: 缓存 TTL（毫秒）
+
+        Returns:
+            集合值；未命中且加载失败时为空集。
+
+        English
+        --------
+        Stampede-proof Set load (business-facing convenience). Same
+        semantics as ``get_with_lock`` with the more natural
+        argument order ``(key, reference, db_loader, timeout_millis)``.
+        """
+        return self._stampede_load_set(
+            key, reference, timeout_millis, db_loader,
+            wait_budget_millis=int(timeout_millis),
         )
+
+    # ── Stampede-prevention shared helpers (M4) ────────────────────
+
+    def _is_cached(self, key: str) -> bool:
+        """EXISTS check for the Set at ``key``.
+
+        Used as the cache-hit detector on the stampede path because
+        an empty Set is a valid cached value and cannot be told apart
+        from a missing key via SMEMBERS / SCARD alone.
+        """
+        return self._backend.raw_client().exists(self._k(key)) > 0
+
+    def _stampede_load_set(
+        self,
+        key: str,
+        clazz: type,
+        timeout_millis: int,
+        db_loader: Callable[[], _PySet[T] | None],
+        *,
+        wait_budget_millis: int,
+    ) -> _PySet[T]:
+        """Shared implementation for `get_with_lock` + `get_from_set_with_lock`.
+
+        Returns the cached set (on hit, even when empty) or the loaded
+        set (after a successful db_loader round-trip). Returns an
+        empty set if the db_loader returned ``None`` / empty or if a
+        competing stampede lock holder didn't publish within the
+        wait budget.
+        """
+        if timeout_millis <= 0:
+            raise ValueError("timeout_millis must be > 0")
+        if db_loader is None:
+            raise ValueError("db_loader is required")
+
+        # 1. Fast path: cache hit (EXISTS, not SCARD, so a cached
+        #    empty Set is honoured as a valid value).
+        if self._is_cached(key):
+            return self.get(key, clazz)
+
+        # 2. Cache miss: try to acquire the per-key stampede lock.
+        request_id = uuid.uuid4().hex
+        lock_key = _make_stampede_lock_key(self._backend, key)
+        client = self._backend.raw_client()
+        if not _stampede_acquire(client, lock_key, request_id, timeout_millis):
+            return self._wait_for_set_publication(
+                key, clazz, wait_budget_millis=wait_budget_millis
+            )
+
+        try:
+            # 3. We hold the stampede lock — re-check the cache.
+            if self._is_cached(key):
+                return self.get(key, clazz)
+            # 4. Still missing → invoke the db_loader.
+            value = db_loader()
+            if not value:
+                return set()
+            # 5. Publish: DEL + SADD + PEXPIRE, no anti-avalanche
+            #    offset (the `*_with_lock` path is the canonical
+            #    write path and the caller is responsible for any
+            #    TTL jitter policy).
+            encoded = self._encode_set(value)
+            pipe = client.pipeline(transaction=False)
+            pipe.delete(self._k(key))
+            if encoded:
+                pipe.sadd(self._k(key), *encoded)
+            if timeout_millis and timeout_millis > 0:
+                pipe.pexpire(self._k(key), int(timeout_millis))
+            pipe.execute()
+            return value
+        finally:
+            try:
+                _stampede_release(client, lock_key, request_id)
+            except Exception:
+                # Release failures are non-fatal: the lock will
+                # expire on its own via the PX TTL.
+                pass
+
+    def _wait_for_set_publication(
+        self, key: str, clazz: type, *, wait_budget_millis: int
+    ) -> _PySet[T]:
+        """Poll the cache for up to `wait_budget_millis` (50ms cadence).
+
+        Returns the published set, or an empty set if no one
+        published within the budget.
+        """
+        deadline = time.monotonic() + (wait_budget_millis / 1000.0)
+        poll_interval_seconds = 0.05
+        while time.monotonic() < deadline:
+            time.sleep(poll_interval_seconds)
+            if self._is_cached(key):
+                return self.get(key, clazz)
+        return set()
 
     def get_from_set(self, key: str, reference: type) -> _PySet[T]:
         return self.get(key, reference)

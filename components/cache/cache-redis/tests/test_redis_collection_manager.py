@@ -162,10 +162,9 @@ class TestCollectionOpsCore:
         assert manager.get("s2", str) == {"c", "d"}
 
 
-class TestCollectionOpsLockNotYetImplemented:
-    def test_get_with_lock_raises(self, manager: RedisCollectionManager) -> None:
-        with pytest.raises(NotImplementedError):
-            manager.get_with_lock("k", str, 1000, lambda: None)
+# Note: `get_with_lock` + `get_from_set_with_lock` now have real
+# implementations; their behaviour is covered end-to-end by
+# `test_redis_collection_struct_with_lock.py` (R-220 M4 work).
 
 
 # ── SetFunction (high-level) ─────────────────────────────────────────
@@ -274,12 +273,9 @@ class TestSetFunction:
         assert manager.get_set_size("missing") == 0
 
 
-class TestSetFunctionLockNotYetImplemented:
-    def test_get_from_set_with_lock_raises(
-        self, manager: RedisCollectionManager
-    ) -> None:
-        with pytest.raises(NotImplementedError):
-            manager.get_from_set_with_lock("k", str, lambda: None, 1000)
+# Note: `get_from_set_with_lock` now has a real implementation; its
+# behaviour is covered end-to-end by
+# `test_redis_collection_struct_with_lock.py` (R-220 M4 work).
 
 
 class TestProviderRegistrarWiring:

@@ -158,18 +158,9 @@ class TestStructOpsRefresh:
         assert manager.get("counter", int) == 80
 
 
-class TestStructOpsLockNotYetImplemented:
-    def test_get_with_lock_raises(
-        self, manager: RedisStructManager
-    ) -> None:
-        with pytest.raises(NotImplementedError):
-            manager.get_with_lock("k", str, 1000, lambda: None)
-
-    def test_get_with_lock_typed_raises(
-        self, manager: RedisStructManager
-    ) -> None:
-        with pytest.raises(NotImplementedError):
-            manager.get_with_lock_typed("k", str, 1000, lambda: None)
+# Note: `get_with_lock` + `get_with_lock_typed` now have real
+# implementations; their behaviour is covered end-to-end by
+# `test_redis_collection_struct_with_lock.py` (R-220 M4 work).
 
 
 class TestProviderRegistrarWiring:
