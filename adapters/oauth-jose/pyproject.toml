@@ -1,0 +1,32 @@
+[build-system]
+requires = [
+    "uv_build>=0.12,<0.13",
+]
+build-backend = "uv_build"
+
+[project]
+name = "atlas-richie-oauth-jose"
+version = "0.1.0"
+description = "JOSERFC adapter for Atlas Richie OAuth JWT access-token validation."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "Atlas Richie" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "atlas-richie-oauth>=0.1.0,<0.2.0",
+    "joserfc>=1.3,<2",
+]
+[project.license]
+text = "Apache-2.0"
+
+[tool.uv.build-backend]
+module-name = "atlas_richie.oauth_jose"
+module-root = "src"

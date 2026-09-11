@@ -1,0 +1,31 @@
+[build-system]
+requires = [
+    "uv_build>=0.12,<0.13",
+]
+build-backend = "uv_build"
+
+[project]
+name = "atlas-richie-http"
+version = "0.1.0"
+description = "Owned HTTP semantics and interceptor pipeline backed exclusively by HTTPX."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "Atlas Richie" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "httpx>=0.28,<0.29",
+]
+[project.license]
+text = "Apache-2.0"
+
+[tool.uv.build-backend]
+module-name = "atlas_richie.http"
+module-root = "src"

@@ -1,0 +1,35 @@
+[build-system]
+requires = [
+    "uv_build>=0.12,<0.13",
+]
+build-backend = "uv_build"
+
+[project]
+name = "atlas-richie-platform"
+version = "0.1.0"
+description = "Compatibility installation entry point for verified Atlas Richie Python components."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "Atlas Richie" },
+]
+dependencies = [
+    "atlas-richie-contracts>=0.1.0,<0.2.0",
+    "atlas-richie-http>=0.1.0,<0.2.0",
+    "atlas-richie-mcp>=0.1.0,<0.2.0",
+    "atlas-richie-oauth>=0.1.0,<0.2.0",
+    "atlas-richie-resilience>=0.1.0,<0.2.0",
+    "atlas-richie-cache-core>=0.1.0,<0.2.0",
+    "atlas-richie-cache-redis>=0.1.0,<0.2.0",
+    "atlas-richie-oauth-jose>=0.1.0,<0.2.0",
+    "atlas-richie-mcp-schema-jsonschema>=0.1.0,<0.2.0",
+    "atlas-richie-mcp-asgi>=0.1.0,<0.2.0",
+    "atlas-richie-mcp-oauth>=0.1.0,<0.2.0",
+    "atlas-richie-mcp-http>=0.1.0,<0.2.0",
+]
+[project.license]
+text = "Apache-2.0"
+
+[tool.uv.build-backend]
+module-name = "atlas_richie.platform"
+module-root = "src"

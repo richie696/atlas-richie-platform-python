@@ -1,0 +1,27 @@
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "atlas-richie-cache-redis"
+version = "0.1.0"
+description = "Redis backend for atlas-richie-cache-core. Implements ProviderRegistrar (16 ops + 1 infrastructure + 11 functions + 2 meta) over redis-py. Mirrors the Java atlas-richie-cache's redis/manage/* 1:1."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Atlas Richie" }]
+dependencies = [
+  "atlas-richie-cache-core>=0.1.0,<0.2.0",
+  "atlas-richie-contracts>=0.1.0,<0.2.0",
+  "pydantic>=2.0,<3.0",
+  "pydantic-settings>=2.0,<3.0",
+  "redis>=8.1.0",
+  "structlog>=26.1.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0,<9.0"]
+
+[tool.uv.build-backend]
+module-name = "atlas_richie.cache_redis"
+module-root = "src"

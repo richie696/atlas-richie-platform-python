@@ -1,0 +1,13 @@
+[python]
+requires = ">=3.12"
+stable = ["3.12", "3.13", "3.14"]
+next_prerelease = "3.15"
+
+[release]
+package_versioning = "semver"
+aggregate_package = "atlas-richie-platform"
+
+[boundaries]
+core_runtime_dependencies = "stdlib-and-sibling-contracts-only"
+framework_adapters = "optional-and-one-way"
+applications = "outside-component-dependency-tree"
