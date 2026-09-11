@@ -6,7 +6,7 @@ build-backend = "uv_build"
 
 [project]
 name = "atlas-richie-contracts"
-version = "0.1.0"
+version = "0.2.0"
 description = "Framework-neutral contracts shared by Atlas Richie Python components."
 readme = "README.md"
 requires-python = ">=3.12"

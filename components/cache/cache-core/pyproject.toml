@@ -4,14 +4,14 @@ build-backend = "uv_build"
 
 [project]
 name = "atlas-richie-cache-core"
-version = "0.1.0"
+version = "0.2.0"
 description = "Framework-neutral distributed cache platform: polymorphism contracts (ops / function / contracts), static facades, holders, shared utilities, local cache. Backend-agnostic; concrete backends (Redis, Dragonfly, ...) live in separate components."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Atlas Richie" }]
 dependencies = [
-  "atlas-richie-contracts>=0.1.0,<0.2.0",
+  "atlas-richie-contracts>=0.2.0,<0.3.0",
   "pydantic>=2.0,<3.0",
   "pydantic-settings>=2.0,<3.0",
   "cachetools>=7.1.8",
