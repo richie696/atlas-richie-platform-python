@@ -91,11 +91,13 @@ import hashlib
 import secrets as _secrets
 import time
 import uuid
-from typing import Any, Callable, Collection, Dict, List, Set, TypeVar
+from contextlib import contextmanager
+from typing import Any, Callable, Collection, Dict, Iterator, List, Set, TypeVar
 
 from atlas_richie.cache_core.function.hash_function import HashFunction
 from atlas_richie.cache_core.ops.field_ops import FieldOps
 
+from .._perf_guard import RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
@@ -173,6 +175,17 @@ def _make_batch_lock_key(
 _STAMPEDE_POLL_INTERVAL_SECONDS = 0.05  # 50ms
 
 
+@contextmanager
+def _noop_cm() -> Iterator[None]:
+    """Zero-cost `with`-block used when the perf guard is disabled.
+
+    Mirrors `redis_string_manager._noop_cm`; defined here so the
+    `with _noop_cm():` lines inside the manager methods compile
+    without an extra attribute lookup.
+    """
+    yield
+
+
 class RedisFieldManager(FieldOps, HashFunction):
     """Hash 类型缓存管理器。
     ----
@@ -191,15 +204,22 @@ class RedisFieldManager(FieldOps, HashFunction):
         backend: The Redis transport wrapper.
         infra: The `CacheInfrastructure` (for typed reads via
             `get_value_type`).
+        perf: Optional `RedisPerfGuard` (R-M5.4). When provided
+            AND enabled, the single-field `set`, multi-field
+            `set_all` / `batch_set`, and `get_many` methods
+            are instrumented with payload-size and batch-size
+            checks per the configured thresholds.
     """
 
     def __init__(
         self,
         backend: RedisDistributedCache,
         infra: RedisCacheInfrastructure,
+        perf: RedisPerfGuard | None = None,
     ) -> None:
         self._backend = backend
         self._infra = infra
+        self._perf = perf
 
     # ── Internal helpers ───────────────────────────────────────────
 
@@ -234,12 +254,17 @@ class RedisFieldManager(FieldOps, HashFunction):
             value: 字段值。
             timeout_millis: 可选过期时间（毫秒），``0`` 表示不设置。
         """
-        client = self._backend.raw_client()
-        client.hset(self._k(key), field, encode_value(value))
-        if timeout_millis and timeout_millis > 0:
-            client.hpexpire(
-                self._k(key), int(timeout_millis) + _anti_avalanche_ms(), field
-            )
+        encoded = encode_value(value)
+        if self._perf is not None:
+            self._perf.check_key_name_hint(key)
+            self._perf.check_hash_field_payload("set", encoded)
+        with self._perf.time_op("set") if self._perf is not None else _noop_cm():
+            client = self._backend.raw_client()
+            client.hset(self._k(key), field, encoded)
+            if timeout_millis and timeout_millis > 0:
+                client.hpexpire(
+                    self._k(key), int(timeout_millis) + _anti_avalanche_ms(), field
+                )
 
     def get(self, key: str, field: str, clazz: type) -> Any:
         raw = self._backend.raw_client().hget(self._k(key), field)
@@ -293,13 +318,17 @@ class RedisFieldManager(FieldOps, HashFunction):
     ) -> None:
         if not mapping:
             return
-        client = self._backend.raw_client()
-        encoded = {f: encode_value(v) for f, v in mapping.items()}
-        client.hset(self._k(key), mapping=encoded)
-        if timeout_millis and timeout_millis > 0:
-            ttl = int(timeout_millis) + _anti_avalanche_ms()
-            for field in encoded:
-                client.hpexpire(self._k(key), ttl, field)
+        if self._perf is not None:
+            self._perf.check_key_name_hint(key)
+            self._perf.check_hash_payload("set_all", mapping)
+        with self._perf.time_op("set_all") if self._perf is not None else _noop_cm():
+            client = self._backend.raw_client()
+            encoded = {f: encode_value(v) for f, v in mapping.items()}
+            client.hset(self._k(key), mapping=encoded)
+            if timeout_millis and timeout_millis > 0:
+                ttl = int(timeout_millis) + _anti_avalanche_ms()
+                for field in encoded:
+                    client.hpexpire(self._k(key), ttl, field)
 
     def get_all(self, key: str, clazz: type) -> Dict[str, Any]:
         raw_map = self._backend.raw_client().hgetall(self._k(key))
@@ -329,13 +358,16 @@ class RedisFieldManager(FieldOps, HashFunction):
     ) -> Dict[str, Any]:
         if not fields:
             return {}
-        raws = self._backend.raw_client().hmget(self._k(key), list(fields))
-        out: Dict[str, Any] = {}
-        for field, raw in zip(fields, raws):
-            v = decode_value(raw, clazz)
-            if v is not None:
-                out[field] = v
-        return out
+        if self._perf is not None:
+            self._perf.check_batch_size("get_many", len(fields))
+        with self._perf.time_op("get_many") if self._perf is not None else _noop_cm():
+            raws = self._backend.raw_client().hmget(self._k(key), list(fields))
+            out: Dict[str, Any] = {}
+            for field, raw in zip(fields, raws):
+                v = decode_value(raw, clazz)
+                if v is not None:
+                    out[field] = v
+            return out
 
     # ── Meta ────────────────────────────────────────────────────────
 
@@ -380,12 +412,15 @@ class RedisFieldManager(FieldOps, HashFunction):
         """
         if not mapping:
             return
-        client = self._backend.raw_client()
-        pipe = client.pipeline(transaction=False)
-        for key, field_map in mapping.items():
-            encoded = {f: encode_value(v) for f, v in field_map.items()}
-            pipe.hset(self._k(key), mapping=encoded)
-        pipe.execute()
+        if self._perf is not None:
+            self._perf.check_batch_size("batch_set", len(mapping))
+        with self._perf.time_op("batch_set") if self._perf is not None else _noop_cm():
+            client = self._backend.raw_client()
+            pipe = client.pipeline(transaction=False)
+            for key, field_map in mapping.items():
+                encoded = {f: encode_value(v) for f, v in field_map.items()}
+                pipe.hset(self._k(key), mapping=encoded)
+            pipe.execute()
 
     # ── Stampede prevention (M4) ────────────────────────────────────
     #

@@ -141,6 +141,30 @@ categories and Semantic Versioning.
   concurrent in-process funnel (10 threads → 1 loader call) /
   per-key granularity (5 keys × 2 threads → 5 loader calls) /
   weakref table cleanup / TTL applied / argument validation.
+- **`RedisPerfGuard` enforcement** (R-M5.4): the 23 fields in
+  `RedisPerfSettings` (defined in R-M6 but defaulted to
+  `enabled=False`) are now wired into the most-frequent cache
+  operations. New `atlas_richie.cache_redis.RedisPerfGuard` class
+  provides a single facade for 6 enforcement paths (string
+  payload, hash-field payload, hash-whole payload, batch size,
+  soft / hard TOC threshold, non-O(1) warning, big-key probe
+  hint, forbidden-tier blocking). 5 managers instrumented
+  (`RedisStringManager`, `RedisFieldManager`,
+  `RedisCollectionManager`, `RedisStructManager`,
+  `RedisKeyManager`) on 1-3 most-frequent public methods each
+  (zero overhead when `enabled=False`). `from_properties()`
+  automatically builds the guard from `properties.perf` and
+  threads it into every manager; the `RedisProviderRegistrar.perf`
+  property exposes the active guard for observability. 11 new
+  tests in `test_redis_perf_guard.py` cover no-op when disabled /
+  block on too-large payload / warn-only mode / soft+hard TOC
+  / batch-size block / end-to-end via `from_properties`. 100%
+  backward compatible — every default `RedisCacheProperties` is
+  unchanged.
+- **3 more handoff docs**: `R-M5-1-loader-timeout-handoff.md`,
+  `R-M5-2-l1-stampede-handoff.md`, and
+  `R-M5-4-perf-guard-handoff.md` (the latter is the deliverable
+  for R-M5.4).
 
 ## Release process
 
@@ -163,7 +187,32 @@ Test count trajectory:
 - + R-M5.1 sample (10) → 471 (+ 1 known flaky keyspace)
 - + R-M5.1 worker (88) → 560 (full suite, no flaky this run)
 - + R-M5.2 (14) → 574
+- + R-M5.4 perf-guard (11) → 585 — *intermediate check after R-M5.4 wiring
+  (also: R-M6 cache-properties added 13 tests in
+  `test_redis_cache_properties.py` between M5.2 and M5.4; combined
+  cache-redis floor at M5.4 = 626 + 11 = 637, combined cache-core +
+  cache-redis = 672)*
 - All 4 skipped are pre-existing `keyspace listener` E2E tests marked
   `xfail` for environments without Redis keyspace notification config.
 - 1 pre-existing flaky (`test_redis_event_manager.py::TestKeyspaceEventListener::test_expired_event_fires`)
   passes on isolated run; full-suite timing-sensitive.
+
+## Verification snapshot (R-M5.4 — perf-guard enforcement)
+
+```text
+pytest components/cache/cache-core/tests/ \
+        components/cache/cache-redis/tests/ -q
+→ 672 passed, 4 skipped, 0 failures
+```
+
+- 11 new tests in `test_redis_perf_guard.py`:
+  `TestGuardDisabledByDefault` (3) /
+  `TestGuardStringPayloadBlock` (2) /
+  `TestGuardStringPayloadWarnOnly` (1) /
+  `TestTimeOpThreshold` (2) /
+  `TestBatchSizeBlock` (1) /
+  `TestEndToEndFromProperties` (2).
+- Files touched: `cache_redis/_perf_guard.py` (NEW, 1 module) +
+  5 manager files (perf guard slot) + 1 registrar (wires
+  `properties.perf` via `from_properties`) + 1 test file +
+  1 `__init__.py` re-export.

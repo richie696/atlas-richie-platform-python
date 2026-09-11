@@ -83,18 +83,12 @@ _BIG_KEY_TOKEN_RE = re.compile(
 )
 
 
-def _noop_op() -> Iterator[None]:
-    """Trivial no-op context manager used when guard is disabled.
-
-    Kept as a module-level singleton (not a fresh function each call)
-    so that the common `with _noop_op(): ...` path is a single
-    attribute lookup + `__enter__`/`__exit__` pair.
-    """
-    yield
-
-
-# Empty-mapping check reused by several guards.
 def _is_empty(values: Any) -> bool:
+    """`True` iff `values` is `None` or has zero length.
+
+    Used by `check_hash_payload` and `check_batch_size` to short-
+    circuit when a manager has already filtered out empty inputs.
+    """
     if values is None:
         return True
     try:
@@ -466,10 +460,6 @@ class RedisPerfGuard:
             _log.info("perf.big_key_probe_hint", key=key)
 
 
-# Type alias to avoid a `typing.Mapping` import in this hot module —
-# declared at the bottom so the rest of the file can use `Mapping` as
-# a forward-style annotation.
-from typing import Mapping  # noqa: E402
-
+# ── Exports ──────────────────────────────────────────────────────
 
 __all__ = ["RedisPerfGuard"]

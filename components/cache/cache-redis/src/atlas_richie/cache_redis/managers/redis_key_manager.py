@@ -33,8 +33,10 @@ from typing import Collection, Set
 from atlas_richie.cache_core.enums.key_type_enum import KeyTypeEnum
 from atlas_richie.cache_core.ops.key_ops import KeyOps
 
+from .._perf_guard import RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
+from .redis_string_manager import _noop_cm
 
 
 _TYPE_MAP: dict[str, KeyTypeEnum] = {
@@ -61,15 +63,23 @@ class RedisKeyManager(KeyOps):
         backend: The Redis transport wrapper.
         infra: The `CacheInfrastructure` (currently unused; reserved
             for typed read plumbing if needed).
+        perf: Optional `RedisPerfGuard` (R-M5.4). When provided
+            AND enabled, the most-called metadata paths
+            (`get_expire`, `set_expired_time`, `exists`, `delete`,
+            `delete_many`) are timed via `time_op`. No payload /
+            batch-size checks — key operations have neither
+            payload nor meaningful batch size in this layer.
     """
 
     def __init__(
         self,
         backend: RedisDistributedCache,
         infra: RedisCacheInfrastructure,
+        perf: RedisPerfGuard | None = None,
     ) -> None:
         self._backend = backend
         self._infra = infra
+        self._perf = perf
 
     def _k(self, key: str) -> str:
         return self._backend.make_key(key)
@@ -92,7 +102,8 @@ class RedisKeyManager(KeyOps):
         Returns:
             过期时间（单位：毫秒）。
         """
-        return int(self._backend.raw_client().pttl(self._k(key)))
+        with self._perf.time_op("get_expire") if self._perf is not None else _noop_cm():
+            return int(self._backend.raw_client().pttl(self._k(key)))
 
     def set_expired_time(self, key: str, timeout: int) -> None:
         """设置对应缓存过期时间的方法。
@@ -207,9 +218,12 @@ class RedisKeyManager(KeyOps):
         """
         if not keys:
             return 0
-        return int(
-            self._backend.raw_client().exists(*[self._k(k) for k in keys])
-        )
+        if self._perf is not None:
+            self._perf.check_batch_size("count_existing_keys", len(keys))
+        with self._perf.time_op("count_existing_keys") if self._perf is not None else _noop_cm():
+            return int(
+                self._backend.raw_client().exists(*[self._k(k) for k in keys])
+            )
 
     # ── Deletion ───────────────────────────────────────────────────
 
@@ -227,7 +241,8 @@ class RedisKeyManager(KeyOps):
         Args:
             key: 列表名称（实际为任意 Redis key）。
         """
-        self._backend.delete(key)
+        with self._perf.time_op("remove_cache") if self._perf is not None else _noop_cm():
+            self._backend.delete(key)
 
     def remove_cache_many(self, keys: Collection[str]) -> None:
         """根据 Key 列表删除指定元素的方法。
@@ -244,12 +259,15 @@ class RedisKeyManager(KeyOps):
         """
         if not keys:
             return
-        client = self._backend.raw_client()
-        # Pipeline so the batch is one round-trip; not transactional.
-        pipe = client.pipeline(transaction=False)
-        for k in keys:
-            pipe.delete(self._k(k))
-        pipe.execute()
+        if self._perf is not None:
+            self._perf.check_batch_size("remove_cache_many", len(keys))
+        with self._perf.time_op("remove_cache_many") if self._perf is not None else _noop_cm():
+            client = self._backend.raw_client()
+            # Pipeline so the batch is one round-trip; not transactional.
+            pipe = client.pipeline(transaction=False)
+            for k in keys:
+                pipe.delete(self._k(k))
+            pipe.execute()
 
     # ── Rename / copy / move ──────────────────────────────────────
 

@@ -62,6 +62,7 @@ from .managers.redis_ranking_manager import RedisRankingManager
 from .managers.redis_script_manager import RedisScriptManager
 from .managers.redis_string_manager import RedisStringManager
 from .managers.redis_struct_manager import RedisStructManager
+from ._perf_guard import RedisPerfGuard
 from .redis_cache_infrastructure import RedisCacheInfrastructure
 from .redis_distributed_cache import RedisDistributedCache
 
@@ -76,6 +77,7 @@ class RedisProviderRegistrar(ProviderRegistrar):
         namespace: str = "atlas-richie",
         connection_string: str | None = None,
         connection_pool: Any | None = None,
+        perf: RedisPerfGuard | None = None,
     ) -> None:
         self._backend = RedisDistributedCache(
             client,
@@ -85,12 +87,20 @@ class RedisProviderRegistrar(ProviderRegistrar):
         )
         self._infra = RedisCacheInfrastructure(self._backend)
         # Eagerly construct the real managers (M1-M4).
-        self._string_manager = RedisStringManager(self._backend, self._infra)
-        self._field_manager = RedisFieldManager(self._backend, self._infra)
+        # R-M5.4: thread the optional `perf` guard into every manager
+        # that has a `_perf` slot. The 5 small managers that don't
+        # currently enforce perf (script / limiter / notification /
+        # event / ranking / bitmap / hyper_log / geo / lock /
+        # bounded_queue / bounded_stack) get `None` — adding the
+        # `perf` arg to their constructors is deferred to a later
+        # milestone (only the 5 most-frequent public surfaces are
+        # instrumented right now).
+        self._string_manager = RedisStringManager(self._backend, self._infra, perf)
+        self._field_manager = RedisFieldManager(self._backend, self._infra, perf)
         self._collection_manager = RedisCollectionManager(
-            self._backend, self._infra
+            self._backend, self._infra, perf
         )
-        self._key_manager = RedisKeyManager(self._backend, self._infra)
+        self._key_manager = RedisKeyManager(self._backend, self._infra, perf)
         self._script_manager = RedisScriptManager(self._backend, self._infra)
         self._limiter_manager = RedisLimiterManager(self._backend, self._infra)
         self._notification_manager = RedisNotificationManager(
@@ -103,7 +113,7 @@ class RedisProviderRegistrar(ProviderRegistrar):
             self._backend, self._infra
         )
         self._geo_manager = RedisGeoManager(self._backend, self._infra)
-        self._struct_manager = RedisStructManager(self._backend, self._infra)
+        self._struct_manager = RedisStructManager(self._backend, self._infra, perf)
         self._bounded_queue_manager = RedisBoundedQueueManager(
             self._backend, self._infra
         )
@@ -113,6 +123,10 @@ class RedisProviderRegistrar(ProviderRegistrar):
         self._lock_manager = RedisLockManager(self._backend, self._infra)
         # `cache_function` returns the base `CacheFunction` Protocol.
         self._cache_function = self._string_manager
+        # Expose the guard for tests / observability. `None` when
+        # no guard is wired (the common case for ad-hoc `from_url`
+        # callers; only `from_properties()` builds a guard).
+        self._perf = perf
 
     @classmethod
     def from_url(
@@ -213,11 +227,20 @@ class RedisProviderRegistrar(ProviderRegistrar):
         client = redis_lib.Redis(connection_pool=pool)
 
         masked = _mask_redis_url(properties.url)
+        # R-M5.4: build the perf guard from `properties.perf` so all
+        # 23 fields in `RedisPerfSettings` flow into the manager
+        # `__init__`s. The guard is a no-op when `perf.enabled` is
+        # False (the default), so callers who don't tune the 23
+        # fields pay zero overhead.
+        from ._perf_guard import RedisPerfGuard as _RedisPerfGuard
+
+        perf_guard = _RedisPerfGuard(properties.perf)
         return cls(
             client,
             namespace=properties.namespace,
             connection_string=masked,
             connection_pool=pool,
+            perf=perf_guard,
         )
 
     # ── 16 low-level ops ───────────────────────────────────────────
@@ -235,6 +258,18 @@ class RedisProviderRegistrar(ProviderRegistrar):
         pool settings (`max_connections`, `timeout`, etc.).
         """
         return self._backend._connection_pool
+
+    @property
+    def perf(self) -> RedisPerfGuard | None:
+        """The `RedisPerfGuard` instance wired into all managers (R-M5.4).
+
+        `None` when the registrar was constructed via `__init__` or
+        `from_url` without an explicit `perf` arg. Always non-`None`
+        when the registrar was built via `from_properties` (the
+        default `RedisPerfSettings(enabled=False)` is wired through
+        but is a no-op until the caller flips `enabled=True`).
+        """
+        return self._perf
 
     def value_ops(self):
         return self._string_manager

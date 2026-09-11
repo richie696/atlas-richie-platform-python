@@ -58,6 +58,7 @@ from typing import Any, Callable, Collection, Set as _PySet, TypeVar
 from atlas_richie.cache_core.function.set_function import SetFunction
 from atlas_richie.cache_core.ops.collection_ops import CollectionOps
 
+from .._perf_guard import RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
@@ -67,6 +68,7 @@ from .redis_string_manager import (
     _make_stampede_lock_key,
     _stampede_acquire,
     _stampede_release,
+    _noop_cm,
 )
 
 T = TypeVar("T")
@@ -103,15 +105,22 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         backend: The Redis transport wrapper.
         infra: The `CacheInfrastructure` (currently unused; reserved
             for the M4 typed-read plumbing).
+        perf: Optional `RedisPerfGuard` (R-M5.4). When provided
+            AND enabled, the `set` (full-replace) and `add`
+            (single-element) write paths are timed; `set` is
+            also subject to the whole-set size threshold
+            (sum-of-element-bytes).
     """
 
     def __init__(
         self,
         backend: RedisDistributedCache,
         infra: RedisCacheInfrastructure,
+        perf: RedisPerfGuard | None = None,
     ) -> None:
         self._backend = backend
         self._infra = infra
+        self._perf = perf
 
     # ── Internal helpers ───────────────────────────────────────────
 
@@ -143,21 +152,38 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         Uses DEL + SADD in a pipeline so the operation is one
         round-trip; the pipeline is NOT transactional.
         """
-        client = self._backend.raw_client()
         encoded = self._encode_set(values)
-        pipe = client.pipeline(transaction=False)
-        pipe.delete(self._k(key))
-        if encoded:
-            pipe.sadd(self._k(key), *encoded)
-        if timeout_millis and timeout_millis > 0:
-            pipe.pexpire(
-                self._k(key),
-                int(timeout_millis) + _anti_avalanche_ms(),
-            )
-        pipe.execute()
+        if self._perf is not None:
+            self._perf.check_key_name_hint(key)
+            # Reuse the hash-whole threshold for whole-set size
+            # (`hash_payload_max_bytes_*`). The 23-field `RedisPerf`
+            # settings don't define a separate `set_payload_max_bytes_*`
+            # triplet; the closest semantic analogue is the hash-whole
+            # budget since both are "sum-of-field-bytes" checks.
+            if encoded:
+                self._perf.check_hash_payload(
+                    "set", {str(i): v for i, v in enumerate(encoded)}
+                )
+        with self._perf.time_op("set") if self._perf is not None else _noop_cm():
+            client = self._backend.raw_client()
+            pipe = client.pipeline(transaction=False)
+            pipe.delete(self._k(key))
+            if encoded:
+                pipe.sadd(self._k(key), *encoded)
+            if timeout_millis and timeout_millis > 0:
+                pipe.pexpire(
+                    self._k(key),
+                    int(timeout_millis) + _anti_avalanche_ms(),
+                )
+            pipe.execute()
 
     def add(self, key: str, value: Any) -> None:
-        self._backend.raw_client().sadd(self._k(key), encode_value(value))
+        encoded = encode_value(value)
+        if self._perf is not None:
+            self._perf.check_key_name_hint(key)
+            self._perf.check_hash_field_payload("add", encoded)
+        with self._perf.time_op("add") if self._perf is not None else _noop_cm():
+            self._backend.raw_client().sadd(self._k(key), encoded)
 
     def size(self, key: str) -> int:
         return int(self._backend.raw_client().scard(self._k(key)))
@@ -184,14 +210,17 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         """
         if not mapping:
             return
-        client = self._backend.raw_client()
-        pipe = client.pipeline(transaction=False)
-        for key, values in mapping.items():
-            pipe.delete(self._k(key))
-            encoded = self._encode_set(values)
-            if encoded:
-                pipe.sadd(self._k(key), *encoded)
-        pipe.execute()
+        if self._perf is not None:
+            self._perf.check_batch_size("batch_set", len(mapping))
+        with self._perf.time_op("batch_set") if self._perf is not None else _noop_cm():
+            client = self._backend.raw_client()
+            pipe = client.pipeline(transaction=False)
+            for key, values in mapping.items():
+                pipe.delete(self._k(key))
+                encoded = self._encode_set(values)
+                if encoded:
+                    pipe.sadd(self._k(key), *encoded)
+            pipe.execute()
 
     def pop(self, key: str, clazz: type) -> Any:
         raw = self._backend.raw_client().spop(self._k(key))

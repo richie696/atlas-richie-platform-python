@@ -42,6 +42,7 @@ from typing import Any, Callable, TypeVar
 import redis as redis_lib
 from atlas_richie.cache_core.ops.struct_ops import StructOps
 
+from .._perf_guard import RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
@@ -51,6 +52,7 @@ from .redis_string_manager import (
     _is_negative,
     _make_stampede_lock_key,
     _NEGATIVE_SENTINEL,
+    _noop_cm,
     _stampede_acquire,
     _stampede_release,
 )
@@ -77,9 +79,11 @@ class RedisStructManager(StructOps):
         self,
         backend: RedisDistributedCache,
         infra: RedisCacheInfrastructure,
+        perf: RedisPerfGuard | None = None,
     ) -> None:
         self._backend = backend
         self._infra = infra
+        self._perf = perf
 
     def _k(self, key: str) -> str:
         return self._backend.make_key(key)
@@ -94,14 +98,24 @@ class RedisStructManager(StructOps):
         return self.get(key, target if target is not None else str)
 
     def set(self, key: str, value: Any) -> None:
-        self._backend.raw_client().set(self._k(key), encode_value(value))
+        encoded = encode_value(value)
+        if self._perf is not None:
+            self._perf.check_key_name_hint(key)
+            self._perf.check_string_payload("set", encoded)
+        with self._perf.time_op("set") if self._perf is not None else _noop_cm():
+            self._backend.raw_client().set(self._k(key), encoded)
 
     def set_with_ttl(
         self, key: str, value: Any, timeout_millis: int
     ) -> None:
-        self._backend.raw_client().set(
-            self._k(key), encode_value(value), px=int(timeout_millis)
-        )
+        encoded = encode_value(value)
+        if self._perf is not None:
+            self._perf.check_key_name_hint(key)
+            self._perf.check_string_payload("set_with_ttl", encoded)
+        with self._perf.time_op("set_with_ttl") if self._perf is not None else _noop_cm():
+            self._backend.raw_client().set(
+                self._k(key), encoded, px=int(timeout_millis)
+            )
 
     def refresh(
         self, key: str, func: Callable[[Any], Any]

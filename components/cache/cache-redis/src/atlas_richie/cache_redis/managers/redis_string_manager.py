@@ -94,7 +94,8 @@ import secrets as _secrets
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-from typing import Any, Callable, Collection, Dict, List
+from contextlib import contextmanager
+from typing import Any, Callable, Collection, Dict, Iterator, List
 
 from atlas_richie.cache_core.function.string_function import StringFunction
 from atlas_richie.cache_core.ops.value_ops import ValueOps
@@ -102,6 +103,7 @@ from atlas_richie.cache_core.ops.value_ops import ValueOps
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
+from .._perf_guard import RedisPerfGuard
 
 
 # Anti-avalanche TTL offset range (matches Java's
@@ -282,6 +284,18 @@ _NEGATIVE_SENTINEL: bytes = b"\x00__atlas_richie_negative__\x00"
 _NEGATIVE_SENTINEL_STR: str = _NEGATIVE_SENTINEL.decode("utf-8")
 
 
+@contextmanager
+def _noop_cm() -> Iterator[None]:
+    """Zero-cost `with`-block used when the perf guard is disabled.
+
+    Kept module-level so the `with _noop_cm():` expression inside
+    the manager methods compiles to a single LOAD_FAST + ENTER /
+    EXIT pair (no lambda / no fresh generator per call). The body
+    is empty so the call overhead is identical to a bare `pass`.
+    """
+    yield
+
+
 def _is_negative(value: Any) -> bool:
     """Return True iff `value` is the M5.7 negative-cache marker.
 
@@ -318,15 +332,24 @@ class RedisStringManager(ValueOps, StringFunction):
         backend: The Redis transport wrapper.
         infra: The `CacheInfrastructure` (for typed reads via
             `get_value_type`).
+        perf: Optional `RedisPerfGuard` (R-M5.4). When `None` (the
+            default), no performance checks are performed. When
+            provided AND `perf.enabled` is `True`, the most
+            frequently-used write / batch paths (`set_with_ttl`,
+            `batch_set_with_ttl`, `get_map`, `get_list`,
+            `batch_set`) are instrumented with payload-size and
+            batch-size checks per the configured thresholds.
     """
 
     def __init__(
         self,
         backend: RedisDistributedCache,
         infra: RedisCacheInfrastructure,
+        perf: RedisPerfGuard | None = None,
     ) -> None:
         self._backend = backend
         self._infra = infra
+        self._perf = perf
 
     # ── Internal helpers ───────────────────────────────────────────
 
@@ -364,40 +387,61 @@ class RedisStringManager(ValueOps, StringFunction):
     def get_map(self, keys: Collection[str], reference: type) -> Dict[str, Any]:
         if not keys:
             return {}
-        namespaced = [self._k(k) for k in keys]
-        raws = self._backend.raw_client().mget(namespaced)
-        out: Dict[str, Any] = {}
-        for k, raw in zip(keys, raws):
-            v = decode_value(raw, reference)
-            if v is not None:
-                out[k] = v
-        return out
+        if self._perf is not None:
+            self._perf.check_batch_size("get_map", len(keys))
+        with self._perf.time_op("get_map") if self._perf is not None else _noop_cm():
+            namespaced = [self._k(k) for k in keys]
+            raws = self._backend.raw_client().mget(namespaced)
+            out: Dict[str, Any] = {}
+            for k, raw in zip(keys, raws):
+                v = decode_value(raw, reference)
+                if v is not None:
+                    out[k] = v
+            return out
 
     def get_list(self, keys: Collection[str], reference: type) -> List[Any]:
         if not keys:
             return []
-        namespaced = [self._k(k) for k in keys]
-        raws = self._backend.raw_client().mget(namespaced)
-        out: List[Any] = []
-        for raw in raws:
-            v = decode_value(raw, reference)
-            if v is not None:
-                out.append(v)
-        return out
+        if self._perf is not None:
+            self._perf.check_batch_size("get_list", len(keys))
+        with self._perf.time_op("get_list") if self._perf is not None else _noop_cm():
+            namespaced = [self._k(k) for k in keys]
+            raws = self._backend.raw_client().mget(namespaced)
+            out: List[Any] = []
+            for raw in raws:
+                v = decode_value(raw, reference)
+                if v is not None:
+                    out.append(v)
+            return out
 
     # ── Write ───────────────────────────────────────────────────────
 
     def set(self, key: str, value: Any) -> None:
-        self._backend.set(key, encode_value(value))
+        encoded = encode_value(value)
+        if self._perf is not None:
+            self._perf.check_key_name_hint(key)
+            self._perf.check_string_payload("set", encoded)
+        with self._perf.time_op("set") if self._perf is not None else _noop_cm():
+            self._backend.set(key, encoded)
 
     def set_if_absent(self, key: str, value: Any) -> bool:
-        result = self._backend.set(key, encode_value(value), if_absent=True)
-        return bool(result)
+        encoded = encode_value(value)
+        if self._perf is not None:
+            self._perf.check_key_name_hint(key)
+            self._perf.check_string_payload("set_if_absent", encoded)
+        with self._perf.time_op("set_if_absent") if self._perf is not None else _noop_cm():
+            result = self._backend.set(key, encoded, if_absent=True)
+            return bool(result)
 
     def set_with_ttl(self, key: str, value: Any, timeout_millis: int) -> None:
-        self._backend.set(
-            key, encode_value(value), ttl_millis=int(timeout_millis)
-        )
+        encoded = encode_value(value)
+        if self._perf is not None:
+            self._perf.check_key_name_hint(key)
+            self._perf.check_string_payload("set_with_ttl", encoded)
+        with self._perf.time_op("set_with_ttl") if self._perf is not None else _noop_cm():
+            self._backend.set(
+                key, encoded, ttl_millis=int(timeout_millis)
+            )
 
     def set_if_absent_with_ttl(
         self, key: str, value: Any, timeout_millis: int
@@ -468,22 +512,28 @@ class RedisStringManager(ValueOps, StringFunction):
     def batch_set(self, mapping: Dict[str, Any]) -> None:
         if not mapping:
             return
-        encoded = {self._k(k): encode_value(v) for k, v in mapping.items()}
-        self._backend.raw_client().mset(encoded)
+        if self._perf is not None:
+            self._perf.check_batch_size("batch_set", len(mapping))
+        with self._perf.time_op("batch_set") if self._perf is not None else _noop_cm():
+            encoded = {self._k(k): encode_value(v) for k, v in mapping.items()}
+            self._backend.raw_client().mset(encoded)
 
     def batch_set_with_ttl(
         self, mapping: Dict[str, Any], timeout_millis: int
     ) -> None:
         if not mapping:
             return
-        # Low-level op: pass the TTL through unchanged (no anti-
-        # avalanche offset). Anti-avalanche is a high-level policy
-        # applied by `add_value` / `batch_add_to_string_with_ttl` etc.
-        client = self._backend.raw_client()
-        pipe = client.pipeline(transaction=False)
-        for k, v in mapping.items():
-            pipe.set(self._k(k), encode_value(v), px=int(timeout_millis))
-        pipe.execute()
+        if self._perf is not None:
+            self._perf.check_batch_size("batch_set_with_ttl", len(mapping))
+        with self._perf.time_op("batch_set_with_ttl") if self._perf is not None else _noop_cm():
+            # Low-level op: pass the TTL through unchanged (no anti-
+            # avalanche offset). Anti-avalanche is a high-level policy
+            # applied by `add_value` / `batch_add_to_string_with_ttl` etc.
+            client = self._backend.raw_client()
+            pipe = client.pipeline(transaction=False)
+            for k, v in mapping.items():
+                pipe.set(self._k(k), encode_value(v), px=int(timeout_millis))
+            pipe.execute()
 
     def batch_set_if_absent(self, mapping: Dict[str, Any]) -> None:
         if not mapping:

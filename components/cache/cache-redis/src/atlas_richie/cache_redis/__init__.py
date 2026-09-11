@@ -83,6 +83,7 @@ from .errors import (
     SerializationError,
     StateError,
 )
+from ._perf_guard import RedisPerfGuard
 from .managers.redis_bitmap_manager import RedisBitmapManager
 from .managers.redis_bounded_queue import RedisBoundedQueue
 from .managers.redis_bounded_queue_manager import RedisBoundedQueueManager
@@ -145,6 +146,7 @@ __all__ = [
     "RedisLockManager",
     "RedisNotificationManager",
     "RedisNotificationListener",
+    "RedisPerfGuard",
     "RedisPerfSettings",
     "RedisSharedBloomFilter",
     "InMemoryBloomFilter",
