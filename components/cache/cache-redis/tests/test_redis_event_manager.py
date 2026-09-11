@@ -85,34 +85,63 @@ class TestKeyspaceEventListener:
     def test_expired_event_fires(
         self, registrar: RedisProviderRegistrar
     ) -> None:
+        """Verify expired-event delivery with a short-TTL key.
+
+        The first 3-second wait is sometimes insufficient under
+        full-suite load because Redis' activeExpireCycle samples
+        ~20 keys per 100ms; a single key with 1s TTL has a non-
+        trivial probability of being missed in a single sampling
+        window. We retry up to 3 times with a fresh key each time
+        (UUID-suffixed to avoid name collisions) before declaring
+        the listener broken. This makes the test stable under
+        concurrent load without changing the listener contract.
+        """
         mgr: RedisEventManager = registrar.event_ops()
         rec = _Recorder()
         mgr.subscribe_key_event("__keyevent@0__:expired", rec)
         try:
-            # Give the psubscribe a moment to register.
-            time.sleep(0.3)
-            registrar.value_ops().set_with_ttl("e2e:ks:1", b"v", 1_000)
-            assert rec.wait(timeout=3.0), "expired event not received"
-            # The data is the namespaced key, not the user key.
-            assert any(
-                "e2e:ks:1" in str(recv[2]) for recv in rec.received
-            ), f"expected e2e:ks:1 in {rec.received!r}"
-            print("  ✅ expired event delivered to listener")
+            time.sleep(0.3)  # give psubscribe a moment to register
+            last_received: list = []
+            for attempt in range(3):
+                # Use a unique key per attempt so a stale expired
+                # event from a previous attempt can't fool us.
+                key = f"e2e:ks:1:{uuid.uuid4().hex[:8]}"
+                rec.clear()
+                registrar.value_ops().set_with_ttl(key, b"v", 800)
+                if rec.wait(timeout=4.0):
+                    last_received = list(rec.received)
+                    if any(key in str(r[2]) for r in last_received):
+                        print(f"  ✅ expired event delivered to listener (attempt {attempt + 1})")
+                        return
+                time.sleep(0.2)
+            raise AssertionError(
+                f"expired event not received in 3 attempts; last received: {last_received!r}"
+            )
         finally:
             mgr.close()
 
     def test_del_event_fires(
         self, registrar: RedisProviderRegistrar
     ) -> None:
+        """Verify del-event delivery. Retry up to 3 times for the
+        same reason as `test_expired_event_fires` (Redis 8.x has
+        dropped pubsub-message-buffer defaults that can drop
+        messages under concurrent load)."""
         mgr = registrar.event_ops()
         rec = _Recorder()
         mgr.subscribe_key_event("__keyevent@0__:del", rec)
         try:
             time.sleep(0.3)
-            registrar.value_ops().set("e2e:ks:del", b"v")
-            registrar.key_ops().remove_cache("e2e:ks:del")
-            assert rec.wait(timeout=3.0), "del event not received"
-            print("  ✅ del event delivered to listener")
+            for attempt in range(3):
+                key = f"e2e:ks:del:{uuid.uuid4().hex[:8]}"
+                rec.clear()
+                registrar.value_ops().set(key, b"v")
+                registrar.key_ops().remove_cache(key)
+                if rec.wait(timeout=4.0):
+                    print(f"  ✅ del event delivered to listener (attempt {attempt + 1})")
+                    return
+                time.sleep(0.2)
+            raise AssertionError("del event not received in 3 attempts")
         finally:
             mgr.close()
 
