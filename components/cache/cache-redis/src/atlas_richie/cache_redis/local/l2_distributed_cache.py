@@ -45,7 +45,8 @@ that pins `max_size` to the caller's request. This way the LRU
 from __future__ import annotations
 
 import threading
-from typing import Any, Dict, Optional
+import weakref
+from typing import Any, Callable, Dict, Optional
 
 from atlas_richie.cache_core.local.config.local_cache_properties import (
     CacheDefinition,
@@ -56,7 +57,42 @@ from atlas_richie.cache_core.local.manage.local_cache_manager import (
     LocalCacheManager,
 )
 
-from ..managers.redis_string_manager import RedisStringManager
+from ..managers.redis_string_manager import (
+    RedisStringManager,
+    _call_db_loader_with_timeout,
+)
+
+
+class _KeyLock:
+    """Per-key `threading.Lock` wrapper that supports `weakref`.
+
+    M5.2: `L2DistributedCache` maintains a `WeakValueDictionary`
+    of these instances, keyed by user-key. When the last caller
+    of a key releases its lock, the instance becomes unreferenced
+    (the caller's frame releases it) and the weak entry is
+    automatically dropped by the `WeakValueDictionary`. This
+    bounds the lock table's memory in long-running processes
+    without an explicit LRU + manual cleanup.
+
+    `threading.Lock` itself does not support `weakref` (built-in
+    mutex objects are excluded), so we wrap it in a class with
+    `__weakref__` in `__slots__` to enable weak-reference support.
+
+    The `__enter__` / `__exit__` methods delegate to the
+    underlying lock, so callers can use it as a context manager:
+    `with lock: ...`.
+    """
+
+    __slots__ = ("_lock", "__weakref__")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def __enter__(self) -> None:
+        self._lock.acquire()
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self._lock.release()
 
 
 class L2DistributedCache:
@@ -96,6 +132,15 @@ class L2DistributedCache:
             }
         )
         self._local = LocalCacheManager(properties)
+        # M5.2: in-process stampede-prevention lock table. The
+        # `WeakValueDictionary` automatically drops entries when
+        # the `_KeyLock` instance loses all strong references
+        # (i.e. when the last caller exits the `with lock:` block
+        # and the lock is no longer held by any thread).
+        self._key_locks: "weakref.WeakValueDictionary[str, _KeyLock]" = (
+            weakref.WeakValueDictionary()
+        )
+        self._key_locks_guard = threading.Lock()
         self._hits = 0
         self._misses = 0
         self._stats_lock = threading.Lock()
@@ -160,6 +205,120 @@ class L2DistributedCache:
             self._local.remove(self._region, key)
         except Exception:
             pass
+
+    # ── M5.2: in-process stampede prevention + loader-driven read ──
+
+    def get_or_load(
+        self,
+        key: str,
+        loader: Callable[[], Optional[bytes]],
+        *,
+        ttl_seconds: int | None = None,
+        loader_timeout_millis: int | None = None,
+    ) -> Optional[bytes]:
+        """按 key 防进程内击穿：L1 命中直接返回；L1 未命中走 L2；都没中则
+        在 per-key `threading.Lock` 保护下调用 `loader` 回源，回写 L1 +
+        L2。
+
+        Args:
+            key: 缓存键
+            loader: 回源加载器；返回 `None` 表示无值（不写缓存）
+            ttl_seconds: 缓存 TTL（秒）。`None` = 用实例默认 TTL
+            loader_timeout_millis: 可选 — M5.1：`loader` 的
+                毫秒级超时。`None`（默认）= 无限时；`> 0` =
+                超时返 None（不写缓存）。复用 `_call_db_loader_with_timeout`。
+
+        Returns:
+            缓存值；未命中且加载失败或超时时为 `None`。
+
+        Raises:
+            ValueError: `loader_timeout_millis <= 0`。
+            `loader` 自身抛出的异常会原样传播。
+
+        English
+        --------
+        In-process stampede-proof loader-driven read. On L1 hit,
+        returns immediately (no lock acquired, no loader called).
+        On L1 miss, acquires a per-key in-process `threading.Lock`
+        so concurrent in-process misses funnel to ONE loader call,
+        tries L2 (Redis), and only invokes `loader` on the
+        L1+L2-miss path. The loader's return value is written to
+        both L1 and L2. The in-process lock is the L2 layer's
+        stampede defense; the cross-process stampede defense lives
+        in `RedisStringManager.get_with_lock` (R-M4). These two
+        layers are complementary, not redundant — `get_or_load`
+        protects in-process fan-out; `*_with_lock` protects
+        cross-process fan-out.
+        """
+        if loader is None:
+            raise ValueError("loader is required")
+        if loader_timeout_millis is not None and loader_timeout_millis <= 0:
+            raise ValueError("loader_timeout_millis must be > 0 (or None)")
+        effective_ttl = ttl_seconds if (ttl_seconds is not None and ttl_seconds > 0) else self._ttl_seconds
+
+        # 1. L1 fast path (no lock acquired, no network).
+        l1_value = self._local.get(self._region, key)
+        if l1_value is not None:
+            with self._stats_lock:
+                self._hits += 1
+            return l1_value
+
+        # 2. L1 miss. Acquire the per-key in-process stampede lock
+        #    so concurrent in-process misses funnel to ONE loader call.
+        with self._get_key_lock(key):
+            # 3. Double-check L1 (another thread may have just
+            #    populated it under the lock).
+            l1_value = self._local.get(self._region, key)
+            if l1_value is not None:
+                with self._stats_lock:
+                    self._hits += 1
+                return l1_value
+
+            with self._stats_lock:
+                self._misses += 1
+
+            # 4. Try L2 (read-through). If L2 hits, populate L1 and
+            #    return; no loader call.
+            l2_value = self._value_ops.get(key, bytes)
+            if l2_value is not None:
+                try:
+                    self._local.put(self._region, key, l2_value)
+                    self._local.expiry(self._region, key, effective_ttl * 1000)
+                except Exception:
+                    pass
+                return l2_value
+
+            # 5. L1 + L2 both miss → call the loader, optionally
+            #    with a timeout (M5.1 helper).
+            value = _call_db_loader_with_timeout(loader, loader_timeout_millis)
+            if value is None:
+                return None
+
+            # 6. Write to BOTH L1 and L2 with the effective TTL.
+            #    L1 first (cheap, no network), then L2 (network).
+            try:
+                self._local.put(self._region, key, value)
+                self._local.expiry(self._region, key, effective_ttl * 1000)
+            except Exception:
+                pass
+            self._value_ops.set_with_ttl(key, value, effective_ttl * 1000)
+            return value
+
+    def _get_key_lock(self, key: str) -> _KeyLock:
+        """Get-or-create the per-key `_KeyLock`.
+
+        The `_key_locks` is a `WeakValueDictionary`; the lock
+        is created lazily on first contention for a given key.
+        When the last caller exits the `with` block, the strong
+        reference is dropped and the weak entry is collected
+        automatically.
+        """
+        with self._key_locks_guard:
+            lock = self._key_locks.get(key)
+            if lock is None:
+                lock = _KeyLock()
+                self._key_locks[key] = lock
+            return lock
 
     def stats(self) -> Dict[str, int]:
         """Return a snapshot of L1 hit / miss counters and current
