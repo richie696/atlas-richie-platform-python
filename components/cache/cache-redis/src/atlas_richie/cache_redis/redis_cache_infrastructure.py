@@ -1,4 +1,16 @@
-"""CacheInfrastructure implementation for the Redis backend.
+"""Redis 后端的 `CacheInfrastructure` 实现。
+----
+对位 Java 端 `cn.richie696.component.cache.ops.CacheInfrastructure`。
+维护按 key 注册的 `type` 表，供 `ValueOps.get_typed` /
+`FieldOps.get_typed` 在调用方不传 `clazz` 时反序列化。同时暴露
+connection 描述用于诊断。
+
+M1 阶段按 key 的类型注册表是简单的进程内 dict；M5 可能按需加
+namespace-aware typing。
+
+English
+--------
+CacheInfrastructure implementation for the Redis backend.
 
 Mirrors `cn.richie696.component.cache.ops.CacheInfrastructure`. Holds
 the per-key `type` registry used by `ValueOps.get_typed` /

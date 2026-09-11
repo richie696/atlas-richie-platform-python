@@ -1,4 +1,25 @@
-"""Serialisation helpers for cache-redis (JSON + bytes).
+"""cache-redis 的（反）序列化工具（JSON + bytes）。
+----
+Java 端 `RedisStringManager` 用 `JsonUtils.getInstance().deserialize(...)`
+处理任意对象。Python 端等价物：基础类型直接透传，其他类型用
+`json.dumps` / `json.loads` 走 JSON 路径。
+
+编码侧（`encode_value`）按值运行时类型决策：
+
+- `bytes` / `bytearray` / `str` / `int` / `float` / `bool`：透传
+- 其他对象：JSON 序列化，`ensure_ascii=False` 支持非 ASCII
+
+解码侧（`decode_value`）按调用方传入的目标 `clazz`（`type[T]`）决策：
+
+- `bytes` / `bytearray`：强制按字节返回（必要时 utf-8 编码）
+- `str` / `int` / `float` / `bool`：按目标类型强转
+- 其他：用 JSON 反序列化后用 `clazz(...)` 包裹
+
+类型不匹配抛 `SerializationError`。
+
+English
+--------
+Serialisation helpers for cache-redis (JSON + bytes).
 
 Java's RedisStringManager uses `JsonUtils.getInstance().deserialize(...)`
 for arbitrary objects. Python equivalent: use `json.dumps`/`json.loads`

@@ -1,4 +1,43 @@
-"""Redis backend for `atlas-richie-cache-core`.
+"""`atlas-richie-cache-core` 的 Redis 后端实现。
+----
+提供 16 ops + 11 functions 的具体实现（封装 `redis-py`），以及
+ProviderRegistrar、L2 缓存、Pub/Sub、Bloom Filter、Snowflake ID 等
+扩展能力。
+
+公开 API：
+
+    RedisProviderRegistrar      # 具体 ProviderRegistrar
+    RedisProviderRegistrar.from_url(...)
+    RedisDistributedCache       # 传输层包装
+    RedisCacheInfrastructure    # CacheInfrastructure 实现
+    RedisStringManager          # M1: ValueOps + StringFunction
+    RedisFieldManager           # M2: FieldOps + HashFunction
+    RedisCollectionManager      # M2: CollectionOps + SetFunction
+    RedisKeyManager             # M3.A: KeyOps
+    RedisScriptManager          # M3.A: ScriptOps
+    RedisLimiterManager         # M3.A: LimiterOps
+    RedisNotificationManager    # M3.A + R-221: NotificationOps + NotificationFunction
+    RedisNotificationListener   # R-221: subscribe() 句柄
+    RedisSharedBloomFilter      # R-222: Redis BITSET + Lua 原子
+    InMemoryBloomFilter         # R-222: 进程内 bytearray
+    L2DistributedCache          # R-223: L1 (cachetools) + L2 (Redis) cache-aside
+    L2CacheFactory              # R-223: per-config L2 cache 实例缓存
+    RedisSnowflakeIdBuilder     # R-224: 64-bit Snowflake ID，workerId Redis 持久化
+    RedisEventManager           # M3.A: EventOps + EventFunction
+    RedisRankingManager         # M3.B: RankingOps + ZSetFunction
+    RedisBitmapManager          # M3.B: BitmapOps + BitmapFunction
+    RedisHyperLogManager        # M3.B: HyperLogOps + HyperLogFunction
+    RedisGeoManager             # M3.B: GeoOps + GeoFunction
+    RedisStructManager          # M3.C: StructOps
+    RedisBoundedQueueManager    # M3.C: BoundedQueueOps
+    RedisBoundedStackManager    # M3.C: BoundedStackOps
+    RedisLockManager            # M4: LockOps + LockFunction
+    RedisDistributedLock        # M4: try_acquire() 返回的句柄
+    RedisDistributedBatchLock   # M4: batch() 返回的句柄
+
+English
+--------
+Redis backend for `atlas-richie-cache-core`.
 
 Public API:
 
@@ -14,8 +53,8 @@ Public API:
     RedisLimiterManager         # M3.A: LimiterOps
     RedisNotificationManager    # M3.A + R-221: NotificationOps + NotificationFunction
     RedisNotificationListener   # R-221: subscribe() handle
-    RedisSharedBloomFilter      # R-222: Redis BITSET + Lua 原子
-    InMemoryBloomFilter         # R-222: 进程内 bytearray
+    RedisSharedBloomFilter      # R-222: Redis BITSET + Lua atomic
+    InMemoryBloomFilter         # R-222: in-process bytearray
     L2DistributedCache          # R-223: L1 (cachetools) + L2 (Redis) cache-aside
     L2CacheFactory              # R-223: per-config L2 cache instance cache
     RedisSnowflakeIdBuilder     # R-224: 64-bit Snowflake ID with Redis-persisted workerId

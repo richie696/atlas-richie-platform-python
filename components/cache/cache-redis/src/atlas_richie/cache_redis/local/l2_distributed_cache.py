@@ -1,4 +1,26 @@
-"""L2 DistributedCache (R-223) — two-tier cache-aside.
+"""L2 分布式缓存（R-223）— 两层 cache-aside。
+----
+对位 Java 端 `cn.richie696.component.cache.l2.L2DistributedCache`。
+
+**架构**：
+
+    caller → L1（进程内 cachetools）→ L2（Redis）→ loader（调用方）
+
+  - L1 命中：直接返回，无网络。
+  - L1 未命中 / L2 命中：拷贝 L2 → L1（read-through），返回。
+  - 都没命中：调用方负责从下游源（DB / API）加载并通过 `set(...)` 回写。
+
+**L1 与 L2 共享同一 TTL**，避免 L2 已过期的条目在 L1 继续存活。
+TTL 在构造时确定，每个实例独立。
+
+**按 region 的 L1 容量**：每个 `L2DistributedCache` 实例持有自己的
+`LocalCacheManager`，按 region 配置 `CacheDefinition`，把 `max_size`
+固定到调用方请求值。这样 LRU 的 `max_size` 预算是 per-instance 的，
+而不是默认的 10_000。
+
+English
+--------
+L2 DistributedCache (R-223) — two-tier cache-aside.
 
 Mirrors `cn.richie696.component.cache.l2.L2DistributedCache` (Java).
 

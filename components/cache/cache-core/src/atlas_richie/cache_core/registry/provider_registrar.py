@@ -1,4 +1,40 @@
-"""Provider Registrar SPI — the backend's contract.
+"""Provider Registrar SPI — 后端的契约。
+----
+`ProviderRegistrar` 是后端包（`atlas-richie-cache-redis`、未来的
+`atlas-richie-cache-dragonfly`、进程内测试替身等）接入 core 框架唯一
+需要实现的东西。core 层从不 import 任何后端；后端自行向
+`CacheRegistry` 注册，静态外观 `GlobalCache` 按方法名查找。
+
+Protocol 声明：
+
+- **16 个低层 ops**（`ValueOps` / `StructOps` / `FieldOps` /
+  `CollectionOps` / `RankingOps` / `BitmapOps` / `HyperLogOps` /
+  `GeoOps` / `KeyOps` / `ScriptOps` / `LimiterOps` / `LockOps` /
+  `BoundedQueueOps` / `BoundedStackOps` / `NotificationOps` /
+  `EventOps`）— 每个能力一个访问器。
+- **1 个框架内部接口**（`CacheInfrastructure`）— L2 缓存开关、类型注册、
+  connection-string 调试信息。
+- **11 个高层 function**（`StringFunction` / `HashFunction` /
+  `SetFunction` / `ZSetFunction` / `GeoFunction` / `HyperLogFunction` /
+  `BitmapFunction` / `LockFunction` / `NotificationFunction` /
+  `EventFunction` / `CacheFunction`）— 每个是 1 个或多个 ops 的外观
+  （对应 Java 端 `function/*Function.java` 的两层设计）。
+- **2 个 meta 访问器**（`provider` / `connection_string`）— 用于诊断
+  和 cache-key 命名空间。
+
+registrar 可以从多个访问器返回同一实例（如单一 Redis client 支撑所有
+ops 和 function），也可以为每个访问器返回新实例（如果实现携带按能力
+区分的状态）。框架既不强制也不禁止。
+
+为什么用单一 Protocol 而不是一个由多个 Protocol 实现的注册中心：互斥
+契约（"一进程只有一个 provider"）在 registrar 层级强制，而且 16 ops +
+11 functions 自然构成一个内聚的"完整 Redis client"抽象；拆开反而会
+邀请只装了一半。代价是一个大 Protocol；收益是一次 `install()`、一次
+`unregister()`，以及清晰的所有权边界。
+
+English
+--------
+Provider Registrar SPI — the backend's contract.
 
 `ProviderRegistrar` is the only thing a backend package
 (`atlas-richie-cache-redis`, future `atlas-richie-cache-dragonfly`,

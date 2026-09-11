@@ -1,4 +1,31 @@
-"""Process-wide static facade for the distributed cache.
+"""分布式缓存的进程级静态外观层。
+----
+提供业务代码访问分布式缓存的统一入口（与 Java 端
+`cn.richie696.component.cache.GlobalCache` 行为一致）。
+
+通过类方法暴露 16 个 ops + 11 个 function：每次调用都从 `CacheRegistry`
+读取当前激活的 `ProviderRegistrar`，并通过 `GlobalCacheManager` 委托到
+对应的 ops / function 实现。
+
+生命周期：
+
+- `install(manager)`：注册一个 manager 作为当前 provider（委托给
+  `CacheRegistry.register`）。
+- `uninstall()`：注销当前 provider。
+- `is_initialized()`：是否已注册 provider。
+- `active()`：返回包装当前 registrar 的 `GlobalCacheManager` 实例
+  （未注册时抛 `StateError`）。
+
+设计要点：
+
+- **不缓存 manager**：每次调用都重新解析 registrar，构造代价仅为一次
+  字典查找，但能彻底避免长生命周期进程切换 provider 时的悬空引用。
+- **不暴露 CacheRegistry**：注册表是实现细节，外部 API 只通过外观层
+  访问；保持公共接口面积小、IDE 自动补全聚焦、文档入口单一。
+
+English
+--------
+Process-wide static facade for the distributed cache.
 
 Mirrors `cn.richie696.component.cache.GlobalCache` (Java) — the
 static entry point that business code uses:

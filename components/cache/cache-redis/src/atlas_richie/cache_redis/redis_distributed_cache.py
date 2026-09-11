@@ -1,4 +1,22 @@
-"""Real Redis-backed distributed cache wrapper.
+"""生产级 Redis-backed 分布式缓存传输包装。
+----
+把 `redis.Redis` 客户端包成符合 cache-core 期望的传输层对象：
+
+- **namespace 前缀**：所有 key 自动加 `{namespace}:` 前缀（如
+  `atlas-richie:user:42`），避免与同一 Redis 实例上的其他业务冲突。
+- **key 校验**：`make_key()` 调用前先过 `key_validator`（默认拒绝空
+  key 和 >512 字节 key）。
+- **connection 描述**：暴露 `connection_string` 给 `CacheInfrastructure`
+  钩子，用于日志和健康检查。
+- **优雅关闭**：`close()` 释放连接池（不负责关闭 `client` 本身——生命周期归调用方）。
+
+本类**不**实现任何 cache-core Protocol（`ValueOps` / `FieldOps` 等）；
+它是传输层抽象。`managers/` 下的每个 `Redis*Manager` 包装一个
+`RedisDistributedCache` 实例并实现对应的 `ProviderRegistrar` 访问器。
+
+English
+--------
+Real Redis-backed distributed cache wrapper.
 
 Wraps a `redis.Redis` client with:
 
