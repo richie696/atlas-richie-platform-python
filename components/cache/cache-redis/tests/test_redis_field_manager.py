@@ -1,4 +1,4 @@
-"""Real-Redis smoke test for `RedisFieldManager` (R-220 M2).
+"""Real-Redis smoke test for `RedisFieldManager` (R-220 M2 + M4).
 
 Validates that the new `RedisFieldManager` correctly implements both
 `FieldOps` and `HashFunction` end-to-end against a real Redis 8.x
@@ -10,6 +10,9 @@ instance, including:
 - Meta: get_fields, size, remove.
 - Batch set across many Hashes.
 - Anti-avalanche TTL on the high-level `set(key, field, value, timeout_millis)`.
+
+The M4 stampede-prevention suite lives in
+`test_redis_field_manager_with_lock.py`.
 
 Test namespace is unique per run so parallel runs cannot collide;
 teardown SCAN-iterates and `DEL`s the test namespace.
@@ -183,24 +186,6 @@ class TestFieldOpsMultiField:
         assert manager.get_all("h2", int) == {"c": 3, "d": 4}
 
 
-class TestFieldOpsLockNotYetImplemented:
-    def test_get_with_lock_raises(self, manager: RedisFieldManager) -> None:
-        with pytest.raises(NotImplementedError):
-            manager.get_with_lock("k", "f", str, 1000, lambda: None)
-
-    def test_get_with_lock_typed_raises(self, manager: RedisFieldManager) -> None:
-        with pytest.raises(NotImplementedError):
-            manager.get_with_lock_typed("k", "f", str, 1000, lambda: None)
-
-    def test_get_many_with_lock_raises(
-        self, manager: RedisFieldManager
-    ) -> None:
-        with pytest.raises(NotImplementedError):
-            manager.get_many_with_lock(
-                "k", ["f1"], str, 1000, lambda: None
-            )
-
-
 # ── HashFunction (high-level) ────────────────────────────────────────
 
 
@@ -244,28 +229,6 @@ class TestHashFunctionHighLevel:
     ) -> None:
         manager.set("h", "x", 10)
         assert manager.decrement("h", "x", 3) == 7
-
-    def test_get_object_from_hash_with_lock_raises(
-        self, manager: RedisFieldManager
-    ) -> None:
-        with pytest.raises(NotImplementedError):
-            manager.get_object_from_hash_with_lock("k", str, lambda: None, 1000)
-
-    def test_get_from_hash_with_lock_raises(
-        self, manager: RedisFieldManager
-    ) -> None:
-        with pytest.raises(NotImplementedError):
-            manager.get_from_hash_with_lock(
-                "k", "f", str, lambda: None, 1000
-            )
-
-    def test_get_from_hash_with_lock_typed_raises(
-        self, manager: RedisFieldManager
-    ) -> None:
-        with pytest.raises(NotImplementedError):
-            manager.get_from_hash_with_lock_typed(
-                "k", "f", str, lambda: None, 1000
-            )
 
 
 class TestProviderRegistrarWiring:

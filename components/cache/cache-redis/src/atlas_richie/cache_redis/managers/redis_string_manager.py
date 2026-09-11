@@ -90,6 +90,9 @@ What's deferred to later R-### milestones:
 
 from __future__ import annotations
 
+import secrets as _secrets
+import time
+import uuid
 from typing import Any, Callable, Collection, Dict, List
 
 from atlas_richie.cache_core.function.string_function import StringFunction
@@ -106,8 +109,6 @@ from ..serialization import decode_value, encode_value
 _MIN_ANTI_AVALANCHE_MS = 60_000
 _MAX_ANTI_AVALANCHE_MS = 600_000
 
-import secrets as _secrets
-
 
 def _anti_avalanche_ms() -> int:
     """Return a uniform random offset in [60s, 10min) milliseconds."""
@@ -115,6 +116,64 @@ def _anti_avalanche_ms() -> int:
         _secrets.randbelow(_MAX_ANTI_AVALANCHE_MS - _MIN_ANTI_AVALANCHE_MS)
         + _MIN_ANTI_AVALANCHE_MS
     )
+
+
+# ── Stampede-prevention lock (M4) ────────────────────────────────────
+# Per-key Lua-acquired lock, used by `get_with_lock` /
+# `get_from_string_with_lock` to ensure only ONE caller hits the
+# db_loader for a given cache key during a stampede. This is the
+# cache-stampede lock, NOT the application-level distributed lock
+# (which lives in `RedisLockManager`); the two are independent and
+# can coexist — the stampede lock guards the cache miss path, the
+# application lock guards whatever business resource the cached
+# value represents.
+#
+# Key shape: `{namespace}:__stampede_lock__:{user_key}`. Distinct
+# prefix from `__lock__:` (used by `RedisLockManager`) so the two
+# never collide.
+#
+# Atomicity guarantees:
+#   - `_STAMPEDE_ACQUIRE_LUA` is `SET NX PX` (Redis native atomic).
+#   - `_STAMPEDE_RELEASE_LUA` is `GET` + `DEL` under Lua's single
+#     thread, so a stale holder cannot release a lock re-acquired
+#     by a different request after the original TTL expired.
+_STAMPEDE_ACQUIRE_LUA = """
+if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'PX', ARGV[2]) then
+    return ARGV[1]
+end
+return ''
+"""
+
+_STAMPEDE_RELEASE_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+
+
+def _make_stampede_lock_key(backend: RedisDistributedCache, user_key: str) -> str:
+    return backend.make_key(f"__stampede_lock__:{user_key}")
+
+
+def _stampede_acquire(
+    client: Any, lock_key: str, request_id: str, ttl_millis: int
+) -> bool:
+    """Atomic SET NX PX. Returns True iff this caller now holds the stampede lock."""
+    result = client.eval(
+        _STAMPEDE_ACQUIRE_LUA, 1, lock_key, request_id, str(int(ttl_millis))
+    )
+    if isinstance(result, bytes):
+        result = result.decode("utf-8", errors="replace")
+    return bool(result)
+
+
+def _stampede_release(client: Any, lock_key: str, request_id: str) -> bool:
+    """Atomic compare-and-delete. Returns True iff we still held the lock."""
+    result = client.eval(_STAMPEDE_RELEASE_LUA, 1, lock_key, request_id)
+    if isinstance(result, bytes):
+        result = result.decode("utf-8", errors="replace")
+    return int(result) == 1
 
 
 class RedisStringManager(ValueOps, StringFunction):
@@ -323,7 +382,7 @@ class RedisStringManager(ValueOps, StringFunction):
             pipe.set(self._k(k), encode_value(v), px=int(timeout_millis), nx=True)
         pipe.execute()
 
-    # ── Stampede prevention ─────────────────────────────────────────
+    # ── Stampede prevention (M4) ────────────────────────────────────
 
     def get_with_lock(
         self,
@@ -331,28 +390,160 @@ class RedisStringManager(ValueOps, StringFunction):
         timeout_millis: int,
         db_loader: Callable[[], str | None],
     ) -> str | None:
-        """Stampede prevention.
+        """防缓存击穿：String 类型。
 
-        Implementation lives in M4 once `RedisLockManager` is wired
-        (needs L2 + Bloom + Lua release). M1 raises to surface the
-        contract.
+        命中直接返回；未命中则获取本方法的 stampede 锁（与
+        `LockFunction` 业务锁**独立**），调用 `db_loader` 回源，回写
+        缓存。其他并发 caller 在锁被持有时进入短暂的轮询重试，超出
+        等待预算则返回 `None`，由调用方决定是否再次重试。
+
+        Args:
+            key: 缓存键
+            timeout_millis: 缓存 TTL（毫秒），同时也是 stampede 锁
+                的持有超时
+            db_loader: 回源加载器；返回 `None` 表示无值（不写缓存）
+
+        Returns:
+            缓存值；未命中且加载失败时为 `None`。
+
+        Raises:
+            ValueError: `timeout_millis <= 0` 或 `db_loader` 为 `None`。
+
+        English
+        --------
+        Stampede-proof String load. On cache hit, returns the cached
+        value directly. On cache miss, acquires a per-key stampede
+        lock (independent of any application-level `LockFunction`
+        lock the caller may also be holding), invokes `db_loader`
+        on the lock-holder, writes the result back to the cache,
+        and returns. Concurrent waiters that lose the lock race
+        enter a short polling loop and re-read the cache; if the
+        winner hasn't published within the wait budget, returns
+        `None` and lets the caller decide whether to retry.
         """
-        raise NotImplementedError(
-            "RedisStringManager.get_with_lock is implemented in R-220 M4 "
-            "(requires RedisLockManager + Lua atomic release)."
+        return self._stampede_load(
+            key, timeout_millis, db_loader,
+            wait_budget_millis=int(timeout_millis),
         )
-
-    # ══════════════════════════════════════════════════════════════
-    # StringFunction (high-level) — mostly aliases / TTL-augmented
-    # ══════════════════════════════════════════════════════════════
 
     def get_from_string_with_lock(
         self, key: str, db_loader: Callable[[], str | None], timeout_millis: int
     ) -> str | None:
-        raise NotImplementedError(
-            "get_from_string_with_lock is implemented in R-220 M4 "
-            "(Bloom + L2 + Redis lock)."
+        """防缓存击穿：String 类型（业务级便捷方法）。
+
+        与 `ValueOps.get_with_lock` 行为一致，仅参数顺序不同（key,
+        db_loader, timeout_millis），便于业务代码按 (资源键, 加载器,
+        超时) 的自然顺序书写。
+
+        Args:
+            key: 缓存键
+            db_loader: 回源加载器
+            timeout_millis: 缓存 TTL（毫秒）
+
+        Returns:
+            缓存值；未命中且加载失败时为 `None`。
+
+        English
+        --------
+        Stampede-proof String load (business-facing convenience).
+        Same semantics as `get_with_lock`, with a more ergonomic
+        argument order: `(key, db_loader, timeout_millis)`.
+        """
+        return self._stampede_load(
+            key, timeout_millis, db_loader,
+            wait_budget_millis=int(timeout_millis),
         )
+
+    def _stampede_load(
+        self,
+        key: str,
+        timeout_millis: int,
+        db_loader: Callable[[], str | None],
+        *,
+        wait_budget_millis: int,
+    ) -> str | None:
+        """Shared implementation for `get_with_lock` + `get_from_string_with_lock`.
+
+        Returns the cached value (on hit) or the loaded value
+        (after a successful db_loader round-trip). Returns `None`
+        if the db_loader returned `None` or if a competing stampede
+        lock holder didn't publish within the wait budget.
+        """
+        if timeout_millis <= 0:
+            raise ValueError("timeout_millis must be > 0")
+        if db_loader is None:
+            raise ValueError("db_loader is required")
+
+        # 1. Fast path: cache hit → return immediately. No Redis lock
+        #    acquired, no db_loader call.
+        cached = self.get(key, str)
+        if cached is not None:
+            return cached
+
+        # 2. Cache miss: try to acquire the per-key stampede lock.
+        #    The lock's TTL is the same as the cache TTL, so a
+        #    crashed lock-holder can't hold the lock for longer
+        #    than the cache entry it was about to publish.
+        request_id = uuid.uuid4().hex
+        lock_key = _make_stampede_lock_key(self._backend, key)
+        client = self._backend.raw_client()
+        if not _stampede_acquire(client, lock_key, request_id, timeout_millis):
+            # 3. Lost the lock race. Poll the cache for up to
+            #    `wait_budget_millis` (50ms cadence). If the winner
+            #    publishes, return the cached value. If not, give
+            #    up and let the caller decide.
+            return self._wait_for_publication(
+                key, wait_budget_millis=wait_budget_millis
+            )
+
+        # 4. We hold the stampede lock. Double-check the cache
+        #    (another holder may have published between our first
+        #    read and our lock acquisition).
+        try:
+            cached = self.get(key, str)
+            if cached is not None:
+                return cached
+            # 5. Still missing → invoke the db_loader.
+            value = db_loader()
+            if value is None:
+                return None
+            # 6. Publish: write to the cache. Note: we use the
+            #    caller-supplied TTL verbatim. The anti-avalanche
+            #    offset is intentionally NOT applied here — the
+            #    `*_with_lock` path is the canonical write path
+            #    and the caller is responsible for any TTL
+            #    jitter policy.
+            self.set_with_ttl(key, value, timeout_millis)
+            return value
+        finally:
+            # 7. Release the stampede lock (compare-and-delete so a
+            #    stale holder can't release a lock re-acquired by
+            #    someone else after our TTL expired).
+            try:
+                _stampede_release(client, lock_key, request_id)
+            except Exception:
+                # Release failures are non-fatal: the lock will
+                # expire on its own via the PX TTL. Don't mask the
+                # method's actual return value with a release
+                # error.
+                pass
+
+    def _wait_for_publication(
+        self, key: str, *, wait_budget_millis: int
+    ) -> str | None:
+        """Poll the cache for up to `wait_budget_millis` (50ms cadence).
+
+        Returns the published value, or `None` if no one published
+        within the budget.
+        """
+        deadline = time.monotonic() + (wait_budget_millis / 1000.0)
+        poll_interval_seconds = 0.05  # 50ms
+        while time.monotonic() < deadline:
+            time.sleep(poll_interval_seconds)
+            cached = self.get(key, str)
+            if cached is not None:
+                return cached
+        return None
 
     def batch_add_to_string(self, mapping: Dict[str, Any]) -> None:
         """High-level batch set WITHOUT TTL (anti-avalanche N/A)."""
