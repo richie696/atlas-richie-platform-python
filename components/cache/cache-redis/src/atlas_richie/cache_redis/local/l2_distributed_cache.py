@@ -45,8 +45,9 @@ that pins `max_size` to the caller's request. This way the LRU
 from __future__ import annotations
 
 import threading
+import time
 import weakref
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from atlas_richie.cache_core.local.config.local_cache_properties import (
     CacheDefinition,
@@ -143,6 +144,11 @@ class L2DistributedCache:
         self._key_locks_guard = threading.Lock()
         self._hits = 0
         self._misses = 0
+        # M5.3 observability counters (cumulative since construction;
+        # `stats()` is a snapshot of these).
+        self._in_process_loader_fan_in = 0
+        self._in_process_loader_wait_seconds_total = 0.0
+        self._loader_timeouts = 0
         self._stats_lock = threading.Lock()
 
     # ── Public API ───────────────────────────────────────────────
@@ -265,7 +271,13 @@ class L2DistributedCache:
 
         # 2. L1 miss. Acquire the per-key in-process stampede lock
         #    so concurrent in-process misses funnel to ONE loader call.
+        #    M5.3: track wait time + fan-in counters for `stats()`.
+        _lock_acquired_at = time.monotonic()
         with self._get_key_lock(key):
+            wait_seconds = time.monotonic() - _lock_acquired_at
+            with self._stats_lock:
+                self._in_process_loader_fan_in += 1
+                self._in_process_loader_wait_seconds_total += wait_seconds
             # 3. Double-check L1 (another thread may have just
             #    populated it under the lock).
             l1_value = self._local.get(self._region, key)
@@ -292,6 +304,9 @@ class L2DistributedCache:
             #    with a timeout (M5.1 helper).
             value = _call_db_loader_with_timeout(loader, loader_timeout_millis)
             if value is None:
+                # M5.3: record the timeout event for `stats()`.
+                with self._stats_lock:
+                    self._loader_timeouts += 1
                 return None
 
             # 6. Write to BOTH L1 and L2 with the effective TTL.
@@ -303,6 +318,160 @@ class L2DistributedCache:
                 pass
             self._value_ops.set_with_ttl(key, value, effective_ttl * 1000)
             return value
+
+    # ── M5.3: batch loader ─────────────────────────────────────────
+
+    def get_or_load_many(
+        self,
+        keys: Iterable[str],
+        loader: Callable[[List[str]], Dict[str, bytes]],
+        *,
+        ttl_seconds: int | None = None,
+        loader_timeout_millis: int | None = None,
+    ) -> Dict[str, Optional[bytes]]:
+        """按 batch 防进程内击穿：L1 命中的直接返回；L1 未命中的走 L2；都没中则在
+        单次锁保护下调用一次 `loader(missing_keys)` 拿 dict，回写 L1 + L2。
+
+        Args:
+            keys: 缓存键列表（任意 iterable）
+            loader: 批量回源加载器；输入 missing keys 列表，返回
+                `{key: value}` dict；missing 键不返回 / 返回 `None`
+                都表示"无值"（不写缓存）
+            ttl_seconds: 缓存 TTL（秒），`None` = 实例默认
+            loader_timeout_millis: 可选 — `loader` 的毫秒级超时
+                （M5.1 helper 复用），`None` = 无限时
+
+        Returns:
+            `Dict[str, Optional[bytes]]` — 每个请求 key 的值；
+            命中/loader 返回/超时/未找到都映射到 `bytes | None`。
+            返回 dict 的 keys 严格 = 入参 keys（顺序不保证）。
+
+        Raises:
+            ValueError: `loader is None` / `loader_timeout_millis <= 0`
+            `loader` 自身抛出的异常会原样传播
+
+        English
+        --------
+        Batch in-process stampede-proof load. The `loader` is called
+        ONCE per stampede (not once per missing key), with the list
+        of missing keys as input and a `{key: value}` dict as output.
+        Each result is then written to both L1 and L2.
+
+        The implementation acquires a per-BATCH lock (key = sorted
+        tuple of missing keys, hashed) so concurrent batch callers
+        funnel to one loader call. Per-key L1/L2 lookups happen
+        sequentially (not in parallel) for simplicity; the dominant
+        cost is usually the loader, not the cache reads.
+        """
+        if loader is None:
+            raise ValueError("loader is required")
+        if loader_timeout_millis is not None and loader_timeout_millis <= 0:
+            raise ValueError("loader_timeout_millis must be > 0 (or None)")
+        effective_ttl = ttl_seconds if (ttl_seconds is not None and ttl_seconds > 0) else self._ttl_seconds
+
+        # Deduplicate + preserve insertion order
+        keys_list = list(dict.fromkeys(keys))
+        if not keys_list:
+            return {}
+
+        results: Dict[str, Optional[bytes]] = {}
+        # Phase 1: try L1 for each key (no lock, no network).
+        for k in keys_list:
+            v = self._local.get(self._region, k)
+            if v is not None:
+                results[k] = v
+                with self._stats_lock:
+                    self._hits += 1
+        # Phase 2: collect keys still missing after L1.
+        missing = [k for k in keys_list if k not in results]
+        if not missing:
+            return results
+
+        # Phase 3: acquire the per-batch stampede lock.
+        #    M5.3: track wait time + fan-in counters for `stats()`.
+        batch_lock_key = self._make_batch_lock_key(missing)
+        _lock_acquired_at = time.monotonic()
+        with self._get_key_lock(batch_lock_key):
+            wait_seconds = time.monotonic() - _lock_acquired_at
+            with self._stats_lock:
+                self._in_process_loader_fan_in += 1
+                self._in_process_loader_wait_seconds_total += wait_seconds
+            # Phase 4: double-check L1 (another batch holder may have
+            # populated it under the lock).
+            for k in list(missing):
+                v = self._local.get(self._region, k)
+                if v is not None:
+                    results[k] = v
+                    with self._stats_lock:
+                        self._hits += 1
+            missing = [k for k in missing if k not in results]
+            if not missing:
+                return results
+
+            with self._stats_lock:
+                self._misses += len(missing)
+
+            # Phase 5: try L2 for each missing key (sequential for
+            # simplicity; L2 reads are cheap when keys are missing).
+            l2_hits: Dict[str, bytes] = {}
+            for k in missing:
+                v = self._value_ops.get(k, bytes)
+                if v is not None:
+                    l2_hits[k] = v
+            for k, v in l2_hits.items():
+                results[k] = v
+                try:
+                    self._local.put(self._region, k, v)
+                    self._local.expiry(self._region, k, effective_ttl * 1000)
+                except Exception:
+                    pass
+            missing = [k for k in missing if k not in l2_hits]
+            if not missing:
+                return results
+
+            # Phase 6: L1 + L2 all miss → call the loader ONCE for
+            # the whole batch (funnel).
+            value = _call_db_loader_with_timeout(
+                lambda: loader(missing), loader_timeout_millis
+            )
+            if value is None:
+                with self._stats_lock:
+                    self._loader_timeouts += 1
+                # Loader returned None / timed out → all `missing` keys
+                # are reported as `None` in the result.
+                for k in missing:
+                    results[k] = None
+                return results
+
+            # Phase 7: write each loaded value to L1 + L2.
+            for k, v in list(value.items()):
+                if v is None:
+                    results[k] = None
+                    continue
+                results[k] = v
+                try:
+                    self._local.put(self._region, k, v)
+                    self._local.expiry(self._region, k, effective_ttl * 1000)
+                except Exception:
+                    pass
+                self._value_ops.set_with_ttl(k, v, effective_ttl * 1000)
+            # Any `missing` keys that the loader didn't return are
+            # treated as "no value" (returns `None`).
+            for k in missing:
+                if k not in results:
+                    results[k] = None
+            return results
+
+    @staticmethod
+    def _make_batch_lock_key(keys: List[str]) -> str:
+        """Stable per-batch lock key.
+
+        Sort the keys to make `(["a", "b", "c"])` and `(["c", "b", "a"])`
+        collide on the same lock — otherwise concurrent batch callers
+        with different orderings of the same keys would each
+        independently call their own loader, defeating the funnel.
+        """
+        return "__batch_lock__::" + "::".join(sorted(keys))
 
     def _get_key_lock(self, key: str) -> _KeyLock:
         """Get-or-create the per-key `_KeyLock`.
@@ -320,16 +489,58 @@ class L2DistributedCache:
                 self._key_locks[key] = lock
             return lock
 
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> Dict[str, Any]:
         """Return a snapshot of L1 hit / miss counters and current
-        L1 size. Useful for tuning and observability."""
+        L1 size, plus M5.3 / R-M5.1 cumulative observability counters.
+
+        Useful for tuning and observability:
+
+        - `hits` / `misses` — L1+L2 cache hit / miss counts since
+          construction
+        - `l1_size` — current L1 entry count (best-effort, walks the
+          internal bucket)
+        - `max_size` — configured LRU `max_size` for this region
+        - `in_process_loader_fan_in` — total number of times the
+          in-process stampede lock was acquired (i.e. the number of
+          loader invocations across all `get_or_load` /
+          `get_or_load_many` calls; > 1 means concurrent misses
+          funneled to one loader call)
+        - `in_process_loader_wait_seconds` — total seconds the
+          cache thread spent waiting for the in-process stampede
+          lock (high = lots of contention)
+        - `key_lock_table_size` — current number of live per-key
+          `_KeyLock` entries (after GC of unused locks); gives a
+          sense of working-set size
+        - `loader_timeouts` — total number of times the loader
+          exceeded `loader_timeout_millis` (R-M5.1)
+        """
         with self._stats_lock:
             return {
                 "hits": self._hits,
                 "misses": self._misses,
                 "l1_size": self._l1_size(),
                 "max_size": self._max_size,
+                "in_process_loader_fan_in": self._in_process_loader_fan_in,
+                "in_process_loader_wait_seconds": self._in_process_loader_wait_seconds_total,
+                "key_lock_table_size": self._live_key_lock_count(),
+                "loader_timeouts": self._loader_timeouts,
             }
+
+    def _live_key_lock_count(self) -> int:
+        """Number of currently-live `_KeyLock` entries.
+
+        `WeakValueDictionary` doesn't expose `__len__` cleanly when
+        many entries have been GC'd but the dict still holds weak
+        refs. We force a `gc.collect()` per call (this is a stats
+        endpoint, called infrequently, not in the hot path) and
+        then read `len()`.
+        """
+        try:
+            import gc as _gc
+            _gc.collect()
+            return len(self._key_locks)
+        except Exception:
+            return -1
 
     # ── Internal ─────────────────────────────────────────────────
 
