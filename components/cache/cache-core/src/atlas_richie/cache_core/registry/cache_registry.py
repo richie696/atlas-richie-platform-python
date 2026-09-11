@@ -1,4 +1,25 @@
-"""Process-wide cache provider registry (mutual-exclusion enforced).
+"""进程级缓存 provider 注册表（强制互斥）。
+----
+`CacheRegistry` 是框架的"一进程一 provider"门禁：后端在启动期注册自己，
+静态外观 `GlobalCache` 从这里读取。已激活 provider 时再注册第二个会抛
+`StateError`，调用方必须先 `unregister()` 才能切换后端。这是有意为之：
+静默覆盖活跃 provider 会让一个组件在另一个组件不知情的情况下释放其
+Redis 客户端。
+
+线程安全：一个类级别 `Lock` 同时保护 `_registrar` 的读和写。读
+（`active()` / `is_registered()`）也拿锁，因此切换中途不会被观察到。
+锁仅覆盖赋值/查找过程，不覆盖用户级操作；最大延迟是 Lock acquire +
+属性写。
+
+为什么用 classmethod（而不是 instance + Holder 模式）：注册表本身就是
+进程级状态，实例化它没有意义。静态类是这种语义最诚实的表达。
+
+诊断：`active_provider()` 返回活跃 provider 的枚举（未初始化时为
+`None`），供日志和健康检查使用。
+
+English
+--------
+Process-wide cache provider registry (mutual-exclusion enforced).
 
 `CacheRegistry` is the framework's "one process, one provider" gate.
 Backends register themselves here at startup; the static facade

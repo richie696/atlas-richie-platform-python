@@ -1,4 +1,26 @@
-"""Per-instance manager for the active distributed cache provider.
+"""当前激活的分布式缓存 provider 的每实例管理器。
+----
+负责持有 16 个 ops + 11 个 function 的具体实现，供静态外观 `GlobalCache`
+调用。Java 端通过 Spring 的 `@Autowired` 注入装配依赖边，Python 端改为
+显式包装一个 `ProviderRegistrar`，行为契约一致。
+
+设计动机：为什么不直接让 `GlobalCache` 从 registrar 拿 ops？
+
+- **API 形态对齐**：Java 端 `GlobalCacheManager` 是 Spring bean，
+  `GlobalCache` 是静态消费者。Python 保留此形态让多租户场景和
+  per-test fixture 能直接构造隔离的 manager，不必走全局注册表。
+- **承载 per-instance 生命周期**：Pub/Sub、Keyspace listener 的
+  `close()` 钩子集中放在这里，避免污染静态外观。
+
+缓存策略：每个 `@property` 委托给 registrar 访问器，后端可自行决定
+是返回新实例还是记忆化。manager 本身不做缓存，是 thin pass-through。
+
+线程安全：manager 在构造后只读（`ProviderRegistrar` 引用固定）。有内部
+状态的后端必须自行保证线程安全。
+
+English
+--------
+Per-instance manager for the active distributed cache provider.
 
 Mirrors `cn.richie696.component.cache.GlobalCacheManager` (Java) —
 the per-instance bean that holds the 16 ops + 11 functions and is

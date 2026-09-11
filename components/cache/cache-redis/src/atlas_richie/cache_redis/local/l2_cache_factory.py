@@ -1,4 +1,15 @@
-"""L2 cache factory (R-223) — caches `L2DistributedCache` instances
+"""L2 缓存工厂（R-223）— 按 `(max_size, ttl_seconds)` 缓存 `L2DistributedCache` 实例。
+----
+对位 Java 端行为：相同配置返回相同实例（`cache.l1()` 始终是同一个
+默认配置实例），不同配置返回不同实例（`cache.l1(max_size=2)` 是
+另一个 per-config 实例）。
+
+线程安全：内置 `Lock` 保护 `_instances` dict；并发首次创建同一配置
+只会真正构造一次。
+
+English
+--------
+L2 cache factory (R-223) — caches `L2DistributedCache` instances
 per `(max_size, ttl_seconds)` combo.
 
 Mirrors the Java side's behavior: `cache.l1()` returns the same

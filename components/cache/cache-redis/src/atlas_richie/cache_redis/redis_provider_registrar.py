@@ -1,4 +1,22 @@
-"""`ProviderRegistrar` implementation for the Redis backend.
+"""Redis 后端 `ProviderRegistrar` 的具体实现。
+----
+状态：**M1-M4 + R-221 + R-222 + R-223 + R-224 已完成** — 30 个
+`ProviderRegistrar` 抽象方法全部真实实现，外加 R-221 的
+`NotificationOps.subscribe()`、R-222 的 Bloom Filter 工厂
+`bloom_shared()` / `bloom_in_memory()`、R-223 的 `l1()` 工厂、
+R-224 的 `snowflake()` 工厂。
+
+15 ops + 11 functions 实际由 16 个 manager 类实现：每个 manager 同时
+实现一个 ops Protocol 和对应的 function Protocol（与 Java 端 17 个
+manager 的布局对齐，但因 Python-only `StructOps` 和 lock 端 ops/function
+拆分略有差异）。
+
+构造期会一次性 eager 实例化所有 manager，因此 `install()` 之后
+所有能力立即可用。`close()` 负责关闭 event manager 和底层 backend。
+
+English
+--------
+`ProviderRegistrar` implementation for the Redis backend.
 
 Status: **M1-M4 + R-221 + R-222 complete** — all 30 abstract methods
 real, plus `NotificationOps.subscribe()` (R-221) and Bloom filter
