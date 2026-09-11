@@ -107,9 +107,12 @@ from ..serialization import decode_value, encode_value
 # scopes.
 from .redis_string_manager import (
     _call_db_loader_with_timeout,
+    _call_db_loader_with_timeout_ex,
+    _is_negative,
     _make_stampede_lock_key,
     _stampede_acquire,
     _stampede_release,
+    _NEGATIVE_SENTINEL,
 )
 
 T = TypeVar("T")
@@ -450,6 +453,77 @@ class RedisFieldManager(FieldOps, HashFunction):
                 pipe.hpexpire(self._k(key), ttl, field)
             pipe.execute()
 
+    # ── Negative-cache raw peek helpers (M5.7) ─────────────────────
+    # The M5.7 negative marker is a bytes sentinel that the typed
+    # `get(key, field, clazz)` read decodes through `decode_value`,
+    # which may round-trip the sentinel into a `None` (or empty
+    # str/list — anything that the typed read cannot distinguish
+    # from "no value"). To detect the marker we have to read the
+    # raw bytes directly with HGET. These helpers are M5.7-internal
+    # — they are not part of the public API.
+
+    def _peek_field_raw(self, key: str, field: str) -> bytes | None:
+        """HGET raw bytes for a single field, or `None` if absent.
+
+        Used only by the M5.7 negative-cache detect path.
+        """
+        return self._backend.raw_client().hget(self._k(key), field)
+
+    def _peek_fields_raw(
+        self, key: str, fields: Collection[str]
+    ) -> Dict[str, bytes | None]:
+        """HMGET raw bytes for a list of fields.
+
+        Returns `{field: bytes_or_None}` (None for absent fields).
+        Used only by the M5.7 negative-cache detect path on
+        `_stampede_load_many`.
+        """
+        fields_list = list(fields)
+        if not fields_list:
+            return {}
+        raw_values = self._backend.raw_client().hmget(
+            self._k(key), fields_list
+        )
+        return dict(zip(fields_list, raw_values))
+
+    def _merge_negative_markers(
+        self,
+        key: str,
+        fields: List[str],
+        result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """For any `field` in `fields` that is missing from
+        `result`, peek the raw bytes; if they are the M5.7 negative
+        sentinel, the field is treated as "loader already
+        determined no value" and is EXCLUDED from the returned
+        dict (consistent with the M5.1 "full-miss timeout returns
+        `{}`" contract — the marker is a cached "no value"
+        answer, not a cached `None` value).
+
+        Fields with real cached values stay in `result` untouched.
+        """
+        missing = [f for f in fields if f not in result]
+        if not missing:
+            return result
+        try:
+            raw = self._peek_fields_raw(key, missing)
+        except Exception:
+            return result
+        # Negative markers translate to "field absent from result";
+        # we drop the field entirely. Real `None` decoded values
+        # would have been returned as `None` by the typed read
+        # and so would already be in `result[f] = None` — we
+        # never overwrite those with the marker's "absent" semantics.
+        for f, raw_bytes in raw.items():
+            if _is_negative(raw_bytes) and f in result:
+                # Defensive: a `result` entry for this field would
+                # mean a non-None decoded value, but the raw
+                # bytes claim it's a negative marker. The typed
+                # read should have raised before this, but in
+                # case the data raced, drop it.
+                del result[f]
+        return result
+
     # ── Public surface: FieldOps ────────────────────────────────────
 
     def get_with_lock(
@@ -461,6 +535,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         db_loader: Callable[[], Any],
         *,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> Any:
         """防缓存击穿：单 Hash field。
 
@@ -482,13 +557,18 @@ class RedisFieldManager(FieldOps, HashFunction):
                 `None` 处理（不写缓存），让 caller 决定是否重试。
                 超时的 loader 可能在后台继续运行（best-effort
                 终止，详见 `_call_db_loader_with_timeout`）。
+            negative_cache_ttl_millis: 可选 — M5.7：超时负缓存
+                TTL；详见 `RedisStringManager.get_with_lock`。
+                仅在 TIMEOUT 时写；自然 `None` 不写。
 
         Returns:
-            缓存值；未命中且加载失败或超时时为 ``None``。
+            缓存值；未命中且加载失败或超时时为 ``None``；命中负缓存
+            标记时同样为 ``None``。
 
         Raises:
             ValueError: ``timeout_millis <= 0``、``db_loader`` 为
-                ``None``，或 ``loader_timeout_millis <= 0``。
+                ``None``、``loader_timeout_millis <= 0``，或
+                ``negative_cache_ttl_millis <= 0``。
             ``db_loader`` 自身抛出的异常会原样传播。
 
         English
@@ -509,6 +589,10 @@ class RedisFieldManager(FieldOps, HashFunction):
         (no cache write). Exceptions from `db_loader` are
         re-raised unchanged.
 
+        M5.7: `negative_cache_ttl_millis` writes a short-TTL
+        negative marker on TIMEOUT so subsequent callers within
+        the window return `None` without re-invoking the loader.
+
         Mirrors `cn.richie696.component.cache.function.HashFunction.
         getFromHashWithLock(key, hashKey, clazz, dbLoader, timeout)`.
         """
@@ -516,6 +600,7 @@ class RedisFieldManager(FieldOps, HashFunction):
             key, field, clazz, timeout_millis, db_loader,
             use_typed=False, reference=None,
             loader_timeout_millis=loader_timeout_millis,
+            negative_cache_ttl_millis=negative_cache_ttl_millis,
         )
 
     def get_with_lock_typed(
@@ -527,6 +612,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         db_loader: Callable[[], Any],
         *,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> Any:
         """防缓存击穿：单 Hash field（运行时类型版本）。
 
@@ -542,13 +628,17 @@ class RedisFieldManager(FieldOps, HashFunction):
             db_loader: 回源加载器。
             loader_timeout_millis: 可选 — M5.1：`db_loader` 的
                 毫秒级超时。详见 `get_with_lock` 文档。
+            negative_cache_ttl_millis: 可选 — M5.7：超时负缓存
+                TTL；详见 `get_with_lock` 文档。
 
         Returns:
-            缓存值；未命中且加载失败或超时时为 ``None``。
+            缓存值；未命中且加载失败或超时时为 ``None``；命中负缓存
+            标记时同样为 ``None``。
 
         Raises:
             ValueError: ``timeout_millis <= 0``、``db_loader`` 为
-                ``None``，或 ``loader_timeout_millis <= 0``。
+                ``None``、``loader_timeout_millis <= 0``，或
+                ``negative_cache_ttl_millis <= 0``。
             ``db_loader`` 自身抛出的异常会原样传播。
 
         English
@@ -560,7 +650,9 @@ class RedisFieldManager(FieldOps, HashFunction):
         for the key. Locking and writeback are identical to
         `get_with_lock`. The `loader_timeout_millis` kwarg governs
         only the `db_loader()` call; the typed read (after the
-        loader returns) is in-process and bounded.
+        loader returns) is in-process and bounded. M5.7:
+        `negative_cache_ttl_millis` opts into a short-TTL
+        negative-cache marker on TIMEOUT.
 
         Mirrors `cn.richie696.component.cache.function.HashFunction.
         getFromHashWithLock(key, hashKey, reference, dbLoader,
@@ -570,6 +662,7 @@ class RedisFieldManager(FieldOps, HashFunction):
             key, field, None, timeout_millis, db_loader,
             use_typed=True, reference=reference,
             loader_timeout_millis=loader_timeout_millis,
+            negative_cache_ttl_millis=negative_cache_ttl_millis,
         )
 
     def get_many_with_lock(
@@ -581,6 +674,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         db_loader: Callable[[], Dict[str, Any] | None],
         *,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> Dict[str, Any]:
         """防缓存击穿：批量 Hash field。
 
@@ -604,6 +698,10 @@ class RedisFieldManager(FieldOps, HashFunction):
                 `None` 处理（不写缓存），让 caller 决定是否重试。
                 **不要**按字段循环使用多个超时 — 整批是单次 loader
                 调用。
+            negative_cache_ttl_millis: 可选 — M5.7：超时负缓存
+                TTL。TIMEOUT 时向**所有未命中的字段**写一个负缓存
+                标记；自然 `None` 不写。详见
+                `RedisStringManager.get_with_lock` 文档。
 
         Returns:
             ``{field: value}`` 字典，键集合与传入 ``fields`` 一致；
@@ -611,7 +709,8 @@ class RedisFieldManager(FieldOps, HashFunction):
 
         Raises:
             ValueError: ``timeout_millis <= 0``、``db_loader`` 为
-                ``None``，或 ``loader_timeout_millis <= 0``。
+                ``None``、``loader_timeout_millis <= 0``，或
+                ``negative_cache_ttl_millis <= 0``。
             ``db_loader`` 自身抛出的异常会原样传播。
 
         English
@@ -629,12 +728,21 @@ class RedisFieldManager(FieldOps, HashFunction):
         call. Do NOT loop per-key with separate timeouts — the
         whole batch is one loader invocation.
 
+        M5.7: on a TIMEOUT, `negative_cache_ttl_millis` writes a
+        per-field negative marker (HSET + HPEXPIRE) so subsequent
+        callers within the window see the missing fields as
+        already-cached `None` (the read path uses
+        `_is_negative(...)` to detect the marker). Only fires on
+        TIMEOUT, never on a natural `None` / empty dict from
+        the loader.
+
         Mirrors `cn.richie696.component.cache.function.HashFunction.
         getFromHashWithLock(key, hashKeys, clazz, dbLoader, timeout)`.
         """
         return self._stampede_load_many(
             key, fields, clazz, timeout_millis, db_loader,
             loader_timeout_millis=loader_timeout_millis,
+            negative_cache_ttl_millis=negative_cache_ttl_millis,
         )
 
     # ── Public surface: HashFunction ────────────────────────────────
@@ -647,6 +755,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         timeout_millis: int,
         *,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> Any:
         """防缓存击穿：Hash 对象（按对象整体缓存）。
 
@@ -663,13 +772,17 @@ class RedisFieldManager(FieldOps, HashFunction):
             timeout_millis: 缓存 TTL（毫秒）。
             loader_timeout_millis: 可选 — M5.1：`db_loader` 的
                 毫秒级超时。详见 `get_with_lock` 文档。
+            negative_cache_ttl_millis: 可选 — M5.7：超时负缓存
+                TTL；详见 `get_with_lock` 文档。
 
         Returns:
-            缓存对象；未命中且加载失败或超时时为 ``None``。
+            缓存对象；未命中且加载失败或超时时为 ``None``；命中
+            负缓存标记时同样为 ``None``。
 
         Raises:
             ValueError: ``timeout_millis <= 0``、``db_loader`` 为
-                ``None``，或 ``loader_timeout_millis <= 0``。
+                ``None``、``loader_timeout_millis <= 0``，或
+                ``negative_cache_ttl_millis <= 0``。
             ``db_loader`` 自身抛出的异常会原样传播。
 
         English
@@ -680,6 +793,8 @@ class RedisFieldManager(FieldOps, HashFunction):
         per-key stampede lock, calls `db_loader`, and writes the
         result back. The lock granularity is the whole key (not a
         per-field lock) because the object is the protected unit.
+        M5.7: `negative_cache_ttl_millis` writes a short-TTL
+        negative marker on TIMEOUT.
 
         Mirrors `cn.richie696.component.cache.function.HashFunction.
         getObjectFromHashWithLock(key, clazz, dbLoader, timeout)`.
@@ -687,6 +802,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         return self._stampede_load_object(
             key, clazz, timeout_millis, db_loader,
             loader_timeout_millis=loader_timeout_millis,
+            negative_cache_ttl_millis=negative_cache_ttl_millis,
         )
 
     def get_from_hash_with_lock(
@@ -698,6 +814,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         timeout_millis: int,
         *,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> Any:
         """防缓存击穿：Hash 单 field（业务级便捷方法）。
 
@@ -713,20 +830,26 @@ class RedisFieldManager(FieldOps, HashFunction):
             timeout_millis: 缓存 TTL（毫秒）。
             loader_timeout_millis: 可选 — M5.1：`db_loader` 的
                 毫秒级超时。详见 `get_with_lock` 文档。
+            negative_cache_ttl_millis: 可选 — M5.7：超时负缓存
+                TTL；详见 `get_with_lock` 文档。
 
         Returns:
-            字段值；未命中且加载失败或超时时为 ``None``。
+            字段值；未命中且加载失败或超时时为 ``None``；命中
+            负缓存标记时同样为 ``None``。
 
         Raises:
             ValueError: ``timeout_millis <= 0``、``db_loader`` 为
-                ``None``，或 ``loader_timeout_millis <= 0``。
+                ``None``、``loader_timeout_millis <= 0``，或
+                ``negative_cache_ttl_millis <= 0``。
             ``db_loader`` 自身抛出的异常会原样传播。
 
         English
         --------
         Stampede-proof single-field load (business-facing
         convenience). Same semantics as `FieldOps.get_with_lock`,
-        with a more ergonomic argument order.
+        with a more ergonomic argument order. Honours
+        `loader_timeout_millis` (M5.1) and
+        `negative_cache_ttl_millis` (M5.7).
 
         Mirrors `cn.richie696.component.cache.function.HashFunction.
         getFromHashWithLock(key, hashKey, clazz, dbLoader, timeout)`.
@@ -735,6 +858,7 @@ class RedisFieldManager(FieldOps, HashFunction):
             key, hash_key, clazz, timeout_millis, db_loader,
             use_typed=False, reference=None,
             loader_timeout_millis=loader_timeout_millis,
+            negative_cache_ttl_millis=negative_cache_ttl_millis,
         )
 
     def get_from_hash_with_lock_typed(
@@ -746,6 +870,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         timeout_millis: int,
         *,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> Any:
         """防缓存击穿：Hash 单 field（运行时类型版本，业务级便捷方法）。
 
@@ -761,19 +886,25 @@ class RedisFieldManager(FieldOps, HashFunction):
             timeout_millis: 缓存 TTL（毫秒）。
             loader_timeout_millis: 可选 — M5.1：`db_loader` 的
                 毫秒级超时。详见 `get_with_lock` 文档。
+            negative_cache_ttl_millis: 可选 — M5.7：超时负缓存
+                TTL；详见 `get_with_lock` 文档。
 
         Returns:
-            字段值；未命中且加载失败或超时时为 ``None``。
+            字段值；未命中且加载失败或超时时为 ``None``；命中
+            负缓存标记时同样为 ``None``。
 
         Raises:
             ValueError: ``timeout_millis <= 0``、``db_loader`` 为
-                ``None``，或 ``loader_timeout_millis <= 0``。
+                ``None``、``loader_timeout_millis <= 0``，或
+                ``negative_cache_ttl_millis <= 0``。
             ``db_loader`` 自身抛出的异常会原样传播。
 
         English
         --------
         Stampede-proof single-field load with a runtime-resolved
         type, with the `HashFunction`-style argument order.
+        Honours `loader_timeout_millis` (M5.1) and
+        `negative_cache_ttl_millis` (M5.7).
 
         Mirrors `cn.richie696.component.cache.function.HashFunction.
         getFromHashWithLock(key, hashKey, reference, dbLoader,
@@ -783,6 +914,7 @@ class RedisFieldManager(FieldOps, HashFunction):
             key, hash_key, None, timeout_millis, db_loader,
             use_typed=True, reference=reference,
             loader_timeout_millis=loader_timeout_millis,
+            negative_cache_ttl_millis=negative_cache_ttl_millis,
         )
 
     # ══════════════════════════════════════════════════════════════
@@ -800,6 +932,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         use_typed: bool,
         reference: type | None,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> Any:
         """Shared implementation for the four single-field `*_with_lock` variants.
 
@@ -813,15 +946,30 @@ class RedisFieldManager(FieldOps, HashFunction):
         backstop on `db_loader`. `None` preserves legacy (unbounded)
         behavior. A timed-out loader returns `None` (no cache
         write). Exceptions from `db_loader` are re-raised unchanged.
+
+        M5.7: `negative_cache_ttl_millis` writes a bytes sentinel
+        to the field (HSET + HPEXPIRE) on TIMEOUT only; subsequent
+        callers within the window return `None` without re-invoking
+        the loader. The read path uses `_is_negative(...)` to
+        distinguish a real `None` / empty value from the marker.
+        M5.7 detection runs BEFORE the typed `get()` to avoid
+        serialisation errors on non-str clazz types.
         """
         self._validate_lock_args(
-            timeout_millis, db_loader, loader_timeout_millis
+            timeout_millis, db_loader, loader_timeout_millis,
+            negative_cache_ttl_millis,
         )
 
-        # 1. Fast path: cache hit → return immediately.
-        cached = self._read_field_for_lock(key, field, clazz, use_typed, reference)
-        if cached is not None:
-            return cached
+        # 1. Fast path. M5.7: detect the negative marker via a
+        #    RAW HGET BEFORE the typed `get(...)` — the sentinel
+        #    bytes may not be decodable through the user's `clazz`.
+        raw_peek = self._peek_field_raw(key, field)
+        if raw_peek is not None:
+            if _is_negative(raw_peek):
+                return None
+            return self._read_field_for_lock(
+                key, field, clazz, use_typed, reference
+            )
 
         # 2. Cache miss: acquire the per-(key, field) stampede lock.
         request_id = uuid.uuid4().hex
@@ -830,29 +978,47 @@ class RedisFieldManager(FieldOps, HashFunction):
         if not _stampede_acquire(client, lock_key, request_id, timeout_millis):
             # 3. Lost the lock race. Poll until the winner publishes
             #    or the wait budget expires.
-            return self._wait_for_field_publication(
+            published = self._wait_for_field_publication(
                 key, field, clazz, use_typed, reference,
                 wait_budget_millis=int(timeout_millis),
             )
+            if _is_negative(self._peek_field_raw(key, field)):
+                return None
+            return published
 
         try:
             # 4. Double-check the cache (another holder may have
             #    published between our first read and lock acquisition).
-            cached = self._read_field_for_lock(
-                key, field, clazz, use_typed, reference
-            )
-            if cached is not None:
-                return cached
+            raw_peek = self._peek_field_raw(key, field)
+            if raw_peek is not None:
+                if _is_negative(raw_peek):
+                    return None
+                return self._read_field_for_lock(
+                    key, field, clazz, use_typed, reference
+                )
             # 5. Still missing → invoke the db_loader, optionally
-            #    with a timeout. `_call_db_loader_with_timeout` either
-            #    returns the loader's return value, returns `None` on
-            #    timeout, or re-raises the loader's exception. The
-            #    typed read (for the `_typed` variants) happens AFTER
-            #    this returns, in-process and bounded.
-            value = _call_db_loader_with_timeout(
+            #    with a timeout. `_call_db_loader_with_timeout_ex`
+            #    returns `(value, timed_out)`; we use the flag to
+            #    decide whether to write a negative-cache marker
+            #    (M5.7). The typed read (for the `_typed` variants)
+            #    happens AFTER this returns, in-process and bounded.
+            value, was_timed_out = _call_db_loader_with_timeout_ex(
                 db_loader, loader_timeout_millis
             )
             if value is None:
+                # M5.7: TIMEOUT → write a per-field negative marker.
+                if (
+                    was_timed_out
+                    and negative_cache_ttl_millis is not None
+                    and negative_cache_ttl_millis > 0
+                ):
+                    try:
+                        self._set_field_with_ttl(
+                            key, field, _NEGATIVE_SENTINEL,
+                            int(negative_cache_ttl_millis),
+                        )
+                    except Exception:
+                        pass
                 return None
             # 6. Publish: HSET + HPEXPIRE with the caller-supplied
             #    TTL (no anti-avalanche; the lock-holder is the
@@ -879,6 +1045,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         db_loader: Callable[[], Any],
         *,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> Any:
         """Implementation for `get_object_from_hash_with_lock`.
 
@@ -886,36 +1053,67 @@ class RedisFieldManager(FieldOps, HashFunction):
         backstop on `db_loader`. `None` preserves legacy (unbounded)
         behavior. A timed-out loader returns `None` (no cache
         write). Exceptions from `db_loader` are re-raised unchanged.
+
+        M5.7: `negative_cache_ttl_millis` writes a bytes sentinel
+        to ``_OBJECT_FIELD`` on TIMEOUT only; subsequent callers
+        within the window return `None` without re-invoking the
+        loader. M5.7 detection runs BEFORE the typed `get()`
+        because the sentinel bytes are not valid JSON and would
+        blow up `decode_value(..., dict)`.
         """
         self._validate_lock_args(
-            timeout_millis, db_loader, loader_timeout_millis
+            timeout_millis, db_loader, loader_timeout_millis,
+            negative_cache_ttl_millis,
         )
 
-        # 1. Fast path: HGET the reserved object field.
-        cached = self.get(key, _OBJECT_FIELD, clazz)
-        if cached is not None:
-            return cached
+        # 1. Fast path. M5.7: detect the negative marker via a
+        #    RAW HGET BEFORE the typed `get(...)` — the sentinel
+        #    bytes are not valid JSON and `decode_value(sentinel,
+        #    dict)` would raise `SerializationError`.
+        raw_peek = self._peek_field_raw(key, _OBJECT_FIELD)
+        if raw_peek is not None:
+            if _is_negative(raw_peek):
+                return None
+            return self.get(key, _OBJECT_FIELD, clazz)
 
         # 2. Cache miss: acquire the per-key stampede lock.
         request_id = uuid.uuid4().hex
         lock_key = _make_object_lock_key(self._backend, key)
         client = self._backend.raw_client()
         if not _stampede_acquire(client, lock_key, request_id, timeout_millis):
-            return self._wait_for_object_publication(
+            published = self._wait_for_object_publication(
                 key, clazz, wait_budget_millis=int(timeout_millis),
             )
+            if _is_negative(self._peek_field_raw(key, _OBJECT_FIELD)):
+                return None
+            return published
 
         try:
-            # 3. Double-check the cache.
-            cached = self.get(key, _OBJECT_FIELD, clazz)
-            if cached is not None:
-                return cached
+            # 3. Double-check the cache (raw peek first to avoid
+            #    JSON-decoding the sentinel).
+            raw_peek = self._peek_field_raw(key, _OBJECT_FIELD)
+            if raw_peek is not None:
+                if _is_negative(raw_peek):
+                    return None
+                return self.get(key, _OBJECT_FIELD, clazz)
             # 4. Still missing → invoke the db_loader, optionally
-            #    with a timeout.
-            value = _call_db_loader_with_timeout(
+            #    with a timeout. M5.7: check timed_out flag.
+            value, was_timed_out = _call_db_loader_with_timeout_ex(
                 db_loader, loader_timeout_millis
             )
             if value is None:
+                if (
+                    was_timed_out
+                    and negative_cache_ttl_millis is not None
+                    and negative_cache_ttl_millis > 0
+                ):
+                    try:
+                        self._set_field_with_ttl(
+                            key, _OBJECT_FIELD, _NEGATIVE_SENTINEL,
+                            int(negative_cache_ttl_millis),
+                        )
+                    except Exception:
+                        pass
                 return None
             # 5. Publish.
             self._set_field_with_ttl(key, _OBJECT_FIELD, value, timeout_millis)
@@ -935,6 +1133,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         db_loader: Callable[[], Dict[str, Any] | None],
         *,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> Dict[str, Any]:
         """Implementation for `get_many_with_lock`.
 
@@ -945,19 +1144,65 @@ class RedisFieldManager(FieldOps, HashFunction):
         here, which is treated the same as a "loader returned
         None" miss: no cache write, return whatever was already
         cached (or `{}`).
+
+        M5.7: `negative_cache_ttl_millis` writes a per-field
+        bytes sentinel (HSET + HPEXPIRE) on TIMEOUT for each
+        missing field. Subsequent callers within the window
+        see the missing fields as already-cached `None`. Only
+        fires on TIMEOUT, never on a natural `None` / empty
+        dict from the loader.
         """
         self._validate_lock_args(
-            timeout_millis, db_loader, loader_timeout_millis
+            timeout_millis, db_loader, loader_timeout_millis,
+            negative_cache_ttl_millis,
         )
         fields_list = list(fields)
         if not fields_list:
             return {}
 
         # 1. Fast path: HMGET all fields; only treat it as a full
-        #    hit when EVERY requested field is present.
+        #    hit when EVERY requested field is present. M5.7:
+        #    individual negative markers are detected via a raw
+        #    HGET peek on the missing fields (so a "field missing
+        #    because the previous call wrote a negative marker"
+        #    is recognised as a hit rather than a miss that would
+        #    re-acquire the lock).
         cached = self.get_many(key, fields_list, clazz)
+        # M5.7: peek the raw bytes for ALL requested fields so we
+        # can detect negative-cache markers before the typed
+        # read's `decode_value` round-trip masks them as benign
+        # strings. Without this, a "full hit" of negative markers
+        # would be returned to the caller as a dict of sentinel
+        # strings, which is neither "real value" nor "no value"
+        # — the markers must be excluded.
+        raw_peek_all = self._peek_fields_raw(key, fields_list)
+        negative_in_all = {
+            f for f, raw in raw_peek_all.items() if _is_negative(raw)
+        }
+        if negative_in_all:
+            # Drop negative-marker fields from the cached dict.
+            for f in negative_in_all:
+                if cached and f in cached:
+                    del cached[f]
+            if not cached and len(negative_in_all) == len(fields_list):
+                # Every requested field is a negative marker —
+                # surface as `{}` (full-miss "no value" answer,
+                # consistent with the M5.1 contract).
+                return {}
         if cached and len(cached) == len(fields_list):
             return cached
+        # M5.7: pre-fetch raw bytes to detect negative markers
+        # for any fields that came back missing in the typed
+        # read above. Negative markers are "no value" answers
+        # and the field is therefore EXCLUDED from the result
+        # (consistent with the M5.1 "full-miss timeout returns
+        # `{}`" contract).
+        missing_fields = [
+            f for f in fields_list
+            if (not cached or f not in cached) and f not in negative_in_all
+        ]
+        if not missing_fields:
+            return cached if cached else {}
 
         # 2. Cache miss (or partial hit): acquire the per-(key,
         #    sorted-fields) batch stampede lock.
@@ -972,6 +1217,12 @@ class RedisFieldManager(FieldOps, HashFunction):
             # On lock loss, the winner may have published only a
             # subset; we can't add a db_loader round-trip, so return
             # whatever the wait surfaced (may be a partial hit or {}).
+            # M5.7: also surface any negative markers we observe
+            # on raw read as `None` in the result.
+            if waited:
+                waited = self._merge_negative_markers(
+                    key, fields_list, waited,
+                )
             return waited
 
         try:
@@ -981,14 +1232,39 @@ class RedisFieldManager(FieldOps, HashFunction):
                 return cached
             # 4. Still missing (or partial) → invoke the db_loader
             #    ONCE for the whole batch, optionally with a timeout.
-            loaded = _call_db_loader_with_timeout(
+            loaded, was_timed_out = _call_db_loader_with_timeout_ex(
                 db_loader, loader_timeout_millis
             )
             if not loaded:
-                # Loader returned None or empty dict → don't write
-                # anything; return whatever was already cached
-                # (may be a partial hit) or {}.
-                return cached if cached else {}
+                # Loader returned None or empty dict. M5.7: on
+                # TIMEOUT, optionally write a per-field negative
+                # marker for each originally-missing field so
+                # subsequent callers see them as already-cached
+                # `None` within the TTL window.
+                if (
+                    was_timed_out
+                    and negative_cache_ttl_millis is not None
+                    and negative_cache_ttl_millis > 0
+                ):
+                    try:
+                        self._set_many_with_ttl(
+                            key,
+                            {f: _NEGATIVE_SENTINEL for f in missing_fields},
+                            int(negative_cache_ttl_millis),
+                        )
+                    except Exception:
+                        pass
+                if cached:
+                    # M5.7: still apply negative-marker merge to
+                    # the partial hit so a previously-pending
+                    # negative field is reported as `None`.
+                    cached = self._merge_negative_markers(
+                        key, fields_list, cached,
+                    )
+                    return cached
+                return self._merge_negative_markers(
+                    key, fields_list, {},
+                )
             # 5. Publish all loaded values back to the hash.
             self._set_many_with_ttl(key, loaded, timeout_millis)
             # 6. Return the UNION of cached + loaded. The caller
@@ -1011,6 +1287,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         timeout_millis: int,
         db_loader: Callable[[], Any] | None,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> None:
         """Shared argument validation for the `*_with_lock` methods."""
         if timeout_millis is None or int(timeout_millis) <= 0:
@@ -1019,6 +1296,10 @@ class RedisFieldManager(FieldOps, HashFunction):
             raise ValueError("db_loader is required")
         if loader_timeout_millis is not None and loader_timeout_millis <= 0:
             raise ValueError("loader_timeout_millis must be > 0 (or None)")
+        if negative_cache_ttl_millis is not None and negative_cache_ttl_millis <= 0:
+            raise ValueError(
+                "negative_cache_ttl_millis must be > 0 (or None)"
+            )
 
     def _read_field_for_lock(
         self,
@@ -1077,12 +1358,38 @@ class RedisFieldManager(FieldOps, HashFunction):
         """Poll HMGET; return the FULLY-LOADED dict, or whatever is
         cached when the budget expires (matches the String backend's
         "publish or give up" semantics on a per-call basis — a
-        partial hit is still better than `None`)."""
+        partial hit is still better than `None`).
+
+        M5.7: any field whose raw bytes are the negative-cache
+        marker is excluded from the returned dict (consistent
+        with the "full-miss timeout returns `{}`" contract — a
+        negative marker is a cached "no value" answer, not a
+        cached `None` value).
+        """
         deadline = time.monotonic() + (wait_budget_millis / 1000.0)
         last: Dict[str, Any] = {}
         while time.monotonic() < deadline:
             time.sleep(_STAMPEDE_POLL_INTERVAL_SECONDS)
             cached = self.get_many(key, fields, clazz)
+            # M5.7: drop any fields whose raw bytes are the
+            # negative marker — the typed `get_many` would have
+            # decoded them to a benign str, not a real value.
+            try:
+                raw_peek = self._peek_fields_raw(
+                    key, [f for f in fields if f not in (cached or {})]
+                )
+                negative_present = {
+                    f for f, raw in raw_peek.items()
+                    if _is_negative(raw)
+                }
+            except Exception:
+                negative_present = set()
+            if cached:
+                for f in list(cached.keys()):
+                    if f in negative_present:
+                        del cached[f]
+            else:
+                cached = {}
             if cached and len(cached) == len(fields):
                 return cached
             last = cached

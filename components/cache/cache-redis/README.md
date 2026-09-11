@@ -33,7 +33,6 @@ atlas_richie/cache_redis/
 ├── redis_provider_registrar.py          # ProviderRegistrar impl (M1: 2/30 real, 28 stub)
 └── managers/
     ├── __init__.py
-    ├── _stubs.py                        # NotImplementedError stubs for the 28 not-yet-implemented methods
     └── redis_string_manager.py          # M1: ValueOps + StringFunction
 ```
 

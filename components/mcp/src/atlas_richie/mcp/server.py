@@ -1,4 +1,53 @@
-"""MCP server facade, immutable registries, and the protocol invocation chain."""
+"""MCP server 外观、不可变注册表与协议调用链。
+
+中文
+----
+`McpServer` 是当前无状态 MCP server 能力的**框架无关外观**。
+
+- **注册**：通过 `tool` / `resource` / `resource_template` / `prompt` /
+  `completion` 装饰器；每次注册都构造新的 `McpRegistrySnapshot`，
+  原子地替换旧的不可变快照。
+- **调用**：固定链路
+  `dialect → identity → authorization → schema → handler → output schema →
+  safe wire result`；notification 不产生响应。
+- **错误处理**：所有 `McpError` 转 JSON-RPC error 响应；其他异常归
+  `-32603 Internal error`；notification 路径不返回任何内容。
+- **取消**：`notifications/cancelled` 携带 `requestId` 触发已注册 cancellation
+  token；`asyncio.CancelledError` / `McpInvocationCancelled` 透传。
+- **MRTR**：注册 `MrtStateBinding` 后，`tools/call` / `prompts/get` 会在
+  `InputRequired` 时颁发签名 `requestState` 并校验回传。
+
+English
+--------
+MCP server facade, immutable registries, and the protocol invocation
+chain.
+
+`McpServer` is the **framework-neutral facade** over the current
+stateless MCP server capabilities.
+
+- **Registration**: through the `tool` / `resource` / `resource_template`
+  / `prompt` / `completion` decorators; each registration builds a
+  new `McpRegistrySnapshot` and atomically replaces the old immutable
+  snapshot.
+- **Invocation**: the fixed chain
+  `dialect → identity → authorization → schema → handler → output
+  schema → safe wire result`; notifications produce no response.
+- **Error handling**: every `McpError` is converted to a JSON-RPC
+  error response; other exceptions are collapsed to
+  `-32603 Internal error`; the notification path returns nothing.
+- **Cancellation**: a `notifications/cancelled` carrying `requestId`
+  triggers the registered cancellation token;
+  `asyncio.CancelledError` / `McpInvocationCancelled` are propagated
+  unchanged.
+- **MRTR**: when an `MrtStateBinding` is registered, `tools/call` and
+  `prompts/get` issue a signed `requestState` on `InputRequired` and
+  verify it on the return path.
+
+Mirrors `cn.richie696.component.mcp.server.tool.McpToolRegistry` +
+`McpToolDispatcher` + `McpTimeoutInvocationInterceptor` +
+`McpAuditInvocationInterceptor` (Java — same shape, framework-neutral
+in Python).
+"""
 
 from __future__ import annotations
 
@@ -35,11 +84,59 @@ _UNSET = object()
 
 
 class McpServer:
-    """Framework-free facade over current stateless MCP server capabilities.
+    """中文
+    ----
+    框架无关的当前无状态 MCP server 能力外观。
 
-    Registration atomically replaces immutable mapping snapshots.  Invocation
-    follows a fixed chain: dialect -> identity -> authorization -> schema ->
-    handler -> output schema -> safe wire result.
+    注册原子地替换不可变 mapping 快照；调用遵循固定链路
+    `dialect → identity → authorization → schema → handler → output schema →
+    safe wire result`。
+
+    Args:
+        identity: 服务端自身身份（默认 `atlas-richie-mcp/0.1.0`）。
+        instructions: 在 `server/discover` 中广播的可选使用说明。
+        context_factory: 从 request meta 构造 `ToolContext` 的工厂。
+        dialect: 协议方言，默认 `Mcp20260728Dialect`。
+        schema_compiler: JSON Schema 编译器；未提供时使用 `input_schema` /
+            `output_schema` 的 tool 在被调用时抛 `CapabilityUnavailable`。
+        page_size: 列表协议每页最大条目数（1~1000）。
+        invocation_interceptors: 业务方可插入的自定义拦截器。
+        audit_sink: 审计事件接收器。
+        trace_sink: trace 事件接收器。
+        mrtr_state: MRTR 多轮状态绑定（可空）。
+
+    Raises:
+        ValueError: `page_size` 不在 1~1000。
+
+    English
+    --------
+    Framework-free facade over current stateless MCP server
+    capabilities.
+
+    Registration atomically replaces immutable mapping snapshots.
+    Invocation follows the fixed chain
+    `dialect → identity → authorization → schema → handler → output
+    schema → safe wire result`.
+
+    Args:
+        identity: server-side identity (default
+            `atlas-richie-mcp/0.1.0`).
+        instructions: optional instructions advertised by
+            `server/discover`.
+        context_factory: factory that builds a `ToolContext` from
+            the request meta.
+        dialect: protocol dialect; default `Mcp20260728Dialect`.
+        schema_compiler: JSON Schema compiler; tools declaring
+            `input_schema` / `output_schema` raise
+            `CapabilityUnavailable` if invoked without one.
+        page_size: max items per page in list protocols (1~1000).
+        invocation_interceptors: caller-supplied extra interceptors.
+        audit_sink: audit event sink.
+        trace_sink: trace event sink.
+        mrtr_state: optional MRTR multi-round state binding.
+
+    Raises:
+        ValueError: `page_size` is not in 1~1000.
     """
 
     def __init__(
@@ -82,7 +179,49 @@ class McpServer:
         output_schema: Mapping[str, Any] | None = None,
         annotations: Mapping[str, Any] | None = None,
     ) -> Callable[[Callable[..., object]], Callable[..., object]]:
-        """Register immutable tool metadata; the decorator performs no I/O."""
+        """中文
+        ----
+        注册一个不可变的 tool 描述符；装饰器**不执行 I/O**。
+
+        Args:
+            name: tool 名（缺省取函数名）。
+            description: 用途描述。
+            title: 可选展示标题。
+            required_scopes: 授权所需的 scope 集合。
+            input_schema: 输入 JSON Schema（`Mapping` 形态）。
+            output_schema: 输出 JSON Schema（`Mapping` 形态）。
+            annotations: 协议无关的扩展注解。
+
+        Returns:
+            一个装饰器；把传入的 `function` 注册到 server 的不可变快照中。
+
+        Raises:
+            ValidationError: 名称非法（空 / 以 `_` 开头）、tool 已注册、
+                `input_schema` / `output_schema` 编译失败（无 `SchemaCompiler`）。
+
+        English
+        --------
+        Register immutable tool metadata; the decorator performs no
+        I/O.
+
+        Args:
+            name: tool name (defaults to the function name).
+            description: purpose description.
+            title: optional display title.
+            required_scopes: scopes required to authorise.
+            input_schema: input JSON Schema (`Mapping` shape).
+            output_schema: output JSON Schema (`Mapping` shape).
+            annotations: protocol-neutral extension annotations.
+
+        Returns:
+            a decorator that registers the wrapped function into the
+            server's immutable snapshot.
+
+        Raises:
+            ValidationError: invalid name (empty / leading `_`),
+                duplicate tool, or `input_schema` / `output_schema`
+                compile failure (no `SchemaCompiler`).
+        """
 
         def register(function: Callable[..., object]) -> Callable[..., object]:
             tool_name = name or function.__name__
@@ -111,7 +250,44 @@ class McpServer:
         title: str | None = None,
         required_scopes: frozenset[str] = frozenset(),
     ) -> Callable[[Callable[..., object]], Callable[..., object]]:
-        """Register a concrete readable resource."""
+        """中文
+        ----
+        注册一个可读的具体 resource。
+
+        Args:
+            uri: 资源 URI（必填，不可空白）。
+            name: 资源展示名（不可空白、不可以 `_` 开头）。
+            description: 用途描述。
+            mime_type: 响应的 MIME 类型。
+            title: 可选展示标题。
+            required_scopes: 授权所需的 scope 集合。
+
+        Returns:
+            一个装饰器；把 `function` 注册到 server。
+
+        Raises:
+            ValidationError: uri 空白、name 非法、uri 已注册。
+
+        English
+        --------
+        Register a concrete readable resource.
+
+        Args:
+            uri: resource URI (required, non-blank).
+            name: display name (non-blank, no leading `_`).
+            description: purpose description.
+            mime_type: response MIME type.
+            title: optional display title.
+            required_scopes: scopes required to authorise.
+
+        Returns:
+            a decorator that registers the wrapped function into the
+            server.
+
+        Raises:
+            ValidationError: blank uri, invalid name, or duplicate
+                uri.
+        """
 
         def register(function: Callable[..., object]) -> Callable[..., object]:
             _require_public_name(name, "resource")
@@ -127,8 +303,34 @@ class McpServer:
         return register
 
     def resource_template(self, *, uri_template: str, name: str, description: str | None = None, mime_type: str | None = None) -> None:
-        """Register discoverable template metadata; resolving it remains an application decision."""
+        """中文
+        ----
+        注册一个可发现的 resource template 描述符；URI 解析仍由调用方决定。
 
+        Args:
+            uri_template: 资源 URI 模板（必填、不可空白）。
+            name: 模板展示名（不可空白、不可以 `_` 开头）。
+            description: 用途描述。
+            mime_type: 响应的 MIME 类型。
+
+        Raises:
+            ValidationError: name 非法、uri_template 空白、uri_template 已注册。
+
+        English
+        --------
+        Register discoverable template metadata; resolving it remains
+        an application decision.
+
+        Args:
+            uri_template: resource URI template (required, non-blank).
+            name: display name (non-blank, no leading `_`).
+            description: purpose description.
+            mime_type: response MIME type.
+
+        Raises:
+            ValidationError: invalid name, blank uri_template, or
+                duplicate uri_template.
+        """
         _require_public_name(name, "resource template")
         if not uri_template.strip():
             raise ValidationError("resource uri template is required")
@@ -147,7 +349,42 @@ class McpServer:
         arguments: tuple[Mapping[str, Any], ...] = (),
         required_scopes: frozenset[str] = frozenset(),
     ) -> Callable[[Callable[..., object]], Callable[..., object]]:
-        """Register a prompt renderer returning MCP prompt messages or an InputRequired result."""
+        """中文
+        ----
+        注册一个 prompt 渲染器；返回 MCP prompt 消息或 `InputRequired` 结果。
+
+        Args:
+            name: prompt 名（缺省取函数名）。
+            description: 用途描述。
+            title: 可选展示标题。
+            arguments: prompt 参数元数据（按声明顺序）。
+            required_scopes: 授权所需的 scope 集合。
+
+        Returns:
+            一个装饰器；把 `function` 注册到 server。
+
+        Raises:
+            ValidationError: name 非法、prompt 已注册。
+
+        English
+        --------
+        Register a prompt renderer returning MCP prompt messages or
+        an `InputRequired` result.
+
+        Args:
+            name: prompt name (defaults to the function name).
+            description: purpose description.
+            title: optional display title.
+            arguments: prompt argument metadata (in declared order).
+            required_scopes: scopes required to authorise.
+
+        Returns:
+            a decorator that registers the wrapped function into the
+            server.
+
+        Raises:
+            ValidationError: invalid name or duplicate prompt.
+        """
 
         def register(function: Callable[..., object]) -> Callable[..., object]:
             prompt_name = name or function.__name__
@@ -162,8 +399,35 @@ class McpServer:
         return register
 
     def completion(self, function: CompletionHandler) -> CompletionHandler:
-        """Set one explicit completion strategy for prompts and resource templates."""
+        """中文
+        ----
+        为 prompts / resource templates 设置唯一的 completion 策略。
 
+        Args:
+            function: 完成处理协程 / 函数；签名 `(context, ref, argument) -> result`。
+
+        Returns:
+            原 `function` 引用。
+
+        Raises:
+            ValidationError: 已有 completion handler 注册。
+
+        English
+        --------
+        Set one explicit completion strategy for prompts and resource
+        templates.
+
+        Args:
+            function: completion handler with signature
+                `(context, ref, argument) -> result`.
+
+        Returns:
+            the original `function` reference.
+
+        Raises:
+            ValidationError: a completion handler is already
+                registered.
+        """
         with self._lock:
             if self._registry.completion_handler is not None:
                 raise ValidationError("completion handler already registered")
@@ -172,10 +436,40 @@ class McpServer:
 
     @property
     def registry_snapshot(self) -> McpRegistrySnapshot:
+        """中文
+        ----
+        当前不可变注册表快照；调用方可以缓存该引用，因为快照本身不可变。
+
+        English
+        --------
+        Current immutable registry snapshot; callers may cache the
+        reference because the snapshot itself is immutable.
+        """
         return self._registry
 
     def add_registry_listener(self, listener: RegistryListener) -> Callable[[], None]:
-        """Observe successful snapshot changes; listener failures never roll back a registry."""
+        """中文
+        ----
+        注册一个 registry 变更监听器；监听器抛出的异常**不会**回滚已生效的
+        快照。
+
+        Args:
+            listener: 回调 `(change) -> None`。
+
+        Returns:
+            一个 `remove()` 调用可注销该监听器。
+
+        English
+        --------
+        Observe successful snapshot changes; listener failures never
+        roll back a registry.
+
+        Args:
+            listener: callback `(change) -> None`.
+
+        Returns:
+            a `remove()` callable that unregisters the listener.
+        """
         with self._lock:
             self._registry_listeners.append(listener)
         def remove() -> None:
@@ -185,7 +479,22 @@ class McpServer:
         return remove
 
     def reload(self, snapshot: McpRegistrySnapshot) -> None:
-        """Atomically replace every visible registry mapping with a newer immutable snapshot."""
+        """中文
+        ----
+        原子地把当前可见的全部 registry 映射替换为新的不可变快照。
+
+        Args:
+            snapshot: 新的不可变快照（通常由 `registry_snapshot` 派生）。
+
+        English
+        --------
+        Atomically replace every visible registry mapping with a
+        newer immutable snapshot.
+
+        Args:
+            snapshot: a new immutable snapshot (typically derived
+                from the current `registry_snapshot`).
+        """
         with self._lock:
             self._replace_registry(
                 tools=snapshot.tools, resources=snapshot.resources,
@@ -194,7 +503,33 @@ class McpServer:
             )
 
     async def handle(self, payload: object, *, transport_version: str | None = None, context: ToolContext | None = None) -> dict[str, Any] | None:
-        """Handle one JSON value; notifications deliberately never produce a response."""
+        """中文
+        ----
+        处理一个 JSON 值；notification 路径**绝不**产生响应。
+
+        Args:
+            payload: 已解码的 JSON-RPC 请求对象。
+            transport_version: 可选 `MCP-Protocol-Version` header。
+            context: 可选的 `ToolContext` 覆盖（测试 / 嵌入场景）。
+
+        Returns:
+            成功 / 错误的 JSON-RPC envelope；notification 返回 `None`。
+
+        English
+        --------
+        Handle one JSON value; notifications deliberately never
+        produce a response.
+
+        Args:
+            payload: the decoded JSON-RPC request object.
+            transport_version: optional `MCP-Protocol-Version` header.
+            context: optional `ToolContext` override (for tests /
+                embedded scenarios).
+
+        Returns:
+            a success or error JSON-RPC envelope; `None` for
+            notifications.
+        """
 
         request_id: str | int | None = None
         notification = _is_notification(payload)

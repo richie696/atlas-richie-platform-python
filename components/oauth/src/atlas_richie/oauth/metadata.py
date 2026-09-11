@@ -1,4 +1,57 @@
-"""OAuth and protected-resource metadata facades plus a cached JWKS source."""
+"""OAuth 与 protected-resource metadata 外观，加一个带缓存的 JWKS 源。
+----
+本模块聚合三类 metadata 操作：
+
+- **Authorization-server metadata**（RFC 8414）：通过
+  `OAuthMetadataClient.authorization_server(...)` 拉取并归一化
+  `issuer` / `token_endpoint` / `jwks_uri` 等字段。
+- **Protected-resource metadata**（RFC 9728）：通过
+  `OAuthMetadataClient.protected_resource(...)` 拉取并保留
+  extension claims（`extensions`）。
+- **JWKS 缓存源**：`JwkSetSource` Protocol + `HttpJwkSetSource`
+  实现；进程内 `RLock` 保护 + TTL 缓存 + 显式 `refresh()` 入口
+  用于"未知 kid"路径。
+
+**协议中立性**：metadata 模块对 JOSE / token 字符串零依赖，只
+关心 JWKS 文档结构。校验发生在 `resource.py` 适配器里。
+
+**JWKS 缓存语义**：
+
+- `get()`：未命中或 TTL 到期则 fetch；命中则返回深拷贝，避免
+  业务侧改坏缓存。
+- `refresh()`：跳过 TTL 强制 fetch；用于"上次没这个 kid"时重
+  试一次。
+
+English
+--------
+OAuth and protected-resource metadata facades plus a cached JWKS
+source.
+
+Three categories of metadata work live here:
+
+- **Authorization-server metadata** (RFC 8414): fetched and
+  normalized via
+  `OAuthMetadataClient.authorization_server(...)` — `issuer`,
+  `token_endpoint`, `jwks_uri`, etc.
+- **Protected-resource metadata** (RFC 9728): fetched via
+  `OAuthMetadataClient.protected_resource(...)` with extension
+  claims preserved in `extensions`.
+- **JWKS cache source:** `JwkSetSource` Protocol +
+  `HttpJwkSetSource` implementation; process-local `RLock`,
+  TTL cache, and an explicit `refresh()` entry for the
+  "unknown kid" retry path.
+
+**Protocol-neutrality:** this module has zero JOSE / token-string
+dependencies. It only deals with the JWKS document structure;
+validation happens in the adapter in `resource.py`.
+
+**JWKS cache semantics:**
+
+- `get()`: miss or TTL-expired triggers a fetch; on hit, a deep
+  copy is returned so callers cannot mutate the cache.
+- `refresh()`: skips the TTL and forces a fetch; used for the
+  "didn't see this kid last time" retry path.
+"""
 
 from __future__ import annotations
 
@@ -16,17 +69,48 @@ from .policy import HttpsOnlyEndpointPolicy, OAuthEndpointPolicy
 
 
 class JwkSetSource(Protocol):
-    """Return one immutable JWKS document and allow an explicit rotation refresh."""
+    """中文
+    ----
+    返回不可变的 JWKS 文档，并提供一次显式 rotation refresh。
+
+    English
+    --------
+    Return one immutable JWKS document and allow an explicit
+    rotation refresh.
+    """
 
     def get(self) -> Mapping[str, Any]:
-        """Return the currently cached or freshly fetched JWKS document."""
+        """中文
+        ----
+        返回当前缓存或新拉取的 JWKS 文档（不可变副本）。
+
+        English
+        --------
+        Return the currently cached or freshly fetched JWKS
+        document.
+        """
 
     def refresh(self) -> Mapping[str, Any]:
-        """Force a new JWKS fetch after an unknown key identifier."""
+        """中文
+        ----
+        遇到未知 key identifier 时强制重拉一次。
+
+        English
+        --------
+        Force a new JWKS fetch after an unknown key identifier.
+        """
 
 
 class OAuthMetadataClient:
-    """Framework-neutral metadata facade that owns endpoint validation and parsing."""
+    """中文
+    ----
+    Framework-neutral metadata 外观，持有端点校验与解析。
+
+    English
+    --------
+    Framework-neutral metadata facade that owns endpoint
+    validation and parsing.
+    """
 
     def __init__(self, http_client: HttpClient, endpoint_policy: OAuthEndpointPolicy | None = None) -> None:
         self._http_client = http_client
@@ -75,7 +159,16 @@ class OAuthMetadataClient:
 
 
 class HttpJwkSetSource:
-    """Thread-safe in-process JWKS cache with one caller-controlled refresh path."""
+    """中文
+    ----
+    线程安全的进程内 JWKS 缓存，提供一次由调用方控制的 refresh
+    路径。
+
+    English
+    --------
+    Thread-safe in-process JWKS cache with one caller-controlled
+    refresh path.
+    """
 
     def __init__(
         self,

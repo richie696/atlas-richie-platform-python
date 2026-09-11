@@ -63,6 +63,7 @@ from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
 from .redis_string_manager import (
     _call_db_loader_with_timeout,
+    _call_db_loader_with_timeout_ex,
     _make_stampede_lock_key,
     _stampede_acquire,
     _stampede_release,
@@ -220,6 +221,7 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         db_loader: Callable[[], _PySet[T] | None],
         *,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> _PySet[T]:
         """防缓存击穿：Set 类型（底层 ``CollectionOps`` 入口）。
 
@@ -241,13 +243,23 @@ class RedisCollectionManager(CollectionOps, SetFunction):
                 ``None`` 处理（不写缓存），让 caller 决定是否重试。
                 超时的 loader 可能在后台继续运行（best-effort
                 终止，详见 `_call_db_loader_with_timeout`）。
+            negative_cache_ttl_millis: 可选 — M5.7：仅当
+                `db_loader` 因 `loader_timeout_millis` **超时**而
+                未返回时，写一个短 TTL 的"负缓存"标记，让后续
+                caller 在 TTL 窗口内直接返回空集而不再调用 loader。
+                标记是一个独立的 Redis 键
+                （``__negative_set__:<key>``），而不是写入 Set 本身
+                — Sets 的元素值不能用作 marker。自然返回
+                ``None`` / 空集的 loader 不写负缓存。
 
         Returns:
-            集合值；未命中且加载失败或超时时为空集。
+            集合值；未命中且加载失败或超时时为空集；命中负缓存
+            标记时同样为空集。
 
         Raises:
             ValueError: ``timeout_millis <= 0``、``db_loader`` 为
-                ``None``，或 ``loader_timeout_millis <= 0``。
+                ``None``、``loader_timeout_millis <= 0``，或
+                ``negative_cache_ttl_millis <= 0``。
             ``db_loader`` 自身抛出的异常会原样传播。
 
         English
@@ -268,11 +280,19 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         (unbounded) behavior. A timed-out loader is treated as
         ``None`` (no cache write). Exceptions from `db_loader`
         are re-raised unchanged.
+
+        M5.7: `negative_cache_ttl_millis` writes a separate Redis
+        marker key (``__negative_set__:<key>``) on TIMEOUT — Sets
+        can't store a sentinel bytes value via SADD, so we use a
+        sibling key with a PEXPIRE. Subsequent callers within the
+        window return ``set()`` without re-invoking the loader.
+        Only fires on TIMEOUT.
         """
         return self._stampede_load_set(
             key, clazz, timeout_millis, db_loader,
             wait_budget_millis=int(timeout_millis),
             loader_timeout_millis=loader_timeout_millis,
+            negative_cache_ttl_millis=negative_cache_ttl_millis,
         )
 
     # ══════════════════════════════════════════════════════════════
@@ -287,6 +307,7 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         timeout_millis: int,
         *,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> _PySet[T]:
         """防缓存击穿：Set 类型（业务级便捷方法）。
 
@@ -302,20 +323,26 @@ class RedisCollectionManager(CollectionOps, SetFunction):
             timeout_millis: 缓存 TTL（毫秒）
             loader_timeout_millis: 可选 — M5.1：`db_loader` 的
                 毫秒级超时。详见 `get_with_lock` 文档。
+            negative_cache_ttl_millis: 可选 — M5.7：超时负缓存
+                TTL；详见 `get_with_lock` 文档。
 
         Returns:
-            集合值；未命中且加载失败或超时时为空集。
+            集合值；未命中且加载失败或超时时为空集；命中负缓存
+            标记时同样为空集。
 
         English
         --------
         Stampede-proof Set load (business-facing convenience). Same
         semantics as ``get_with_lock`` with the more natural
         argument order ``(key, reference, db_loader, timeout_millis)``.
+        Honours both `loader_timeout_millis` (M5.1) and
+        `negative_cache_ttl_millis` (M5.7).
         """
         return self._stampede_load_set(
             key, reference, timeout_millis, db_loader,
             wait_budget_millis=int(timeout_millis),
             loader_timeout_millis=loader_timeout_millis,
+            negative_cache_ttl_millis=negative_cache_ttl_millis,
         )
 
     # ── Stampede-prevention shared helpers (M4) ────────────────────
@@ -329,6 +356,34 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         """
         return self._backend.raw_client().exists(self._k(key)) > 0
 
+    # M5.7 negative marker: Sets cannot store a bytes sentinel via
+    # SADD (every member is itself an element of the set), so we
+    # use a separate Redis key whose existence encodes the
+    # "loader timed out within the TTL window" state. The marker
+    # is namespaced under `__negative_set__:` and uses
+    # `make_key` so it picks up the same prefix as the user key.
+    def _negative_set_marker_key(self, key: str) -> str:
+        return self._backend.make_key(f"__negative_set__:{key}")
+
+    def _is_negative_set_cached(self, key: str) -> bool:
+        """True if the M5.7 negative-cache marker exists for `key`."""
+        return (
+            self._backend.raw_client().exists(
+                self._negative_set_marker_key(key)
+            )
+            > 0
+        )
+
+    def _write_negative_set_marker(
+        self, key: str, ttl_millis: int
+    ) -> None:
+        """Write the M5.7 negative-cache marker for `key` with `ttl_millis`."""
+        self._backend.raw_client().set(
+            self._negative_set_marker_key(key),
+            b"1",
+            px=int(ttl_millis),
+        )
+
     def _stampede_load_set(
         self,
         key: str,
@@ -338,6 +393,7 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         *,
         wait_budget_millis: int,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> _PySet[T]:
         """Shared implementation for `get_with_lock` + `get_from_set_with_lock`.
 
@@ -346,6 +402,13 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         empty set if the db_loader returned ``None`` / empty, timed
         out (M5.1), or if a competing stampede lock holder didn't
         publish within the wait budget.
+
+        M5.7: on a TIMEOUT, optionally writes a separate
+        ``__negative_set__:<key>`` marker with
+        `negative_cache_ttl_millis`; subsequent callers within the
+        window return ``set()`` without re-invoking the loader. Only
+        fires on TIMEOUT, never on a natural ``None`` / empty set
+        from the loader.
         """
         if timeout_millis <= 0:
             raise ValueError("timeout_millis must be > 0")
@@ -353,11 +416,22 @@ class RedisCollectionManager(CollectionOps, SetFunction):
             raise ValueError("db_loader is required")
         if loader_timeout_millis is not None and loader_timeout_millis <= 0:
             raise ValueError("loader_timeout_millis must be > 0 (or None)")
+        if negative_cache_ttl_millis is not None and negative_cache_ttl_millis <= 0:
+            raise ValueError(
+                "negative_cache_ttl_millis must be > 0 (or None)"
+            )
 
         # 1. Fast path: cache hit (EXISTS, not SCARD, so a cached
-        #    empty Set is honoured as a valid value).
+        #    empty Set is honoured as a valid value). M5.7: a
+        #    negative-cache marker is also a hit (returns `set()`).
         if self._is_cached(key):
             return self.get(key, clazz)
+        if (
+            negative_cache_ttl_millis is not None
+            and negative_cache_ttl_millis > 0
+            and self._is_negative_set_cached(key)
+        ):
+            return set()
 
         # 2. Cache miss: try to acquire the per-key stampede lock.
         request_id = uuid.uuid4().hex
@@ -373,18 +447,41 @@ class RedisCollectionManager(CollectionOps, SetFunction):
             if self._is_cached(key):
                 return self.get(key, clazz)
             # 4. Still missing → invoke the db_loader, optionally
-            #    with a timeout. `_call_db_loader_with_timeout` either
-            #    returns the loader's return value, returns `None` on
-            #    timeout, or re-raises the loader's exception.
-            value = _call_db_loader_with_timeout(
+            #    with a timeout. `_call_db_loader_with_timeout_ex`
+            #    returns `(value, timed_out)`; we use the flag to
+            #    decide whether to write a negative-cache marker
+            #    (M5.7).
+            value, was_timed_out = _call_db_loader_with_timeout_ex(
                 db_loader, loader_timeout_millis
             )
             if not value:
+                # Loader returned None / empty. M5.7: on TIMEOUT,
+                # write a separate negative marker so subsequent
+                # callers see this key as already-cached `set()`.
+                if (
+                    was_timed_out
+                    and negative_cache_ttl_millis is not None
+                    and negative_cache_ttl_millis > 0
+                ):
+                    try:
+                        self._write_negative_set_marker(
+                            key, int(negative_cache_ttl_millis),
+                        )
+                    except Exception:
+                        pass
                 return set()
             # 5. Publish: DEL + SADD + PEXPIRE, no anti-avalanche
             #    offset (the `*_with_lock` path is the canonical
             #    write path and the caller is responsible for any
-            #    TTL jitter policy).
+            #    TTL jitter policy). A successful publish
+            #    transparently clears any stale negative-cache
+            #    marker — the user can call again with a fresh
+            #    loader, no leftover "negative" state to confuse
+            #    the next caller.
+            try:
+                client.delete(self._negative_set_marker_key(key))
+            except Exception:
+                pass
             encoded = self._encode_set(value)
             pipe = client.pipeline(transaction=False)
             pipe.delete(self._k(key))
@@ -408,7 +505,9 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         """Poll the cache for up to `wait_budget_millis` (50ms cadence).
 
         Returns the published set, or an empty set if no one
-        published within the budget.
+        published within the budget. A published negative-cache
+        marker is also surfaced as ``set()`` (the winner hit a
+        `loader_timeout_millis` timeout and opted into M5.7).
         """
         deadline = time.monotonic() + (wait_budget_millis / 1000.0)
         poll_interval_seconds = 0.05
@@ -416,6 +515,8 @@ class RedisCollectionManager(CollectionOps, SetFunction):
             time.sleep(poll_interval_seconds)
             if self._is_cached(key):
                 return self.get(key, clazz)
+            if self._is_negative_set_cached(key):
+                return set()
         return set()
 
     def get_from_set(self, key: str, reference: type) -> _PySet[T]:

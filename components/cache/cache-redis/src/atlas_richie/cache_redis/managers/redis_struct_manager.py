@@ -47,7 +47,10 @@ from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
 from .redis_string_manager import (
     _call_db_loader_with_timeout,
+    _call_db_loader_with_timeout_ex,
+    _is_negative,
     _make_stampede_lock_key,
+    _NEGATIVE_SENTINEL,
     _stampede_acquire,
     _stampede_release,
 )
@@ -157,6 +160,7 @@ class RedisStructManager(StructOps):
         db_loader: Callable[[], Any],
         *,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> Any:
         """防缓存击穿：结构化对象（``StructOps.get_with_lock``）。
 
@@ -177,13 +181,22 @@ class RedisStructManager(StructOps):
                 `None` 处理（不写缓存），让 caller 决定是否重试。
                 超时的 loader 可能在后台继续运行（best-effort
                 终止，详见 `_call_db_loader_with_timeout`）。
+            negative_cache_ttl_millis: 可选 — M5.7：仅当
+                `db_loader` 因 `loader_timeout_millis` **超时**而
+                未返回（loader 自然返回 `None` 仍按 miss 处理）时，
+                写一个短 TTL 的"负缓存"标记，让后续 caller 在
+                TTL 窗口内直接返回 `None` 而不再调用 loader。
+                缓解下游降级时的 thundering herd。`None`（默认）
+                = 不写负缓存。
 
         Returns:
-            缓存值；未命中且加载失败或超时时为 ``None``。
+            缓存值；未命中且加载失败或超时时为 ``None``；命中负缓存
+            标记时同样为 ``None``。
 
         Raises:
             ValueError: ``timeout_millis <= 0``、``db_loader`` 为
-                ``None``，或 ``loader_timeout_millis <= 0``。
+                ``None``、``loader_timeout_millis <= 0``，或
+                ``negative_cache_ttl_millis <= 0``。
             ``db_loader`` 自身抛出的异常会原样传播。
 
         English
@@ -202,11 +215,16 @@ class RedisStructManager(StructOps):
         (unbounded) behavior. A timed-out loader returns `None`
         (no cache write). Exceptions from `db_loader` are
         re-raised unchanged.
+
+        M5.7: `negative_cache_ttl_millis` writes a short-TTL
+        negative marker on TIMEOUT so subsequent callers within
+        the window return `None` without re-invoking the loader.
         """
         return self._stampede_load(
             key, clazz, timeout_millis, db_loader,
             wait_budget_millis=int(timeout_millis),
             loader_timeout_millis=loader_timeout_millis,
+            negative_cache_ttl_millis=negative_cache_ttl_millis,
         )
 
     def get_with_lock_typed(
@@ -217,6 +235,7 @@ class RedisStructManager(StructOps):
         db_loader: Callable[[], Any],
         *,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> Any:
         """防缓存击穿：结构化对象（运行时类型版本）。
 
@@ -231,14 +250,18 @@ class RedisStructManager(StructOps):
             db_loader: 回源加载器
             loader_timeout_millis: 可选 — M5.1：`db_loader` 的
                 毫秒级超时。详见 `get_with_lock` 文档。
+            negative_cache_ttl_millis: 可选 — M5.7：超时负缓存
+                TTL；详见 `get_with_lock` 文档。
 
         Returns:
-            缓存值；未命中且加载失败或超时时为 ``None``。
+            缓存值；未命中且加载失败或超时时为 ``None``；命中负缓存
+            标记时同样为 ``None``。
         """
         return self._stampede_load(
             key, reference, timeout_millis, db_loader,
             wait_budget_millis=int(timeout_millis),
             loader_timeout_millis=loader_timeout_millis,
+            negative_cache_ttl_millis=negative_cache_ttl_millis,
         )
 
     # ── Stampede-prevention shared helper (M4) ─────────────────────
@@ -252,6 +275,7 @@ class RedisStructManager(StructOps):
         *,
         wait_budget_millis: int,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> Any:
         """Shared implementation for `get_with_lock` + `get_with_lock_typed`.
 
@@ -260,6 +284,15 @@ class RedisStructManager(StructOps):
         if the db_loader returned ``None``, timed out (M5.1), or if
         a competing stampede lock holder didn't publish within the
         wait budget.
+
+        M5.7: on TIMEOUT, optionally writes a bytes sentinel to the
+        key with `negative_cache_ttl_millis`; subsequent callers
+        within the window return ``None`` without re-invoking the
+        loader. Only fires on TIMEOUT, never on a natural ``None``
+        from the loader. M5.7 detection runs BEFORE the typed
+        `get()` so a non-`str` `clazz` doesn't blow up trying to
+        decode the sentinel bytes (e.g. `dict` would attempt a
+        JSON parse and raise `SerializationError`).
         """
         if timeout_millis <= 0:
             raise ValueError("timeout_millis must be > 0")
@@ -267,36 +300,68 @@ class RedisStructManager(StructOps):
             raise ValueError("db_loader is required")
         if loader_timeout_millis is not None and loader_timeout_millis <= 0:
             raise ValueError("loader_timeout_millis must be > 0 (or None)")
+        if negative_cache_ttl_millis is not None and negative_cache_ttl_millis <= 0:
+            raise ValueError(
+                "negative_cache_ttl_millis must be > 0 (or None)"
+            )
 
-        # 1. Fast path: cache hit → return immediately.
-        cached = self.get(key, clazz)
-        if cached is not None:
-            return cached
+        # 1. Fast path. M5.7: detect the negative marker via a
+        #    RAW GET BEFORE the typed `get(...)` — the sentinel
+        #    bytes are not valid JSON and would raise
+        #    `SerializationError` when decoded through `dict`.
+        raw_peek = self._peek_raw(key)
+        if raw_peek is not None:
+            if _is_negative(raw_peek):
+                return None
+            return self.get(key, clazz)
 
         # 2. Cache miss: try to acquire the per-key stampede lock.
         request_id = uuid.uuid4().hex
         lock_key = _make_stampede_lock_key(self._backend, key)
         client = self._backend.raw_client()
         if not _stampede_acquire(client, lock_key, request_id, timeout_millis):
-            return self._wait_for_publication(
+            published = self._wait_for_publication(
                 key, clazz, wait_budget_millis=wait_budget_millis
             )
+            if _is_negative(self._peek_raw(key)):
+                return None
+            return published
 
         try:
-            # 3. We hold the stampede lock — re-check the cache.
-            cached = self.get(key, clazz)
-            if cached is not None:
-                return cached
+            # 3. We hold the stampede lock — re-check the cache
+            #    (raw peek first to avoid JSON-decoding the sentinel).
+            raw_peek = self._peek_raw(key)
+            if raw_peek is not None:
+                if _is_negative(raw_peek):
+                    return None
+                return self.get(key, clazz)
             # 4. Still missing → invoke the db_loader, optionally
-            #    with a timeout. `_call_db_loader_with_timeout` either
-            #    returns the loader's return value, returns `None` on
-            #    timeout, or re-raises the loader's exception. The
-            #    typed read (for `get_with_lock_typed`) happens AFTER
-            #    this returns, in-process and bounded.
-            value = _call_db_loader_with_timeout(
+            #    with a timeout. `_call_db_loader_with_timeout_ex`
+            #    returns `(value, timed_out)`; we use the flag to
+            #    decide whether to write a negative-cache marker
+            #    (M5.7). The typed read (for `get_with_lock_typed`)
+            #    happens AFTER this returns, in-process and bounded.
+            value, was_timed_out = _call_db_loader_with_timeout_ex(
                 db_loader, loader_timeout_millis
             )
             if value is None:
+                # M5.7: TIMEOUT → write the negative-cache marker
+                # via set_with_ttl. On a natural `None` we
+                # deliberately do NOT write the marker — the
+                # loader's "no value" answer should be re-attempted
+                # on the next call.
+                if (
+                    was_timed_out
+                    and negative_cache_ttl_millis is not None
+                    and negative_cache_ttl_millis > 0
+                ):
+                    try:
+                        self.set_with_ttl(
+                            key, _NEGATIVE_SENTINEL,
+                            int(negative_cache_ttl_millis),
+                        )
+                    except Exception:
+                        pass
                 return None
             # 5. Publish: caller-supplied TTL verbatim (no anti-
             #    avalanche offset; the `*_with_lock` path is the
@@ -311,13 +376,26 @@ class RedisStructManager(StructOps):
                 # expire on its own via the PX TTL.
                 pass
 
+    def _peek_raw(self, key: str) -> bytes | None:
+        """GET raw bytes for `key`, or `None` if absent.
+
+        Used only by the M5.7 negative-cache detect path; lets us
+        see the on-the-wire bytes without going through the typed
+        `decode_value` round-trip (which would convert the sentinel
+        into a benign str).
+        """
+        return self._backend.raw_client().get(self._k(key))
+
     def _wait_for_publication(
         self, key: str, clazz: type, *, wait_budget_millis: int
     ) -> Any:
         """Poll the cache for up to `wait_budget_millis` (50ms cadence).
 
         Returns the published value, or ``None`` if no one published
-        within the budget.
+        within the budget. A published negative-cache marker is
+        surfaced as ``None`` (the lock-holder wrote it on a
+        `loader_timeout_millis` timeout — callers should treat it
+        as a clean miss-and-don't-retry-for-the-TTL-window).
         """
         deadline = time.monotonic() + (wait_budget_millis / 1000.0)
         poll_interval_seconds = 0.05
@@ -325,6 +403,8 @@ class RedisStructManager(StructOps):
             time.sleep(poll_interval_seconds)
             cached = self.get(key, clazz)
             if cached is not None:
+                if _is_negative(self._peek_raw(key)):
+                    return None
                 return cached
         return None
 

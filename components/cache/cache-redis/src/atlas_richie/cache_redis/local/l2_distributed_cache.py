@@ -61,6 +61,9 @@ from atlas_richie.cache_core.local.manage.local_cache_manager import (
 from ..managers.redis_string_manager import (
     RedisStringManager,
     _call_db_loader_with_timeout,
+    _call_db_loader_with_timeout_ex,
+    _is_negative,
+    _NEGATIVE_SENTINEL,
 )
 
 
@@ -221,6 +224,7 @@ class L2DistributedCache:
         *,
         ttl_seconds: int | None = None,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> Optional[bytes]:
         """按 key 防进程内击穿：L1 命中直接返回；L1 未命中走 L2；都没中则
         在 per-key `threading.Lock` 保护下调用 `loader` 回源，回写 L1 +
@@ -233,12 +237,22 @@ class L2DistributedCache:
             loader_timeout_millis: 可选 — M5.1：`loader` 的
                 毫秒级超时。`None`（默认）= 无限时；`> 0` =
                 超时返 None（不写缓存）。复用 `_call_db_loader_with_timeout`。
+            negative_cache_ttl_millis: 可选 — M5.7：仅当
+                `loader` 因 `loader_timeout_millis` **超时**而未
+                返回时，写一个短 TTL 的"负缓存"标记到 L1 + L2，
+                让后续 caller 在 TTL 窗口内直接返回 `None` 而
+                不再调用 loader。自然返回 `None` 不写负缓存。
+                负缓存标记是固定的字节 sentinel（与
+                `RedisStringManager.get_with_lock` 共享同一个
+                常量），由 `_is_negative(...)` 识别。
 
         Returns:
-            缓存值；未命中且加载失败或超时时为 `None`。
+            缓存值；未命中且加载失败或超时时为 `None`；命中负缓存
+            标记时同样为 `None`。
 
         Raises:
-            ValueError: `loader_timeout_millis <= 0`。
+            ValueError: `loader_timeout_millis <= 0` 或
+                `negative_cache_ttl_millis <= 0`。
             `loader` 自身抛出的异常会原样传播。
 
         English
@@ -255,16 +269,31 @@ class L2DistributedCache:
         layers are complementary, not redundant — `get_or_load`
         protects in-process fan-out; `*_with_lock` protects
         cross-process fan-out.
+
+        M5.7: `negative_cache_ttl_millis` writes a bytes sentinel
+        to BOTH L1 and L2 on TIMEOUT so subsequent callers within
+        the window return `None` without re-invoking the loader.
+        Only fires on TIMEOUT, never on a natural `None` from
+        the loader.
         """
         if loader is None:
             raise ValueError("loader is required")
         if loader_timeout_millis is not None and loader_timeout_millis <= 0:
             raise ValueError("loader_timeout_millis must be > 0 (or None)")
+        if negative_cache_ttl_millis is not None and negative_cache_ttl_millis <= 0:
+            raise ValueError(
+                "negative_cache_ttl_millis must be > 0 (or None)"
+            )
         effective_ttl = ttl_seconds if (ttl_seconds is not None and ttl_seconds > 0) else self._ttl_seconds
 
-        # 1. L1 fast path (no lock acquired, no network).
+        # 1. L1 fast path (no lock acquired, no network). M5.7: a
+        #    negative-cache marker is also a hit (returns `None`).
         l1_value = self._local.get(self._region, key)
         if l1_value is not None:
+            if _is_negative(l1_value):
+                with self._stats_lock:
+                    self._hits += 1
+                return None
             with self._stats_lock:
                 self._hits += 1
             return l1_value
@@ -279,9 +308,14 @@ class L2DistributedCache:
                 self._in_process_loader_fan_in += 1
                 self._in_process_loader_wait_seconds_total += wait_seconds
             # 3. Double-check L1 (another thread may have just
-            #    populated it under the lock).
+            #    populated it under the lock). M5.7: a negative
+            #    marker is also a hit.
             l1_value = self._local.get(self._region, key)
             if l1_value is not None:
+                if _is_negative(l1_value):
+                    with self._stats_lock:
+                        self._hits += 1
+                    return None
                 with self._stats_lock:
                     self._hits += 1
                 return l1_value
@@ -290,9 +324,23 @@ class L2DistributedCache:
                 self._misses += 1
 
             # 4. Try L2 (read-through). If L2 hits, populate L1 and
-            #    return; no loader call.
+            #    return; no loader call. M5.7: a negative marker in
+            #    L2 also counts as a hit (returns `None`).
             l2_value = self._value_ops.get(key, bytes)
             if l2_value is not None:
+                if _is_negative(l2_value):
+                    # L2 negative-cache hit — populate L1 with the
+                    # sentinel (so the next L1 fast path is a hit
+                    # too) and return `None`.
+                    try:
+                        self._local.put(self._region, key, l2_value)
+                        self._local.expiry(
+                            self._region, key,
+                            int(negative_cache_ttl_millis or effective_ttl * 1000),
+                        )
+                    except Exception:
+                        pass
+                    return None
                 try:
                     self._local.put(self._region, key, l2_value)
                     self._local.expiry(self._region, key, effective_ttl * 1000)
@@ -301,12 +349,37 @@ class L2DistributedCache:
                 return l2_value
 
             # 5. L1 + L2 both miss → call the loader, optionally
-            #    with a timeout (M5.1 helper).
-            value = _call_db_loader_with_timeout(loader, loader_timeout_millis)
+            #    with a timeout (M5.1 helper, `_call_db_loader_with_timeout_ex`
+            #    also returns the `timed_out` flag for M5.7).
+            value, was_timed_out = _call_db_loader_with_timeout_ex(
+                loader, loader_timeout_millis
+            )
             if value is None:
                 # M5.3: record the timeout event for `stats()`.
                 with self._stats_lock:
                     self._loader_timeouts += 1
+                # M5.7: on TIMEOUT, optionally write the negative
+                # sentinel to BOTH L1 and L2 so subsequent callers
+                # within the window return `None` immediately.
+                if (
+                    was_timed_out
+                    and negative_cache_ttl_millis is not None
+                    and negative_cache_ttl_millis > 0
+                ):
+                    try:
+                        self._local.put(self._region, key, _NEGATIVE_SENTINEL)
+                        self._local.expiry(
+                            self._region, key, int(negative_cache_ttl_millis),
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        self._value_ops.set_with_ttl(
+                            key, _NEGATIVE_SENTINEL,
+                            int(negative_cache_ttl_millis),
+                        )
+                    except Exception:
+                        pass
                 return None
 
             # 6. Write to BOTH L1 and L2 with the effective TTL.
@@ -328,6 +401,7 @@ class L2DistributedCache:
         *,
         ttl_seconds: int | None = None,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> Dict[str, Optional[bytes]]:
         """按 batch 防进程内击穿：L1 命中的直接返回；L1 未命中的走 L2；都没中则在
         单次锁保护下调用一次 `loader(missing_keys)` 拿 dict，回写 L1 + L2。
@@ -340,6 +414,13 @@ class L2DistributedCache:
             ttl_seconds: 缓存 TTL（秒），`None` = 实例默认
             loader_timeout_millis: 可选 — `loader` 的毫秒级超时
                 （M5.1 helper 复用），`None` = 无限时
+            negative_cache_ttl_millis: 可选 — M5.7：仅当 `loader`
+                因 `loader_timeout_millis` **超时**而未返回时，对
+                **所有**仍处于 missing 状态的 key 写一个短 TTL
+                的"负缓存"标记到 L1 + L2，让后续 caller 在 TTL
+                窗口内直接返回 `None` 而不再调用 loader。自然
+                返回空 dict 不写负缓存。负缓存标记是固定的字节
+                sentinel，由 `_is_negative(...)` 识别。
 
         Returns:
             `Dict[str, Optional[bytes]]` — 每个请求 key 的值；
@@ -348,6 +429,7 @@ class L2DistributedCache:
 
         Raises:
             ValueError: `loader is None` / `loader_timeout_millis <= 0`
+                / `negative_cache_ttl_millis <= 0`。
             `loader` 自身抛出的异常会原样传播
 
         English
@@ -362,11 +444,22 @@ class L2DistributedCache:
         funnel to one loader call. Per-key L1/L2 lookups happen
         sequentially (not in parallel) for simplicity; the dominant
         cost is usually the loader, not the cache reads.
+
+        M5.7: `negative_cache_ttl_millis` writes a per-key bytes
+        sentinel to BOTH L1 and L2 on TIMEOUT for every key that
+        was still missing when the timeout fired. Subsequent
+        callers within the window return `None` for those keys
+        without re-invoking the loader. Only fires on TIMEOUT,
+        never on a natural empty dict from the loader.
         """
         if loader is None:
             raise ValueError("loader is required")
         if loader_timeout_millis is not None and loader_timeout_millis <= 0:
             raise ValueError("loader_timeout_millis must be > 0 (or None)")
+        if negative_cache_ttl_millis is not None and negative_cache_ttl_millis <= 0:
+            raise ValueError(
+                "negative_cache_ttl_millis must be > 0 (or None)"
+            )
         effective_ttl = ttl_seconds if (ttl_seconds is not None and ttl_seconds > 0) else self._ttl_seconds
 
         # Deduplicate + preserve insertion order
@@ -376,10 +469,14 @@ class L2DistributedCache:
 
         results: Dict[str, Optional[bytes]] = {}
         # Phase 1: try L1 for each key (no lock, no network).
+        #    M5.7: a negative-cache marker is also a hit (returns `None`).
         for k in keys_list:
             v = self._local.get(self._region, k)
             if v is not None:
-                results[k] = v
+                if _is_negative(v):
+                    results[k] = None
+                else:
+                    results[k] = v
                 with self._stats_lock:
                     self._hits += 1
         # Phase 2: collect keys still missing after L1.
@@ -397,11 +494,15 @@ class L2DistributedCache:
                 self._in_process_loader_fan_in += 1
                 self._in_process_loader_wait_seconds_total += wait_seconds
             # Phase 4: double-check L1 (another batch holder may have
-            # populated it under the lock).
+            # populated it under the lock). M5.7: a negative marker
+            # is also a hit.
             for k in list(missing):
                 v = self._local.get(self._region, k)
                 if v is not None:
-                    results[k] = v
+                    if _is_negative(v):
+                        results[k] = None
+                    else:
+                        results[k] = v
                     with self._stats_lock:
                         self._hits += 1
             missing = [k for k in missing if k not in results]
@@ -413,15 +514,25 @@ class L2DistributedCache:
 
             # Phase 5: try L2 for each missing key (sequential for
             # simplicity; L2 reads are cheap when keys are missing).
+            #    M5.7: a negative marker in L2 is also a hit
+            #    (returns `None`).
             l2_hits: Dict[str, bytes] = {}
             for k in missing:
                 v = self._value_ops.get(k, bytes)
                 if v is not None:
                     l2_hits[k] = v
             for k, v in l2_hits.items():
-                results[k] = v
+                if _is_negative(v):
+                    results[k] = None
+                else:
+                    results[k] = v
                 try:
                     self._local.put(self._region, k, v)
+                    # Use the caller-supplied TTL (or default);
+                    # the negative TTL is only relevant for
+                    # writes triggered by a TIMEOUT, not for
+                    # a published L2 negative marker (which
+                    # already has its own L2-side TTL).
                     self._local.expiry(self._region, k, effective_ttl * 1000)
                 except Exception:
                     pass
@@ -431,12 +542,36 @@ class L2DistributedCache:
 
             # Phase 6: L1 + L2 all miss → call the loader ONCE for
             # the whole batch (funnel).
-            value = _call_db_loader_with_timeout(
+            value, was_timed_out = _call_db_loader_with_timeout_ex(
                 lambda: loader(missing), loader_timeout_millis
             )
             if value is None:
                 with self._stats_lock:
                     self._loader_timeouts += 1
+                # M5.7: on TIMEOUT, write a per-key negative
+                # sentinel to BOTH L1 and L2 for each still-missing
+                # key so subsequent callers within the window
+                # return `None` immediately.
+                if (
+                    was_timed_out
+                    and negative_cache_ttl_millis is not None
+                    and negative_cache_ttl_millis > 0
+                ):
+                    for k in missing:
+                        try:
+                            self._local.put(self._region, k, _NEGATIVE_SENTINEL)
+                            self._local.expiry(
+                                self._region, k, int(negative_cache_ttl_millis),
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            self._value_ops.set_with_ttl(
+                                k, _NEGATIVE_SENTINEL,
+                                int(negative_cache_ttl_millis),
+                            )
+                        except Exception:
+                            pass
                 # Loader returned None / timed out → all `missing` keys
                 # are reported as `None` in the result.
                 for k in missing:
@@ -545,14 +680,14 @@ class L2DistributedCache:
     # ── Internal ─────────────────────────────────────────────────
 
     def _l1_size(self) -> int:
-        """Best-effort L1 size — the local cache doesn't expose a
-        `__len__` directly, so we walk the bucket's entries."""
-        try:
-            bucket = self._local._buckets[self._region]  # type: ignore[attr-defined]
-            with bucket._lock:  # type: ignore[attr-defined]
-                return len(bucket._entries)  # type: ignore[attr-defined]
-        except (KeyError, AttributeError):
-            return 0
+        """Best-effort L1 size for `stats()["l1_size"]`.
+
+        Delegates to the public `LocalCacheManager.size(region)` API
+        so we don't poke the manager's private attributes (R-M5.x
+        polish: prefer the public surface; `LocalCacheManager.size`
+        walks the bucket under the bucket's RLock on our behalf).
+        """
+        return self._local.size(self._region)
 
     # ── Properties ───────────────────────────────────────────────
 

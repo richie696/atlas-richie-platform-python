@@ -432,6 +432,40 @@ class LocalCacheManager:
     def region_size(self, region: str | Any) -> int:
         return self._bucket(self._region_name(region)).size()
 
+    def size(self, region: str | Any) -> int:
+        """返回 region 中存活（未过期）的条目数。
+
+        未知 region 返回 0。线程安全：在 bucket 的 RLock 内读取
+        ``_entries`` 的长度，调用方无需自加锁。
+
+        与 ``region_size`` 行为一致；命名为 ``size`` 是为了与外部
+        L2 facade 的 ``stats()["l1_size"]`` 字段语义对齐，也便于
+        不希望暴露 "region" 前缀的调用方使用。
+
+        Args:
+            region: 缓存 region 标识（str 或实现了 ``get_cache()`` 的
+                ``CacheName`` 对象）。
+
+        Returns:
+            该 region 中当前存活（未过期）的条目数；未知 region 返回 0。
+
+        English
+        --------
+        Return the number of live (non-expired) entries in `region`.
+
+        Returns 0 if the region is unknown. Thread-safe: reads
+        `len(_entries)` under the bucket's RLock; the caller doesn't
+        need to acquire any additional lock.
+
+        Behaviourally identical to `region_size`; the shorter `size`
+        name aligns with the L2 facade's `stats()["l1_size"]` field
+        and is the preferred public API for new code.
+        """
+        try:
+            return self._bucket(self._region_name(region)).size()
+        except Exception:
+            return 0
+
     def close(self) -> None:
         """Drop all regions. Idempotent."""
         with self._buckets_lock:

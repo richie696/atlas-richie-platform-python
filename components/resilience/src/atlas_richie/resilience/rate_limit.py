@@ -1,4 +1,35 @@
-"""Token-bucket rate limiter."""
+"""令牌桶限流器。
+----
+`TokenBucket` 是一种按速率（token / 秒）补充、按请求消耗的限流器。
+桶容量是 `capacity`，每个请求默认消耗 `tokens_per_acquire` 个令牌。
+提供三种获取令牌的入口：
+
+- `try_acquire()`：非阻塞；令牌不足时返回 `False`。
+- `acquire(..., max_wait=0.0)`：非等待；令牌不足时立即抛
+  `RateLimitExceeded`。
+- `acquire(..., max_wait > 0.0)`：等待刷新；超过 `max_wait` 抛
+  `RateLimitExceeded`，`retry_after` 字段告知还需等多久。
+
+时间源 `Clock` / `Sleep` 注入后，可完全脱离 wall clock 做单测。
+
+English
+--------
+Token-bucket rate limiter.
+
+`TokenBucket` refills at `refill_rate` tokens per second up to
+`capacity`, and consumes `tokens_per_acquire` tokens per request
+(default 1). Three acquisition paths are provided:
+
+- `try_acquire()` — non-blocking; returns `False` when tokens are
+  insufficient.
+- `acquire(..., max_wait=0.0)` — fail fast; raises
+  `RateLimitExceeded` immediately when empty.
+- `acquire(..., max_wait > 0.0)` — wait for refill; raises
+  `RateLimitExceeded` after the budget is exhausted. The
+  `retry_after` field reports the remaining wait.
+
+`Clock` and `Sleep` are injected so the limiter can be unit-tested
+without touching the wall clock."""
 
 from __future__ import annotations
 
@@ -12,7 +43,17 @@ from .errors import RateLimitExceeded
 
 @dataclass(frozen=True, slots=True)
 class TokenBucketConfig:
-    """Configuration for `TokenBucket`.
+    """中文
+    ----
+    `TokenBucket` 的配置。
+
+    - `capacity`：桶可容纳的最大令牌数。
+    - `refill_rate`：令牌补充速率（个 / 秒）。
+    - `tokens_per_acquire`：单次请求默认消耗的令牌数（默认 1）。
+
+    English
+    --------
+    Configuration for `TokenBucket`.
 
     `capacity` is the maximum number of tokens the bucket can hold. Tokens
     refill at `refill_rate` tokens per second, and a request consumes
@@ -35,7 +76,17 @@ class TokenBucketConfig:
 
 
 class TokenBucket:
-    """Async token-bucket rate limiter.
+    """中文
+    ----
+    异步令牌桶限流器。
+
+    - `try_acquire` 非阻塞，令牌不足时返回 `False`。
+    - `acquire` 在令牌不足时通过注入的 `sleep` 周期性重试；超过
+      `max_wait` 时抛 `RateLimitExceeded`。
+
+    English
+    --------
+    Async token-bucket rate limiter.
 
     `try_acquire` is non-blocking and returns `False` when the request
     would have to wait. `acquire` awaits a fresh token, calling the
@@ -57,7 +108,14 @@ class TokenBucket:
 
     @property
     def available(self) -> float:
-        """Current token count after the most recent refill calculation."""
+        """中文
+        ----
+        按最新一次的令牌补充计算后，当前桶内可用令牌数。
+
+        English
+        --------
+        Current token count after the most recent refill calculation.
+        """
         self._refill()
         return self._tokens
 
@@ -77,7 +135,35 @@ class TokenBucket:
         self._last_refill = now
 
     def try_acquire(self, tokens: int | None = None) -> bool:
-        """Consume tokens immediately if available, else return `False`."""
+        """中文
+        ----
+        立即尝试消耗令牌；不足时返回 `False`，不抛异常。
+
+        Args:
+            tokens: 要消耗的令牌数；为 `None` 时使用配置中的
+                `tokens_per_acquire`。
+
+        Returns:
+            成功扣减返回 `True`；令牌不足返回 `False`。
+
+        Raises:
+            ValueError: `tokens < 1`。
+
+        English
+        --------
+        Consume tokens immediately if available, else return `False`.
+
+        Args:
+            tokens: Number of tokens to consume. When `None`, uses
+                the configured `tokens_per_acquire`.
+
+        Returns:
+            `True` if the tokens were deducted; `False` if not
+            enough tokens were available.
+
+        Raises:
+            ValueError: if `tokens < 1`.
+        """
         if tokens is None:
             tokens = self._config.tokens_per_acquire
         if tokens < 1:
@@ -89,7 +175,21 @@ class TokenBucket:
         return False
 
     def time_to_tokens(self, tokens: int | None = None) -> float:
-        """Seconds until `tokens` become available. Zero if already available."""
+        """中文
+        ----
+        返回距离 `tokens` 个令牌可用还需等待的秒数；若已可用则返回
+        `0.0`。
+
+        Args:
+            tokens: 目标令牌数；为 `None` 时使用 `tokens_per_acquire`。
+
+        Returns:
+            距离令牌可用的剩余秒数；已可用时为 `0.0`。
+
+        English
+        --------
+        Seconds until `tokens` become available. Zero if already available.
+        """
         if tokens is None:
             tokens = self._config.tokens_per_acquire
         if tokens < 1:
@@ -106,7 +206,25 @@ class TokenBucket:
         *,
         max_wait: float = 0.0,
     ) -> None:
-        """Consume tokens, awaiting via the injected sleep.
+        """中文
+        ----
+        消耗令牌；不足时通过注入的 `sleep` 周期性等待刷新。
+
+        - `max_wait == 0.0` 且令牌不足：立即抛 `RateLimitExceeded`。
+        - `max_wait > 0.0`：等待至令牌可被扣减；超过 `max_wait` 时
+          抛 `RateLimitExceeded`，`retry_after` 指示还需等待的秒数。
+
+        Args:
+            tokens: 目标令牌数；为 `None` 时使用 `tokens_per_acquire`。
+            max_wait: 允许的最长等待时间（秒）。
+
+        Raises:
+            RateLimitExceeded: 令牌不足且等待时间耗尽。
+            ValueError: `tokens < 1` 或 `max_wait < 0`。
+
+        English
+        --------
+        Consume tokens, awaiting via the injected sleep.
 
         Raises `RateLimitExceeded` immediately when `max_wait == 0` and the
         bucket is empty, or after the wait budget is exhausted.

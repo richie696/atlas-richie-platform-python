@@ -1,4 +1,61 @@
-"""DPoP proof contracts, request binding, and replay protection (RFC 9449)."""
+"""DPoP proof 契约、请求绑定与重放保护（RFC 9449）。
+----
+DPoP（Demonstrating Proof-of-Possession，RFC 9449）把 access
+token 绑定到一对非对称密钥：access token 在 HTTP 出口必须配带
+DPoP proof JWS，proof 包含 `htm`（method）/ `htu`（目标 URI，
+RFC 9449 规范化形式）/ `iat` / `jti` / 密钥 thumbprint（`jkt`）
+等 claim。资源服务器通过 `cnf.jkt` claim 把 access token 与
+密钥绑定。
+
+本模块划分三层：
+
+1. **Adapter 协议**：`DpopProofValidator`（验签 + 解析）与
+   `DpopProofFactory`（按请求签名）。JOSE 库无关，业务侧注入
+   PyJWT / joserfc / authlib 中的任意一个。
+2. **重放保护**：`DpopReplayStore` Protocol + 进程内
+   `InMemoryDpopReplayStore` 实现。分布式部署需要外部
+   adapter（如 Redis SETNX + 过期）。
+3. **业务校验器**：`DpopProofVerifier` 串联请求绑定（`htm` /
+   `htu`）/ 密钥绑定（`jkt`）/ token 绑定（`ath`）/ 时间窗
+   （`iat`）/ nonce / 重放五道检查，全部失败抛
+   `OAuthTokenValidationError`。
+
+**原子性**：`_replay_store.reserve(...)` 必须保证"check +
+write"原子 —— 分布式场景下靠 Redis SETNX，进程内靠 RLock +
+`dict.__setitem__` 单步写入。
+
+English
+--------
+DPoP proof contracts, request binding, and replay protection
+(RFC 9449).
+
+DPoP (Demonstrating Proof-of-Possession, RFC 9449) binds an
+access token to a key pair: the access token must travel with a
+DPoP proof JWS containing `htm` (method) / `htu` (target URI in
+RFC 9449 canonical form) / `iat` / `jti` / key thumbprint (`jkt`).
+The resource server pins the access token to the key via the
+`cnf.jkt` claim.
+
+This module has three layers:
+
+1. **Adapter protocols:** `DpopProofValidator` (verify signature
+   + parse) and `DpopProofFactory` (sign per request). JOSE-
+   library-agnostic; business code injects PyJWT / joserfc /
+   authlib / ...
+2. **Replay protection:** `DpopReplayStore` Protocol + a process-
+   local `InMemoryDpopReplayStore` implementation. Distributed
+   deployments need an external adapter (e.g. Redis SETNX +
+   expiry).
+3. **Business verifier:** `DpopProofVerifier` chains five checks
+   — request binding (`htm` / `htu`) / key binding (`jkt`) /
+   token binding (`ath`) / time window (`iat`) / nonce / replay
+   — and raises `OAuthTokenValidationError` on any failure.
+
+**Atomicity:** `_replay_store.reserve(...)` must make
+"check + write" atomic — distributed deployments rely on Redis
+SETNX; the process-local path relies on the `RLock` plus the
+single-step `dict.__setitem__` write.
+"""
 
 from __future__ import annotations
 
@@ -19,7 +76,15 @@ _DEFAULT_FUTURE_SKEW = timedelta(seconds=30)
 
 @dataclass(frozen=True, slots=True)
 class DpopProofClaims:
-    """Signature-validated DPoP claims; the JOSE adapter owns JWT parsing."""
+    """中文
+    ----
+    已通过签名校验的 DPoP claims；JOSE 适配器负责 JWT 解析。
+
+    English
+    --------
+    Signature-validated DPoP claims; the JOSE adapter owns JWT
+    parsing.
+    """
 
     proof_id: str
     issued_at: datetime
@@ -39,25 +104,58 @@ class DpopProofClaims:
 
 
 class DpopProofValidator(Protocol):
-    """Adapter port that verifies a compact DPoP JWS and exposes no JOSE values."""
+    """中文
+    ----
+    适配器端口：校验紧凑 DPoP JWS，不向上层暴露任何 JOSE 内部
+    值。
+
+    English
+    --------
+    Adapter port that verifies a compact DPoP JWS and exposes no
+    JOSE values.
+    """
 
     def validate(self, proof: str) -> DpopProofClaims: ...
 
 
 class DpopProofFactory(Protocol):
-    """Adapter port that signs a distinct proof for each outbound HTTP request."""
+    """中文
+    ----
+    适配器端口：为每个出站 HTTP 请求签一个独立 proof。
+
+    English
+    --------
+    Adapter port that signs a distinct proof for each outbound
+    HTTP request.
+    """
 
     def create(self, *, method: str, target_uri: str, access_token: str | None = None, nonce: str | None = None) -> str: ...
 
 
 class DpopReplayStore(Protocol):
-    """Atomically reserve a proof identity until it expires; false means replay."""
+    """中文
+    ----
+    原子地把一个 proof 身份保留到过期；返回 `False` 即重放。
+
+    English
+    --------
+    Atomically reserve a proof identity until it expires; false
+    means replay.
+    """
 
     def reserve(self, key_thumbprint: str, proof_id: str, expires_at: datetime) -> bool: ...
 
 
 class InMemoryDpopReplayStore:
-    """Process-local replay protection; distributed deployments supply an adapter."""
+    """中文
+    ----
+    进程内重放保护；分布式部署需自行注入外部 adapter。
+
+    English
+    --------
+    Process-local replay protection; distributed deployments
+    supply an adapter.
+    """
 
     def __init__(self) -> None:
         self._entries: dict[tuple[str, str], datetime] = {}
@@ -85,7 +183,15 @@ class DpopValidationPolicy:
 
 
 class DpopProofVerifier:
-    """Applies RFC request/key/token/replay invariants after adapter signature validation."""
+    """中文
+    ----
+    在适配器签名校验之上，叠加 RFC 请求/密钥/token/重放不变量。
+
+    English
+    --------
+    Applies RFC request/key/token/replay invariants after adapter
+    signature validation.
+    """
 
     def __init__(self, validator: DpopProofValidator, replay_store: DpopReplayStore, *, policy: DpopValidationPolicy = DpopValidationPolicy()) -> None:
         self._validator = validator
@@ -122,7 +228,16 @@ class DpopProofVerifier:
 
 
 def canonical_dpop_uri(value: str) -> str:
-    """Return RFC 9449's scheme/host/port/path target URI form without query/fragment."""
+    """中文
+    ----
+    返回 RFC 9449 规范的 scheme/host/port/path 形式的 target URI
+    （去掉 query 与 fragment）。
+
+    English
+    --------
+    Return RFC 9449's scheme/host/port/path target URI form without
+    query/fragment.
+    """
 
     parsed = urlsplit(value)
     if not parsed.scheme or not parsed.hostname or parsed.username or parsed.password:

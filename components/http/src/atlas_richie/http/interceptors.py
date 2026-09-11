@@ -126,7 +126,12 @@ class HttpAuditSink(Protocol):
 
 
 class _RequestIdInterceptor:
-    """同步版本的 request-id 填充拦截器。"""
+    """同步版本的 request-id 填充拦截器。
+
+    English
+    --------
+    Sync `request-id` filling interceptor.
+    """
 
     def intercept(self, request: HttpRequest, proceed: SyncNext) -> HttpResponse:
         if header_value(request.headers, "X-Request-Id") is None:
@@ -135,7 +140,12 @@ class _RequestIdInterceptor:
 
 
 class _AsyncRequestIdInterceptor:
-    """异步版本的 request-id 填充拦截器。"""
+    """异步版本的 request-id 填充拦截器。
+
+    English
+    --------
+    Async `request-id` filling interceptor.
+    """
 
     async def intercept(self, request: HttpRequest, proceed: AsyncNext) -> HttpResponse:
         if header_value(request.headers, "X-Request-Id") is None:
@@ -144,7 +154,12 @@ class _AsyncRequestIdInterceptor:
 
 
 class _AuditInterceptor:
-    """同步版本的审计拦截器，封装计时 + 事件 dispatch。"""
+    """同步版本的审计拦截器，封装计时 + 事件 dispatch。
+
+    English
+    --------
+    Sync audit interceptor; encapsulates timing and event dispatch.
+    """
 
     def __init__(self, sink: HttpAuditSink | None) -> None:
         self._sink = sink
@@ -175,7 +190,13 @@ class _AuditInterceptor:
 
 
 class _AsyncAuditInterceptor:
-    """异步版本的审计拦截器，封装计时 + 事件 dispatch。"""
+    """异步版本的审计拦截器，封装计时 + 事件 dispatch。
+
+    English
+    --------
+    Async audit interceptor; encapsulates timing and event
+    dispatch.
+    """
 
     def __init__(self, sink: HttpAuditSink | None) -> None:
         self._sink = sink

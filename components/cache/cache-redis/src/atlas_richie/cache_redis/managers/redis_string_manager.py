@@ -225,6 +225,80 @@ def _call_db_loader_with_timeout(
         executor.shutdown(wait=False)
 
 
+def _call_db_loader_with_timeout_ex(
+    db_loader: Callable[[], Any], timeout_millis: int | None
+) -> tuple[Any, bool]:
+    """M5.7 variant of `_call_db_loader_with_timeout`.
+
+    Returns `(value, timed_out)`:
+
+    - `(value, False)` — loader returned normally (including `None`
+      as a legitimate "no value" answer).
+    - `(None, True)` — loader exceeded `timeout_millis`. The cache
+      layer uses the `True` flag to decide whether to write a
+      negative-cache marker (`*_with_lock` paths honour
+      `negative_cache_ttl_millis` only on TIMEOUT, never on a
+      loader that returned `None` for legitimate "no value"
+      reasons — the latter must stay a clean miss so the next
+      loader attempt can re-fetch).
+    - raises whatever `db_loader` raises (with the executor shut
+      down on the way out).
+
+    This is a separate helper rather than a `bool` return on the
+    M5.1 helper so existing M5.1 callers keep their `(value,)` call
+    sites unchanged.
+    """
+    if timeout_millis is None:
+        return db_loader(), False
+    if timeout_millis <= 0:
+        raise ValueError("loader_timeout_millis must be > 0 (or None)")
+    executor = ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="stampede-loader"
+    )
+    try:
+        future = executor.submit(db_loader)
+        try:
+            return future.result(timeout=timeout_millis / 1000.0), False
+        except FuturesTimeoutError:
+            return None, True
+    finally:
+        executor.shutdown(wait=False)
+
+
+# ── Negative cache (M5.7) ─────────────────────────────────────────────
+# When `db_loader` exceeds `loader_timeout_millis` AND the caller
+# supplied `negative_cache_ttl_millis`, we write a fixed-bytes
+# sentinel to the cache key so the next caller within the TTL
+# window short-circuits to `None` (treated as "absent") without
+# invoking the loader. The marker is bytes (not str) so it survives
+# a `get(key, bytes)` round-trip — the L1 layer of `L2DistributedCache`
+# stores raw bytes and the L2 layer's `set_with_ttl` writes raw
+# bytes too. The matching read paths use `_is_negative(...)` to
+# distinguish a real `None` / empty value from the marker.
+#
+# This is a Python-side optimization the Java side doesn't have; it
+# mitigates thundering-herd when the downstream is degraded.
+_NEGATIVE_SENTINEL: bytes = b"\x00__atlas_richie_negative__\x00"
+_NEGATIVE_SENTINEL_STR: str = _NEGATIVE_SENTINEL.decode("utf-8")
+
+
+def _is_negative(value: Any) -> bool:
+    """Return True iff `value` is the M5.7 negative-cache marker.
+
+    The marker can appear as raw bytes (L1 layer, `get(key, bytes)`)
+    or as a decoded str (`get(key, str)` after `decode_value`). Both
+    forms are recognised so each `*_with_lock` path can plug this
+    helper into either read style.
+    """
+    if value is None:
+        return False
+    if isinstance(value, bytes):
+        return value == _NEGATIVE_SENTINEL
+    if isinstance(value, str):
+        return value == _NEGATIVE_SENTINEL_STR
+    return False
+
+
 class RedisStringManager(ValueOps, StringFunction):
     """字符串类型缓存管理器。
     ----
@@ -440,6 +514,7 @@ class RedisStringManager(ValueOps, StringFunction):
         db_loader: Callable[[], str | None],
         *,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> str | None:
         """防缓存击穿：String 类型。
 
@@ -459,13 +534,22 @@ class RedisStringManager(ValueOps, StringFunction):
                 `None` 处理（不写缓存），让 caller 决定是否重试。
                 超时的 loader 可能在后台继续运行（best-effort
                 终止，详见 `_call_db_loader_with_timeout`）。
+            negative_cache_ttl_millis: 可选 — M5.7：仅当
+                `db_loader` 因 `loader_timeout_millis` **超时**而
+                未返回（loader 自然返回 `None` 仍按 miss 处理）时，
+                写一个短 TTL 的"负缓存"标记，让后续 caller 在
+                TTL 窗口内直接返回 `None` 而不再调用 loader。
+                缓解下游降级时的 thundering herd。`None`（默认）
+                = 不写负缓存。
 
         Returns:
-            缓存值；未命中且加载失败或超时时为 `None`。
+            缓存值；未命中且加载失败或超时时为 `None`；命中负缓存
+            标记时同样为 `None`。
 
         Raises:
             ValueError: `timeout_millis <= 0`、`db_loader` 为 `None`、
-                或 `loader_timeout_millis <= 0`。
+                `loader_timeout_millis <= 0` 或
+                `negative_cache_ttl_millis <= 0`。
             `db_loader` 自身抛出的异常会原样传播。
 
         English
@@ -485,11 +569,18 @@ class RedisStringManager(ValueOps, StringFunction):
         (unbounded) behavior. A timed-out loader returns `None`
         (no cache write) — the caller decides whether to retry.
         Exceptions from `db_loader` are re-raised unchanged.
+
+        M5.7: `negative_cache_ttl_millis` opts into a short-TTL
+        negative-cache marker so subsequent callers within the
+        window return `None` immediately without re-invoking
+        `db_loader`. Only fires on TIMEOUT, never on a natural
+        `None` from the loader.
         """
         return self._stampede_load(
             key, timeout_millis, db_loader,
             wait_budget_millis=int(timeout_millis),
             loader_timeout_millis=loader_timeout_millis,
+            negative_cache_ttl_millis=negative_cache_ttl_millis,
         )
 
     def get_from_string_with_lock(
@@ -499,6 +590,7 @@ class RedisStringManager(ValueOps, StringFunction):
         timeout_millis: int,
         *,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> str | None:
         """防缓存击穿：String 类型（业务级便捷方法）。
 
@@ -512,20 +604,26 @@ class RedisStringManager(ValueOps, StringFunction):
             timeout_millis: 缓存 TTL（毫秒）
             loader_timeout_millis: 可选 — M5.1：`db_loader` 的
                 毫秒级超时。详见 `get_with_lock` 文档。
+            negative_cache_ttl_millis: 可选 — M5.7：超时负缓存
+                TTL。详见 `get_with_lock` 文档。
 
         Returns:
-            缓存值；未命中且加载失败或超时时为 `None`。
+            缓存值；未命中且加载失败或超时时为 `None`；命中负缓存
+            标记时同样为 `None`。
 
         English
         --------
         Stampede-proof String load (business-facing convenience).
         Same semantics as `get_with_lock`, with a more ergonomic
-        argument order: `(key, db_loader, timeout_millis)`.
+        argument order: `(key, db_loader, timeout_millis)`. Honours
+        both `loader_timeout_millis` (M5.1) and
+        `negative_cache_ttl_millis` (M5.7).
         """
         return self._stampede_load(
             key, timeout_millis, db_loader,
             wait_budget_millis=int(timeout_millis),
             loader_timeout_millis=loader_timeout_millis,
+            negative_cache_ttl_millis=negative_cache_ttl_millis,
         )
 
     def _stampede_load(
@@ -536,6 +634,7 @@ class RedisStringManager(ValueOps, StringFunction):
         *,
         wait_budget_millis: int,
         loader_timeout_millis: int | None = None,
+        negative_cache_ttl_millis: int | None = None,
     ) -> str | None:
         """Shared implementation for `get_with_lock` + `get_from_string_with_lock`.
 
@@ -544,6 +643,12 @@ class RedisStringManager(ValueOps, StringFunction):
         if the db_loader returned `None`, if the db_loader
         timed out (M5.1), or if a competing stampede lock holder
         didn't publish within the wait budget.
+
+        M5.7: when `db_loader` times out AND
+        `negative_cache_ttl_millis is not None and > 0`, a bytes
+        sentinel is written to the key with that TTL; subsequent
+        callers within the window return `None` from the cache
+        without re-invoking the loader.
         """
         if timeout_millis <= 0:
             raise ValueError("timeout_millis must be > 0")
@@ -551,11 +656,18 @@ class RedisStringManager(ValueOps, StringFunction):
             raise ValueError("db_loader is required")
         if loader_timeout_millis is not None and loader_timeout_millis <= 0:
             raise ValueError("loader_timeout_millis must be > 0 (or None)")
+        if negative_cache_ttl_millis is not None and negative_cache_ttl_millis <= 0:
+            raise ValueError(
+                "negative_cache_ttl_millis must be > 0 (or None)"
+            )
 
         # 1. Fast path: cache hit → return immediately. No Redis lock
-        #    acquired, no db_loader call.
+        #    acquired, no db_loader call. M5.7: a negative-cache
+        #    marker also counts as a hit (returns `None`).
         cached = self.get(key, str)
         if cached is not None:
+            if _is_negative(cached):
+                return None
             return cached
 
         # 2. Cache miss: try to acquire the per-key stampede lock.
@@ -570,9 +682,12 @@ class RedisStringManager(ValueOps, StringFunction):
             #    `wait_budget_millis` (50ms cadence). If the winner
             #    publishes, return the cached value. If not, give
             #    up and let the caller decide.
-            return self._wait_for_publication(
+            published = self._wait_for_publication(
                 key, wait_budget_millis=wait_budget_millis
             )
+            if published is not None and _is_negative(published):
+                return None
+            return published
 
         # 4. We hold the stampede lock. Double-check the cache
         #    (another holder may have published between our first
@@ -580,15 +695,40 @@ class RedisStringManager(ValueOps, StringFunction):
         try:
             cached = self.get(key, str)
             if cached is not None:
+                if _is_negative(cached):
+                    return None
                 return cached
             # 5. Still missing → invoke the db_loader, optionally
-            #    with a timeout. `_call_db_loader_with_timeout` either
-            #    returns the loader's return value, returns `None` on
-            #    timeout, or re-raises the loader's exception.
-            value = _call_db_loader_with_timeout(
+            #    with a timeout. `_call_db_loader_with_timeout_ex`
+            #    returns `(value, timed_out)`; we use the flag to
+            #    decide whether to write a negative-cache marker
+            #    (M5.7). `_call_db_loader_with_timeout_ex` either
+            #    returns the loader's return value, returns `None`
+            #    on timeout, or re-raises the loader's exception.
+            value, was_timed_out = _call_db_loader_with_timeout_ex(
                 db_loader, loader_timeout_millis
             )
             if value is None:
+                # M5.7: on a TIMEOUT, optionally write a short-TTL
+                # negative-cache marker so the next caller within
+                # the window short-circuits. On a natural `None`
+                # from the loader we deliberately do NOT write
+                # the marker — the loader's "no value" answer
+                # should be re-attempted on the next call.
+                if (
+                    was_timed_out
+                    and negative_cache_ttl_millis is not None
+                    and negative_cache_ttl_millis > 0
+                ):
+                    try:
+                        self.set_with_ttl(
+                            key, _NEGATIVE_SENTINEL, int(negative_cache_ttl_millis)
+                        )
+                    except Exception:
+                        # Non-fatal: a failed negative-cache
+                        # write must not mask the `None` return
+                        # the caller is expecting.
+                        pass
                 return None
             # 6. Publish: write to the cache. Note: we use the
             #    caller-supplied TTL verbatim. The anti-avalanche
@@ -617,7 +757,10 @@ class RedisStringManager(ValueOps, StringFunction):
         """Poll the cache for up to `wait_budget_millis` (50ms cadence).
 
         Returns the published value, or `None` if no one published
-        within the budget.
+        within the budget. A published negative-cache marker is
+        surfaced as `None` (the lock-holder wrote it on a
+        `loader_timeout_millis` timeout — callers should treat it
+        as a clean miss-and-don't-retry-for-the-TTL-window).
         """
         deadline = time.monotonic() + (wait_budget_millis / 1000.0)
         poll_interval_seconds = 0.05  # 50ms
@@ -625,6 +768,8 @@ class RedisStringManager(ValueOps, StringFunction):
             time.sleep(poll_interval_seconds)
             cached = self.get(key, str)
             if cached is not None:
+                if _is_negative(cached):
+                    return None
                 return cached
         return None
 

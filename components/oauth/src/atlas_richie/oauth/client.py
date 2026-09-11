@@ -1,4 +1,65 @@
-"""OAuth token and introspection facades built only on Atlas Richie's HTTP client."""
+"""仅基于 Atlas Richie HTTP 客户端的 OAuth token / introspection 外观。
+----
+`OAuthTokenClient` 是 OAuth 2.1 客户端侧的"协议请求拼装 + 错误
+归类"门面：
+
+- **依赖只有 HTTP 抽象**：`HttpClient` + `HttpRequest`，不引入
+  `requests` / `httpx` 之类的具体库；本组件可被任何 Atlas Richie
+  HTTP 后端驱动。
+- **端点校验在请求前必走 `OAuthEndpointPolicy`**：默认
+  `HttpsOnlyEndpointPolicy`，test 内网可换 `AllowHttpEndpointPolicy`。
+- **错误归类固定**：
+  - HTTP 非 2xx + OAuth `error` 字段 → `OAuthEndpointError`
+    （只暴露白名单错误码）；
+  - 协议层字段缺失 / 类型错 → `OAuthProtocolError`；
+  - 用户侧构造 / 参数错 → `OAuthConfigurationError`。
+- **DPoP 可选**：`dpop_proof_factory` 注入后，所有出站
+  `_post_form` / `_post_without_body` 都自动附 `DPoP` 头。
+- **DPoP / revocation / userinfo / register 全部不回显 token
+  字符串**。
+
+**`OAuthTokenRequester` 与 `IntrospectionClient` 是 Protocol**：
+单元测试可注入本地 fake，框架本身不依赖具体 HTTP 实现。
+
+**为什么 `register_client` 存在而本组件不实现 RFC 7591 服务端**：
+本组件只作为 OAuth 客户端去调一个"已存在的"动态注册端点，自己
+不充当那个端点。
+
+English
+--------
+OAuth token and introspection facades built only on Atlas Richie's
+HTTP client.
+
+`OAuthTokenClient` is the "protocol-request assembly + error
+classification" facade on the OAuth 2.1 client side:
+
+- **Sole dependency is the HTTP abstraction:** `HttpClient` +
+  `HttpRequest`. No `requests` / `httpx` is imported; the
+  component is driven by any Atlas Richie HTTP backend.
+- **Endpoint validation is mandatory before each request:** an
+  `OAuthEndpointPolicy` (default `HttpsOnlyEndpointPolicy`; tests
+  on internal networks can swap in `AllowHttpEndpointPolicy`).
+- **Fixed error classification:**
+  - HTTP non-2xx + OAuth `error` field → `OAuthEndpointError`
+    (only whitelisted error codes are exposed);
+  - missing / wrong-typed protocol field → `OAuthProtocolError`;
+  - caller-side construction / argument error →
+    `OAuthConfigurationError`.
+- **DPoP is optional:** when a `dpop_proof_factory` is injected,
+  every outbound `_post_form` / `_post_without_body` automatically
+  attaches a `DPoP` header.
+- **DPoP / revocation / userinfo / register never echo the
+  token string.**
+
+**`OAuthTokenRequester` and `IntrospectionClient` are Protocols:**
+unit tests inject local fakes; the framework itself has no
+HTTP-implementation dependency.
+
+**Why `register_client` exists without the component implementing
+the RFC 7591 server side:** this component is only an OAuth client
+that calls an existing dynamic-registration endpoint; it never
+acts as that endpoint.
+"""
 
 from __future__ import annotations
 
@@ -43,7 +104,15 @@ _REGISTRATION_SECRET_FIELDS = frozenset({"client_secret", "registration_access_t
 
 
 class OAuthTokenRequester(Protocol):
-    """Port used by the token manager; implementations can be local test doubles."""
+    """中文
+    ----
+    token manager 依赖的端口；实现可以是本地 test double。
+
+    English
+    --------
+    Port used by the token manager; implementations can be local
+    test doubles.
+    """
 
     def client_credentials(
         self,
@@ -52,7 +121,14 @@ class OAuthTokenRequester(Protocol):
         resource: ResourceIndicator,
         scopes: frozenset[str],
     ) -> OAuthTokenResponse:
-        """Obtain a resource-bound client credentials token."""
+        """中文
+        ----
+        申请一个 resource 绑定的 client credentials token。
+
+        English
+        --------
+        Obtain a resource-bound client credentials token.
+        """
 
     def refresh_token(
         self,
@@ -62,18 +138,48 @@ class OAuthTokenRequester(Protocol):
         resource: ResourceIndicator,
         scopes: frozenset[str],
     ) -> OAuthTokenResponse:
-        """Refresh an existing OAuth grant."""
+        """中文
+        ----
+        刷新一个已有的 OAuth grant。
+
+        English
+        --------
+        Refresh an existing OAuth grant.
+        """
 
 
 class IntrospectionClient(Protocol):
-    """Port for opaque-token validation without exposing an HTTP library."""
+    """中文
+    ----
+    不透明 token 校验的端口，不向上层暴露任何 HTTP 库类型。
+
+    English
+    --------
+    Port for opaque-token validation without exposing an HTTP
+    library.
+    """
 
     def introspect(self, endpoint: str, credentials: OAuthClientCredentials, token: str) -> OAuthIntrospectionResult:
-        """Return a normalized RFC 7662 token state."""
+        """中文
+        ----
+        返回归一化的 RFC 7662 token 状态。
+
+        English
+        --------
+        Return a normalized RFC 7662 token state.
+        """
 
 
 class OAuthTokenClient(OAuthTokenRequester, IntrospectionClient):
-    """A framework-neutral OAuth form client with fixed safe error handling."""
+    """中文
+    ----
+    Framework-neutral OAuth form 客户端，错误归类固定为安全语义。
+
+    English
+    --------
+    A framework-neutral OAuth form client with fixed safe error
+    handling.
+    """
 
     def __init__(self, http_client: HttpClient, endpoint_policy: OAuthEndpointPolicy | None = None, *, dpop_proof_factory: DpopProofFactory | None = None) -> None:
         self._http_client = http_client
@@ -182,7 +288,16 @@ class OAuthTokenClient(OAuthTokenRequester, IntrospectionClient):
         resource: ResourceIndicator | None = None,
         scopes: frozenset[str] = frozenset(),
     ) -> OAuthDeviceAuthorization:
-        """Start RFC 8628 device authorization; applications own user interaction and scheduling."""
+        """中文
+        ----
+        启动 RFC 8628 device authorization；用户交互与轮询节奏
+        由业务侧负责。
+
+        English
+        --------
+        Start RFC 8628 device authorization; applications own user
+        interaction and scheduling.
+        """
 
         form = {"client_id": credentials.client_id, "scope": " ".join(sorted(scopes))}
         if resource is not None:
@@ -208,7 +323,15 @@ class OAuthTokenClient(OAuthTokenRequester, IntrospectionClient):
         resource: ResourceIndicator,
         scopes: frozenset[str] = frozenset(),
     ) -> OAuthTokenResponse:
-        """Perform one device-code token attempt; the caller schedules retries explicitly."""
+        """中文
+        ----
+        执行一次 device-code token 尝试；重试节奏由调用方显式调度。
+
+        English
+        --------
+        Perform one device-code token attempt; the caller schedules
+        retries explicitly.
+        """
 
         if not device_code:
             raise ValueError("device_code is required")
@@ -234,7 +357,15 @@ class OAuthTokenClient(OAuthTokenRequester, IntrospectionClient):
         token: str,
         token_type_hint: str | None = None,
     ) -> None:
-        """Call RFC 7009 revocation without retaining or echoing token material."""
+        """中文
+        ----
+        调用 RFC 7009 撤销端点，不持有或回显 token 字符串。
+
+        English
+        --------
+        Call RFC 7009 revocation without retaining or echoing token
+        material.
+        """
 
         if not token:
             raise ValueError("token is required")
@@ -250,7 +381,15 @@ class OAuthTokenClient(OAuthTokenRequester, IntrospectionClient):
         *,
         initial_access_token: str | None = None,
     ) -> OAuthClientRegistration:
-        """Register against a remote RFC 7591 endpoint; this component never acts as that endpoint."""
+        """中文
+        ----
+        对远端 RFC 7591 端点进行动态注册；本组件自身不充当该端点。
+
+        English
+        --------
+        Register against a remote RFC 7591 endpoint; this
+        component never acts as that endpoint.
+        """
 
         self._endpoint_policy.validate(endpoint)
         headers = {_ACCEPT_HEADER: _JSON_MEDIA_TYPE}
@@ -272,7 +411,15 @@ class OAuthTokenClient(OAuthTokenRequester, IntrospectionClient):
         )
 
     def user_info(self, endpoint: str, access_token: OAuthAccessToken) -> OidcUserInfo:
-        """Retrieve a remote OIDC UserInfo document using its resource-bound access token."""
+        """中文
+        ----
+        用一个资源绑定的 access token 拉取远端 OIDC UserInfo 文档。
+
+        English
+        --------
+        Retrieve a remote OIDC UserInfo document using its
+        resource-bound access token.
+        """
 
         self._endpoint_policy.validate(endpoint)
         response = self._http_client.execute(
@@ -354,7 +501,15 @@ def _response_json(value: object) -> Mapping[str, Any]:
 
 
 def _safe_error_code(value: object) -> str:
-    """Expose only registered OAuth error codes; endpoint values are untrusted."""
+    """中文
+    ----
+    只暴露已注册的 OAuth 错误码；端点返回值不可信。
+
+    English
+    --------
+    Expose only registered OAuth error codes; endpoint values are
+    untrusted.
+    """
 
     known = frozenset(
         {
