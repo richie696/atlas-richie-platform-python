@@ -6,7 +6,7 @@ build-backend = "uv_build"
 
 [project]
 name = "atlas-richie-testing"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reusable test fixtures and contract assertions for Atlas Richie components."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -14,7 +14,7 @@ authors = [
     { name = "Atlas Richie" },
 ]
 dependencies = [
-    "atlas-richie-contracts>=0.1.0,<0.2.0",
+  "atlas-richie-contracts>=0.2.0,<0.3.0",
 ]
 [project.license]
 text = "Apache-2.0"

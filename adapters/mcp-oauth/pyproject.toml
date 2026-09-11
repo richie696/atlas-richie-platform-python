@@ -1,12 +1,12 @@
 [project]
 name = "atlas-richie-mcp-oauth"
-version = "0.1.0"
+version = "0.2.0"
 description = "OAuth protected-resource bridge for atlas-richie-mcp."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "atlas-richie-mcp>=0.1.0,<0.2.0",
-    "atlas-richie-oauth>=0.1.0,<0.2.0",
+  "atlas-richie-mcp>=0.2.0,<0.3.0",
+  "atlas-richie-oauth>=0.2.0,<0.3.0",
 ]
 
 [project.license]
