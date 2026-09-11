@@ -252,11 +252,13 @@ class McpClient:
         response_cache: McpResponseCache | None = None,
         cache_partition: str | None = None,
         dialect: McpClientDialect = DEFAULT_CLIENT_DIALECT,
+        request_id_offset: int = 0,
     ) -> None:
         self._exchange = exchange
         self._identity = identity or Implementation("atlas-richie-mcp-client", "0.1.0")
         self._capabilities = dict(capabilities or {})
         self._next_id = 0
+        self._request_id_offset = request_id_offset
         self._response_cache = response_cache or McpResponseCache()
         self._cache_partition = cache_partition
         self._dialect = dialect
@@ -589,7 +591,7 @@ class McpClient:
                 return cached
         self._next_id += 1
         response = await self._exchange(self._dialect.encode_request(
-            request_id=self._next_id,
+            request_id=self._next_id + self._request_id_offset,
             method=method,
             params=raw_params,
             identity=self._identity,
