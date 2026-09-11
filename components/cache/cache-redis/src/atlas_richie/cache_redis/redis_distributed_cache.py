@@ -77,6 +77,7 @@ class RedisDistributedCache:
         namespace: str = "atlas-richie",
         key_validator: Optional[Any] = None,
         connection_string: Optional[str] = None,
+        connection_pool: Optional[Any] = None,
     ) -> None:
         if client is None:
             raise ConfigurationError("client is required")
@@ -85,6 +86,11 @@ class RedisDistributedCache:
                 "RedisDistributedCache.namespace must be a non-empty string"
             )
         self._client = client
+        # If a `connection_pool` is provided separately (e.g. by
+        # `RedisProviderRegistrar.from_properties` for max_connections
+        # tuning), keep a reference for observability; the actual
+        # ownership is held by the `redis.Redis` client.
+        self._connection_pool = connection_pool
         self._namespace = namespace
         self._validate = key_validator or _default_key_validator
         self._connection_string = connection_string or (

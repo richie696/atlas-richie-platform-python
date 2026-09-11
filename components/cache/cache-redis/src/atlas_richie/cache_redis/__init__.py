@@ -113,6 +113,7 @@ from .managers.redis_string_manager import RedisStringManager
 from .managers.redis_struct_manager import RedisStructManager
 from .redis_cache_infrastructure import RedisCacheInfrastructure
 from .redis_distributed_cache import RedisDistributedCache
+from .redis_cache_properties import ProtocolVersion, RedisCacheProperties, RedisPerfSettings, RedisType
 from .redis_provider_registrar import RedisProviderRegistrar
 
 __version__ = "0.10.0"  # bumped for R-224 (SnowflakeIdBuilder)
@@ -130,6 +131,7 @@ __all__ = [
     "RedisBoundedStack",
     "RedisBoundedStackManager",
     "RedisCacheInfrastructure",
+    "RedisCacheProperties",
     "RedisCollectionManager",
     "RedisDistributedBatchLock",
     "RedisDistributedCache",
@@ -143,6 +145,7 @@ __all__ = [
     "RedisLockManager",
     "RedisNotificationManager",
     "RedisNotificationListener",
+    "RedisPerfSettings",
     "RedisSharedBloomFilter",
     "InMemoryBloomFilter",
     "L2DistributedCache",
@@ -153,6 +156,8 @@ __all__ = [
     "RedisScriptManager",
     "RedisStringManager",
     "RedisStructManager",
+    "RedisType",
+    "ProtocolVersion",
     "SerializationError",
     "StateError",
     "__version__",

@@ -75,9 +75,13 @@ class RedisProviderRegistrar(ProviderRegistrar):
         *,
         namespace: str = "atlas-richie",
         connection_string: str | None = None,
+        connection_pool: Any | None = None,
     ) -> None:
         self._backend = RedisDistributedCache(
-            client, namespace=namespace, connection_string=connection_string
+            client,
+            namespace=namespace,
+            connection_string=connection_string,
+            connection_pool=connection_pool,
         )
         self._infra = RedisCacheInfrastructure(self._backend)
         # Eagerly construct the real managers (M1-M4).
@@ -129,7 +133,108 @@ class RedisProviderRegistrar(ProviderRegistrar):
             client, namespace=namespace, connection_string=masked
         )
 
+    @classmethod
+    def from_properties(
+        cls,
+        properties: "RedisCacheProperties",
+    ) -> "RedisProviderRegistrar":
+        """从 `RedisCacheProperties` (pydantic-settings) 构造 registrar。
+
+        把 properties 里的 18 个池/连接/业务字段映射到 redis-py 8.x
+        客户端 + 显式构造 `ConnectionPool`（业务方调 `max_connections`、
+        `socket_timeout`、`retry_on_timeout` 等都从这里生效）。
+
+        **与 Java 端对齐**：`AtlasRedisProperties` 的字段 1:1 映射
+        到 `RedisCacheProperties`，但结构是 pydantic-settings 而不是
+        yml。对应 Java 端 `@ConfigurationProperties(prefix = "platform.component.cache.redis")` +
+        `LettuceExtension` + `RedisPerf` 三个层级合并成一个 dataclass。
+
+        English
+        --------
+        Construct a `RedisProviderRegistrar` from a pydantic-settings
+        `RedisCacheProperties`. Maps 18 pool/connection/business
+        fields to redis-py 8.x client + explicit `ConnectionPool`,
+        so business code can tune `max_connections`,
+        `socket_timeout`, `retry_on_timeout`, etc. via env vars /
+        .env / pyproject.toml.
+
+        Mirrors Java's `AtlasRedisProperties` 1:1 in semantics, with
+        the three-level Spring config (AtlasRedisProperties +
+        LettuceExtension + RedisPerf) collapsed into one pydantic
+        dataclass.
+        """
+        # Local import to avoid circular import at module load.
+        from .redis_cache_properties import RedisCacheProperties
+        from redis.connection import BlockingConnectionPool
+
+        if not isinstance(properties, RedisCacheProperties):
+            raise TypeError(
+                f"properties must be a RedisCacheProperties instance, "
+                f"got {type(properties).__name__}"
+            )
+
+        # Build a `BlockingConnectionPool` explicitly so that
+        # `max_connections`, `socket_keepalive`, `pool_max_wait_seconds`
+        # etc. from properties actually take effect.
+        #
+        # We choose `BlockingConnectionPool` over the default
+        # `ConnectionPool` because `pool_max_wait_seconds` is a
+        # blocking-pool concept (how long to block waiting for a free
+        # connection); the default `ConnectionPool` rejects
+        # immediately when the pool is full, which is rarely what
+        # business code wants.
+        pool_kwargs: dict[str, Any] = {
+            "max_connections": properties.max_connections,
+            "socket_timeout": properties.socket_timeout,
+            "socket_connect_timeout": properties.socket_connect_timeout,
+            "socket_keepalive": properties.socket_keepalive,
+            "retry_on_timeout": properties.retry_on_timeout,
+            "decode_responses": properties.decode_responses,
+        }
+        if properties.health_check_interval > 0:
+            pool_kwargs["health_check_interval"] = properties.health_check_interval
+        # `BlockingConnectionPool.timeout` is the max time to wait for a
+        # free connection. None means use redis-py default (20s).
+        # redis-py stores this on `pool.timeout` as a public attribute.
+        pool_timeout = (
+            properties.pool_max_wait_seconds
+            if properties.pool_max_wait_seconds is not None
+            else 20  # BlockingConnectionPool default
+        )
+
+        # `redis.connection.BlockingConnectionPool.from_url` builds a
+        # pool with the given settings; the resulting `Redis` client
+        # shares the pool.
+        import redis as redis_lib
+
+        pool = BlockingConnectionPool.from_url(
+            properties.url, timeout=pool_timeout, **pool_kwargs
+        )
+        client = redis_lib.Redis(connection_pool=pool)
+
+        masked = _mask_redis_url(properties.url)
+        return cls(
+            client,
+            namespace=properties.namespace,
+            connection_string=masked,
+            connection_pool=pool,
+        )
+
     # ── 16 low-level ops ───────────────────────────────────────────
+
+    @property
+    def namespace(self) -> str:
+        """The key namespace passed at construction (delegated to backend)."""
+        return self._backend.namespace
+
+    @property
+    def connection_pool(self) -> Any | None:
+        """The underlying `redis.ConnectionPool` (or `None` if `from_url`).
+
+        Exposed for observability and for tests that need to assert
+        pool settings (`max_connections`, `timeout`, etc.).
+        """
+        return self._backend._connection_pool
 
     def value_ops(self):
         return self._string_manager
