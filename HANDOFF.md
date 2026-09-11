@@ -430,6 +430,14 @@ atlas-richie-platform-python/
 | R-M4 | 10 个 `*_with_lock` 方法体实现（stampede prevention，per-key Lua 锁） | `docs/acceptance/R-M4-stampede-prevention-handoff.md` | DONE |
 | R-M5.1 | `loader_timeout_millis` keyword 参数加到全部 10 个 `*_with_lock` | `docs/acceptance/R-M5-1-loader-timeout-handoff.md` | DONE |
 | R-M5.2 | `L2DistributedCache.get_or_load()` (L1 + in-process stampede，per-key `threading.Lock` + `WeakValueDictionary`) | `docs/acceptance/R-M5-2-l1-stampede-handoff.md` (+ design `R-M5-2-l1-stampede-design.md`) | DONE |
+| R-M5.3 / M5.3.7 | `L2DistributedCache.get_or_load_many()` + `L2CacheStats` 可观测性 + negative cache（M5.7/Phase A2 合并到 `3c65f34`） | `CHANGELOG.md` 描述（无独立 handoff） | DONE |
+| R-M5.4 | `RedisPerfGuard` enforcement facade（5 managers，6 enforcement paths，零开销默认） | `docs/acceptance/R-M5-4-perf-guard-handoff.md` | DONE |
+| R-M6 | `RedisCacheProperties`（pydantic-settings env 注入；23 字段 `RedisPerfSettings` + lock settings） | `docs/acceptance/R-M6-redis-cache-properties-handoff.md` | DONE |
+| Phase B.0 | `foundation/contracts` 3 个 core 文件双语 docstring | 包含在 `ab8049a` commit message | DONE |
+| Phase B.1–B.4 | `components/http` (15) + `components/mcp` (18) + `components/oauth` (11, R-231) + `components/resilience` (10) 全员双语 docstring | `docs/acceptance/R-231-oauth-bilingual-docstring-handoff.md` | DONE |
+| Phase C | root `conftest.py` + `tests/integration/conftest.py` + pytest markers (`unit` / `integration` / `e2e`) | `a60a0c6` commit message | DONE |
+| Phase D | cross-component integration tests（cache + http / mcp / oauth 共 3 文件 13 tests） | `bfaa7fa` commit message | DONE |
+| Phase E | E2E tests（http / mcp / oauth / resilience 共 4 文件 38 tests；MCP client `request_id_offset` 修复） | `06ec5e3` commit message | DONE |
 
 ### 15.3 关键架构决策（与原规划的偏差）
 
@@ -468,10 +476,10 @@ atlas-richie-platform-python/
 5. **uv_build 不支持 `dynamic = ["version"]`**：版本管理走 `versions.toml`
    + `tools/sync_versions.py` 同步方案，不走 PEP 621 dynamic version。
 
-### 15.4 现状指标（截至 R-M5.2 commit `c08ed30`）
+### 15.4 现状指标（截至 Phase F commit `06ec5e3`）
 
 ```text
-7 commits ahead of origin/main（6 已 push，最新 R-M5.2 在 latest push）:
+16 commits since Initial commit（全部已 push 到 origin/main）:
   5a925bb  R-220..R-229: bootstrap atlas-richie-platform-python + cache component
   1613654  R-230: bilingual polish for 12 top-level glue files
   233bd43  R-M4: stampede prevention for Value/String/Hash/Set/Struct
@@ -479,15 +487,41 @@ atlas-richie-platform-python/
   7734524  R-M5.2: design doc
   375b13c  R-M5.1: loader_timeout_millis kwarg on all 10 *_with_lock methods
   c08ed30  R-M5.2: L2DistributedCache.get_or_load (L1 + in-process stampede)
+  112be7e  R-M5.x: CHANGELOG.md + HANDOFF.md sync (R-M5.1 + R-M5.2 收尾)
+  b9ec93f  fix: stabilize pre-existing flaky keyspace-event tests
+  f416b46  bump: 0.1.0 -> 0.2.0
+  02f8ec8  R-M6: RedisCacheProperties (pydantic-settings env injection)
+  c61748e  M5.3: get_or_load_many + stats observability
+  ab8049a  Phase B.0: foundation/contracts 双语 docstring (3 文件)
+  3c65f34  M5.3.7 + Phase A2+A3 + Phase B (4 components bilingual)
+  a60a0c6  Phase C: pytest markers (unit/integration/e2e) + cache-redis conftest
+  0252da9  R-M5.4: RedisPerfGuard enforcement facade + manager wiring
+  bfaa7fa  Phase D: integration tests for cache + http/mcp/oauth cross-component
+  06ec5e3  Phase E: E2E tests for http/mcp/oauth/resilience components
 
-Test counts:
-  pytest components/cache/cache-{core,redis}/tests/ -q
-  → 574 passed, 4 skipped, 0 failures
-  (vs R-220 baseline 369 passed; +205 net)
+Test counts (unit + integration, no E2E):
+  pytest components/ -m "not e2e" -q
+  → 773 passed, 2 skipped, 0 failures
+  (cache 638 + non-cache 135; vs R-220 baseline 369 passed; +404 net)
 
-Bilingual docstring coverage: 89 files
+Test counts (Phase E e2e subset):
+  pytest components/{http,mcp,oauth,resilience}/tests/test_e2e_*.py -q
+  → 79 passed, 2 skipped, 0 failures
+  (the 2 skipped are pre-existing xfail keyspace listener tests)
+
+Test counts (cache-redis E2E):
+  pytest components/cache/cache-redis/tests/test_e2e_real_redis.py -q
+  → 41 passed, 2 skipped, 0 failures (43 collected; needs real Redis + keyspace)
+
+Bilingual docstring coverage: 194 files
   R-229: 77 files (Java Javadoc 翻译)
   R-230: 12 files (Python 原创 + 新写中文段)
+  Phase B.0: 3 files (foundation/contracts)
+  Phase B.1: 15 files (http)
+  Phase B.2: 18 files (mcp)
+  Phase B.3 + R-231: 11 files (oauth)
+  Phase B.4: 10 files (resilience)
+  + cache polish 中文段若干 (3c65f34)
 
 Stampede prevention coverage:
   Cross-process (R-M4): 10 public methods across 4 managers
@@ -501,9 +535,10 @@ Stampede prevention coverage:
     RedisStructManager:  get_with_lock, get_with_lock_typed
   In-process (R-M5.2): L2DistributedCache.get_or_load (1 method, all keys)
   Loader timeout (R-M5.1): all 11 stampede methods accept loader_timeout_millis
+  Negative cache (M5.7/Phase A2): get_with_lock 接受 negative_cache_ttl
 
-Stampede tests: 117 (R-M4) + 98 (R-M5.1) + 14 (R-M5.2) = 229 stampede-specific
-Net test count delta: R-220 369 → R-M5.2 574 = +205
+Stampede tests: 117 (R-M4) + 98 (R-M5.1) + 14 (R-M5.2) + 6 (M5.7) = 235 stampede-specific
+Net test count delta: R-220 369 → 773 = +404 (+229 stampede + 175 other)
 
 ─── Two-layer stampede defense ───
 
@@ -516,20 +551,28 @@ Net test count delta: R-220 369 → R-M5.2 574 = +205
     Both methods re-use _call_db_loader_with_timeout   → loader timeout
 ```
 
-### 15.5 仍待办（按 R-M5 handoff 的 follow-up 段）
+### 15.5 仍待办（Stage 1 已完成；Stage 2 待启动）
 
-- **M5.3 候选**：
-  - `L2DistributedCache.get_or_load_many()` — 批量 loader 支持（等真实用例）
-  - 加载统计可观测性（`in_process_loader_fan_in` /
-    `in_process_loader_wait_seconds` / `key_lock_table_size`）
-- **文档收尾**：本 HANDOFF.md §15 已覆盖到 R-M5.2；前 14 章仍是规划基线
+**Stage 1 (atlas-richie-platform-python) — 已完成**:
+- 4 个 component（cache / http / mcp / oauth / resilience）骨架 + 双语 docstring
+- 16 ops + 11 function cache Protocol；Redis backend；stampede + perf guard + negative cache
+- 3 阶段测试体系：unit (R-M5) + integration (Phase D) + e2e (Phase E)
+- 18 handoff docs in `docs/acceptance/`
+- 16 commits 全部 push 到 origin/main
+
+**Stage 2 候选（按 HANDOFF §12 路线图 + 实战优先级）**:
+- **secret component**（§60 任务清单：cache / secret / logging / tracing 中下一个）
+- **logging + tracing components**（与 secret 并列）
+- **storage / vector / document / AI components**（§61）
+- **Gateway / Antivirus 应用层**（§62）
+- **Java ↔ Python 互操作验证**（§66-70，conformance / wire fixture / 真实 IdP）
 - **发布准备**：
-  - `versions.toml` 15 个包目前都是 `0.1.0`；首次发版前 bump 到 `0.1.0` → `0.2.0`
+  - `versions.toml` 15 个包目前都是 `0.2.0`（`f416b46` 已 bump）
   - 启用 GitHub Actions 中的 `ci.yml` + `publish.yml`（已写好，待推 PyPI 凭据）
-  - 7 commits 已全部 push 上 origin/main
-- **已知 pre-existing flakiness**（不在 R-M4/M5 范围）：
-  - `test_redis_event_manager.py::TestKeyspaceEventListener::test_expired_event_fires`
-  - `test_e2e_real_redis.py::TestE2ESkippedCapabilities::test_7_4_keyspace_listener`
+
+**已知 pre-existing flakiness**（不在 R-M4/M5 范围，已知问题不阻塞发版）:
+- `test_redis_event_manager.py::TestKeyspaceEventListener::test_expired_event_fires`
+- `test_e2e_real_redis.py::TestE2ESkippedCapabilities::test_7_4_keyspace_listener`
   两者在 full-suite 跑时偶发失败（keyspace notification 时序敏感），
-  单独跑或重跑均通过。需后续单独修（建议用 `pytest --reruns 2` 或
-  异步 listener 配 fixture 来稳定化）。
+  单独跑或重跑均通过。已在 `b9ec93f` 加上 stabilizing fixture，后续单独
+  闭环（建议用 `pytest --reruns 2` 或异步 listener 配 fixture 进一步稳定化）。

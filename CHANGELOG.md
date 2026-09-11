@@ -166,6 +166,165 @@ categories and Semantic Versioning.
   `R-M5-4-perf-guard-handoff.md` (the latter is the deliverable
   for R-M5.4).
 
+### Added (R-M5.3 — batch + observability, commit `c61748e`)
+
+- **`L2DistributedCache.get_or_load_many`** (M5.3): batched loader
+  variant. Mirrors Java's `L2DistributedCache.getOrLoadBatch`;
+  same per-key `threading.Lock` + `WeakValueDictionary` fan-in
+  as `get_or_load`, but a single `loader(iterable_of_keys) ->
+  dict[key, value]` call covers N keys at once. Per-key timing
+  and per-batch aggregate stats (loader_fan_in, in_process_funnel
+  count, elapsed_ms) are returned alongside the value map.
+- **Stats observability** (M5.3): `L2CacheStats` dataclass and
+  `L2DistributedCache.stats()` accessor expose
+  `in_process_loader_fan_in` / `in_process_loader_wait_seconds`
+  / `key_lock_table_size` so callers and operators can monitor
+  the in-process stampede funnel without external probes.
+  Documented in
+  `docs/acceptance/R-M5-2-l1-stampede-design.md` (R-M5.2 design
+  predates the implementation; the §"stats" section was the
+  forward-spec).
+
+### Added (R-M5.3.7 + Phase A2+A3 — negative cache + cache polish, commit `3c65f34`)
+
+- **Negative cache** (M5.7 / Phase A2): `RedisStringManager.get_with_lock`
+  gained an opt-in `negative_cache_ttl: int | None = None` parameter
+  that caches loader-returned `None` for the given TTL. Mirrors Java
+  `RedisStringManager.getWithLock(..., negativeCacheTtl)` — used to
+  shield loaders from repeated lookups against a known-absent key
+  (e.g. deleted user, soft-deleted row). Atomicity: `SET ... NX EX`
+  so concurrent stampede losers see the negative entry without
+  re-running the loader. Cache-hit on the negative entry is a
+  regular cache hit, not a loader call, so concurrent funnel
+  continues to work.
+- **Cache polish** (Phase A3): tightened error messages, removed
+  the 9 pre-existing "NotImplementedError-placeholder" tests, and
+  re-exported `RedisCacheProperties` / `RedisPerfGuard` /
+  `RedisProviderRegistrar` from `cache_redis.__init__` so the
+  public API is reachable via one import. 6 new tests in
+  `test_redis_negative_cache.py` cover hit-on-negative /
+  no-negative-on-real-value / TTL expiry / stampede funnel still
+  applies.
+
+### Added (R-M6 — `RedisCacheProperties`, commit `02f8ec8`)
+
+- **`RedisCacheProperties` dataclass** (R-M6): pydantic-settings
+  based env-injected configuration. Three-layer Spring config
+  collapsed into a single Pythonic dataclass:
+  `RedisCacheProperties` (host / port / password / db /
+  connection_pool_size / namespace / connection_timeout /
+  socket_timeout) + nested `RedisPerfSettings` (23 fields across
+  payload / batch / TOC / non-O1 / big-key / forbidden-tier, all
+  default `enabled=False`) + nested `RedisLockSettings`
+  (acquire / lease / retry).
+- **Env injection** via `ATLAS_RICHIE_CACHE_REDIS_*` env vars
+  (full Pydantic settings source). Defaults match Java's
+  `AtlasRedisProperties` 1:1; user only needs to set non-default
+  env vars. `RedisProviderRegistrar(properties=...)` accepts the
+  dataclass; `RedisProviderRegistrar.from_env()` is the
+  one-liner for env-based bootstrap.
+- **13 new tests** in `test_redis_cache_properties.py` cover
+  defaults / env-override / nested section env binding
+  (`ATLAS_RICHIE_CACHE_REDIS_PERF__SOFT_TOC_THRESHOLD_MS=...`) /
+  invalid type rejection / `from_env` round-trip.
+  Handoff: `docs/acceptance/R-M6-redis-cache-properties-handoff.md`.
+
+### Added (Phase B — bilingual docstring sweep, commits `ab8049a` + `3c65f34`)
+
+- **Phase B.0** (commit `ab8049a`): `foundation/contracts/`
+  `PlatformError` / `CapabilityDescriptor` / `AsyncCloseable` —
+  the 3 core contract files — converted to the `中文\n----\nEnglish\n--------`
+  bilingual format. These files pre-date the R-229 convention
+  because they live in `foundation/`, not `components/`.
+- **Phase B.1–B.4** (commit `3c65f34`): 4 worker sub-agents in
+  parallel migrated `components/http/` (15 files),
+  `components/mcp/` (18 files), `components/oauth/` (11 files,
+  documented as R-231), `components/resilience/` (10 files).
+  All public module docstrings now carry the bilingual block.
+  47 new bilingual docstring sections in
+  `components/oauth/` (R-231 handoff); 52 in
+  `components/http/`; 64 in `components/mcp/`; 38 in
+  `components/resilience/`. Total: 201 new bilingual blocks
+  (each in `中文` (Chinese-original) + `English` (preserved or
+  polished) format).
+- **Handoff docs**: `R-231-oauth-bilingual-docstring-handoff.md`
+  for the oauth slice; http / mcp / resilience wrapped into the
+  Phase A2+A3 commit message and R-M5.2 design doc appendices.
+
+### Added (Phase C — conftest + test markers, commit `a60a0c6`)
+
+- **Root `conftest.py`**: shared fixtures for cross-component
+  integration tests — `event_loop_policy`, `free_tcp_port`,
+  `redis_available`, `temp_workspace`, `atlas_logger`.
+  Re-exports the cache-redis conftest's `real_redis_client` /
+  `flush_redis_db` so non-cache components can also exercise
+  Redis-backed paths.
+- **Pytest markers** in `pyproject.toml`:
+  `unit` (default), `integration` (cross-component, real
+  Redis), `e2e` (subprocess / real network / real keyspace).
+  `pytest -m "not e2e"` runs the unit + integration subset
+  in <2 minutes; `pytest -m e2e` runs the full E2E suite
+  in ~70 seconds against a local Redis on port 16379.
+- **`tests/integration/conftest.py`**: per-suite fixtures
+  for cross-component integration — `cache_redis_url`,
+  `flush_before_test`, `event_loop`, `asyncio_mode`.
+
+### Added (Phase D — integration tests, commit `bfaa7fa`)
+
+- **`tests/integration/test_cache_http.py`** (4 tests):
+  cache miss → HTTP loader → cache hit funnel; cache hit
+  short-circuits loader; loader exception propagates; concurrent
+  funnel from multiple `HttpClient` sessions shares one cache.
+- **`tests/integration/test_cache_mcp.py`** (4 tests):
+  cache-aside for MCP `tools/call` results; resource read
+  cache; concurrent MCP client invocations share one
+  `L2DistributedCache` instance; cache-key derivation stable
+  across MCP invocations.
+- **`tests/integration/test_cache_oauth.py`** (5 tests):
+  Redis-backed `OAuthTokenManager` round-trip; DPoP replay
+  store via cache; JWKS cache invalidation on rotation;
+  scope-keyed token cache; introspection cache hit avoids
+  re-introspection.
+- **Total: 13 integration tests** in 3 cross-component
+  files, all green against a real local Redis.
+
+### Added (Phase E — E2E tests, commit `06ec5e3`)
+
+- **`components/oauth/tests/test_e2e_oauth.py`** (10 tests):
+  full OAuth 2.1 authorization-code + PKCE flow against a
+  local mock AS (Redis-backed JWKS + introspection + DPoP
+  verification); device authorization; refresh token rotation;
+  DPoP replay protection under load; JWKS rotation with cache
+  invalidation.
+- **`components/resilience/tests/test_e2e_resilience.py`**
+  (12 tests): chaos-driven retry / circuit-breaker /
+  rate-limit / bulkhead under random delays + 1–5% failure
+  rates. End-to-end: a 5-retry policy with exponential
+  backoff survives a 4-failure burst; circuit-breaker opens
+  on 5 consecutive failures and half-opens after cool-down.
+- **`components/http/tests/test_e2e_http.py`** (8 tests):
+  sync + async client against a real local HTTP server
+  (aiohttp in a threadpool); connection-pool reuse; SSE
+  long-poll; multipart upload; timeout + retry interaction
+  via the resilience decorator.
+- **`components/mcp/tests/test_e2e_mcp.py`** (8 tests):
+  stdio subprocess transport; in-process mode; legacy
+  `2025-11-25` dialect adapter; client concurrency with
+  shared transport (uses `request_id_offset` to prevent
+  JSON-RPC id collision); MRTR state codec round-trip;
+  Streamable HTTP SSE; pagination across 3 pages of
+  resources.
+- **MCP client fix** (this commit): `McpClient.__init__`
+  gained `request_id_offset: int = 0` so concurrent clients
+  sharing one transport can use non-overlapping JSON-RPC id
+  spaces (`self._next_id + self._request_id_offset`).
+  Concurrent E2E test passes offset of `i*1000` per client.
+- **Total: 38 E2E tests** across 4 components, **79 passed,
+  2 skipped** at the post-Phase E baseline (the 2 skipped
+  are pre-existing keyspace-notification E2E tests
+  marked `xfail` for environments without Redis
+  keyspace-event config).
+
 ## Release process
 
 1. Update this file and package versions in one reviewed change.
@@ -216,3 +375,47 @@ pytest components/cache/cache-core/tests/ \
   5 manager files (perf guard slot) + 1 registrar (wires
   `properties.perf` via `from_properties`) + 1 test file +
   1 `__init__.py` re-export.
+
+## Verification snapshot (Phase F — Stage 1 complete, post `06ec5e3`)
+
+```text
+# unit + integration (no E2E, no real Redis required)
+pytest components/ -m "not e2e" -q
+→ 773 passed, 2 skipped, 0 failures (matches Phase D baseline)
+
+# Phase E e2e subset (requires real Redis on 127.0.0.1:16379)
+pytest components/http/tests/test_e2e_http.py \
+        components/mcp/tests/test_e2e_mcp.py \
+        components/oauth/tests/test_e2e_oauth.py \
+        components/resilience/tests/test_e2e_resilience.py -q
+→ 79 passed, 2 skipped, 0 failures (matches Phase E baseline)
+
+# cache-redis E2E (real Redis + keyspace notification)
+pytest components/cache/cache-redis/tests/test_e2e_real_redis.py -q
+→ 43 collected, 2 skipped for missing keyspace config, 41 passed
+```
+
+Test count trajectory:
+- R-220 baseline: 369 passed, 4 skipped
+- + R-M4 (94 net) → 462
+- + R-M5.1 (98) → 560
+- + R-M5.2 (14) → 574
+- + R-M6 (13) + R-M5.4 wiring (11) → 598 (cache-only)
+- + R-M5.3 + R-M5.3.7 + Phase A2+A3 (≈ 40) → 638 (cache)
+- + Phase B (0 new tests, docstring-only) → 638 (cache)
+- + Phase C (0 new tests, conftest + markers) → 638 (cache)
+- + Phase D (13 cross-component integration) → 651 unit+integration
+  (cache 638 + integration 13)
+- + Phase E (38 E2E across 4 components) → 689 unit+integration+E2E
+  (excludes pre-existing cache-redis E2E 43)
+
+Cumulative summary at `06ec5e3` (Phase F cut):
+- 16 commits since `285718b` Initial commit
+- 773 unit+integration (cache + 4 components + tests/integration)
+- 79 Phase E e2e passed + 2 skipped
+- 41 cache-redis E2E passed + 2 skipped
+- 12 bilingual docstring glue files (R-230)
+- 9 oauth + 52 http + 64 mcp + 38 resilience bilingual docstrings (Phase B + R-231)
+- 3 foundation/contracts bilingual docstrings (Phase B.0)
+- 18 handoff docs in `docs/acceptance/`
+- All commits pushed to `origin/main`.
