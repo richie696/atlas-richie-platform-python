@@ -46,6 +46,7 @@ from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
 from .redis_string_manager import (
+    _call_db_loader_with_timeout,
     _make_stampede_lock_key,
     _stampede_acquire,
     _stampede_release,
@@ -154,6 +155,8 @@ class RedisStructManager(StructOps):
         clazz: type,
         timeout_millis: int,
         db_loader: Callable[[], Any],
+        *,
+        loader_timeout_millis: int | None = None,
     ) -> Any:
         """防缓存击穿：结构化对象（``StructOps.get_with_lock``）。
 
@@ -168,13 +171,20 @@ class RedisStructManager(StructOps):
             timeout_millis: 缓存 TTL（毫秒），同时也是 stampede 锁
                 的持有超时
             db_loader: 回源加载器；返回 ``None`` 表示无值（不写缓存）
+            loader_timeout_millis: 可选 — M5.1：`db_loader` 的
+                毫秒级超时。`None`（默认）= 沿用旧行为（不限时）；
+                `> 0` = `db_loader` 在此时间内未完成则当作
+                `None` 处理（不写缓存），让 caller 决定是否重试。
+                超时的 loader 可能在后台继续运行（best-effort
+                终止，详见 `_call_db_loader_with_timeout`）。
 
         Returns:
-            缓存值；未命中且加载失败时为 ``None``。
+            缓存值；未命中且加载失败或超时时为 ``None``。
 
         Raises:
-            ValueError: ``timeout_millis <= 0`` 或 ``db_loader`` 为
-                ``None``。
+            ValueError: ``timeout_millis <= 0``、``db_loader`` 为
+                ``None``，或 ``loader_timeout_millis <= 0``。
+            ``db_loader`` 自身抛出的异常会原样传播。
 
         English
         --------
@@ -186,10 +196,17 @@ class RedisStructManager(StructOps):
         that lose the lock race enter a short polling loop and
         re-read the cache; if the winner hasn't published within
         the wait budget, returns ``None``.
+
+        M5.1: `loader_timeout_millis` adds a millisecond-level
+        backstop on `db_loader`. `None` preserves legacy
+        (unbounded) behavior. A timed-out loader returns `None`
+        (no cache write). Exceptions from `db_loader` are
+        re-raised unchanged.
         """
         return self._stampede_load(
             key, clazz, timeout_millis, db_loader,
             wait_budget_millis=int(timeout_millis),
+            loader_timeout_millis=loader_timeout_millis,
         )
 
     def get_with_lock_typed(
@@ -198,6 +215,8 @@ class RedisStructManager(StructOps):
         reference: type,
         timeout_millis: int,
         db_loader: Callable[[], Any],
+        *,
+        loader_timeout_millis: int | None = None,
     ) -> Any:
         """防缓存击穿：结构化对象（运行时类型版本）。
 
@@ -210,13 +229,16 @@ class RedisStructManager(StructOps):
             reference: 运行时解析的目标类型
             timeout_millis: 缓存 TTL（毫秒）
             db_loader: 回源加载器
+            loader_timeout_millis: 可选 — M5.1：`db_loader` 的
+                毫秒级超时。详见 `get_with_lock` 文档。
 
         Returns:
-            缓存值；未命中且加载失败时为 ``None``。
+            缓存值；未命中且加载失败或超时时为 ``None``。
         """
         return self._stampede_load(
             key, reference, timeout_millis, db_loader,
             wait_budget_millis=int(timeout_millis),
+            loader_timeout_millis=loader_timeout_millis,
         )
 
     # ── Stampede-prevention shared helper (M4) ─────────────────────
@@ -229,18 +251,22 @@ class RedisStructManager(StructOps):
         db_loader: Callable[[], Any],
         *,
         wait_budget_millis: int,
+        loader_timeout_millis: int | None = None,
     ) -> Any:
         """Shared implementation for `get_with_lock` + `get_with_lock_typed`.
 
         Returns the cached value (on hit) or the loaded value
         (after a successful db_loader round-trip). Returns ``None``
-        if the db_loader returned ``None`` or if a competing
-        stampede lock holder didn't publish within the wait budget.
+        if the db_loader returned ``None``, timed out (M5.1), or if
+        a competing stampede lock holder didn't publish within the
+        wait budget.
         """
         if timeout_millis <= 0:
             raise ValueError("timeout_millis must be > 0")
         if db_loader is None:
             raise ValueError("db_loader is required")
+        if loader_timeout_millis is not None and loader_timeout_millis <= 0:
+            raise ValueError("loader_timeout_millis must be > 0 (or None)")
 
         # 1. Fast path: cache hit → return immediately.
         cached = self.get(key, clazz)
@@ -261,8 +287,15 @@ class RedisStructManager(StructOps):
             cached = self.get(key, clazz)
             if cached is not None:
                 return cached
-            # 4. Still missing → invoke the db_loader.
-            value = db_loader()
+            # 4. Still missing → invoke the db_loader, optionally
+            #    with a timeout. `_call_db_loader_with_timeout` either
+            #    returns the loader's return value, returns `None` on
+            #    timeout, or re-raises the loader's exception. The
+            #    typed read (for `get_with_lock_typed`) happens AFTER
+            #    this returns, in-process and bounded.
+            value = _call_db_loader_with_timeout(
+                db_loader, loader_timeout_millis
+            )
             if value is None:
                 return None
             # 5. Publish: caller-supplied TTL verbatim (no anti-
