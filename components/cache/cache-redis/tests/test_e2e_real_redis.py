@@ -657,6 +657,10 @@ class TestE2ESkippedCapabilities:
         self, registrar: RedisProviderRegistrar
     ) -> None:
         # R-225: implemented. Subscribe + set + delete + receive.
+        # Same retry-with-unique-key pattern as
+        # `TestKeyspaceEventListener` — Redis 8.x can drop pubsub
+        # messages under full-suite load.
+        import uuid as _uuid
         from atlas_richie.cache_core.contracts.keyspace_listener import (
             KeyspaceEventListener,
         )
@@ -676,11 +680,18 @@ class TestE2ESkippedCapabilities:
         mgr.subscribe_key_event("__keyevent@0__:del", L())
         try:
             time.sleep(0.3)
-            registrar.value_ops().set("e2e:ks:r225", b"v")
-            registrar.key_ops().remove_cache("e2e:ks:r225")
-            assert ready.wait(timeout=3.0), "keyspace del event not received"
-            assert any("e2e:ks:r225" in str(r[2]) for r in received), (
-                f"expected e2e:ks:r225 in {received!r}"
+            for attempt in range(3):
+                key = f"e2e:ks:r225:{_uuid.uuid4().hex[:8]}"
+                received.clear()
+                ready.clear()
+                registrar.value_ops().set(key, b"v")
+                registrar.key_ops().remove_cache(key)
+                if ready.wait(timeout=4.0) and any(key in str(r[2]) for r in received):
+                    print(f"  ✅ 7.4 keyspace listener (attempt {attempt + 1})")
+                    return
+                time.sleep(0.2)
+            raise AssertionError(
+                f"keyspace del event not received in 3 attempts; received: {received!r}"
             )
         finally:
             mgr.close()
