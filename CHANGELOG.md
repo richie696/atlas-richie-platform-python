@@ -46,6 +46,39 @@ categories and Semantic Versioning.
 - **9 handoff docs** in `docs/acceptance/` documenting the R-220 →
   R-M4 implementation (each milestone: motivation, architecture, files
   changed, review gate, follow-ups).
+- **Loader timeout enforcement** (R-M5.1): all 10 `*_with_lock` methods
+  gained an optional `loader_timeout_millis: int | None = None` keyword
+  argument. Uses a single-worker `concurrent.futures.ThreadPoolExecutor`
+  + `future.result(timeout=...)`; on timeout the method returns `None`
+  (no cache write, no exception) and the stampede lock is released
+  cleanly. `None` preserves legacy unbounded behavior — 100%
+  backward compatible. Helper `_call_db_loader_with_timeout` is
+  re-used by 4 managers, no duplication.
+- **L1 (cachetools) + in-process stampede integration** (R-M5.2):
+  `L2DistributedCache.get_or_load(key, loader, *, ttl_seconds,
+  loader_timeout_millis)` — a loader-driven read that funnels
+  concurrent in-process misses to ONE loader call via per-key
+  `threading.Lock` + `WeakValueDictionary`-backed lock table. The
+  in-process lock is the L2-layer stampede defense; cross-process
+  defense stays in `RedisStringManager.get_with_lock` (R-M4). L1
+  hit path is unchanged (no lock, no network) — warm cache pays
+  zero lock cost. `L2DistributedCache.get()` is unchanged (backward
+  compatible — `get_or_load` is purely additive).
+- **98 new tests** (R-M5.1): 10 in
+  `test_redis_string_manager_loader_timeout.py`, 56 in
+  `test_redis_field_manager_loader_timeout.py`, 32 in
+  `test_redis_collection_struct_loader_timeout.py`. Cover loader
+  timeout / exception propagation / cache-hit unaffected / lock
+  re-acquisition / concurrent funnel / batch-specific
+  (`get_many_with_lock`).
+- **14 new tests** (R-M5.2): `test_l2_distributed_cache_get_or_load.py`.
+  Cover L1 hit short-circuit / L2 read-through / loader success+None+timeout+raise /
+  concurrent in-process funnel (10 threads → 1 loader call) /
+  per-key granularity (5 keys × 2 threads → 5 loader calls) /
+  weakref table cleanup / TTL applied / argument validation.
+- **2 more handoff docs**: `R-M5-1-loader-timeout-handoff.md` and
+  `R-M5-2-l1-stampede-handoff.md` (plus the R-M5.2 design doc
+  `R-M5-2-l1-stampede-design.md`).
 
 ### Changed
 
@@ -94,6 +127,21 @@ categories and Semantic Versioning.
    35 in `test_redis_collection_struct_with_lock.py`,
     8 in `test_redis_bloom_filter_atomicity.py`).
 
+### Added (R-M5 follow-ups)
+
+- **98 new tests** (R-M5.1): 10 in
+  `test_redis_string_manager_loader_timeout.py`, 56 in
+  `test_redis_field_manager_loader_timeout.py`, 32 in
+  `test_redis_collection_struct_loader_timeout.py`. Cover loader
+  timeout / exception propagation / cache-hit unaffected / lock
+  re-acquisition / concurrent funnel / batch-specific
+  (`get_many_with_lock`).
+- **14 new tests** (R-M5.2): `test_l2_distributed_cache_get_or_load.py`.
+  Cover L1 hit short-circuit / L2 read-through / loader success+None+timeout+raise /
+  concurrent in-process funnel (10 threads → 1 loader call) /
+  per-key granularity (5 keys × 2 threads → 5 loader calls) /
+  weakref table cleanup / TTL applied / argument validation.
+
 ## Release process
 
 1. Update this file and package versions in one reviewed change.
@@ -101,16 +149,21 @@ categories and Semantic Versioning.
 3. The protected `pypi` GitHub environment publishes the verified artifacts with trusted publishing.
 4. Verify uploaded hashes and install each wheel in isolation before announcing the release.
 
-## Verification snapshot (R-M4 commit `233bd43`)
+## Verification snapshot (R-M5.2 commit `c08ed30`)
 
 ```text
 pytest components/cache/cache-core/tests/ \
         components/cache/cache-redis/tests/ -q
-→ 462 passed, 4 skipped, 0 failures
+→ 574 passed, 4 skipped, 0 failures
 ```
 
 Test count trajectory:
 - R-220 baseline: 369 passed, 4 skipped
-- + R-M4 sample (12) + worker 1 (48) + worker 2 (43) − 9 obsolete = 462 net
+- + R-M4 (12 + 48 + 35 + 8 sample/worker) − 9 obsolete = +94 net → 462
+- + R-M5.1 sample (10) → 471 (+ 1 known flaky keyspace)
+- + R-M5.1 worker (88) → 560 (full suite, no flaky this run)
+- + R-M5.2 (14) → 574
 - All 4 skipped are pre-existing `keyspace listener` E2E tests marked
   `xfail` for environments without Redis keyspace notification config.
+- 1 pre-existing flaky (`test_redis_event_manager.py::TestKeyspaceEventListener::test_expired_event_fires`)
+  passes on isolated run; full-suite timing-sensitive.

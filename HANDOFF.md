@@ -428,6 +428,8 @@ atlas-richie-platform-python/
 | R-229 | 77 个 docstring 中英双语化（从 Java Javadoc 翻译） | `docs/acceptance/R-229-bilingual-docstring-migration-handoff.md` | DONE |
 | R-230 | 12 个 glue 文件中英双语化（Python 原创，新写中文段） | `docs/acceptance/R-230-glue-files-bilingual-polish-handoff.md` | DONE |
 | R-M4 | 10 个 `*_with_lock` 方法体实现（stampede prevention，per-key Lua 锁） | `docs/acceptance/R-M4-stampede-prevention-handoff.md` | DONE |
+| R-M5.1 | `loader_timeout_millis` keyword 参数加到全部 10 个 `*_with_lock` | `docs/acceptance/R-M5-1-loader-timeout-handoff.md` | DONE |
+| R-M5.2 | `L2DistributedCache.get_or_load()` (L1 + in-process stampede，per-key `threading.Lock` + `WeakValueDictionary`) | `docs/acceptance/R-M5-2-l1-stampede-handoff.md` (+ design `R-M5-2-l1-stampede-design.md`) | DONE |
 
 ### 15.3 关键架构决策（与原规划的偏差）
 
@@ -443,56 +445,91 @@ atlas-richie-platform-python/
 3. **stampede 锁与 business 锁两套独立**（R-M4）：`__stampede_lock__:{key}`
    vs `__lock__:{key}`，不同 namespace 不同语义，可共存。inline Lua 而非
    `RedisLockManager` 注入，4 个 manager 共享 module-level helpers。
+   **两层 stampede 防御**（R-M4 + R-M5.2）：R-M4 的 Redis Lua 锁防御
+   cross-process 重复 loader；R-M5.2 的 in-process `threading.Lock` 防御
+   in-process 重复 loader（per-key，`WeakValueDictionary` 持有，弱引用
+   自动 GC）。`L2DistributedCache.get_or_load` 走 in-process 锁；
+   `RedisStringManager.get_with_lock` 走 Redis 锁；两者各司其职，
+   caller 按需选用（与 Java 端 `L2DistributedCache` 无 stampede 锁一致）。
+4. **`db_loader` 超时 backstop**（R-M5.1）：`loader_timeout_millis`
+   keyword-only 参数 + `_call_db_loader_with_timeout` 共享 helper。
+   `concurrent.futures.ThreadPoolExecutor(max_workers=1)` + `future.result
+   (timeout=...)`，超时返 `None`（不写 cache、不抛异常），stampede 锁
+   立即释放。Python 不支持 `pthread_cancel`，hung loader 线程
+   best-effort 终止，是 backstop 而非硬保证。
+5. **docstring 双语**（R-229 + R-230）：中段在上（Java Javadoc 翻译或 Python
+   原创）+ 英段在下，锚点 `中文\n----` + `English\n--------`。后续所有新
+   docstring 默认双语。
+6. **uv_build 不支持 `dynamic = ["version"]`**：版本管理走 `versions.toml`
+   + `tools/sync_versions.py` 同步方案，不走 PEP 621 dynamic version。
 4. **docstring 双语**（R-229 + R-230）：中段在上（Java Javadoc 翻译或 Python
    原创）+ 英段在下，锚点 `中文\n----` + `English\n--------`。后续所有新
    docstring 默认双语。
 5. **uv_build 不支持 `dynamic = ["version"]`**：版本管理走 `versions.toml`
    + `tools/sync_versions.py` 同步方案，不走 PEP 621 dynamic version。
 
-### 15.4 现状指标（截至 R-M4 commit `233bd43`）
+### 15.4 现状指标（截至 R-M5.2 commit `c08ed30`）
 
 ```text
-3 commits ahead of origin/main:
+7 commits ahead of origin/main（6 已 push，最新 R-M5.2 在 latest push）:
   5a925bb  R-220..R-229: bootstrap atlas-richie-platform-python + cache component
   1613654  R-230: bilingual polish for 12 top-level glue files
   233bd43  R-M4: stampede prevention for Value/String/Hash/Set/Struct
+  d6cecd2  R-M4.x: CHANGELOG.md + HANDOFF.md 收尾
+  7734524  R-M5.2: design doc
+  375b13c  R-M5.1: loader_timeout_millis kwarg on all 10 *_with_lock methods
+  c08ed30  R-M5.2: L2DistributedCache.get_or_load (L1 + in-process stampede)
 
 Test counts:
   pytest components/cache/cache-{core,redis}/tests/ -q
-  → 462 passed, 4 skipped, 0 failures
-  (vs R-220 baseline 369 passed)
+  → 574 passed, 4 skipped, 0 failures
+  (vs R-220 baseline 369 passed; +205 net)
 
 Bilingual docstring coverage: 89 files
   R-229: 77 files (Java Javadoc 翻译)
   R-230: 12 files (Python 原创 + 新写中文段)
 
-Stampede prevention coverage: 10 public methods across 4 managers
-  RedisStringManager:  get_with_lock, get_from_string_with_lock
-  RedisFieldManager:   get_with_lock, get_with_lock_typed,
-                       get_object_from_hash_with_lock,
-                       get_from_hash_with_lock,
-                       get_from_hash_with_lock_typed,
-                       get_many_with_lock
-  RedisCollectionManager: get_with_lock, get_from_set_with_lock
-  RedisStructManager:  get_with_lock, get_with_lock_typed
+Stampede prevention coverage:
+  Cross-process (R-M4): 10 public methods across 4 managers
+    RedisStringManager:  get_with_lock, get_from_string_with_lock
+    RedisFieldManager:   get_with_lock, get_with_lock_typed,
+                         get_object_from_hash_with_lock,
+                         get_from_hash_with_lock,
+                         get_from_hash_with_lock_typed,
+                         get_many_with_lock
+    RedisCollectionManager: get_with_lock, get_from_set_with_lock
+    RedisStructManager:  get_with_lock, get_with_lock_typed
+  In-process (R-M5.2): L2DistributedCache.get_or_load (1 method, all keys)
+  Loader timeout (R-M5.1): all 11 stampede methods accept loader_timeout_millis
 
-Stampede tests: 103 新测试（+9 旧 placeholder 删除 = +93 net）
+Stampede tests: 117 (R-M4) + 98 (R-M5.1) + 14 (R-M5.2) = 229 stampede-specific
+Net test count delta: R-220 369 → R-M5.2 574 = +205
+
+─── Two-layer stampede defense ───
+
+  R-M4: cross-process funnel (Redis Lua SET NX PX)
+  R-M5.2: in-process funnel (per-key threading.Lock + WeakValueDictionary)
+
+  Caller chooses layer:
+    L2DistributedCache.get_or_load(key, loader, ...)   → in-process only
+    RedisStringManager.get_with_lock(key, ttl, loader) → cross-process (R-M4)
+    Both methods re-use _call_db_loader_with_timeout   → loader timeout
 ```
 
-### 15.5 仍待办（按 R-M4 handoff 的 follow-up 段）
+### 15.5 仍待办（按 R-M5 handoff 的 follow-up 段）
 
-- **M5 候选**：
-  - `db_loader` 超时强制（`concurrent.futures` wrapper + `loader_timeout_millis` 参数）
-  - L1 (cachetools) + stampede 锁双层集成（当前 Redis-funneled 后 L1 仍 N 次 loader）
-- **文档收尾**：
-  - 本 HANDOFF.md 已 R-M4 状态段 append（在本节），但前 14 章仍是规划基线，
-    后续接手者按 §15.2 表格查 handoff doc 即可
+- **M5.3 候选**：
+  - `L2DistributedCache.get_or_load_many()` — 批量 loader 支持（等真实用例）
+  - 加载统计可观测性（`in_process_loader_fan_in` /
+    `in_process_loader_wait_seconds` / `key_lock_table_size`）
+- **文档收尾**：本 HANDOFF.md §15 已覆盖到 R-M5.2；前 14 章仍是规划基线
 - **发布准备**：
-  - `versions.toml` 中所有 15 个包目前都是 `0.1.0`；首次发版前 bump 到 `0.1.0` → `0.2.0`
-  - `git push origin main`（3 commits ahead of origin/main）
-  - 启用 GitHub Actions 中的 `ci.yml` + `publish.yml`（已写好）
-- **已知 pre-existing flakiness**（不在 R-M4 范围）：
+  - `versions.toml` 15 个包目前都是 `0.1.0`；首次发版前 bump 到 `0.1.0` → `0.2.0`
+  - 启用 GitHub Actions 中的 `ci.yml` + `publish.yml`（已写好，待推 PyPI 凭据）
+  - 7 commits 已全部 push 上 origin/main
+- **已知 pre-existing flakiness**（不在 R-M4/M5 范围）：
   - `test_redis_event_manager.py::TestKeyspaceEventListener::test_expired_event_fires`
   - `test_e2e_real_redis.py::TestE2ESkippedCapabilities::test_7_4_keyspace_listener`
   两者在 full-suite 跑时偶发失败（keyspace notification 时序敏感），
-  单独跑或重跑均通过。需后续单独修。
+  单独跑或重跑均通过。需后续单独修（建议用 `pytest --reruns 2` 或
+  异步 listener 配 fixture 来稳定化）。
