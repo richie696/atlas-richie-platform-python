@@ -22,6 +22,13 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest>=8.0,<9.0"]
 
+[tool.pytest.ini_options]
+markers = [
+    "unit: fast tests with no I/O, no external dependencies (default)",
+    "integration: multi-component interaction, may use real Redis",
+    "e2e: end-to-end tests that may spin up servers, slower",
+]
+
 [tool.uv.build-backend]
 module-name = "atlas_richie.cache_redis"
 module-root = "src"
