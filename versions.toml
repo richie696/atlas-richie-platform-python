@@ -1,0 +1,35 @@
+# Single source of truth for the framework's package versions.
+#
+# Mirrors the Maven `<revision>` convention: bump a version here,
+# then run `python tools/sync_versions.py` to propagate the new
+# number into every `pyproject.toml` (both the package's own
+# `version =` field and any cross-component dependency constraints
+# like `"atlas-richie-cache-core>=0.1.0,<0.2.0"`).
+#
+# `tools/sync_versions.py` reads this file as the canonical input;
+# it will refuse to write a `pyproject.toml` whose `version` is not
+# declared here, and will fail loudly if a dependency references a
+# package that isn't declared here either.
+#
+# Bump workflow:
+#   1. edit versions.toml (e.g. `0.1.0` -> `0.2.0`)
+#   2. python tools/sync_versions.py
+#   3. git add -A && git commit -m "bump: 0.1.0 -> 0.2.0"
+
+[versions]
+platform-version                    = "0.1.0"
+atlas-richie-contracts              = "0.1.0"
+atlas-richie-testing                = "0.1.0"
+atlas-richie-platform               = "0.1.0"
+atlas-richie-http                   = "0.1.0"
+atlas-richie-mcp                    = "0.1.0"
+atlas-richie-oauth                  = "0.1.0"
+atlas-richie-resilience             = "0.1.0"
+atlas-richie-cache-core             = "0.1.0"
+atlas-richie-cache-redis            = "0.1.0"
+atlas-richie-oauth-jose             = "0.1.0"
+atlas-richie-mcp-schema-jsonschema  = "0.1.0"
+atlas-richie-mcp-asgi               = "0.1.0"
+atlas-richie-mcp-oauth              = "0.1.0"
+atlas-richie-mcp-http               = "0.1.0"
+atlas-richie-mcp-legacy             = "0.1.0"
