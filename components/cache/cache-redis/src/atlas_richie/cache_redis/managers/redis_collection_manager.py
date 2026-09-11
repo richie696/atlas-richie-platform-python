@@ -62,6 +62,7 @@ from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
 from .redis_string_manager import (
+    _call_db_loader_with_timeout,
     _make_stampede_lock_key,
     _stampede_acquire,
     _stampede_release,
@@ -217,6 +218,8 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         clazz: type,
         timeout_millis: int,
         db_loader: Callable[[], _PySet[T] | None],
+        *,
+        loader_timeout_millis: int | None = None,
     ) -> _PySet[T]:
         """防缓存击穿：Set 类型（底层 ``CollectionOps`` 入口）。
 
@@ -232,13 +235,20 @@ class RedisCollectionManager(CollectionOps, SetFunction):
                 的持有超时
             db_loader: 回源加载器；返回 ``None`` 或空集表示无值
                 （不写缓存）
+            loader_timeout_millis: 可选 — M5.1：`db_loader` 的
+                毫秒级超时。`None`（默认）= 沿用旧行为（不限时）；
+                `> 0` = `db_loader` 在此时间内未完成则当作
+                ``None`` 处理（不写缓存），让 caller 决定是否重试。
+                超时的 loader 可能在后台继续运行（best-effort
+                终止，详见 `_call_db_loader_with_timeout`）。
 
         Returns:
-            集合值；未命中且加载失败时为空集。
+            集合值；未命中且加载失败或超时时为空集。
 
         Raises:
-            ValueError: ``timeout_millis <= 0`` 或 ``db_loader`` 为
-                ``None``。
+            ValueError: ``timeout_millis <= 0``、``db_loader`` 为
+                ``None``，或 ``loader_timeout_millis <= 0``。
+            ``db_loader`` 自身抛出的异常会原样传播。
 
         English
         --------
@@ -252,10 +262,17 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         re-read the cache; if the winner hasn't published within the
         wait budget, returns ``set()`` and lets the caller decide
         whether to retry.
+
+        M5.1: `loader_timeout_millis` adds a millisecond-level
+        backstop on `db_loader`. `None` preserves legacy
+        (unbounded) behavior. A timed-out loader is treated as
+        ``None`` (no cache write). Exceptions from `db_loader`
+        are re-raised unchanged.
         """
         return self._stampede_load_set(
             key, clazz, timeout_millis, db_loader,
             wait_budget_millis=int(timeout_millis),
+            loader_timeout_millis=loader_timeout_millis,
         )
 
     # ══════════════════════════════════════════════════════════════
@@ -268,6 +285,8 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         reference: type,
         db_loader: Callable[[], _PySet[T] | None],
         timeout_millis: int,
+        *,
+        loader_timeout_millis: int | None = None,
     ) -> _PySet[T]:
         """防缓存击穿：Set 类型（业务级便捷方法）。
 
@@ -281,9 +300,11 @@ class RedisCollectionManager(CollectionOps, SetFunction):
             reference: 集合元素类型
             db_loader: 回源加载器
             timeout_millis: 缓存 TTL（毫秒）
+            loader_timeout_millis: 可选 — M5.1：`db_loader` 的
+                毫秒级超时。详见 `get_with_lock` 文档。
 
         Returns:
-            集合值；未命中且加载失败时为空集。
+            集合值；未命中且加载失败或超时时为空集。
 
         English
         --------
@@ -294,6 +315,7 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         return self._stampede_load_set(
             key, reference, timeout_millis, db_loader,
             wait_budget_millis=int(timeout_millis),
+            loader_timeout_millis=loader_timeout_millis,
         )
 
     # ── Stampede-prevention shared helpers (M4) ────────────────────
@@ -315,19 +337,22 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         db_loader: Callable[[], _PySet[T] | None],
         *,
         wait_budget_millis: int,
+        loader_timeout_millis: int | None = None,
     ) -> _PySet[T]:
         """Shared implementation for `get_with_lock` + `get_from_set_with_lock`.
 
         Returns the cached set (on hit, even when empty) or the loaded
         set (after a successful db_loader round-trip). Returns an
-        empty set if the db_loader returned ``None`` / empty or if a
-        competing stampede lock holder didn't publish within the
-        wait budget.
+        empty set if the db_loader returned ``None`` / empty, timed
+        out (M5.1), or if a competing stampede lock holder didn't
+        publish within the wait budget.
         """
         if timeout_millis <= 0:
             raise ValueError("timeout_millis must be > 0")
         if db_loader is None:
             raise ValueError("db_loader is required")
+        if loader_timeout_millis is not None and loader_timeout_millis <= 0:
+            raise ValueError("loader_timeout_millis must be > 0 (or None)")
 
         # 1. Fast path: cache hit (EXISTS, not SCARD, so a cached
         #    empty Set is honoured as a valid value).
@@ -347,8 +372,13 @@ class RedisCollectionManager(CollectionOps, SetFunction):
             # 3. We hold the stampede lock — re-check the cache.
             if self._is_cached(key):
                 return self.get(key, clazz)
-            # 4. Still missing → invoke the db_loader.
-            value = db_loader()
+            # 4. Still missing → invoke the db_loader, optionally
+            #    with a timeout. `_call_db_loader_with_timeout` either
+            #    returns the loader's return value, returns `None` on
+            #    timeout, or re-raises the loader's exception.
+            value = _call_db_loader_with_timeout(
+                db_loader, loader_timeout_millis
+            )
             if not value:
                 return set()
             # 5. Publish: DEL + SADD + PEXPIRE, no anti-avalanche

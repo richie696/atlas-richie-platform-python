@@ -93,6 +93,7 @@ from __future__ import annotations
 import secrets as _secrets
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any, Callable, Collection, Dict, List
 
 from atlas_richie.cache_core.function.string_function import StringFunction
@@ -174,6 +175,54 @@ def _stampede_release(client: Any, lock_key: str, request_id: str) -> bool:
     if isinstance(result, bytes):
         result = result.decode("utf-8", errors="replace")
     return int(result) == 1
+
+
+def _call_db_loader_with_timeout(
+    db_loader: Callable[[], Any], timeout_millis: int | None
+) -> Any:
+    """Run `db_loader` with an optional millisecond timeout (M5.1).
+
+    - `timeout_millis is None` → call directly, block forever (legacy
+      behavior).
+    - `timeout_millis > 0` → run in a single-worker
+      `ThreadPoolExecutor`, return its result or `None` on timeout.
+      The executor is closed (with the worker thread interrupted via
+      `shutdown(wait=False)`) on every path so we never leak threads.
+
+    Note: a timed-out loader may continue running in the background
+    until it eventually returns; we deliberately do not wait for it.
+    Its return value (if any) is discarded because the cache has
+    already moved on. Callers that need to bound a runaway loader
+    should compose the timeout *inside* `db_loader` itself (e.g.
+    with `signal.alarm` or `asyncio.wait_for` wrapping a sync
+    bridge) — the framework-level timeout is a backstop, not a
+    guarantee.
+
+    On `db_loader` raising, the exception is re-raised after the
+    executor is shut down. Callers that want "loader exception →
+    cache miss, no write" should wrap the exception inside
+    `db_loader` and return `None`.
+    """
+    if timeout_millis is None:
+        return db_loader()
+    if timeout_millis <= 0:
+        raise ValueError("loader_timeout_millis must be > 0 (or None)")
+    executor = ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="stampede-loader"
+    )
+    try:
+        future = executor.submit(db_loader)
+        try:
+            return future.result(timeout=timeout_millis / 1000.0)
+        except FuturesTimeoutError:
+            return None
+    finally:
+        # Don't block on the (possibly hung) worker thread; the
+        # loader is best-effort terminated and the cache path
+        # continues. Python's daemon-thread cleanup will reclaim
+        # the thread when the loader eventually returns (or when
+        # the process exits).
+        executor.shutdown(wait=False)
 
 
 class RedisStringManager(ValueOps, StringFunction):
@@ -389,6 +438,8 @@ class RedisStringManager(ValueOps, StringFunction):
         key: str,
         timeout_millis: int,
         db_loader: Callable[[], str | None],
+        *,
+        loader_timeout_millis: int | None = None,
     ) -> str | None:
         """防缓存击穿：String 类型。
 
@@ -402,12 +453,20 @@ class RedisStringManager(ValueOps, StringFunction):
             timeout_millis: 缓存 TTL（毫秒），同时也是 stampede 锁
                 的持有超时
             db_loader: 回源加载器；返回 `None` 表示无值（不写缓存）
+            loader_timeout_millis: 可选 — M5.1：`db_loader` 的
+                毫秒级超时。`None`（默认）= 沿用旧行为（不限时）；
+                `> 0` = `db_loader` 在此时间内未完成则当作
+                `None` 处理（不写缓存），让 caller 决定是否重试。
+                超时的 loader 可能在后台继续运行（best-effort
+                终止，详见 `_call_db_loader_with_timeout`）。
 
         Returns:
-            缓存值；未命中且加载失败时为 `None`。
+            缓存值；未命中且加载失败或超时时为 `None`。
 
         Raises:
-            ValueError: `timeout_millis <= 0` 或 `db_loader` 为 `None`。
+            ValueError: `timeout_millis <= 0`、`db_loader` 为 `None`、
+                或 `loader_timeout_millis <= 0`。
+            `db_loader` 自身抛出的异常会原样传播。
 
         English
         --------
@@ -420,14 +479,26 @@ class RedisStringManager(ValueOps, StringFunction):
         enter a short polling loop and re-read the cache; if the
         winner hasn't published within the wait budget, returns
         `None` and lets the caller decide whether to retry.
+
+        M5.1: `loader_timeout_millis` adds a millisecond-level
+        backstop on `db_loader`. `None` preserves legacy
+        (unbounded) behavior. A timed-out loader returns `None`
+        (no cache write) — the caller decides whether to retry.
+        Exceptions from `db_loader` are re-raised unchanged.
         """
         return self._stampede_load(
             key, timeout_millis, db_loader,
             wait_budget_millis=int(timeout_millis),
+            loader_timeout_millis=loader_timeout_millis,
         )
 
     def get_from_string_with_lock(
-        self, key: str, db_loader: Callable[[], str | None], timeout_millis: int
+        self,
+        key: str,
+        db_loader: Callable[[], str | None],
+        timeout_millis: int,
+        *,
+        loader_timeout_millis: int | None = None,
     ) -> str | None:
         """防缓存击穿：String 类型（业务级便捷方法）。
 
@@ -439,9 +510,11 @@ class RedisStringManager(ValueOps, StringFunction):
             key: 缓存键
             db_loader: 回源加载器
             timeout_millis: 缓存 TTL（毫秒）
+            loader_timeout_millis: 可选 — M5.1：`db_loader` 的
+                毫秒级超时。详见 `get_with_lock` 文档。
 
         Returns:
-            缓存值；未命中且加载失败时为 `None`。
+            缓存值；未命中且加载失败或超时时为 `None`。
 
         English
         --------
@@ -452,6 +525,7 @@ class RedisStringManager(ValueOps, StringFunction):
         return self._stampede_load(
             key, timeout_millis, db_loader,
             wait_budget_millis=int(timeout_millis),
+            loader_timeout_millis=loader_timeout_millis,
         )
 
     def _stampede_load(
@@ -461,18 +535,22 @@ class RedisStringManager(ValueOps, StringFunction):
         db_loader: Callable[[], str | None],
         *,
         wait_budget_millis: int,
+        loader_timeout_millis: int | None = None,
     ) -> str | None:
         """Shared implementation for `get_with_lock` + `get_from_string_with_lock`.
 
         Returns the cached value (on hit) or the loaded value
         (after a successful db_loader round-trip). Returns `None`
-        if the db_loader returned `None` or if a competing stampede
-        lock holder didn't publish within the wait budget.
+        if the db_loader returned `None`, if the db_loader
+        timed out (M5.1), or if a competing stampede lock holder
+        didn't publish within the wait budget.
         """
         if timeout_millis <= 0:
             raise ValueError("timeout_millis must be > 0")
         if db_loader is None:
             raise ValueError("db_loader is required")
+        if loader_timeout_millis is not None and loader_timeout_millis <= 0:
+            raise ValueError("loader_timeout_millis must be > 0 (or None)")
 
         # 1. Fast path: cache hit → return immediately. No Redis lock
         #    acquired, no db_loader call.
@@ -503,8 +581,13 @@ class RedisStringManager(ValueOps, StringFunction):
             cached = self.get(key, str)
             if cached is not None:
                 return cached
-            # 5. Still missing → invoke the db_loader.
-            value = db_loader()
+            # 5. Still missing → invoke the db_loader, optionally
+            #    with a timeout. `_call_db_loader_with_timeout` either
+            #    returns the loader's return value, returns `None` on
+            #    timeout, or re-raises the loader's exception.
+            value = _call_db_loader_with_timeout(
+                db_loader, loader_timeout_millis
+            )
             if value is None:
                 return None
             # 6. Publish: write to the cache. Note: we use the

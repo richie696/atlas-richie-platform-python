@@ -106,6 +106,7 @@ from ..serialization import decode_value, encode_value
 # lock-key builders below to address per-(key, field) and per-batch
 # scopes.
 from .redis_string_manager import (
+    _call_db_loader_with_timeout,
     _make_stampede_lock_key,
     _stampede_acquire,
     _stampede_release,
@@ -458,6 +459,8 @@ class RedisFieldManager(FieldOps, HashFunction):
         clazz: type,
         timeout_millis: int,
         db_loader: Callable[[], Any],
+        *,
+        loader_timeout_millis: int | None = None,
     ) -> Any:
         """防缓存击穿：单 Hash field。
 
@@ -473,12 +476,20 @@ class RedisFieldManager(FieldOps, HashFunction):
             timeout_millis: 缓存 TTL（毫秒），同时也是 stampede 锁
                 的持有超时。
             db_loader: 回源加载器；返回 ``None`` 表示无值（不写缓存）。
+            loader_timeout_millis: 可选 — M5.1：`db_loader` 的
+                毫秒级超时。`None`（默认）= 沿用旧行为（不限时）；
+                `> 0` = `db_loader` 在此时间内未完成则当作
+                `None` 处理（不写缓存），让 caller 决定是否重试。
+                超时的 loader 可能在后台继续运行（best-effort
+                终止，详见 `_call_db_loader_with_timeout`）。
 
         Returns:
-            缓存值；未命中且加载失败时为 ``None``。
+            缓存值；未命中且加载失败或超时时为 ``None``。
 
         Raises:
-            ValueError: ``timeout_millis <= 0`` 或 ``db_loader`` 为 ``None``。
+            ValueError: ``timeout_millis <= 0``、``db_loader`` 为
+                ``None``，或 ``loader_timeout_millis <= 0``。
+            ``db_loader`` 自身抛出的异常会原样传播。
 
         English
         --------
@@ -492,12 +503,19 @@ class RedisFieldManager(FieldOps, HashFunction):
         hasn't published within the wait budget, returns `None` and
         lets the caller decide whether to retry.
 
+        M5.1: `loader_timeout_millis` adds a millisecond-level
+        backstop on `db_loader`. `None` preserves legacy
+        (unbounded) behavior. A timed-out loader returns `None`
+        (no cache write). Exceptions from `db_loader` are
+        re-raised unchanged.
+
         Mirrors `cn.richie696.component.cache.function.HashFunction.
         getFromHashWithLock(key, hashKey, clazz, dbLoader, timeout)`.
         """
         return self._stampede_load_field(
             key, field, clazz, timeout_millis, db_loader,
             use_typed=False, reference=None,
+            loader_timeout_millis=loader_timeout_millis,
         )
 
     def get_with_lock_typed(
@@ -507,6 +525,8 @@ class RedisFieldManager(FieldOps, HashFunction):
         reference: type,
         timeout_millis: int,
         db_loader: Callable[[], Any],
+        *,
+        loader_timeout_millis: int | None = None,
     ) -> Any:
         """防缓存击穿：单 Hash field（运行时类型版本）。
 
@@ -520,12 +540,16 @@ class RedisFieldManager(FieldOps, HashFunction):
             reference: 目标类型引用（注册表未命中时使用）。
             timeout_millis: 缓存 TTL（毫秒）。
             db_loader: 回源加载器。
+            loader_timeout_millis: 可选 — M5.1：`db_loader` 的
+                毫秒级超时。详见 `get_with_lock` 文档。
 
         Returns:
-            缓存值；未命中且加载失败时为 ``None``。
+            缓存值；未命中且加载失败或超时时为 ``None``。
 
         Raises:
-            ValueError: ``timeout_millis <= 0`` 或 ``db_loader`` 为 ``None``。
+            ValueError: ``timeout_millis <= 0``、``db_loader`` 为
+                ``None``，或 ``loader_timeout_millis <= 0``。
+            ``db_loader`` 自身抛出的异常会原样传播。
 
         English
         --------
@@ -534,7 +558,9 @@ class RedisFieldManager(FieldOps, HashFunction):
         `CacheInfrastructure.get_value_type`; falls back to the
         caller-supplied `reference` when the registry has no entry
         for the key. Locking and writeback are identical to
-        `get_with_lock`.
+        `get_with_lock`. The `loader_timeout_millis` kwarg governs
+        only the `db_loader()` call; the typed read (after the
+        loader returns) is in-process and bounded.
 
         Mirrors `cn.richie696.component.cache.function.HashFunction.
         getFromHashWithLock(key, hashKey, reference, dbLoader,
@@ -543,6 +569,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         return self._stampede_load_field(
             key, field, None, timeout_millis, db_loader,
             use_typed=True, reference=reference,
+            loader_timeout_millis=loader_timeout_millis,
         )
 
     def get_many_with_lock(
@@ -552,6 +579,8 @@ class RedisFieldManager(FieldOps, HashFunction):
         clazz: type,
         timeout_millis: int,
         db_loader: Callable[[], Dict[str, Any] | None],
+        *,
+        loader_timeout_millis: int | None = None,
     ) -> Dict[str, Any]:
         """防缓存击穿：批量 Hash field。
 
@@ -569,13 +598,21 @@ class RedisFieldManager(FieldOps, HashFunction):
             timeout_millis: 缓存 TTL（毫秒）。
             db_loader: 回源加载器；返回 ``{field: value}`` 字典，
                 返回 ``None`` 或空字典表示无值（不写缓存）。
+            loader_timeout_millis: 可选 — M5.1：单次 `db_loader()`
+                调用的毫秒级超时。`None`（默认）= 沿用旧行为（不限
+                时）；`> 0` = `db_loader` 在此时间内未完成则当作
+                `None` 处理（不写缓存），让 caller 决定是否重试。
+                **不要**按字段循环使用多个超时 — 整批是单次 loader
+                调用。
 
         Returns:
             ``{field: value}`` 字典，键集合与传入 ``fields`` 一致；
-            未命中且加载失败时为 ``{}``。
+            未命中且加载失败或超时时为 ``{}``（或已有的部分命中）。
 
         Raises:
-            ValueError: ``timeout_millis <= 0`` 或 ``db_loader`` 为 ``None``。
+            ValueError: ``timeout_millis <= 0``、``db_loader`` 为
+                ``None``，或 ``loader_timeout_millis <= 0``。
+            ``db_loader`` 自身抛出的异常会原样传播。
 
         English
         --------
@@ -588,11 +625,16 @@ class RedisFieldManager(FieldOps, HashFunction):
         with the SAME field set funnel to one db_loader; different
         sets do not contend.
 
+        M5.1: `loader_timeout_millis` bounds the SINGLE `db_loader()`
+        call. Do NOT loop per-key with separate timeouts — the
+        whole batch is one loader invocation.
+
         Mirrors `cn.richie696.component.cache.function.HashFunction.
         getFromHashWithLock(key, hashKeys, clazz, dbLoader, timeout)`.
         """
         return self._stampede_load_many(
             key, fields, clazz, timeout_millis, db_loader,
+            loader_timeout_millis=loader_timeout_millis,
         )
 
     # ── Public surface: HashFunction ────────────────────────────────
@@ -603,6 +645,8 @@ class RedisFieldManager(FieldOps, HashFunction):
         clazz: type,
         db_loader: Callable[[], Any],
         timeout_millis: int,
+        *,
+        loader_timeout_millis: int | None = None,
     ) -> Any:
         """防缓存击穿：Hash 对象（按对象整体缓存）。
 
@@ -617,12 +661,16 @@ class RedisFieldManager(FieldOps, HashFunction):
             clazz: 反序列化目标类型。
             db_loader: 回源加载器。
             timeout_millis: 缓存 TTL（毫秒）。
+            loader_timeout_millis: 可选 — M5.1：`db_loader` 的
+                毫秒级超时。详见 `get_with_lock` 文档。
 
         Returns:
-            缓存对象；未命中且加载失败时为 ``None``。
+            缓存对象；未命中且加载失败或超时时为 ``None``。
 
         Raises:
-            ValueError: ``timeout_millis <= 0`` 或 ``db_loader`` 为 ``None``。
+            ValueError: ``timeout_millis <= 0``、``db_loader`` 为
+                ``None``，或 ``loader_timeout_millis <= 0``。
+            ``db_loader`` 自身抛出的异常会原样传播。
 
         English
         --------
@@ -638,6 +686,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         """
         return self._stampede_load_object(
             key, clazz, timeout_millis, db_loader,
+            loader_timeout_millis=loader_timeout_millis,
         )
 
     def get_from_hash_with_lock(
@@ -647,6 +696,8 @@ class RedisFieldManager(FieldOps, HashFunction):
         clazz: type,
         db_loader: Callable[[], Any],
         timeout_millis: int,
+        *,
+        loader_timeout_millis: int | None = None,
     ) -> Any:
         """防缓存击穿：Hash 单 field（业务级便捷方法）。
 
@@ -660,12 +711,16 @@ class RedisFieldManager(FieldOps, HashFunction):
             clazz: 反序列化目标类型。
             db_loader: 回源加载器。
             timeout_millis: 缓存 TTL（毫秒）。
+            loader_timeout_millis: 可选 — M5.1：`db_loader` 的
+                毫秒级超时。详见 `get_with_lock` 文档。
 
         Returns:
-            字段值；未命中且加载失败时为 ``None``。
+            字段值；未命中且加载失败或超时时为 ``None``。
 
         Raises:
-            ValueError: ``timeout_millis <= 0`` 或 ``db_loader`` 为 ``None``。
+            ValueError: ``timeout_millis <= 0``、``db_loader`` 为
+                ``None``，或 ``loader_timeout_millis <= 0``。
+            ``db_loader`` 自身抛出的异常会原样传播。
 
         English
         --------
@@ -679,6 +734,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         return self._stampede_load_field(
             key, hash_key, clazz, timeout_millis, db_loader,
             use_typed=False, reference=None,
+            loader_timeout_millis=loader_timeout_millis,
         )
 
     def get_from_hash_with_lock_typed(
@@ -688,6 +744,8 @@ class RedisFieldManager(FieldOps, HashFunction):
         reference: type,
         db_loader: Callable[[], Any],
         timeout_millis: int,
+        *,
+        loader_timeout_millis: int | None = None,
     ) -> Any:
         """防缓存击穿：Hash 单 field（运行时类型版本，业务级便捷方法）。
 
@@ -701,12 +759,16 @@ class RedisFieldManager(FieldOps, HashFunction):
             reference: 目标类型引用（注册表未命中时使用）。
             db_loader: 回源加载器。
             timeout_millis: 缓存 TTL（毫秒）。
+            loader_timeout_millis: 可选 — M5.1：`db_loader` 的
+                毫秒级超时。详见 `get_with_lock` 文档。
 
         Returns:
-            字段值；未命中且加载失败时为 ``None``。
+            字段值；未命中且加载失败或超时时为 ``None``。
 
         Raises:
-            ValueError: ``timeout_millis <= 0`` 或 ``db_loader`` 为 ``None``。
+            ValueError: ``timeout_millis <= 0``、``db_loader`` 为
+                ``None``，或 ``loader_timeout_millis <= 0``。
+            ``db_loader`` 自身抛出的异常会原样传播。
 
         English
         --------
@@ -720,6 +782,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         return self._stampede_load_field(
             key, hash_key, None, timeout_millis, db_loader,
             use_typed=True, reference=reference,
+            loader_timeout_millis=loader_timeout_millis,
         )
 
     # ══════════════════════════════════════════════════════════════
@@ -736,6 +799,7 @@ class RedisFieldManager(FieldOps, HashFunction):
         *,
         use_typed: bool,
         reference: type | None,
+        loader_timeout_millis: int | None = None,
     ) -> Any:
         """Shared implementation for the four single-field `*_with_lock` variants.
 
@@ -744,8 +808,15 @@ class RedisFieldManager(FieldOps, HashFunction):
         `CacheInfrastructure.get_value_type`, falling back to
         `reference`) or through `get(key, field, clazz)`. The lock,
         writeback, and release path are identical for both.
+
+        M5.1: `loader_timeout_millis` adds a millisecond-level
+        backstop on `db_loader`. `None` preserves legacy (unbounded)
+        behavior. A timed-out loader returns `None` (no cache
+        write). Exceptions from `db_loader` are re-raised unchanged.
         """
-        self._validate_lock_args(timeout_millis, db_loader)
+        self._validate_lock_args(
+            timeout_millis, db_loader, loader_timeout_millis
+        )
 
         # 1. Fast path: cache hit → return immediately.
         cached = self._read_field_for_lock(key, field, clazz, use_typed, reference)
@@ -772,8 +843,15 @@ class RedisFieldManager(FieldOps, HashFunction):
             )
             if cached is not None:
                 return cached
-            # 5. Still missing → invoke the db_loader.
-            value = db_loader()
+            # 5. Still missing → invoke the db_loader, optionally
+            #    with a timeout. `_call_db_loader_with_timeout` either
+            #    returns the loader's return value, returns `None` on
+            #    timeout, or re-raises the loader's exception. The
+            #    typed read (for the `_typed` variants) happens AFTER
+            #    this returns, in-process and bounded.
+            value = _call_db_loader_with_timeout(
+                db_loader, loader_timeout_millis
+            )
             if value is None:
                 return None
             # 6. Publish: HSET + HPEXPIRE with the caller-supplied
@@ -799,9 +877,19 @@ class RedisFieldManager(FieldOps, HashFunction):
         clazz: type,
         timeout_millis: int,
         db_loader: Callable[[], Any],
+        *,
+        loader_timeout_millis: int | None = None,
     ) -> Any:
-        """Implementation for `get_object_from_hash_with_lock`."""
-        self._validate_lock_args(timeout_millis, db_loader)
+        """Implementation for `get_object_from_hash_with_lock`.
+
+        M5.1: `loader_timeout_millis` adds a millisecond-level
+        backstop on `db_loader`. `None` preserves legacy (unbounded)
+        behavior. A timed-out loader returns `None` (no cache
+        write). Exceptions from `db_loader` are re-raised unchanged.
+        """
+        self._validate_lock_args(
+            timeout_millis, db_loader, loader_timeout_millis
+        )
 
         # 1. Fast path: HGET the reserved object field.
         cached = self.get(key, _OBJECT_FIELD, clazz)
@@ -822,8 +910,11 @@ class RedisFieldManager(FieldOps, HashFunction):
             cached = self.get(key, _OBJECT_FIELD, clazz)
             if cached is not None:
                 return cached
-            # 4. Still missing → invoke the db_loader.
-            value = db_loader()
+            # 4. Still missing → invoke the db_loader, optionally
+            #    with a timeout.
+            value = _call_db_loader_with_timeout(
+                db_loader, loader_timeout_millis
+            )
             if value is None:
                 return None
             # 5. Publish.
@@ -842,9 +933,22 @@ class RedisFieldManager(FieldOps, HashFunction):
         clazz: type,
         timeout_millis: int,
         db_loader: Callable[[], Dict[str, Any] | None],
+        *,
+        loader_timeout_millis: int | None = None,
     ) -> Dict[str, Any]:
-        """Implementation for `get_many_with_lock`."""
-        self._validate_lock_args(timeout_millis, db_loader)
+        """Implementation for `get_many_with_lock`.
+
+        M5.1: `loader_timeout_millis` bounds the SINGLE `db_loader()`
+        call (which returns a dict for all missing keys). Do NOT
+        loop per-key with separate timeouts — the whole batch is
+        one loader invocation. A timed-out loader yields `None`
+        here, which is treated the same as a "loader returned
+        None" miss: no cache write, return whatever was already
+        cached (or `{}`).
+        """
+        self._validate_lock_args(
+            timeout_millis, db_loader, loader_timeout_millis
+        )
         fields_list = list(fields)
         if not fields_list:
             return {}
@@ -876,8 +980,10 @@ class RedisFieldManager(FieldOps, HashFunction):
             if cached and len(cached) == len(fields_list):
                 return cached
             # 4. Still missing (or partial) → invoke the db_loader
-            #    ONCE for the whole batch.
-            loaded = db_loader()
+            #    ONCE for the whole batch, optionally with a timeout.
+            loaded = _call_db_loader_with_timeout(
+                db_loader, loader_timeout_millis
+            )
             if not loaded:
                 # Loader returned None or empty dict → don't write
                 # anything; return whatever was already cached
@@ -902,13 +1008,17 @@ class RedisFieldManager(FieldOps, HashFunction):
 
     @staticmethod
     def _validate_lock_args(
-        timeout_millis: int, db_loader: Callable[[], Any] | None
+        timeout_millis: int,
+        db_loader: Callable[[], Any] | None,
+        loader_timeout_millis: int | None = None,
     ) -> None:
         """Shared argument validation for the `*_with_lock` methods."""
         if timeout_millis is None or int(timeout_millis) <= 0:
             raise ValueError("timeout_millis must be > 0")
         if db_loader is None:
             raise ValueError("db_loader is required")
+        if loader_timeout_millis is not None and loader_timeout_millis <= 0:
+            raise ValueError("loader_timeout_millis must be > 0 (or None)")
 
     def _read_field_for_lock(
         self,
