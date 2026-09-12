@@ -4,6 +4,18 @@
 > **Purpose**: 把 §21 的 checkbox 展开到 actionable 粒度(Deliverable / Exit Criteria / Test ID / ADR / Deps),不引入新子项,不改顺序。
 > **Update rule**: §21 改了,本文件跟着同步;两者必须保持一致。
 
+## Checkbox 约定
+
+- **`[x]`** 已完成 — 实现 / 测试 / commit / evidence 都齐
+- **`[ ]`** 未开始 — 等上一个子项的 Deps 满足才能开始
+- **顶部 `M_x Exit`** 是聚合退出条件(不是单个任务),由其下所有子项完成来满足
+
+完成一个子项时:
+1. 跑通 Exit Criteria 验证命令
+2. 收集测试 ID / commit hash / evidence
+3. 改 `[ ]` → `[x]`
+4. 在文件底部"决策记录"区追加 evidence + 任何偏差
+
 ## 标记约定
 
 - ✅ = 已完成(`[x]`)
@@ -18,28 +30,28 @@
 
 ## M0：包结构与 Resilience 合并
 
-### M0.1 ✅ 确认统一 Sentinel 产品边界
+### M0.1 [x] 确认统一 Sentinel 产品边界
 - **Deliverable**: 决策记录
 - **Exit Criteria**: DESIGN.md §1 明确写 "Atlas Richie Sentinel" 产品定位
 - **Test ID**: —
 - **ADR**: ADR-SEN-001 前提
 - **Deps**: 无
 
-### M0.2 ✅ 确认核心不引入 stamina/aiolimiter
+### M0.2 [x] 确认核心不引入 stamina/aiolimiter
 - **Deliverable**: DESIGN.md ADR-SEN-003
 - **Exit Criteria**: 主 wheel `pyproject.toml` `dependencies` 仅允许 `atlas-richie-contracts` 移除;`stamina` / `aiolimiter` 字段不存在
 - **Test ID**: —
 - **ADR**: ADR-SEN-003
 - **Deps**: M0.1
 
-### M0.3 ✅ 确认采用 Facade、责任链、State、Strategy、Adapter、Observer
+### M0.3 [x] 确认采用 Facade、责任链、State、Strategy、Adapter、Observer
 - **Deliverable**: DESIGN.md §4 章节
 - **Exit Criteria**: 6 个 pattern 在 §4 各自有独立小节,且有"明确不采用"清单
 - **Test ID**: SEN-CORE-001(Slot 逆序释放)
 - **ADR**: ADR-SEN-004 ~ ADR-SEN-006
 - **Deps**: M0.1
 
-### M0.4 ⬜ 创建 atlas-richie-sentinel 主 wheel
+### M0.4 [ ] 创建 atlas-richie-sentinel 主 wheel
 - **Deliverable**:
   - `components/sentinel/sentinel/pyproject.toml` — name=`atlas-richie-sentinel`, version=`0.2.0`, deps=空数组
   - `components/sentinel/sentinel/src/atlas_richie/sentinel/__init__.py` — 公开 Facade,`__all__` 注释
@@ -52,7 +64,7 @@
 - **ADR**: ADR-SEN-002
 - **Deps**: M0.1, M0.2, M0.3
 
-### M0.5 ⬜ 使用 git mv 迁入 Resilience 源码和测试(按目标结构重命名/拆分)
+### M0.5 [ ] 使用 git mv 迁入 Resilience 源码和测试(按目标结构重命名/拆分)
 - **Deliverable**(实际文件名按 `ls components/resilience/src/atlas_richie/resilience/` 现状):
   - `git mv` + 原地重命名/拆分:
     - `retry.py` → `primitives/retry.py`(名称不变)
@@ -77,7 +89,7 @@
 - **ADR**: ADR-SEN-001
 - **Deps**: M0.4
 
-### M0.6 ⬜ 删除 sentinel-primitives/core/rules 三个基础 wheel 骨架
+### M0.6 [ ] 删除 sentinel-primitives/core/rules 三个基础 wheel 骨架
 - **Deliverable**:
   - `git rm -r components/sentinel/sentinel-primitives/`
   - `git rm -r components/sentinel/sentinel-core/`
@@ -89,7 +101,7 @@
 - **ADR**: ADR-SEN-002
 - **Deps**: M0.4(主 wheel 先建好)
 
-### M0.7 ⬜ 去除主包对 atlas-richie-contracts 的依赖
+### M0.7 [ ] 去除主包对 atlas-richie-contracts 的依赖
 - **Deliverable**:
   - 主 wheel `pyproject.toml` `dependencies` = 空数组
   - 内部异常、生命周期、事件、Protocol 全部在 `atlas_richie.sentinel.errors` / `.ports` 内部定义
@@ -114,7 +126,7 @@
 - **ADR**: ADR-SEN-002, ADR-SEN-003
 - **Deps**: M0.7
 
-### M0.8 ⬜ 更新真实消费者依赖(全仓 grep 已验证)
+### M0.8 [ ] 更新真实消费者依赖(全仓 grep 已验证)
 - **背景**: 2026-09-13 `grep -rE "atlas_richie\.resilience|atlas-richie-resilience" components/ foundation/ --include="pyproject.toml" --include="*.py" | grep -v __pycache__` 的**实际命中**(排除 sentinel 自指):
   - `foundation/platform/pyproject.toml` 列出 `atlas-richie-resilience>=0.2.0,<0.3.0` 作为 platform 聚合依赖
   - `components/http/src/` 和 `components/mcp/src/` **不**直接 import resilience
@@ -142,7 +154,7 @@
 - **ADR**: ADR-SEN-002(主 wheel 独占),DESIGN.md §3.1 命名空间所有权
 - **Deps**: M0.5, M0.6
 
-### M0.9 ⬜ 删除 components/resilience 及发布配置
+### M0.9 [ ] 删除 components/resilience 及发布配置
 - **Deliverable**:
   - `git rm -r components/resilience/`
   - 移除 workspace `pyproject.toml` 中 `components/resilience` member
@@ -173,7 +185,7 @@
 - **ADR**: —
 - **Deps**: M0.6(主 wheel 骨架就位)
 
-### M0.10 ⬜ 现有 67 个 Resilience 测试迁移后全部通过
+### M0.10 [ ] 现有 67 个 Resilience 测试迁移后全部通过
 - **Deliverable**:
   - `components/sentinel/sentinel/tests/test_retry.py` / `test_circuit_breaker.py` / `test_token_bucket.py` / `test_bulkhead.py` / `test_idempotency.py` / `test_clock.py` / `test_random_source.py` / `test_errors.py`
   - 每个测试 import 改成 `from atlas_richie.sentinel.primitives import ...`
@@ -185,7 +197,7 @@
 - **ADR**: —
 - **Deps**: M0.9
 
-### M0.11 ⬜ 主 wheel 独立构建、安装和 public import 验证通过
+### M0.11 [ ] 主 wheel 独立构建、安装和 public import 验证通过
 - **Deliverable**:
   - 干净 venv(无任何 atlas-richie-* 包预装)中:
     - `uv venv /tmp/sentinel-m0-test`
@@ -200,7 +212,7 @@
 - **ADR**: ADR-SEN-002, ADR-SEN-003
 - **Deps**: M0.10
 
-### M0 Exit(全部完成)
+### M0 Exit [ ] (M0.1-M0.11 全部完成)
 - **Exit Criteria**(由 §21 + 11 个子项汇总):
   - 仓库只有一份原语实现
   - 不再存在 Resilience 产品或兼容 shim
@@ -217,7 +229,7 @@
 
 ## M1：Engine、生命周期和指标内核
 
-### M1.1 ⬜ 实现领域模型和异常体系
+### M1.1 [ ] 实现领域模型和异常体系
 - **Deliverable**:
   - `components/sentinel/sentinel/src/atlas_richie/sentinel/model/`:
     - `resource.py` — `Resource` / `ResourceKind` / `TrafficType`
@@ -240,7 +252,7 @@
 - **ADR**: ADR-SEN-001, ADR-SEN-006
 - **Deps**: M0.11
 
-### M1.2 ⬜ 实现 SentinelEngine、EntryLease、Slot/SlotLease、SlotChain
+### M1.2 [ ] 实现 SentinelEngine、EntryLease、Slot/SlotLease、SlotChain
 - **Deliverable**:
   - `engine/sentinel_engine.py` — `SentinelEngine`(async context manager,6 状态机)
   - `engine/entry.py` — `EntryRequest` / `EntryLease`
@@ -254,7 +266,7 @@
 - **ADR**: ADR-SEN-004, ADR-SEN-005
 - **Deps**: M1.1
 
-### M1.3 ⬜ 实现原子回滚、取消和关闭语义
+### M1.3 [ ] 实现原子回滚、取消和关闭语义
 - **Deliverable**:
   - `SlotLease` 实际释放逻辑:逆序 + idempotent + 一个 Lease 失败不阻止其他
   - `CancelledError` 处理:`Outcome.CANCELLED` 不计入异常比例,不重试
@@ -269,7 +281,7 @@
 - **ADR**: ADR-SEN-004, ADR-SEN-005
 - **Deps**: M1.2
 
-### M1.4 ⬜ 实现环形 SlidingWindow、MetricRegistry、ResourceRegistry
+### M1.4 [ ] 实现环形 SlidingWindow、MetricRegistry、ResourceRegistry
 - **Deliverable**:
   - `metrics/sliding_window.py` — **stdlib ring buffer**(`array.array('q')` 或 list + 索引),**不引入 sortedcontainers**
   - `metrics/registry.py` — `MetricRegistry`(admitted / blocked / success / failure / cancelled / RT)
@@ -286,7 +298,7 @@
 - **Deps**: M1.2
 - **不做硬性性能断言**:SlidingWindow 的写入延迟、Memory 占用、p99 等**不**在 M1 设绝对阈值。先用 `tests/benchmark/test_sen_perf.py` 收集数据,作为"原始基线"提交。阈值审批延后到 M5 1.0 前 + 真实下游场景验证后再设。DESIGN.md §19.5 已明确:"M1 建立基线,后续里程碑只能在批准阈值内回归。首次基线未完成前,文档不声称具体 QPS。"
 
-### M1.5 ⬜ 实现 RuleSnapshot、RuleRepository、ResourceSelector/RuleIndex
+### M1.5 [ ] 实现 RuleSnapshot、RuleRepository、ResourceSelector/RuleIndex
 - **Deliverable**:
   - `rules/snapshot.py` — `RuleVersion` / `RuleSnapshot` / `RuleSnapshotAppliedEvent`
   - `rules/repository.py` — `RuleRepository` 校验 + 编译索引 + 原子替换 + last-known-good
@@ -301,7 +313,7 @@
 - **ADR**: ADR-SEN-007
 - **Deps**: M1.4
 
-### M1.6 ⬜ 完成 SEN-CORE、SEN-RULE、SEN-PERF 测试基线(不设绝对阈值)
+### M1.6 [ ] 完成 SEN-CORE、SEN-RULE、SEN-PERF 测试基线(不设绝对阈值)
 - **Deliverable**:
   - `tests/test_sen_core.py` — Slot 逆序释放 + CancelledError + 故障注入
   - `tests/test_sen_rule.py` — RuleSnapshot 校验 / 原子替换 / 乱序
@@ -316,7 +328,7 @@
 - **ADR**: 全部
 - **Deps**: M1.5
 
-### M1 Exit
+### M1 Exit [ ] (子项全部完成)
 - **Exit Criteria**(§21 + 修正 4):
   - 无具体协议框架时,可通过公开 API 保护一个 async 业务资源
   - **demo 脚本 `examples/protect_async_business.py` 只能证明 Engine / 生命周期 / 指标 / 无规则 Entry;不能演示 FlowRule(M2 才有)**
@@ -329,7 +341,7 @@
 
 ## M2：五类规则
 
-### M2.1 ⬜ FlowRule/FlowSlot,覆盖 direct/origin/associated/call-path
+### M2.1 [ ] FlowRule/FlowSlot,覆盖 direct/origin/associated/call-path
 - **Deliverable**:
   - `rules/flow.py` — `FlowRule` + `FlowGrade` / `FlowBehavior` / `FlowScope` 枚举
   - `slots/flow.py` — `FlowSlot`(Order=500),4 种 scope 各自实现
@@ -342,7 +354,7 @@
 - **ADR**: ADR-SEN-006
 - **Deps**: M1.6
 
-### M2.2 ⬜ DegradeRule/DegradeSlot,并复用唯一 CircuitBreaker
+### M2.2 [ ] DegradeRule/DegradeSlot,并复用唯一 CircuitBreaker
 - **Deliverable**:
   - `rules/degrade.py` — `DegradeRule` + `DegradeStrategy` 枚举
   - `slots/degrade.py` — `DegradeSlot`(Order=700),复用 `primitives.CircuitBreaker` 状态机
@@ -358,7 +370,7 @@
 - **ADR**: ADR-SEN-006
 - **Deps**: M2.1(共享 SlotChain 框架)
 
-### M2.3 ⬜ ParamFlowRule/ParamFlowSlot 和基数治理
+### M2.3 [ ] ParamFlowRule/ParamFlowSlot 和基数治理
 - **Deliverable**:
   - `rules/param_flow.py` — `ParamFlowRule` + `ParameterSpec` + `ParameterOverride` + `ParameterSource` 枚举
   - `slots/param_flow.py` — `ParamFlowSlot`(Order=600)
@@ -372,7 +384,7 @@
 - **ADR**: —
 - **Deps**: M2.1
 
-### M2.4 ⬜ SystemRule/SystemSlot/SystemMetricSampler,覆盖 direct 和 adaptive capacity
+### M2.4 [ ] SystemRule/SystemSlot/SystemMetricSampler,覆盖 direct 和 adaptive capacity
 - **Deliverable**:
   - `rules/system.py` — `SystemRule`(直接继承 `Rule`,**不是** `ResourceRule`)
   - `slots/system.py` — `SystemSlot`(Order=400),**只对 INBOUND 资源生效**
@@ -388,7 +400,7 @@
 - **ADR**: ADR-SEN-014, ADR-SEN-015
 - **Deps**: M2.1
 
-### M2.5 ⬜ AuthorityRule/AuthoritySlot
+### M2.5 [ ] AuthorityRule/AuthoritySlot
 - **Deliverable**:
   - `rules/authority.py` — `AuthorityRule` + `AuthorityStrategy` 枚举(ALLOW_LIST / DENY_LIST)
   - `slots/authority.py` — `AuthoritySlot`(Order=300)
@@ -402,7 +414,7 @@
 - **ADR**: —
 - **Deps**: M2.1
 
-### M2.6 ⬜ 完成所有规则边界、状态、并发和组合测试
+### M2.6 [ ] 完成所有规则边界、状态、并发和组合测试
 - **Deliverable**:
   - 每类规则:边界、状态、并发 3 类测试
   - 组合测试:Flow + Degrade + ParamFlow + Authority + System 同 resource 触发
@@ -415,7 +427,7 @@
 - **ADR**: 全部
 - **Deps**: M2.1-M2.5 全部
 
-### M2 Exit
+### M2 Exit [ ] (子项全部完成)
 - **Exit Criteria**(§21):
   - 五类规则均有稳定契约、确定性测试和组合行为证据
   - 全部 `Outcome` 区分在测试中验证(ADMITTED vs BLOCKED)
@@ -425,7 +437,7 @@
 
 ## M3：File Source 与 ASGI
 
-### M3.1 ⬜ 实现 RuleSource contract test kit(M3 仅供 File Source 使用)
+### M3.1 [ ] 实现 RuleSource contract test kit(M3 仅供 File Source 使用)
 - **Deliverable**:
   - `tests/contract/test_rule_source.py` — 公用的 RuleSource 契约测试集
   - 覆盖:首次迭代成功/失败、迭代结束 / 监听退出 / 重连、指数退避 + jitter、消费速度慢于更新速度的合并/背压、stale 状态、aclose 幂等、凭证脱敏
@@ -439,7 +451,7 @@
 - **ADR**: ADR-SEN-007
 - **Deps**: M1.6
 
-### M3.2 ⬜ 实现 JSON/YAML File Source 和 last-known-good 热更新
+### M3.2 [ ] 实现 JSON/YAML File Source 和 last-known-good 热更新
 - **Deliverable**:
   - 新 wheel `components/sentinel/sentinel-source-file/`
   - JSON 规范 + YAML 便捷两种 codec
@@ -456,7 +468,7 @@
 - **ADR**: ADR-SEN-007
 - **Deps**: M3.1, M1.6
 
-### M3.3 ⬜ 实现纯 ASGI Middleware
+### M3.3 [ ] 实现纯 ASGI Middleware
 - **Deliverable**:
   - 新 wheel `components/sentinel/sentinel-adapter-asgi/`
   - `SentinelASGIMiddleware`:**纯 ASGI callable,不继承 Starlette / FastAPI**,不强制任何 web framework
@@ -473,7 +485,7 @@
 - **ADR**: ADR-SEN-008
 - **Deps**: M1.6, M2.5(Authority)
 
-### M3.4 ⬜ 实现资源命名、可信 origin 和参数提取 Strategy
+### M3.4 [ ] 实现资源命名、可信 origin 和参数提取 Strategy
 - **Deliverable**:
   - `components/sentinel/sentinel-adapter-asgi/src/atlas_richie/sentinel/adapters/asgi/strategies/`:
     - `resource_name.py` — `MethodRouteResolver`("POST /orders")等
@@ -488,7 +500,7 @@
 - **ADR**: ADR-SEN-008
 - **Deps**: M3.3
 
-### M3.5 ⬜ 验证普通响应、流式响应、断连、取消、异常、lifespan
+### M3.5 [ ] 验证普通响应、流式响应、断连、取消、异常、lifespan
 - **Deliverable**:
   - 6 个 ASGI 协议场景测试:
     1. 普通响应(返回 200 + body)
@@ -505,7 +517,7 @@
 - **ADR**: ADR-SEN-008
 - **Deps**: M3.3, M3.4
 
-### M3.6 ⬜ 完成真实多 worker 语义测试
+### M3.6 [ ] 完成真实多 worker 语义测试
 - **Deliverable**:
   - 启动 2 个 ASGI worker(uvicorn workers=2)
   - 验证 per-process 阈值:`configured threshold × worker count = approximate process-group capacity` 在文档和测试中明确
@@ -517,7 +529,7 @@
 - **ADR**: ADR-SEN-008
 - **Deps**: M3.5
 
-### M3 Exit
+### M3 Exit [ ] (子项全部完成)
 - **Exit Criteria**(§21):
   - 任意 asyncio ASGI 应用无需依赖 FastAPI/Starlette 即可接入
   - 一个 demo:`uvicorn examples.asgi_demo:app --workers 4` 跑通
@@ -528,7 +540,7 @@
 
 ## M4：HTTPX 出站保护
 
-### M4.1 ⬜ 实现 SentinelAsyncTransport
+### M4.1 [ ] 实现 SentinelAsyncTransport
 - **Deliverable**:
   - 新 wheel `components/sentinel/sentinel-adapter-httpx/`
   - `SentinelAsyncTransport`:**只读公开的 `httpx.AsyncBaseTransport`**,**不**碰 `httpcore` 私有属性
@@ -543,7 +555,7 @@
 - **ADR**: ADR-SEN-009
 - **Deps**: M1.6
 
-### M4.2 ⬜ 实现全局和 per-origin 并发/排队保护
+### M4.2 [ ] 实现全局和 per-origin 并发/排队保护
 - **Deliverable**:
   - per-origin key:scheme + normalized host + effective port
   - 全局和 per-origin 都有 permit 上限
@@ -557,7 +569,7 @@
 - **ADR**: ADR-SEN-009
 - **Deps**: M4.1
 
-### M4.3 ⬜ 包装响应流并在 EOF/aclose 释放
+### M4.3 [ ] 包装响应流并在 EOF/aclose 释放
 - **Deliverable**:
   - 包装 response stream,在 `__aexit__` 释放 permit
   - 显式处理 aclose 调用一次
@@ -570,7 +582,7 @@
 - **ADR**: ADR-SEN-009
 - **Deps**: M4.2
 
-### M4.4 ⬜ 实现 OutcomeClassifier
+### M4.4 [ ] 实现 OutcomeClassifier
 - **Deliverable**:
   - 把连接错误 / 超时 / 5xx / 4xx / 2xx / 取消分别映射 Outcome
   - 默认:只把连接错误、超时、5xx 计为下游故障;4xx 不自动计为
@@ -583,7 +595,7 @@
 - **ADR**: ADR-SEN-009
 - **Deps**: M4.3
 
-### M4.5 ⬜ 与 Retry/CircuitBreaker 组合测试(默认不重试)
+### M4.5 [ ] 与 Retry/CircuitBreaker 组合测试(默认不重试)
 - **背景**(DESIGN.md §12.3 + §8.1):
   - HTTPX Adapter **默认不重试**;Adapter 自身不在 `handle_async_request` 内 retry
   - 只有调用方**显式组合 `RetryPolicy`**(从 `primitives.retry`)+ `IdempotencyKey` 显式允许 + 把 retry 接入到出站调用链中,5xx 才触发重试
@@ -606,7 +618,7 @@
 - **ADR**: ADR-SEN-009
 - **Deps**: M4.4
 
-### M4.6 ⬜ 禁止任何 httpcore 私有 API 使用
+### M4.6 [ ] 禁止任何 httpcore 私有 API 使用
 - **Deliverable**:
   - `tests/test_no_httpcore_private.py` — 静态扫描所有 sentinel-adapter-httpx 源码,断言没有任何 `httpcore._xxx` 或私有 attr 访问
   - CI lint 规则(可选,grep 也可以)
@@ -617,7 +629,7 @@
 - **ADR**: ADR-SEN-009
 - **Deps**: M4.5
 
-### M4 Exit
+### M4 Exit [ ] (子项全部完成)
 - **Exit Criteria**(§21):
   - 受控真实下游服务上的正常 / 失败 / 超时 / 流式 / 取消 场景通过
   - 一个 demo:examples/httpx_demo.py 跑 5 种场景
@@ -626,7 +638,7 @@
 
 ## M5：Embedded Dashboard、文档和 1.0
 
-### M5.1 ⬜ 实现 per-process embedded 管理 API
+### M5.1 [ ] 实现 per-process embedded 管理 API
 - **Deliverable**:
   - 新 wheel `components/sentinel/sentinel-dashboard/`
   - REST API:
@@ -644,7 +656,7 @@
 - **ADR**: ADR-SEN-010
 - **Deps**: M1.6, M3.1(依赖 RuleRepository)
 
-### M5.2 ⬜ 默认 loopback/read-only,写操作认证授权审计
+### M5.2 [ ] 默认 loopback/read-only,写操作认证授权审计
 - **Deliverable**:
   - 默认绑定 127.0.0.1
   - 默认 read-only
@@ -661,7 +673,7 @@
 - **ADR**: ADR-SEN-010
 - **Deps**: M5.1
 
-### M5.3 ⬜ 完成中英文 Quick Start、规则手册、扩展开发、运维边界文档
+### M5.3 [ ] 完成中英文 Quick Start、规则手册、扩展开发、运维边界文档
 - **Deliverable**:
   - `docs/QUICKSTART.md`(中英)
   - `docs/RULES.md` — 5 类规则详解
@@ -676,7 +688,7 @@
 - **ADR**: 全部
 - **Deps**: M5.2
 
-### M5.4 ⬜ 完成 Python/OS matrix、isolated wheel、性能和 soak 门禁
+### M5.4 [ ] 完成 Python/OS matrix、isolated wheel、性能和 soak 门禁
 - **Deliverable**:
   - CI matrix:Python 3.12 / 3.13 / 3.14 × Linux / macOS
   - **1.0 只发布 5 个 wheel**:main + asgi + httpx + source-file + dashboard
@@ -693,7 +705,7 @@
 - **Deps**: M4.6, M5.3
 - **observability 处理**(M5 决策):若要 1.0 含 observability,**必须先**补 ADR + DESIGN.md §3.1 发行包表行,且实现满足 SEN-PERF-001 label 约束。否则推迟到 1.x。**不**发空 wheel。
 
-### M5.5 ⬜ 完成 API review、CHANGELOG、迁移说明和 SBOM
+### M5.5 [ ] 完成 API review、CHANGELOG、迁移说明和 SBOM
 - **Deliverable**:
   - API review checklist
   - `CHANGELOG.md`(M0-M5 每阶段一条)
@@ -707,7 +719,7 @@
 - **ADR**: —
 - **Deps**: M5.4
 
-### M5.6 ⬜ 发布 1.0.0(只发 5 个已实现 wheel)
+### M5.6 [ ] 发布 1.0.0(只发 5 个已实现 wheel)
 - **Deliverable**:
   - 5 个 wheel 发到 PyPI:
     - `atlas-richie-sentinel`(主)
@@ -725,7 +737,7 @@
 - **ADR**: —
 - **Deps**: M5.5
 
-### M5 Exit
+### M5 Exit [ ] (子项全部完成)
 - **Exit Criteria**(§21 + §24):
   - 主包和已实现扩展达到公开 API 稳定承诺
   - 所有未验证边界明确列出
@@ -735,21 +747,21 @@
 
 ## M6+：集群与聚合控制面
 
-### M6.1 ⬜ Nacos Source
+### M6.1 [ ] Nacos Source
 - **Deliverable**: `components/sentinel/sentinel-source-nacos/` 实际实现
 - **Exit Criteria**: 跑 M3.1 contract test + 真实 Nacos 服务器
 - **Test ID**: SEN-RULE-001(part:nacos)
 - **ADR**: ADR-SEN-007
 - **Deps**: M3.1
 
-### M6.2 ⬜ Redis 可恢复 Source
+### M6.2 [ ] Redis 可恢复 Source
 - **Deliverable**: `components/sentinel/sentinel-source-redis/` 实际实现 + key 存储 + pub/sub 通知
 - **Exit Criteria**: pub/sub 不能保证消息补偿,选 key+stream 二选一
 - **Test ID**: SEN-RULE-001(part:redis)
 - **ADR**: ADR-SEN-007
 - **Deps**: M3.1
 
-### M6.3 ⬜ Token Server/Client
+### M6.3 [ ] Token Server/Client
 - **Deliverable**:
   - `components/sentinel/sentinel-cluster/` 实际实现
   - 1.0 预留的 `TokenService` Port 填入实现
@@ -759,7 +771,7 @@
 - **ADR**: ADR-SEN-011
 - **Deps**: M5.6(主包先稳定)
 
-### M6.4 ⬜ 双实例故障和恢复验收
+### M6.4 [ ] 双实例故障和恢复验收
 - **Deliverable**:
   - 2 个真实进程互发 token 同步
   - 覆盖:crash / 网络分区 / 超时 / 恢复 / 重复请求 / 规则版本切换
@@ -771,7 +783,7 @@
 - **ADR**: ADR-SEN-011
 - **Deps**: M6.3
 
-### M6.5 ⬜ Agent Reporting Protocol
+### M6.5 [ ] Agent Reporting Protocol
 - **Deliverable**:
   - 协议:instance_id + 启动纪元 + 指标序号 + 重复/乱序/离线处理 + 频率 + 背压 + mTLS
   - client(报告方)+ server(聚合方)SDK
@@ -782,7 +794,7 @@
 - **ADR**: —
 - **Deps**: M6.3
 
-### M6.6 ⬜ 聚合 Dashboard 和 Web UI(1.x 评估,不在 M6 默认范围)
+### M6.6 [ ] 聚合 Dashboard 和 Web UI(1.x 评估,不在 M6 默认范围)
 - **背景**: `sentinel-dashboard-aggregator` 是新发行包,DESIGN.md 没批准。**从 M6 默认范围中删除**。若要纳入 M6,必须先:
   - 补 ADR(M6 范围内需要用户签字)
   - 更新 DESIGN.md §3.1 发行包表加一行
@@ -793,7 +805,7 @@
 - **ADR**: 待用户签字才存在
 - **Deps**: M6.5(协议)
 
-### M6.7 ⬜ WSGI/同步阻塞引擎可行性评估
+### M6.7 [ ] WSGI/同步阻塞引擎可行性评估
 - **Deliverable**:
   - 调研报告(同步 API、asyncio.run、threading 风险)
   - 决策:1.x 是否做?2.0 怎么做?
@@ -804,7 +816,7 @@
 - **ADR**: —
 - **Deps**: M5.6
 
-### M6+ Exit
+### M6+ Exit [ ] (M6.1-M6.5 全部完成;M6.6 默认不在范围)
 - **Exit Criteria**(隐含):M6.1-M6.5 完成 + 双实例 + 跨进程验收;M6.6 聚合 dashboard 默认不在范围
 
 ---
