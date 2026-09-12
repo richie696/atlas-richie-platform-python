@@ -200,14 +200,28 @@ class SentinelASGIMiddleware:
             # BLOCKED / SentinelError → 503
             await self._send_503(send)
             return
-        # 透传到下游 app
+        # 透传到下游 app;__aexit__ 必须拿到真实异常才能记 CANCELLED /
+        # FAILED outcome
         try:
             await self.app(scope, receive, send)
         except asyncio.CancelledError:
             # 客户端断连
             await self._send_client_disconnect(send)
-            raise
-        finally:
+            try:
+                await entry.__aexit__(
+                    asyncio.CancelledError,
+                    asyncio.CancelledError(),
+                    None,
+                )
+            finally:
+                raise
+        except BaseException as e:
+            # 下游 app 抛业务异常 / 系统异常:让 engine 记 FAILED
+            try:
+                await entry.__aexit__(type(e), e, e.__traceback__)
+            finally:
+                raise
+        else:
             await entry.__aexit__(None, None, None)
 
     async def _send_503(self, send: Send) -> None:

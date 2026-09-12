@@ -780,20 +780,26 @@
 
 ### M3.5 [x] 验证普通响应、流式响应、断连、取消、异常、lifespan
 - **Deliverable**:
+  - `sentinel-adapter-asgi/tests/test_asgi.py` — 21 个 ASGI 协议测试
   - 6 个 ASGI 协议场景测试:
-    1. 普通响应(返回 200 + body)
-    2. 流式响应(more_body=True 直到 EOF,Entry 不能在第一个 body 后释放)
-    3. 客户端断连(EOF / CancelledError 注入)
-    4. cancel(scope.receive 抛 CancelledError)
-    5. 业务异常(Outcome.FAILED,HTTP 5xx)
-    6. lifespan(lifespan start / shutdown 不被业务流控)
+    1. 普通响应(返回 200 + body) — 5 tests
+    2. 流式响应(more_body=True 直到 EOF,Entry 不能在第一个 body 后释放) — 2 tests
+    3. 客户端断连(EOF / CancelledError 注入) — 2 tests
+    4. cancel(scope.receive 抛 CancelledError / task cancel during app) — 1 test
+    5. 业务异常(Outcome.FAILED,HTTP 5xx) — 2 tests
+    6. lifespan(lifespan start / shutdown 不被业务流控) — 2 tests
+  - 额外: BLOCKED 路径(503) / origin 解析(5 tests) / websocket 透传(1 test)
 - **Exit Criteria**:
-  - 6 个场景 permit 都正确释放
-  - 流式响应 body EOF 才 release(非首次 send)
-  - 业务异常不吞,响应能 close
+  - 6 个场景 permit 都正确释放 — ✅ 21/21 通过
+  - 流式响应 body EOF 才 release(非首次 send) — ✅
+  - 业务异常不吞,响应能 close — ✅
 - **Test ID**: SEN-ASGI-001
 - **ADR**: ADR-SEN-008
 - **Deps**: M3.3, M3.4
+- **真实修复**(测试中暴露):middleware 之前
+  `entry.__aexit__(None, None, None)` 永远传 None,导致 engine 永远看不到
+  CANCELLED / FAILED outcome。改为按实际异常类型传参:
+  asyncio.CancelledError → CANCELLED,BaseException → FAILED。
 
 ### M3.6 [x] 完成真实多 worker 语义测试
 - **Deliverable**:
