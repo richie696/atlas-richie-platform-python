@@ -92,10 +92,15 @@
       ```bash
       # 1. 专用干净目录,避免和根 dist/ 旧产物混合
       rm -rf /tmp/atlas-richie-sentinel-release
-      uv build --package atlas-richie-sentinel --out-dir /tmp/atlas-richie-sentinel-release --clear
-      # 2. 强制要求目录内恰好 1 wheel + 1 sdist + 文件名匹配 atlas_richie_sentinel-* + 三元组 name/version 一致
+      # 2. --clear 重建 + --no-create-gitignore 禁止 uv 在输出目录写 .gitignore
+      #    (默认 uv 会在 --out-dir 落 .gitignore,导致严格校验脚本 "恰好 1 wheel + 1 sdist" 假失败)
+      uv build --package atlas-richie-sentinel \
+               --out-dir /tmp/atlas-richie-sentinel-release \
+               --clear \
+               --no-create-gitignore
+      # 3. 强制要求目录内恰好 1 wheel + 1 sdist + 文件名匹配 atlas_richie_sentinel-* + 三元组 name/version 一致
       python tools/release/check_version_consistency.py /tmp/atlas-richie-sentinel-release
-      # 3. uv publish 接受文件路径列表(本机 uv publish --help 没有 --package);用 glob 避免再次硬编码规范化和版本号
+      # 4. uv publish 接受文件路径列表(本机 uv publish --help 没有 --package);用 glob 避免再次硬编码规范化和版本号
       uv publish /tmp/atlas-richie-sentinel-release/*.whl \
                  /tmp/atlas-richie-sentinel-release/*.tar.gz
       ```
