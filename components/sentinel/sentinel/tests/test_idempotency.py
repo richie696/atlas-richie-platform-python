@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from atlas_richie.resilience import (
+from atlas_richie.sentinel.primitives import (
     CallableIdempotencyKey,
     NeverIdempotencyKey,
     StatelessIdempotencyKey,

@@ -52,18 +52,20 @@ from typing import Any
 
 import pytest
 
-from atlas_richie.resilience import (
+from atlas_richie.sentinel.errors import (
+    BulkheadFull,
+    CircuitOpen,
+    RateLimitExceeded,
+    RetryExhausted,
+)
+from atlas_richie.sentinel.primitives import (
     Bulkhead,
     BulkheadConfig,
-    BulkheadFull,
     CircuitBreaker,
     CircuitBreakerConfig,
-    CircuitOpen,
     CircuitState,
     ManualClock,
-    RateLimitExceeded,
     RetryExecutor,
-    RetryExhausted,
     RetryPolicy,
     TokenBucket,
     TokenBucketConfig,

@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from atlas_richie.resilience import (
+from atlas_richie.sentinel.errors import RateLimitExceeded
+from atlas_richie.sentinel.primitives import (
     ManualClock,
-    RateLimitExceeded,
     TokenBucket,
     TokenBucketConfig,
 )

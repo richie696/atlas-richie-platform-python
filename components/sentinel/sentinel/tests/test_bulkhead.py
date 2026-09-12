@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from atlas_richie.resilience import (
+from atlas_richie.sentinel.errors import BulkheadFull
+from atlas_richie.sentinel.primitives import (
     Bulkhead,
     BulkheadConfig,
-    BulkheadFull,
 )
 
 

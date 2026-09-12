@@ -9,18 +9,16 @@ from __future__ import annotations
 
 import unittest
 
-from atlas_richie.resilience import (
+from atlas_richie.sentinel.errors import BulkheadFull, CircuitOpen, RetryExhausted
+from atlas_richie.sentinel.primitives import (
     Bulkhead,
     BulkheadConfig,
-    BulkheadFull,
     CircuitBreaker,
     CircuitBreakerConfig,
-    CircuitOpen,
     CircuitState,
     DeterministicRandom,
     ManualClock,
     RetryExecutor,
-    RetryExhausted,
     RetryPolicy,
 )
 

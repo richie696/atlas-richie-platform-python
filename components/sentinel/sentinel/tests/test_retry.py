@@ -5,15 +5,14 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from atlas_richie.resilience import (
+from atlas_richie.sentinel.errors import RetryExhausted, RetryNotPermitted
+from atlas_richie.sentinel.primitives import (
     DeterministicRandom,
     FirstByteSignal,
     ManualClock,
     NeverIdempotencyKey,
     RetryEvent,
     RetryExecutor,
-    RetryExhausted,
-    RetryNotPermitted,
     RetryPolicy,
 )
 
