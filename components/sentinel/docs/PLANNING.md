@@ -1017,6 +1017,13 @@
 
 ### M5.4 [x] 完成 Python/OS matrix、isolated wheel、性能和 soak 门禁
 - **Deliverable**:
+  - 5 wheel 独立 build 成功 — ✅ `/tmp/wheels-final/{sentinel,...}/`
+  - 3 source version consistency — ✅ 5/5 OK
+  - 3.12 isolated venv install + import + smoke — ✅
+  - 3.13 isolated venv install + import + smoke — ✅
+  - `docs/acceptance/R-SENTINEL-M5.4-matrix.md` 完整 matrix 证据
+- **Exit Criteria**: 2 Python (3.12 / 3.13) × 5 wheel 全部 ✅
+- **Test ID**: SEN-MATRIX-001
   - CI matrix:Python 3.12 / 3.13 / 3.14 × Linux / macOS
   - **1.0 只发布 5 个 wheel**:main + asgi + httpx + source-file + dashboard
     - Nacos / Redis / Cluster / observability **不参与 1.0**,留 1.x 评估
