@@ -383,7 +383,7 @@
 
 ## M1：Engine、生命周期和指标内核
 
-### M1.1 [ ] 实现领域模型和异常体系(基于 M0.5-A 已有异常层)
+### M1.1 [x] 实现领域模型和异常体系(基于 M0.5-A 已有异常层)
 - **背景**(M0.5-A): M0.5 已经把 5 个原语具体异常(`CircuitOpen` / `BulkheadFull` / `RetryExhausted` / `RetryNotPermitted` / `RateLimitExceeded`)+ 基类 `ResilienceError` 移到 `atlas_richie/sentinel/errors/__init__.py`,根异常 `SentinelError(Exception)` 已定义。M1.1 **不再新建同名类**,只补 M0 还没建的部分。
 - **Deliverable**:
   - `model/`:
