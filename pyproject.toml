@@ -19,6 +19,7 @@ members = [
   "components/secret/secret-gcp-kms",
   "components/secret/secret-pkcs11",
   "components/secret/secret-rotation-daemon",
+  "components/secret/secret-aliyun-kms",
   "components/cache/cache-core",
   "components/cache/cache-redis",
 ]
@@ -38,6 +39,7 @@ atlas-richie-secret-azure-keyvault = { workspace = true }
 atlas-richie-secret-gcp-kms = { workspace = true }
 atlas-richie-secret-pkcs11 = { workspace = true }
 atlas-richie-secret-rotation-daemon = { workspace = true }
+atlas-richie-secret-aliyun-kms = { workspace = true }
 atlas-richie-cache-core = { workspace = true }
 atlas-richie-cache-redis = { workspace = true }
 atlas-richie-testing = { workspace = true }
