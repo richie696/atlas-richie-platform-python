@@ -476,7 +476,7 @@
 - **Deps**: M1.2
 - **不做硬性性能断言**:SlidingWindow 的写入延迟、Memory 占用、p99 等**不**在 M1 设绝对阈值。先用 `tests/benchmark/test_sen_perf.py` 收集数据,作为"原始基线"提交。阈值审批延后到 M5 1.0 前 + 真实下游场景验证后再设。DESIGN.md §19.5 已明确:"M1 建立基线,后续里程碑只能在批准阈值内回归。首次基线未完成前,文档不声称具体 QPS。"
 
-### M1.5 [ ] 实现 RuleSnapshot、RuleRepository、ResourceSelector/RuleIndex
+### M1.5 [x] 实现 RuleSnapshot、RuleRepository、ResourceSelector/RuleIndex
 - **Deliverable**:
   - `rules/snapshot.py` — `RuleVersion` / `RuleSnapshot` / `RuleSnapshotAppliedEvent`
   - `rules/repository.py` — `RuleRepository` 校验 + 编译索引 + 原子替换 + last-known-good
