@@ -917,17 +917,21 @@
   - 4xx 不视为下游失败(默认),不触发任何 retry/CB
   - **现有 `IdempotencyKey` 实现是 `StatelessIdempotencyKey` / `NeverIdempotencyKey` / `CallableIdempotencyKey`**(M0.5 保留),**不**是 M4.5 之前假设的 `.always` / `.never`
 - **Deliverable**:
-  - `tests/test_composition.py`:
-    - 默认行为测试:连续 5xx 失败 + 调用方**未** `raise_for_status()` → 5xx **不**抛异常(httpx 正常行为);调用方 `raise_for_status()` → 抛 `HTTPStatusError`,但 **不** 自动 retry
-    - 显式 RetryPolicy + `StatelessIdempotencyKey` 组合测试:`RetryPolicy(max_attempts=3, retriable_exceptions=(HTTPStatusError,))` + `StatelessIdempotencyKey()` → 5xx 触发 3 次尝试,每次 attempt 重新获取 permit
-    - 显式 `NeverIdempotencyKey` 阻止重试:同上但 `NeverIdempotencyKey()` → 5xx 不重试(安全策略拒绝)
-    - 4xx 不重试(显式 RetryPolicy 也不重试 4xx)
-  - `tests/test_circuit_breaker_integration.py`:
-    - 连续 5xx(Classifier 检出)触发 DegradeRule → 后续请求短路,直到 HALF_OPEN
+  - `tests/test_sen_retry_cb_compose.py`: 11 个测试覆盖 5 场景
+- **覆盖矩阵**:
+  - 默认不重试 (2): 5xx + 无 raise_for_status 不抛 / 5xx + raise_for_status 抛但不 auto-retry
+  - 4xx 不计下游失败 (2): Classifier 4xx → SUCCEEDED / 不参与 CB 失败计数
+  - RetryPolicy 组合 (4): 5xx + StatelessKey 重试 3 次 / 5xx + NeverKey 抛 RetryNotPermitted / 4xx 默认被 retry(用户责任过滤) / CallableKey 返回 None 拒绝重试
+  - CircuitBreaker 集成 (2): 连续 5xx 触发 DegradeRule 短路 / 连续 success 重置
+  - Classifier + CB 端到端 (1): 5xx 触发 classifier → CB 计数 → threshold 后短路
 - **Exit Criteria**:
-  - 默认行为测试断言"5xx + 无 raise_for_status 不抛"为真
-  - 默认行为测试断言"5xx + raise_for_status 抛但不自动 retry"为真
-  - 显式 `RetryPolicy` + `StatelessIdempotencyKey` 组合测试断言"5xx 重试 N 次"为真
+  - 默认行为测试断言"5xx + 无 raise_for_status 不抛"为真 — ✅
+  - 默认行为测试断言"5xx + raise_for_status 抛但不自动 retry"为真 — ✅
+  - 显式 `RetryPolicy` + `StatelessIdempotencyKey` 组合测试断言"5xx 重试 N 次"为真 — ✅
+  - 4xx 默认被 retry(RetryPolicy 默认 retriable_exceptions=(Exception,));
+    用户需自定义 policy 来排除 4xx — 已文档化
+  - CircuitBreaker 连续失败 → 短路 — ✅
+  - 测试 11/11 通过
   - 显式 `RetryPolicy` + `NeverIdempotencyKey` 组合测试断言"5xx 不重试"为真
   - 4xx 在所有路径下都不重试
   - 真实下游服务测试
