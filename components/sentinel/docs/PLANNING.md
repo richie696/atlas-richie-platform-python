@@ -891,13 +891,23 @@
   - 默认:只把连接错误、超时、5xx 计为下游故障;4xx 不自动计为
   - 策略可注入(用户可自定义哪些 HTTP 状态算失败)
 - **Exit Criteria**:
-  - 6 种 outcome 各自测试
-  - **测试用 `httpx.Response(503)` 构造,显式断言 Classifier 读 status_code 判定失败**(不是 `raise_for_status` 路径)
-  - 4xx 默认不触发 circuit breaker
-  - 自定义 classifier 可注入
+  - 6 种 outcome 各自测试 — ✅ 26/26
+  - **测试用 `httpx.Response(503)` 构造,显式断言 Classifier 读 status_code 判定失败**(不是 `raise_for_status` 路径) — ✅
+  - 4xx 默认不触发 circuit breaker — ✅
+  - 自定义 classifier 可注入 — ✅
 - **Test ID**: SEN-CB-001(part:http)
 - **ADR**: ADR-SEN-009
 - **Deps**: M4.3
+- **实现说明**:
+  - 新增 `OutcomeClassifier` Protocol (`@runtime_checkable`) +
+    `DefaultOutcomeClassifier` 默认实现(2xx/3xx/4xx → SUCCEEDED,
+    5xx → FAILED,网络异常 → FAILED, CancelledError → CANCELLED,
+    其它 Exception → FAILED, status_code=None → FAILED)
+  - `classify_outcome(response)` 是 `DefaultOutcomeClassifier().classify()`
+    的**兼容 shim**,返回值从 `str` 改成 `OutcomeKind.value` (`"succeeded"` /
+    `"failed"` / `"cancelled"` / `"blocked"`)
+  - **不**调用 `response.raise_for_status()`(显式 `MagicMock` 测试断言)
+  - 覆盖文件: `sentinel-adapter-httpx/tests/test_outcome_classifier.py` (26 tests)
 
 ### M4.5 [x] 与 Retry/CircuitBreaker 组合测试(默认不重试)
 - **背景**(DESIGN.md §12.3 + §8.1):

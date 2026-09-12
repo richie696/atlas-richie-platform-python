@@ -50,15 +50,120 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional, Protocol, runtime_checkable
 
 import httpx
 
 from atlas_richie.sentinel.engine import SentinelEngine
 from atlas_richie.sentinel.model import (
     Resource, ResourceKind, TrafficType, SentinelContext,
+    OutcomeKind,
 )
 from atlas_richie.sentinel.slots.flow import FlowSlot
+
+
+# ---------------------------------------------------------------------------
+# OutcomeClassifier — Strategy interface (M4.4)
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class OutcomeClassifier(Protocol):
+    """中文
+    ----
+    OutcomeClassifier Strategy(协议):把一次出站调用的"结果"
+    (HTTPX ``Response`` 或 ``Exception``)分类成
+    ``OutcomeKind``。默认实现见 ``DefaultOutcomeClassifier``;用户可
+    注入自定义分类器(例如把 429 视为 FAILED,或把 5xx 视为 SUCCEEDED
+    做优雅降级)。
+
+    **不**调用 ``response.raise_for_status()``;HTTPX 5xx 不会自动抛
+    ``HTTPStatusError``,必须**显式**读 ``response.status_code``。
+
+    English
+    --------
+    OutcomeClassifier Strategy (Protocol): classify an outbound call's
+    "outcome" (an HTTPX ``Response`` or an ``Exception``) into an
+    ``OutcomeKind``. Default implementation in
+    ``DefaultOutcomeClassifier``; users can inject a custom classifier
+    (e.g. treat 429 as FAILED, or treat 5xx as SUCCEEDED for graceful
+    degradation).
+
+    **Does not** call ``response.raise_for_status()``; HTTPX 5xx does
+    not auto-raise ``HTTPStatusError``; must explicitly read
+    ``response.status_code``.
+    """
+
+    def classify(self, response_or_exc: Any) -> OutcomeKind:
+        ...
+
+
+class DefaultOutcomeClassifier:
+    """中文
+    ----
+    默认分类器(PLANNING §M4.4 落地):
+
+    - 2xx / 3xx / 4xx → ``SUCCEEDED``(4xx 是业务错误,**不**计为下游
+      失败,不会触发熔断 / 重试)
+    - 5xx → ``FAILED``(下游失败)
+    - ``httpx.ConnectError`` / ``TimeoutException`` /
+      ``RemoteProtocolError`` / ``RequestError`` → ``FAILED``
+    - ``asyncio.CancelledError`` → ``CANCELLED``
+    - 其它 ``Exception`` → ``FAILED``
+    - ``status_code = None``(畸形响应)→ ``FAILED``
+
+    **不**调用 ``response.raise_for_status()``。HTTPX 不会自动
+    抛 ``HTTPStatusError``;必须显式读 ``response.status_code``。
+
+    English
+    --------
+    Default classifier (PLANNING §M4.4 implementation):
+
+    - 2xx / 3xx / 4xx → ``SUCCEEDED`` (4xx is business error, **not**
+      downstream failure; will not trigger circuit breaker / retry).
+    - 5xx → ``FAILED`` (downstream failure).
+    - ``httpx.ConnectError`` / ``TimeoutException`` /
+      ``RemoteProtocolError`` / ``RequestError`` → ``FAILED``.
+    - ``asyncio.CancelledError`` → ``CANCELLED``.
+    - Other ``Exception`` → ``FAILED``.
+    - ``status_code = None`` (malformed response) → ``FAILED``.
+
+    **Does not** call ``response.raise_for_status()``. HTTPX does not
+    auto-raise ``HTTPStatusError``; must explicitly read
+    ``response.status_code``.
+    """
+
+    # HTTP status code ranges for outcome classification.
+    _SUCCESS_MAX: int = 500  # anything below 500 is "succeeded"
+
+    def classify(self, response_or_exc: Any) -> OutcomeKind:
+        # Cancellation first (asyncio.CancelledError is a BaseException
+        # but we want to classify it specifically).
+        if isinstance(response_or_exc, asyncio.CancelledError):
+            return OutcomeKind.CANCELLED
+        # Exception path: network errors, downstream exceptions.
+        if isinstance(response_or_exc, BaseException):
+            return OutcomeKind.FAILED
+        # Response path: read status_code explicitly. We **do not** call
+        # raise_for_status() — that would couple Classifier to
+        # caller-side error policy.
+        status = getattr(response_or_exc, "status_code", None)
+        if not isinstance(status, int):
+            return OutcomeKind.FAILED
+        if status < self._SUCCESS_MAX:
+            # 1xx / 2xx / 3xx / 4xx — all SUCCEEDED by default.
+            return OutcomeKind.SUCCEEDED
+        # 5xx and beyond.
+        return OutcomeKind.FAILED
+
+
+__all__ = [
+    "DefaultOutcomeClassifier",
+    "OutcomeClassifier",
+    "SentinelAsyncTransport",
+    "classify_outcome",
+    "default_resource_name",
+]
 
 
 def default_resource_name(request: httpx.Request) -> str:
@@ -84,31 +189,33 @@ def classify_outcome(response: httpx.Response | Exception) -> str:
     ----
     OutcomeClassifier:把 HTTPX Response 分类成 OutcomeKind 字符串。
 
-    - 2xx → "succeeded"
-    - 4xx/5xx → "failed" (业务异常,但**不**计入 SentinelBlocked;
-      SentinelBlocked 由 Sentinel 主动 reject 产生)
+    - 2xx / 3xx / 4xx → "succeeded"(4xx 是业务错误,**不**计为下游
+      失败;``SentinelBlocked`` 由 Sentinel 主动 reject 产生)
+    - 5xx → "failed"(下游失败)
     - 网络异常 (httpx.ConnectError / TimeoutException 等) → "failed"
     - 5xx 默认不重试(PLANNING §M4.5)
+
+    本函数是 ``DefaultOutcomeClassifier().classify()`` 的**兼容
+    入口**;新代码请用 ``DefaultOutcomeClassifier``(可注入替换)。
 
     English
     --------
     OutcomeClassifier: classify HTTPX Response into OutcomeKind
     string.
 
-    - 2xx → "succeeded"
-    - 4xx/5xx → "failed" (business error, **not** counted as
-      SentinelBlocked; SentinelBlocked is raised by Sentinel active
-      rejection)
+    - 2xx / 3xx / 4xx → "succeeded" (4xx is business error, **not**
+      counted as downstream failure; ``SentinelBlocked`` is raised by
+      Sentinel active rejection).
+    - 5xx → "failed" (downstream failure).
     - Network errors (httpx.ConnectError / TimeoutException etc.) →
-      "failed"
-    - 5xx default no retry (PLANNING §M4.5)
+      "failed".
+    - 5xx default no retry (PLANNING §M4.5).
+
+    This is a compatibility shim over
+    ``DefaultOutcomeClassifier().classify()``; new code should use
+    ``DefaultOutcomeClassifier`` (injection-friendly).
     """
-    if isinstance(response, Exception):
-        return "failed"
-    code = response.status_code
-    if 200 <= code < 300:
-        return "succeeded"
-    return "failed"
+    return DefaultOutcomeClassifier().classify(response).value
 
 
 @dataclass(slots=True)
