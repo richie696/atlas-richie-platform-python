@@ -55,6 +55,7 @@ PACKAGES = (
     (f"atlas-richie-secret-aliyun-kms=={_VERSION}", "atlas_richie.secret_aliyun_kms"),
     (f"atlas-richie-secret-kmip=={_VERSION}", "atlas_richie.secret_kmip"),
     (f"atlas-richie-secret-barbican=={_VERSION}", "atlas_richie.secret_barbican"),
+    (f"atlas-richie-secret-tencent-ssm-kms=={_VERSION}", "atlas_richie.secret_tencent_ssm_kms"),
     (f"atlas-richie-oauth=={_VERSION}", "atlas_richie.oauth"),
     (f"atlas-richie-platform=={_VERSION}", "atlas_richie.platform"),
 )
