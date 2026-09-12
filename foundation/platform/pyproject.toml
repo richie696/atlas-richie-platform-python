@@ -19,6 +19,7 @@ dependencies = [
   "atlas-richie-mcp>=0.2.0,<0.3.0",
   "atlas-richie-oauth>=0.2.0,<0.3.0",
   "atlas-richie-resilience>=0.2.0,<0.3.0",
+  "atlas-richie-secret-core>=0.2.0,<0.3.0",
   "atlas-richie-cache-core>=0.2.0,<0.3.0",
   "atlas-richie-cache-redis>=0.2.0,<0.3.0",
 ]

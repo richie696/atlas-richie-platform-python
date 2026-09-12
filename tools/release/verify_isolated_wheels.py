@@ -43,6 +43,7 @@ PACKAGES = (
     (f"atlas-richie-resilience=={_VERSION}", "atlas_richie.resilience"),
     (f"atlas-richie-cache-core=={_VERSION}", "atlas_richie.cache_core"),
     (f"atlas-richie-cache-redis=={_VERSION}", "atlas_richie.cache_redis"),
+    (f"atlas-richie-secret-core=={_VERSION}", "atlas_richie.secret"),
     (f"atlas-richie-oauth=={_VERSION}", "atlas_richie.oauth"),
     (f"atlas-richie-platform=={_VERSION}", "atlas_richie.platform"),
 )
