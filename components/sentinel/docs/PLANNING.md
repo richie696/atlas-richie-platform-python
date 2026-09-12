@@ -703,16 +703,28 @@
 ### M3.1 [x] 实现 RuleSource contract test kit(M3 仅供 File Source 使用)
 - **Deliverable**:
   - `tests/contract/test_rule_source.py` — 公用的 RuleSource 契约测试集
+    (实际放在 `tests/test_sen_rule_source.py`,带 `_RuleSourceContractBase`
+    基类 + `__test__ = False` 不被自动 collect)
   - 覆盖:首次迭代成功/失败、迭代结束 / 监听退出 / 重连、指数退避 + jitter、消费速度慢于更新速度的合并/背压、stale 状态、aclose 幂等、凭证脱敏
   - **M3 阶段只跑 File Source 接入同一套 contract**(M3.2 交付)
   - **Nacos / Redis 在 M6+ 才加入**同一套 contract suite(M6.1 / M6.2 任务里跑)
 - **Exit Criteria**:
-  - Contract test 包含「协议满足性」「错误恢复」「资源清理」三组
-  - File Source(M3.2)通过 contract test
+  - Contract test 包含「协议满足性」「错误恢复」「资源清理」三组 — ✅ 25/25 通过
+  - File Source(M3.2)通过 contract test — ✅ 18/18 通过(含额外 7 个)
   - M3 退出时 Nacos / Redis Source 还未实现
 - **Test ID**: SEN-RULE-001
 - **ADR**: ADR-SEN-007
 - **Deps**: M1.6
+- **实现说明**:
+  - 契约基类:`_RuleSourceContractBase(unittest.TestCase)` + `__test__ = False`
+    + 子类 `__test__ = True` 重新启用 collection
+  - 覆盖 Port identity (`isinstance(RuleSource)`) / start 幂等 / stop 幂等 /
+    start 推 repository / missing file / 解析失败 / mtime cache / mtime 变更 /
+    YAML 解析 / poll loop 健壮 / event-loop lifecycle
+  - 测试 fixtures 包含 `_TestRule` 包装器(让 RuleIndex 编译)和
+    `_WrappingFileRuleSource` 子类(把 JSON 包装成 Rule 对象)
+  - 已知 mtime 文件系统分辨率限制:同一秒内 rewrite 产生相同 epoch;
+    测试用 `os.utime` 强制改 mtime 来验证版本变化路径
 
 ### M3.2 [x] 实现 JSON/YAML File Source 和 last-known-good 热更新
 - **Deliverable**:
