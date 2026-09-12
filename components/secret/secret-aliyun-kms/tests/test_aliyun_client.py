@@ -27,7 +27,6 @@ this suite.
 from __future__ import annotations
 
 import base64
-from collections.abc import Iterator
 
 import pytest
 
@@ -36,7 +35,6 @@ from atlas_richie.secret.bootstrap.catalog import (
     SecretBinding,
     SecretBindingCatalog,
 )
-from atlas_richie.secret.bootstrap.policy import SecretPropertyPolicy
 from atlas_richie.secret.bootstrap.spi import (
     DefaultBootstrapContext,
     SecretBootstrapRequest,
@@ -54,7 +52,7 @@ from atlas_richie.secret.errors import (
     SecretIntegrityException,
 )
 from atlas_richie.secret.metadata import SecretBackend
-from atlas_richie.secret.reference import SecretReference, SecretVersionSelector
+from atlas_richie.secret.reference import SecretReference
 
 from atlas_richie.secret_aliyun_kms.client import (
     AliyunBootstrapLoadResult,

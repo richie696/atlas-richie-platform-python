@@ -1055,6 +1055,4 @@ __all__ = [
     "AliyunBootstrapLoadResult",
     # 4-SPI composite
     "AliyunSecretClient",
-    # Re-export the destroyable wrapper because the spec mentions it
-    "DestroyableSecretValue",
 ]
