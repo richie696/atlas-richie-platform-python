@@ -64,30 +64,48 @@
 - **ADR**: ADR-SEN-002
 - **Deps**: M0.1, M0.2, M0.3
 
-### M0.5 [ ] 使用 git mv 迁入 Resilience 源码和测试(按目标结构重命名/拆分)
+### M0.5 [ ] 使用 git mv 迁入 Resilience 源码和测试(保持现有公开 API,按目标结构重命名/拆分)
 - **Deliverable**(实际文件名按 `ls components/resilience/src/atlas_richie/resilience/` 现状):
   - `git mv` + 原地重命名/拆分:
-    - `retry.py` → `primitives/retry.py`(名称不变)
+    - `retry.py` → `primitives/retry.py`(名称不变,**公开类名 `RetryPolicy` / `RetryExecutor` 保持** — M0 不重命名)
     - `circuit_breaker.py` → `primitives/circuit_breaker.py`(名称不变)
     - `bulkhead.py` → `primitives/bulkhead.py`(名称不变)
-    - `idempotency.py` → `primitives/idempotency.py`(名称不变)
-    - `errors.py` → `primitives/errors.py`(名称不变)
+    - `idempotency.py` → `primitives/idempotency.py`(名称不变,**保留 `StatelessIdempotencyKey` / `NeverIdempotencyKey` / `CallableIdempotencyKey`**)
+    - `errors.py` → `errors/__init__.py`(**目标位置是 `atlas_richie/sentinel/errors/`** 而不是 `primitives/`,见 M0.5-A "唯一异常层")
     - `rate_limit.py` → `primitives/token_bucket.py`(**重命名**,因为它内部 class 是 `TokenBucket`,跟 DESIGN.md §8.3 一致)
     - `clock.py` → 拆成:
       - `primitives/clock.py` — 只保留 `Clock` / `SystemClock` / `ManualClock` / `system_sleep`
       - `primitives/random_source.py` — `RandomSource` / `SystemRandom` / `DeterministicRandom`(新拆出)
-  - 命名空间 `atlas_richie.resilience` → `atlas_richie.sentinel.primitives`(所有 8 个文件)
+  - 命名空间 `atlas_richie.resilience` → `atlas_richie.sentinel.primitives`(7 个 primitive 文件)
+  - `errors.py` 命名空间 `atlas_richie.resilience.errors` → `atlas_richie.sentinel.errors`(独立子包)
   - `git mv components/resilience/tests/test_*.py` → `components/sentinel/sentinel/tests/`
-  - 测试文件内 `from atlas_richie.resilience import ...` → `from atlas_richie.sentinel.primitives import ...`
-  - 公共类名按 DESIGN.md §8 重命名(如 `RetryPolicy` → `Retry`)
-- **Exit Criteria**:
+  - 测试文件内 `from atlas_richie.resilience import ...` → `from atlas_richie.sentinel.primitives import ...` 或 `from atlas_richie.sentinel.errors import ...`
+  - **M0 不改任何公开类名**(保留 `RetryPolicy` / `RetryExecutor` / `IdempotencyKey` / `StatelessIdempotencyKey` / `NeverIdempotencyKey` / `ResilienceError` / `CircuitOpen` / `BulkheadFull` / `RetryExhausted` / `RetryNotPermitted` / `RateLimitExceeded`)
+- **Exit Criteria**(**只**检查源码迁移,目录删除归 M0.9):
   - `grep -r "atlas_richie.resilience" components/sentinel/sentinel/` 返回 0 行
-  - `grep -r "atlas_richie.resilience" components/resilience/` 返回空(目录已删)
-  - `ls components/sentinel/sentinel/src/atlas_richie/sentinel/primitives/` 含 8 个 .py 文件
-  - `token_bucket.py` 内 class 名 `TokenBucket` 与文件名一致
+  - `grep -r "atlas_richie.resilience" components/resilience/src/ components/resilience/tests/` 返回空(旧源码/测试已迁走)
+  - `ls components/sentinel/sentinel/src/atlas_richie/sentinel/primitives/` 含 7 个 .py 文件(`token_bucket.py` 内 class 名 `TokenBucket` 与文件名一致)
+  - `ls components/sentinel/sentinel/src/atlas_richie/sentinel/errors/` 含 `__init__.py` 一个文件
+  - `ls components/resilience/` **仍存在**(README / pyproject.toml 没动,完整删除在 M0.9)
 - **Test ID**: SEN-CORE-001(全逆向释放),SEN-CB-001(熔断状态机)
 - **ADR**: ADR-SEN-001
 - **Deps**: M0.4
+
+### M0.5-A [ ] 唯一异常层:`atlas_richie.sentinel.errors`(原语从其导入)
+- **背景**: 若把 `errors.py` 放进 `primitives/`,而 M1.1 又新建 `sentinel/errors/`,会出现两套同名异常(`CircuitOpen` / `BulkheadFull` / `RetryExhausted` / `RetryNotPermitted` / `RateLimitExceeded` / `ResilienceError`),用户代码无法用单一 `except` 跨模块捕获。
+- **决策**:**唯一异常层 = `atlas_richie.sentinel.errors`**,**所有原语模块从中导入**
+- **Deliverable**:
+  - M0.5 把 `errors.py` 直接 `git mv` 到 `src/atlas_richie/sentinel/errors/__init__.py`(不是 `primitives/errors.py`)
+  - `primitives/circuit_breaker.py` 等从 `from atlas_richie.sentinel.errors import CircuitOpen` 导入
+  - 5 个 `from atlas_richie.sentinel.errors import ...` 引用覆盖所有 5 个具体异常
+- **Exit Criteria**:
+  - `ls components/sentinel/sentinel/src/atlas_richie/sentinel/errors/__init__.py` 存在
+  - `grep "from atlas_richie.sentinel.errors" components/sentinel/sentinel/src/atlas_richie/sentinel/primitives/` 返回 ≥ 5 行
+  - `grep "from atlas_richie.sentinel.errors" components/sentinel/sentinel/src/atlas_richie/sentinel/primitives/` 0 重复定义
+  - M1.1 实现 `sentinel/errors/base.py / block.py / configuration.py / lifecycle.py` 时**继承/复用** M0.5 提供的 5 个具体异常,**不**新建同名类
+- **Test ID**: —
+- **ADR**: ADR-SEN-001 扩展
+- **Deps**: M0.5
 
 ### M0.6 [ ] 删除 sentinel-primitives/core/rules 三个基础 wheel 骨架
 - **Deliverable**:
@@ -229,28 +247,51 @@
 
 ## M1：Engine、生命周期和指标内核
 
-### M1.1 [ ] 实现领域模型和异常体系
+### M1.1 [ ] 实现领域模型和异常体系(基于 M0.5-A 已有异常层)
+- **背景**(M0.5-A): M0.5 已经把 5 个原语具体异常(`CircuitOpen` / `BulkheadFull` / `RetryExhausted` / `RetryNotPermitted` / `RateLimitExceeded`)+ 基类 `ResilienceError` 移到 `atlas_richie/sentinel/errors/__init__.py`。M1.1 **不再新建同名类**,只补 M0 还没建的部分。
 - **Deliverable**:
-  - `components/sentinel/sentinel/src/atlas_richie/sentinel/model/`:
+  - `model/`:
     - `resource.py` — `Resource` / `ResourceKind` / `TrafficType`
     - `context.py` — `SentinelContext`(frozen,无 put)
     - `argument.py` — `InvocationArguments`
     - `outcome.py` — `OutcomeKind` 枚举(ADMITTED/SUCCEEDED/FAILED/CANCELLED/BLOCKED) + `Outcome` dataclass
     - `decision.py` — `SlotLease` Protocol + `NoopSlotLease` 不可变
     - `enums.py` — `BlockReason` / `RuleMatchKind` / `EngineState`
-  - `components/sentinel/sentinel/src/atlas_richie/sentinel/errors/`:
-    - `base.py` — `SentinelError`
-    - `block.py` — `SentinelBlockedError` + 6 子类(FlowBlocked / ParamFlowBlocked / SystemBlocked / CircuitOpen / AuthorityDenied / BulkheadFull)
-    - `configuration.py` — `SentinelConfigurationError`
-    - `lifecycle.py` — `SentinelLifecycleError` + `RuleSnapshotError`
+  - `errors/` 拆分(复用 M0.5 已有 5 个具体异常):
+    - `__init__.py` — 现有(M0.5 移入,5 个具体异常 + `ResilienceError` 基类)
+    - `base.py` — 新增 `SentinelError`(M1 engine/lifecycle 异常的共同基类);**继承** `ResilienceError`(保留原语异常的捕获能力)
+    - `block.py` — 新增 `SentinelBlockedError` + 6 子类(`FlowBlocked` / `ParamFlowBlocked` / `SystemBlocked` / `CircuitBlocked` / `AuthorityDenied` / `BulkheadFull`);**`CircuitBlocked` 复用 M0.5 的 `CircuitOpen`**(继承或别名)
+    - `configuration.py` — 新增 `SentinelConfigurationError`(继承 `SentinelError`)
+    - `lifecycle.py` — 新增 `SentinelLifecycleError` + `RuleSnapshotError`(继承 `SentinelError`)
+  - 完整异常树:
+    ```
+    SentinelError
+    ├── (ResilienceError  ← 来自 M0.5)
+    │   ├── RetryExhausted
+    │   ├── RetryNotPermitted
+    │   ├── CircuitOpen(可作 CircuitBlocked 别名)
+    │   ├── RateLimitExceeded
+    │   └── BulkheadFull
+    ├── SentinelBlockedError
+    │   ├── FlowBlocked
+    │   ├── ParamFlowBlocked
+    │   ├── SystemBlocked
+    │   ├── CircuitBlocked → CircuitOpen
+    │   ├── AuthorityDenied
+    │   └── BulkheadFull(可复用 M0.5 版本)
+    ├── SentinelConfigurationError
+    ├── SentinelLifecycleError
+    └── RuleSnapshotError
+    ```
 - **Exit Criteria**:
   - `from atlas_richie.sentinel.model import Resource, SentinelContext, Outcome, ...` 成功
-  - `from atlas_richie.sentinel.errors import SentinelBlockedError, ...` 成功
+  - `from atlas_richie.sentinel.errors import SentinelBlockedError, FlowBlocked, ...` 成功
   - 全部 frozen dataclass,`__init__` 拒绝可变默认值
+  - `CircuitOpen` 和 `CircuitBlocked` 是同一个类(无重复定义)
   - 异常有 `stable_code` / `BlockReason` / `resource` / `rule_id` / `retry_after` / `message` 字段
 - **Test ID**: SEN-CORE-001(part:outcome 5 种区分)
 - **ADR**: ADR-SEN-001, ADR-SEN-006
-- **Deps**: M0.11
+- **Deps**: M0.5-A
 
 ### M1.2 [ ] 实现 SentinelEngine、EntryLease、Slot/SlotLease、SlotChain
 - **Deliverable**:
@@ -423,15 +464,38 @@
   - 5 类规则都有稳定契约
   - 组合行为有证据
   - 全部 deterministic(Monotonic Clock)
-- **Test ID**: SEN-CORE-001(完整),SEN-CB-001(完整),SEN-FLOW-001, SEN-PARAM-001
+- **Test ID**: SEN-CORE-001(完整),SEN-CB-001(完整),SEN-FLOW-001, SEN-PARAM-001, SEN-SYSTEM-001, SEN-AUTH-001
 - **ADR**: 全部
 - **Deps**: M2.1-M2.5 全部
 
+### M2.7 [ ] 定义无第三方依赖的 `TokenService` Protocol + 本地默认实现
+- **背景**: DESIGN.md ADR-SEN-011 要求 1.0 主包**必须预留** `TokenService` Port,Cluster M6+ 填入实现。若 M2 阶段不预留,FlowSlot 完成后再加会重写 FlowSlot。
+- **Deliverable**:
+  - `ports/token_service.py` — `TokenService` Protocol,无 3rd-party 依赖
+    ```python
+    @runtime_checkable
+    class TokenService(Protocol):
+        async def acquire(self, resource: Resource, permits: float) -> TokenResponse: ...
+        async def release(self, token: Token) -> None: ...
+    ```
+  - `slots/_local_token_service.py` — `LocalTokenService`,永远 grant permit(单进程不需要 token 协调)
+  - `SlotChain` 默认用 `LocalTokenService`;`SentinelEngine(token_service=...)` 可注入其他实现
+  - FlowSlot 在 acquire 资源时调用 `token_service.acquire()`;若 TokenService 暂时不可用(集群模式)按 fail-safe 策略:1.0 fail-open(单进程 = 永远能拿 token)
+- **Exit Criteria**:
+  - `from atlas_richie.sentinel.ports import TokenService` 成功
+  - `LocalTokenService().acquire(...)` 永远返回 granted
+  - FlowSlot 测试用 mock TokenService 验证「token 申请/释放」调用路径
+  - **不**依赖任何网络 / 进程间通信(零 3rd-party 兼容 1.0 主包约束)
+- **Test ID**: SEN-CORE-001(part:flow)
+- **ADR**: ADR-SEN-011
+- **Deps**: M2.1
+
 ### M2 Exit [ ] (子项全部完成)
-- **Exit Criteria**(§21):
+- **Exit Criteria**(§21 + ADR-SEN-011):
   - 五类规则均有稳定契约、确定性测试和组合行为证据
   - 全部 `Outcome` 区分在测试中验证(ADMITTED vs BLOCKED)
   - 状态机非法迁移 0 例外
+  - **`TokenService` Port 已在主包定义 + `LocalTokenService` 默认实现就位**(M2.7 退出条件)
 
 ---
 
@@ -477,7 +541,10 @@
   - 默认 HTTP 映射:FLOW/PARAM_FLOW/CONCURRENCY → 429;SYSTEM_OVERLOAD → 503;CIRCUIT_OPEN → 503 + retry-after;AUTHORITY_DENIED → 403;INTERNAL_CONFIGURATION → 500
   - 响应体:稳定 code / resource / reason / request_id;**不**暴露规则全文 / 阈值 / 堆栈
 - **Exit Criteria**:
-  - 用裸 ASGI protocol messages(httpx 写请求)测试,不依赖 Starlette / FastAPI TestClient
+  - **测试方式二选一,不要混写**:
+    - (A) 单元 / 集成:直接驱动 ASGI callable — 调用方提供 `scope` dict + `receive` async generator + `send` async collector,手工 `await middleware(scope, receive, send)` 验证(http 场景用 `httpx.AsyncClient(transport=ASGITransport(app=middleware))` 是 httpx 的 ASGI 适配,**不**是直接 ASGI 协议测试,可选)
+    - (B) 端到端:`uvicorn` 子进程拉起服务 + `httpx.AsyncClient` 通过真实 HTTP 请求验证
+  - **不**用 `starlette.testclient.TestClient` / `fastapi.testclient.TestClient`(违反纯 ASGI 约束)
   - lifespan scope 不被 ingress QPS 计入
   - 5 种 BlockReason 的 HTTP 状态 + body 正确
   - 客户端断连 → CANCELLED,不计入业务异常
@@ -520,10 +587,14 @@
 ### M3.6 [ ] 完成真实多 worker 语义测试
 - **Deliverable**:
   - 启动 2 个 ASGI worker(uvicorn workers=2)
-  - 验证 per-process 阈值:`configured threshold × worker count = approximate process-group capacity` 在文档和测试中明确
+  - **测试重点**:每个 worker 的规则和指标**彼此隔离**(per-process 语义)
+  - **不**断言"configured threshold × worker count = capacity"(负载分配不均时仅是近似,非保证值)
+  - 文档明确说明 per-process 语义,Cluster 模式下才有跨 worker 精确总量
   - Dashboard 不会把单 worker 数据描述成整个服务
 - **Exit Criteria**:
-  - 2 worker 跑 30s 持续,每个 worker 的 metric 报告正确
+  - 2 worker 跑 30s 持续,每个 worker 的 metric 报告**独立**正确
+  - 同一 resource 在 worker A 累计的 pass_count + worker B 累计的 pass_count ≠ 全局 pass_count(各自独立)
+  - 同一 resource 触发的 BlockReason 在两个 worker 中分别记录
   - 测试输出明确说明 per-process 语义
 - **Test ID**: SEN-MP-001
 - **ADR**: ADR-SEN-008
@@ -533,8 +604,8 @@
 - **Exit Criteria**(§21):
   - 任意 asyncio ASGI 应用无需依赖 FastAPI/Starlette 即可接入
   - 一个 demo:`uvicorn examples.asgi_demo:app --workers 4` 跑通
-  - 6 种 ASGI 协议场景都验证过
-  - 多 worker 语义清楚
+  - 6 种 ASGI 协议场景都验证过(普通/流式/断连/取消/异常/lifespan)
+  - 多 worker per-process 语义清楚(无虚假容量保证)
 
 ---
 
@@ -571,13 +642,15 @@
 
 ### M4.3 [ ] 包装响应流并在 EOF/aclose 释放
 - **Deliverable**:
-  - 包装 response stream,在 `__aexit__` 释放 permit
-  - 显式处理 aclose 调用一次
-  - permit 释放是 idempotent
+  - 包装 response stream,**在 EOF 或 `aclose()` 时释放 permit**(不是 `__aexit__` —— HTTPX 用户常用 `await response.aread()` 读 body,不需要 `__aexit__` 入口)
+  - permit 释放是 idempotent,多个 aclose 调用只释放一次
+  - 提供 `__aenter__` / `__aexit__` 是为了在 `async with client.stream(...) as response` 模式下也能正确释放
 - **Exit Criteria**:
-  - 流式响应(分多次 read)期间 permit 持锁
-  - EOF 释放,第二次 aclose 幂等
-  - 异常时仍释放
+  - 流式响应(分多次 `aread()`)期间 permit 持锁
+  - **EOF(流读完)** → 释放 permit
+  - **`aclose()`** 调用 → 释放 permit;第二次 aclose 幂等
+  - **异常** → 释放 permit
+  - 测试用 `httpx.AsyncClient` + 流式 response 验证 4 种释放路径
 - **Test ID**: SEN-HTTPX-001
 - **ADR**: ADR-SEN-009
 - **Deps**: M4.2
@@ -585,10 +658,12 @@
 ### M4.4 [ ] 实现 OutcomeClassifier
 - **Deliverable**:
   - 把连接错误 / 超时 / 5xx / 4xx / 2xx / 取消分别映射 Outcome
+  - **HTTPX 实际语义**:响应 5xx **不会**自动抛 `httpx.HTTPStatusError`;只在调用方 `raise_for_status()` 时才抛。OutcomeClassifier 必须**显式**读取 `response.status_code`,**不**依赖 `raise_for_status()` 已调用
   - 默认:只把连接错误、超时、5xx 计为下游故障;4xx 不自动计为
   - 策略可注入(用户可自定义哪些 HTTP 状态算失败)
 - **Exit Criteria**:
   - 6 种 outcome 各自测试
+  - **测试用 `httpx.Response(503)` 构造,显式断言 Classifier 读 status_code 判定失败**(不是 `raise_for_status` 路径)
   - 4xx 默认不触发 circuit breaker
   - 自定义 classifier 可注入
 - **Test ID**: SEN-CB-001(part:http)
@@ -601,17 +676,20 @@
   - 只有调用方**显式组合 `RetryPolicy`**(从 `primitives.retry`)+ `IdempotencyKey` 显式允许 + 把 retry 接入到出站调用链中,5xx 才触发重试
   - 重试时每次真实网络 attempt 重新走 SentinelAsyncTransport 的 permit / 流控 / 熔断
   - 4xx 不视为下游失败(默认),不触发任何 retry/CB
+  - **现有 `IdempotencyKey` 实现是 `StatelessIdempotencyKey` / `NeverIdempotencyKey` / `CallableIdempotencyKey`**(M0.5 保留),**不**是 M4.5 之前假设的 `.always` / `.never`
 - **Deliverable**:
   - `tests/test_composition.py`:
-    - 默认行为测试:连续 5xx 失败只抛 `httpx.HTTPStatusError`,**不**自动 retry
-    - 显式 RetryPolicy 组合测试:`RetryPolicy(max_attempts=3, retriable_exceptions=...)` + `IdempotencyKey.always` → 5xx 触发 3 次尝试,每次 attempt 重新获取 permit
-    - 显式 IdempotencyKey 阻止重试:同上但 `IdempotencyKey.never` → 5xx 不重试
+    - 默认行为测试:连续 5xx 失败 + 调用方**未** `raise_for_status()` → 5xx **不**抛异常(httpx 正常行为);调用方 `raise_for_status()` → 抛 `HTTPStatusError`,但 **不** 自动 retry
+    - 显式 RetryPolicy + `StatelessIdempotencyKey` 组合测试:`RetryPolicy(max_attempts=3, retriable_exceptions=(HTTPStatusError,))` + `StatelessIdempotencyKey()` → 5xx 触发 3 次尝试,每次 attempt 重新获取 permit
+    - 显式 `NeverIdempotencyKey` 阻止重试:同上但 `NeverIdempotencyKey()` → 5xx 不重试(安全策略拒绝)
     - 4xx 不重试(显式 RetryPolicy 也不重试 4xx)
   - `tests/test_circuit_breaker_integration.py`:
-    - 连续 5xx 触发 DegradeRule → 后续请求短路,直到 HALF_OPEN
+    - 连续 5xx(Classifier 检出)触发 DegradeRule → 后续请求短路,直到 HALF_OPEN
 - **Exit Criteria**:
-  - 默认行为测试断言"5xx 不重试"为真
-  - 显式组合测试断言"5xx 重试 N 次"为真
+  - 默认行为测试断言"5xx + 无 raise_for_status 不抛"为真
+  - 默认行为测试断言"5xx + raise_for_status 抛但不自动 retry"为真
+  - 显式 `RetryPolicy` + `StatelessIdempotencyKey` 组合测试断言"5xx 重试 N 次"为真
+  - 显式 `RetryPolicy` + `NeverIdempotencyKey` 组合测试断言"5xx 不重试"为真
   - 4xx 在所有路径下都不重试
   - 真实下游服务测试
 - **Test ID**: SEN-HTTPX-001(part),SEN-CB-001(part)
