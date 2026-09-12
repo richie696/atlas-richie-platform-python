@@ -30,9 +30,7 @@ members = [
   "components/secret/secret-baidu-kms",
   "components/cache/cache-core",
   "components/cache/cache-redis",
-  "components/sentinel/sentinel-primitives",
-  "components/sentinel/sentinel-core",
-  "components/sentinel/sentinel-rules",
+  "components/sentinel/sentinel",
   "components/sentinel/sentinel-source-file",
   "components/sentinel/sentinel-source-nacos",
   "components/sentinel/sentinel-source-redis",
@@ -68,9 +66,7 @@ atlas-richie-secret-ibm-key-protect = { workspace = true }
 atlas-richie-secret-baidu-kms = { workspace = true }
 atlas-richie-cache-core = { workspace = true }
 atlas-richie-cache-redis = { workspace = true }
-atlas-richie-sentinel-primitives = { workspace = true }
-atlas-richie-sentinel-core = { workspace = true }
-atlas-richie-sentinel-rules = { workspace = true }
+atlas-richie-sentinel = { workspace = true }
 atlas-richie-sentinel-source-file = { workspace = true }
 atlas-richie-sentinel-source-nacos = { workspace = true }
 atlas-richie-sentinel-source-redis = { workspace = true }
