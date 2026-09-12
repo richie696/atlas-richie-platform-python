@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .clock import Clock, Sleep, SystemClock, system_sleep
-from .errors import RateLimitExceeded
+from ..errors import RateLimitExceeded
 
 
 @dataclass(frozen=True, slots=True)

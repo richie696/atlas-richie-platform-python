@@ -39,8 +39,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .clock import Clock, RandomSource, Sleep, SystemClock, SystemRandom, system_sleep
-from .errors import RetryExhausted, RetryNotPermitted
+from .clock import Clock, Sleep, SystemClock, system_sleep
+from .random_source import RandomSource, SystemRandom
+from ..errors import RetryExhausted, RetryNotPermitted
 from .idempotency import IdempotencyKey, StatelessIdempotencyKey
 
 

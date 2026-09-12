@@ -49,7 +49,7 @@ from enum import StrEnum
 from typing import Any, Deque
 
 from .clock import Clock, SystemClock
-from .errors import CircuitOpen
+from ..errors import CircuitOpen
 
 
 class CircuitState(StrEnum):
