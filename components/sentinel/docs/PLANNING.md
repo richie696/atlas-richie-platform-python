@@ -53,17 +53,31 @@
 
 ### M0.4 [ ] 创建 atlas-richie-sentinel 主 wheel
 - **Deliverable**:
-  - `components/sentinel/sentinel/pyproject.toml` — name=`atlas-richie-sentinel`, version=`0.2.0`, deps=空数组
-  - `components/sentinel/sentinel/src/atlas_richie/sentinel/__init__.py` — 公开 Facade,显式定义:
+  - `components/sentinel/sentinel/pyproject.toml` — name=`atlas-richie-sentinel`, `[project] version = "0.2.0"`, deps=空数组
+    - **唯一版本源 = `pyproject.toml` 的 `[project] version`**;`__init__.py` 不再硬编码。
+  - `components/sentinel/sentinel/src/atlas_richie/sentinel/__init__.py` — 公开 Facade,版本走 PEP 562 `__getattr__` 懒加载:
     ```python
-    from atlas_richie.sentinel._version import __version__  # 或者直接在 __init__.py 写 __version__ = "0.2.0"
+    from importlib.metadata import version as _pkg_version, PackageNotFoundError
+
+    def __getattr__(name: str) -> str:
+        if name == "__version__":
+            try:
+                return _pkg_version("atlas-richie-sentinel")
+            except PackageNotFoundError:
+                return "0.0.0+local"  # editable / 未 install 兜底
+        raise AttributeError(f"module 'atlas_richie.sentinel' has no attribute {name!r}")
+
+    __all__ = ["__version__"]  # 配合 __getattr__ 用
     ```
-    - 优先用 `__init__.py` 顶部的 module-level `__version__ = "0.2.0"`,跟 wheel version 单点对齐(避免 install 前 import 失败)。
+    - 编辑器/类型检查器友好:`__version__: str` 走 `__getattr__`,不会触发静态分析报错。
   - `components/sentinel/sentinel/README.md` — 4 段:What / Why / Compare / Quick Start
 - **Exit Criteria**:
   - `uv build --package atlas-richie-sentinel` 成功
-  - 在干净 venv `pip install` 后 `python -c "import atlas_richie.sentinel; assert atlas_richie.sentinel.__version__ == '0.2.0'"` 不报错
+  - 在干净 venv `pip install` 后,`python -c "from importlib.metadata import version; assert version('atlas-richie-sentinel') == '0.2.0'"` 不报错(包内 `__version__` 与 distribution metadata 一致)
+  - `python -c "import atlas_richie.sentinel; assert atlas_richie.sentinel.__version__ == '0.2.0'"` 不报错
+  - `grep -E '^__version__\s*=\s*["'\'']' components/sentinel/sentinel/src/atlas_richie/sentinel/__init__.py` 返回 0 行(确认无硬编码)
   - `__init__.py` 不 import 任何第三方包(grep 验证)
+  - **build/publish 门禁**(新增,在 M0.11 验证命令里体现):构建产物(sdist + wheel)的 `METADATA` 与 `pyproject.toml` `[project] version` 字符相等,不等则 `uv publish` 拒绝
 - **Test ID**: —
 - **ADR**: ADR-SEN-002
 - **Deps**: M0.1, M0.2, M0.3
@@ -233,10 +247,32 @@
     - `components/sentinel/docs/M0-skeleton-handoff.md`
     - `components/sentinel/docs/DESIGN.md`
     - `components/sentinel/docs/PLANNING.md`
-  - 根目录 `HANDOFF.md` 验收用**分段 grep**(只查 "当前架构" 段落,不查历史验收日志):
-    - 用 `awk '/^## /{section=$0} /atlas-richie-resilience/ && section ~ /当前架构|Current Architecture/{print FILENAME":"NR":"$0}' HANDOFF.md` 返回 0 行
-    - 显式确认历史验收章节(Phase B.4 / Phase E E2E 等)仍可读、可检索 `atlas-richie-resilience` 字符串(事实记录保留)
-    - 检查完后追加 commit message 一句:"HANDOFF.md 历史事实保留,当前架构段已切换到 Sentinel"
+  - 根目录 `HANDOFF.md` 验收用**确定性 sentinel 标记**(M0.9 实施时在 `## 2. 总体架构决策` 段的开头/结尾插入明确注释,避免"假绿"):
+    - M0.9 实施时在 `HANDOFF.md` 写入:
+      ```markdown
+      ## 2. 总体架构决策
+      <!-- SENTINEL_HANDOFF_CURRENT_ARCH_START -->
+
+      ...(原"总体架构决策"内容,但 `atlas-richie-resilience` 描述替换为"Sentinel 主包已收编, 详见 components/sentinel/docs/DESIGN.md")...
+
+      <!-- SENTINEL_HANDOFF_CURRENT_ARCH_END -->
+      ```
+    - 验收命令(基于明确注释区间,不依赖章节标题文案):
+      ```bash
+      awk '
+        /<!-- SENTINEL_HANDOFF_CURRENT_ARCH_START -->/{in=1; next}
+        /<!-- SENTINEL_HANDOFF_CURRENT_ARCH_END -->/{in=0; next}
+        in && /atlas-richie-resilience/{print FILENAME":"NR":"$0; found=1}
+        END{exit found?1:0}
+      ' HANDOFF.md
+      ```
+      返回码 0 + 输出 0 行 = 当前架构段已无 `atlas-richie-resilience` 字样。
+    - 显式确认历史验收章节(Phase B.4 / Phase E E2E 等)仍可读、可检索 `atlas-richie-resilience` 字符串(事实记录保留):
+      ```bash
+      awk '/^## 15\. R-220/{found=1} found && /atlas-richie-resilience/{c++} END{exit c>=1?0:1}' HANDOFF.md
+      ```
+      返回码 0 = 历史事实保留成功。
+    - 检查完后追加 commit message 一句:"HANDOFF.md 历史事实保留,当前架构段已切换到 Sentinel(sentinel 标记区间无 resilience 引用)"
   - `uv lock` 成功
   - 全仓 release/verify 脚本不引用 `atlas-richie-resilience`
   - `HANDOFF.md` 仍包含历史 Phase B-E 验收事实(事实保留),但"当前架构"段落已更新
@@ -540,6 +576,14 @@
 - **Deliverable**:
   - `ports/token.py` — 冻结值对象,无 3rd-party 依赖(`dataclasses.dataclass(frozen=True, slots=True)`):
     ```python
+    class TokenDenyReason(StrEnum):
+        QUEUE_FULL            = "queue_full"          # 等待队列满
+        REMOTE_UNAVAILABLE    = "remote_unavailable"  # 集群 token 服务不可达
+        RATE_LIMITED          = "rate_limited"        # 集群 rate-limit 拒绝
+        FAIL_OPEN             = "fail_open"           # fail-open 策略,本地回退放行
+        SHUTTING_DOWN         = "shutting_down"       # 节点关闭中
+        UNKNOWN               = "unknown"             # 兜底
+
     @dataclass(frozen=True, slots=True)
     class Token:
         resource: str
@@ -553,9 +597,11 @@
     class TokenResponse:
         granted: bool
         token: Token | None       # granted=False 时为 None
-        reason: str | None        # "queue_full" / "fail_open" / "remote_unavailable"
+        reason: TokenDenyReason   # granted=True 时为 TokenDenyReason.FAIL_OPEN(标记本地放行)或自定 NOT_APPLICABLE
         wait_ns: int              # 0 = 立即;>0 = 建议等待纳秒
     ```
+    - **永不暴露裸字符串**:`reason` 必传 `TokenDenyReason` 枚举值;`LocalTokenService` 放行时传 `TokenDenyReason.FAIL_OPEN` 而不是 `None`,便于审计。
+    - 加 `class NotApplicableReason(TokenDenyReason):` 内部 sentinel? 不,直接复用 `FAIL_OPEN` 配 `granted=True` 即可,避免语义分裂。
   - `ports/token_service.py` — `TokenService` Protocol,无 3rd-party 依赖
     ```python
     @runtime_checkable
