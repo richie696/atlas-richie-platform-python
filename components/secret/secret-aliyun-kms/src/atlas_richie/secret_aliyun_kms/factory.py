@@ -1,58 +1,49 @@
-"""Aliyun backend factory — `SecretProviderFactory` + 内部 `AliyunClientFactory`。
+"""`AliyunSecretProviderFactory` — 框架入口 + 内部 `AliyunClientFactory` SDK 适配。
 
 中文
 ----
 对位 Java `cn.richie696.component.secret.provider.aliyun.AliyunSecretBootstrapProviderFactory`
-+ 私有 `AliyunClientFactory`。Java 端一个类做 SDK 构造,另一个做
-bootstrap;Python 端把两者合一放在 `factory.py`,framework 端只看到
-`SecretProviderFactory` Protocol。
++ `AliyunClientFactory`。两个 factory 分工:
 
-`AliyunClientFactory`(`create_gateway(properties)`):负责
-- **import-safe**:不强制要求 `alibabacloud_kms20160120` 已安装;
-  SDK 在 `create_gateway` 内 lazy import(对位 R-232 决定的 optional
-  dependency 原则,跟 secret-vault / secret-aws-kms 一致)
-- 构造 `alibabacloud_kms20160120.Client`,配置 region / endpoint /
-  protocol / 超时 / retries
-- 把 SDK client 适配成 `AliyunKmsGateway` Protocol(3 个方法),
-  内部把 SDK 的 `GetSecretValueResponse` 转成
-  `AliyunGetSecretValueResponse` 冻结 dataclass,SDK 类型不穿透
+- `AliyunClientFactory` — 内部 SDK 适配器;`create_gateway(properties)`
+  懒加载 `alibabacloud_kms20160120.client.Client` + 必要的
+  `alibabacloud_tea_openapi` / `alibabacloud_credentials` 依赖,
+  包成 `AliyunKmsGateway` Protocol 实例。SDK 缺失时抛
+  `SecretConfigurationException("SEC-BOOT-003", ...)`。
+- `AliyunSecretProviderFactory` — `SecretProviderFactory` Protocol
+  实现;`name` 形如 `aliyun-{region}`(无 region 时 `aliyun-default`),
+  `backend = SecretBackend.ALIYUN`,`capabilities` 静态固定
+  (`SECRET_READ` / `SECRET_VERSIONING` / `KEY_WRAP` / `KEY_UNWRAP`),
+  `version = "0.2.0"`。`create(configuration) -> SecretProviderSession`
+  三步走:resolve → build gateway → construct `AliyunSecretClient`。
 
-`AliyunSecretProviderFactory`(`SecretProviderFactory` Protocol 实现):
-- `name` = `f"aliyun-{region}"`
-- `backend` = `SecretBackend.ALIYUN`(framework `metadata.SecretBackend`
-  枚举已包含 `ALIYUN = "aliyun"`)
-- `capability` = 静态声明(`can_read=True / can_write=False /
-  can_rotate=True / can_list=False / encrypts_at_rest=True /
-  signs_values=False / cacheable=True`,对位 Java 4-SPI scope)
-- `version` = `"0.2.0"`
-- `create(configuration) -> SecretProviderSession`:
-  1. 用 `AliyunClientFactory` 拿 `AliyunKmsGateway`
-  2. 用 `AliyunConfigurationResolver` 拿 `ResolvedAliyunConfiguration`
-  3. 构造 `AliyunSecretClient`
-  4. `close_action` 不需要 — gateway adapter 自身在 `close()` 中处理
-
-错误转译:
-- SDK 缺失 / 不可导入 → `SecretConfigurationException("SEC-BOOT-003", ...)`
-- SDK 初始化失败 → `SecretConfigurationException("SEC-PROVIDER-001", ...)`
-- `client.get_secret_value` / `encrypt` / `decrypt` 失败 → 由 client.py
-  转译为 `SecretException` / `SecretCryptoException`
+**Import-safe**:模块顶层不 import 任何 `alibabacloud_*` 包;
+`import atlas_richie.secret_aliyun_kms` 永远不会触发 SDK 加载。
+SDK 只在 `AliyunClientFactory.create_gateway(properties)` 调用栈中
+被 `import` (用 `try/except ImportError` 守护)。
 
 English
 --------
-Combined factory for the Aliyun backend. Mirrors Java
-`AliyunSecretBootstrapProviderFactory` + private
-`AliyunClientFactory`. The Alibaba SDK is imported lazily
-inside `create_gateway` so the wheel is import-safe even
-without the SDK installed (matches the `optional-dependency`
-convention from R-232).
+Framework entry. Two factories split responsibility: the internal
+`AliyunClientFactory` lazily loads the Alibaba SDK and adapts it to
+the `AliyunKmsGateway` Protocol; the public
+`AliyunSecretProviderFactory` is a `SecretProviderFactory` Protocol
+implementation that owns the resolve → build gateway → construct
+client pipeline.
+
+The module is import-safe: top-level imports do NOT touch
+`alibabacloud_*`. The SDK is only loaded inside
+`AliyunClientFactory.create_gateway(...)`, which is itself called
+only from `AliyunSecretProviderFactory.create(...)`. Developers
+without Alibaba credentials can still `import
+atlas_richie.secret_aliyun_kms` to exercise properties /
+configuration / unit tests driven by `FakeAliyunGateway`.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
-from typing import Protocol, runtime_checkable
-from urllib.parse import urlparse
+from typing import TYPE_CHECKING
 
 from atlas_richie.secret.errors import SecretConfigurationException
 from atlas_richie.secret.metadata import SecretBackend, SecretCapability
@@ -60,10 +51,8 @@ from atlas_richie.secret.provider.configuration import SecretProviderConfigurati
 from atlas_richie.secret.provider.descriptor import SecretProviderDescriptor
 from atlas_richie.secret.provider.factory import SecretProviderFactory
 from atlas_richie.secret.provider.session import SecretProviderSession
+
 from atlas_richie.secret_aliyun_kms.client import (
-    AliyunDecryptResponse,
-    AliyunEncryptResponse,
-    AliyunGetSecretValueResponse,
     AliyunKmsGateway,
     AliyunSecretClient,
 )
@@ -73,284 +62,293 @@ from atlas_richie.secret_aliyun_kms.configuration import (
 )
 from atlas_richie.secret_aliyun_kms.properties import AliyunSecretProperties
 
+if TYPE_CHECKING:
+    pass
+
 _logger = logging.getLogger("atlas_richie.secret_aliyun_kms.factory")
 
+# Aliyun Secrets Manager 2016-01-20 SDK entry point (the Python
+# equivalent of Java `com.aliyun.kms20160120.Client`). We deliberately
+# do NOT import it at module top level so this wheel is import-safe
+# on machines that never call `create(...)`.
+_KMS_SDK_CLIENT = "alibabacloud_kms20160120.client:Client"
+_KMS_SDK_MODELS = "alibabacloud_kms20160120.models"
+_TEA_OPENAPI_CLIENT = "alibabacloud_tea_openapi.client:Client"
+_CREDENTIALS_CLIENT = "alibabacloud_credentials.client:Client"
 
-@runtime_checkable
-class _SdkClientFactory(Protocol):
-    """Test seam: tests may inject a pre-built `AliyunKmsGateway`
-    to skip the Alibaba SDK bootstrap path entirely.
-    """
+# Default provider id when the caller does not configure one. Mirrors
+# Java's `AliyunSecretBootstrapProviderFactory` default.
+_DEFAULT_PROVIDER_ID = "aliyun-default"
 
-    def __call__(self, properties: AliyunSecretProperties) -> AliyunKmsGateway: ...
+# Stable, non-Protocol exports re-exposed for `from factory import X`
+# convenience.
+_ = (SecretCapability,)
 
 
-def _aliyun_capability() -> SecretCapability:
-    """Static capability for the Aliyun backend (mirrors Java
-    `Set<SecretCapability>` for `AliyunSecretClient`):
-    - SECRET_READ (SM GetSecretValue)
-    - SECRET_VERSIONING (SM VersionId + VersionStage)
-    - KEY_WRAP / KEY_UNWRAP (KMS Encrypt / Decrypt)
-    - encrypts_at_rest=True (SM encrypts at rest by default
-      when backed by KMS)
+def _aliyun_provider_capability() -> SecretCapability:
+    """Static capability declared by the Alibaba Cloud backend.
+
+    Mirrors the framework's view of the aliyun backend: same
+    capability as `ResolvedAliyunConfiguration.capability` (so
+    `factory.capability` and `session.descriptor.capability` are
+    consistent across the lifetime of a session).
     """
     return SecretCapability(
         can_read=True,
-        can_write=False,  # 1:1 with Java: no SecretWriter SPI
+        can_write=False,
         can_rotate=True,
-        can_list=False,   # 1:1 with Java: Aliyun SDK 20160120 has no list
+        can_list=False,
         encrypts_at_rest=True,
         signs_values=False,
         cacheable=True,
     )
 
 
-def _split_endpoint(endpoint: str) -> tuple[str, str]:
-    """Split ``https://host[:port]`` into ``(scheme_upper, authority)``.
-
-    Mirrors Java `AliyunClientFactory.endpoint` + `protocol`.
-    """
-    parsed = urlparse(endpoint)
-    scheme = (parsed.scheme or "https").upper()
-    host = parsed.hostname or ""
-    if parsed.port:
-        authority = f"{host}:{parsed.port}"
-    else:
-        authority = host
-    return scheme, authority
-
-
 class AliyunClientFactory:
-    """Build an `AliyunKmsGateway` from `AliyunSecretProperties`.
+    """Internal SDK adapter. Lazily imports the Alibaba SDK.
 
-    The Alibaba SDK is imported lazily inside `create_gateway`
-    so the wheel remains import-safe without the SDK installed.
-    The default factory tries the real `alibabacloud_kms20160120`
-    SDK; tests inject a `FakeAliyunGateway` via the
-    `_SdkClientFactory` parameter on `AliyunSecretProviderFactory`.
+    `create_gateway(properties)` returns an `AliyunKmsGateway` that
+    wraps `alibabacloud_kms20160120.client.Client`. The adapter
+    translates the SDK's mutable model classes into the frozen
+    response dataclasses defined in `client.py`, so the public
+    surface of this wheel never references SDK types.
+
+    Import failures are translated to
+    `SecretConfigurationException("SEC-BOOT-003", ...)` so callers
+    can install the `[kms]` extra to recover.
     """
 
     __slots__ = ()
 
     def create_gateway(self, properties: AliyunSecretProperties) -> AliyunKmsGateway:
+        """Build an `AliyunKmsGateway` for `properties`.
+
+        Args:
+            properties: Validated `AliyunSecretProperties` (typically
+                produced by `AliyunConfigurationResolver.resolve(...)`).
+
+        Raises:
+            SecretConfigurationException: When the Alibaba SDK is not
+                installed, the user has not provided the required
+                region, or the SDK raises a configuration error
+                during client construction.
+        """
         try:
-            from alibabacloud_kms20160120.client import Client as KmsSdkClient  # type: ignore[import-not-found]
-            from alibabacloud_tea_openapi import models as tea_models  # type: ignore[import-not-found]
-        except ImportError as error:
-            raise SecretConfigurationException(
-                f"aliyun: SDK not installed ({error.name!r}); "
-                f"pip install 'atlas-richie-secret-aliyun-kms[kms]' "
-                f"(SEC-BOOT-003)",
-            ) from error
-        try:
-            config = tea_models.Config()
-            if properties.endpoint:
-                protocol, authority = _split_endpoint(properties.endpoint)
-                config.protocol = protocol
-                config.endpoint = authority
-            else:
-                config.protocol = "HTTPS"
-                config.endpoint = f"kms.{properties.region}.aliyuncs.com"
-            sdk = KmsSdkClient(config)
-            return _AliyunSdkAdapter(sdk)
+            return self._build_gateway(properties)
         except SecretConfigurationException:
             raise
+        except ImportError as error:
+            raise SecretConfigurationException(
+                "SEC-BOOT-003 aliyun: Aliyun KMS SDK not installed; "
+                "pip install 'atlas-richie-secret-aliyun-kms[kms]'",
+            ) from error
         except Exception as error:  # noqa: BLE001
             raise SecretConfigurationException(
-                f"aliyun: cannot initialize KMS SDK "
-                f"(region={properties.region!r}): {error} (SEC-PROVIDER-001)",
+                f"SEC-BOOT-003 aliyun: failed to build SDK client: {error}",
             ) from error
 
+    @staticmethod
+    def _build_gateway(properties: AliyunSecretProperties) -> AliyunKmsGateway:
+        # Lazy imports — see module docstring.
+        from alibabacloud_credentials.client import Client as CredentialsClient  # type: ignore[import-not-found]
+        from alibabacloud_kms20160120.client import Client as KmsClient  # type: ignore[import-not-found]
+        from alibabacloud_tea_openapi import models as open_api_models  # type: ignore[import-not-found]
+        from alibabacloud_tea_openapi.client import Client as TeaClient  # type: ignore[import-not-found]
 
-def _default_client_factory(properties: AliyunSecretProperties) -> AliyunKmsGateway:
-    return AliyunClientFactory().create_gateway(properties)
+        endpoint = properties.endpoint or f"kms.{properties.region}.aliyuncs.com"
+        credentials_client = CredentialsClient()
+        config = open_api_models.Config(
+            credential=credentials_client,
+            endpoint=endpoint,
+            connect_timeout=properties.connect_timeout_seconds * 1000,
+            read_timeout=properties.read_timeout_seconds * 1000,
+        )
+        if properties.ca_file:
+            config.ca_cert_path = properties.ca_file
+        kms_client = KmsClient(config)
+        return _AliyunSdkGateway(
+            kms_client=kms_client,
+            tea_client=TeaClient,
+            max_attempts=properties.max_attempts,
+        )
 
 
-class _AliyunSdkAdapter:
-    """Adapter from `alibabacloud_kms20160120.Client` to `AliyunKmsGateway`.
+class _AliyunSdkGateway:
+    """Adapter that translates the Alibaba SDK's mutable models into
+    the frozen response dataclasses.
 
-    Translates SDK request / response models to / from the
-    framework's frozen dataclass responses. The SDK types
-    never leave this class.
+    This class is private to the `factory` module; tests use
+    `FakeAliyunGateway` from `tests/conftest.py` instead.
     """
 
-    __slots__ = ("_sdk",)
+    __slots__ = ("_kms_client", "_max_attempts", "_tea_client")
 
-    def __init__(self, sdk: object) -> None:
-        self._sdk = sdk
+    def __init__(self, kms_client, tea_client, *, max_attempts: int) -> None:
+        self._kms_client = kms_client
+        self._tea_client = tea_client
+        self._max_attempts = max_attempts
 
     def get_secret_value(
         self,
         secret_name: str,
         version_id: str | None,
         version_stage: str | None,
-    ) -> AliyunGetSecretValueResponse | None:
-        models = _import_sdk_models()
-        request = models.GetSecretValueRequest()
-        request.secret_name = secret_name
-        if version_id is not None:
+    ):
+        # Lazy import so the SDK is only loaded when this method
+        # actually runs (not at adapter construction time).
+        from alibabacloud_kms20160120 import models as kms_models  # type: ignore[import-not-found]
+
+        request = kms_models.GetSecretValueRequest(
+            secret_name=secret_name,
+        )
+        if version_id:
             request.version_id = version_id
-        if version_stage is not None:
+        if version_stage:
             request.version_stage = version_stage
+        runtime = self._runtime_options()
         try:
-            response = self._sdk.get_secret_value_with_options(request, None)
+            response = self._kms_client.get_secret_value_with_options(request, runtime)
         except Exception as error:  # noqa: BLE001
-            if _is_not_found(error):
+            code = _extract_vendor_code(error)
+            if code == "Forbidden.ResourceNotFound":
                 return None
             raise
-        body = getattr(response, "body", None) or response
-        stages: tuple[str, ...] = ()
-        stages_attr = getattr(body, "version_stages", None)
-        if stages_attr is not None:
-            inner = getattr(stages_attr, "version_stage", None) or []
-            stages = tuple(str(s) for s in inner)
+        from atlas_richie.secret_aliyun_kms.client import AliyunGetSecretValueResponse
+        from datetime import datetime as _dt, timezone as _tz
+
+        body = getattr(response, "body", response)
+        create_time = getattr(body, "create_time", None)
+        if create_time is not None and not isinstance(create_time, _dt):
+            create_time = _dt.now(tz=_tz.utc)
+        stages = getattr(body, "version_stages", None) or ()
         return AliyunGetSecretValueResponse(
-            secret_name=secret_name,
-            secret_data=str(getattr(body, "secret_data", "") or ""),
-            secret_data_type=str(getattr(body, "secret_data_type", "") or "text"),
-            version_id=str(getattr(body, "version_id", "") or ""),
-            version_stages=stages,
-            create_time=getattr(body, "create_time", None),
-            request_id=_extract_request_id(response),
+            secret_name=getattr(body, "secret_name", secret_name),
+            secret_data=getattr(body, "secret_data", "") or "",
+            secret_data_type=getattr(body, "secret_data_type", "Text") or "Text",
+            version_id=getattr(body, "version_id", "") or "",
+            version_stages=tuple(stages),
+            create_time=create_time,
+            request_id=getattr(response, "request_id", "") or getattr(body, "request_id", "") or "",
         )
 
-    def encrypt(
-        self,
-        key_id: str,
-        plaintext_b64: str,
-        encryption_context: Mapping[str, str],
-    ) -> AliyunEncryptResponse:
-        models = _import_sdk_models()
-        request = models.EncryptRequest()
-        request.key_id = key_id
-        request.plaintext = plaintext_b64
+    def encrypt(self, key_id, plaintext_b64, encryption_context):
+        from alibabacloud_kms20160120 import models as kms_models  # type: ignore[import-not-found]
+        from atlas_richie.secret_aliyun_kms.client import AliyunEncryptResponse
+
+        request = kms_models.EncryptRequest(
+            key_id=key_id,
+            plaintext=plaintext_b64,
+        )
         if encryption_context:
             request.encryption_context = dict(encryption_context)
-        response = self._sdk.encrypt_with_options(request, None)
-        body = getattr(response, "body", None) or response
+        runtime = self._runtime_options()
+        response = self._kms_client.encrypt_with_options(request, runtime)
+        body = getattr(response, "body", response)
         return AliyunEncryptResponse(
-            key_id=str(getattr(body, "key_id", "") or ""),
-            ciphertext_blob=str(getattr(body, "ciphertext_blob", "") or ""),
-            request_id=_extract_request_id(response),
+            ciphertext_blob=getattr(body, "ciphertext_blob", "") or "",
+            key_id=getattr(body, "key_id", key_id) or key_id,
+            request_id=getattr(response, "request_id", "") or getattr(body, "request_id", "") or "",
         )
 
-    def decrypt(
-        self,
-        ciphertext_blob: str,
-        encryption_context: Mapping[str, str],
-    ) -> AliyunDecryptResponse:
-        models = _import_sdk_models()
-        request = models.DecryptRequest()
-        request.ciphertext_blob = ciphertext_blob
+    def decrypt(self, ciphertext_blob, encryption_context):
+        from alibabacloud_kms20160120 import models as kms_models  # type: ignore[import-not-found]
+        from atlas_richie.secret_aliyun_kms.client import AliyunDecryptResponse
+
+        request = kms_models.DecryptRequest(ciphertext_blob=ciphertext_blob)
         if encryption_context:
             request.encryption_context = dict(encryption_context)
-        response = self._sdk.decrypt_with_options(request, None)
-        body = getattr(response, "body", None) or response
+        runtime = self._runtime_options()
+        response = self._kms_client.decrypt_with_options(request, runtime)
+        body = getattr(response, "body", response)
         return AliyunDecryptResponse(
-            key_id=str(getattr(body, "key_id", "") or ""),
-            plaintext=str(getattr(body, "plaintext", "") or ""),
-            request_id=_extract_request_id(response),
+            plaintext=getattr(body, "plaintext", "") or "",
+            key_id=getattr(body, "key_id", "") or "",
+            request_id=getattr(response, "request_id", "") or getattr(body, "request_id", "") or "",
         )
 
     def close(self) -> None:
-        # The Alibaba SDK `Client` does not own sockets directly;
-        # the underlying HTTP session is closed via gc.
-        return None
+        close = getattr(self._kms_client, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # noqa: BLE001
+                _logger.exception("aliyun: error during SDK client close")
+
+    def _runtime_options(self):
+        from alibabacloud_tea_openapi import models as open_api_models  # type: ignore[import-not-found]
+
+        return open_api_models.RuntimeOptions(
+            autoretry=True,
+            max_attempts=self._max_attempts,
+        )
 
 
-def _import_sdk_models() -> object:
-    try:
-        from alibabacloud_kms20160120 import models  # type: ignore[import-not-found]
-    except ImportError as error:
-        raise SecretConfigurationException(
-            f"aliyun: SDK not installed ({error.name!r}) (SEC-BOOT-003)",
-        ) from error
-    return models
+def _extract_vendor_code(error: BaseException) -> str:
+    """Best-effort vendor code extraction for the Alibaba SDK.
 
-
-def _extract_request_id(response: object) -> str | None:
-    headers = getattr(response, "headers", None)
-    if headers is None:
-        return None
-    if isinstance(headers, Mapping):
-        return headers.get("x-acs-request-id")
-    getter = getattr(headers, "get", None)
-    if getter is None:
-        return None
-    try:
-        return getter("x-acs-request-id")
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _is_not_found(error: BaseException) -> bool:
-    """Heuristic detection of Aliyun's `TeaException` not-found variant.
-
-    Java's `AliyunSecretClient` checks
-    `SECRET_NOT_FOUND_CODES.contains(exception.getCode().trim())`
-    where `SECRET_NOT_FOUND_CODES = {"Forbidden.ResourceNotFound"}`.
-    The Python SDK's exception class is `TeaException`; we look at
-    the `.code` attribute and fall back to scanning the message
-    for robustness across SDK versions.
+    Mirrors the client-side `_extract_sdk_code`; kept private to the
+    factory module so the public surface does not re-expose it.
     """
-    code = getattr(error, "code", None)
-    if code and str(code).strip() == "Forbidden.ResourceNotFound":
-        return True
-    return "Forbidden.ResourceNotFound" in str(error)
+    for attr in ("code", "errorCode", "Code"):
+        value = getattr(error, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return ""
 
 
 class AliyunSecretProviderFactory:
-    """`SecretProviderFactory` for the Aliyun backend."""
+    """Framework entry point. Implements `SecretProviderFactory`.
+
+    Construct with no arguments; the factory loads
+    `AliyunSecretProperties` lazily from environment variables on
+    `create(...)`. Callers may also pass an explicit
+    `AliyunSecretProperties` instance to `create(configuration)`,
+    or pre-build a `ResolvedAliyunConfiguration` for advanced
+    scenarios (e.g. in-process reuse of a resolved configuration
+    across multiple sessions).
+    """
 
     __slots__ = (
-        "_client_factory",
-        "_configuration_resolver",
-        "_descriptor_backend",
-        "_name_override",
-        "_properties",
-        "_version",
+        "_default_properties",
+        "_provider_id_template",
+        "_resolver",
     )
 
     def __init__(
         self,
-        properties: AliyunSecretProperties,
+        properties: AliyunSecretProperties | None = None,
         *,
-        name: str | None = None,
-        version: str = "0.2.0",
-        client_factory: _SdkClientFactory | None = None,
-        configuration_resolver: AliyunConfigurationResolver | None = None,
-        descriptor_backend: SecretBackend = SecretBackend.ALIYUN,
+        provider_id: str | None = None,
     ) -> None:
-        self._properties = properties
-        self._name_override = name
-        self._version = version
-        self._client_factory = client_factory or _default_client_factory
-        self._configuration_resolver = (
-            configuration_resolver or AliyunConfigurationResolver()
-        )
-        self._descriptor_backend = descriptor_backend
-
-    @property
-    def properties(self) -> AliyunSecretProperties:
-        return self._properties
+        self._default_properties = properties
+        self._provider_id_template = provider_id or _DEFAULT_PROVIDER_ID
+        self._resolver = AliyunConfigurationResolver()
 
     @property
     def name(self) -> str:
-        if self._name_override is not None:
-            return self._name_override
-        return f"aliyun-{self._properties.region}"
+        """Stable identifier for this backend.
+
+        Computed as `aliyun-{region}` when a region is configured,
+        falling back to `aliyun-default` when no region is set in
+        the default properties. The framework uses this as
+        `SecretProviderDescriptor.name`.
+        """
+        region = (self._default_properties.region if self._default_properties else None) or ""
+        if not region:
+            return _DEFAULT_PROVIDER_ID
+        return f"aliyun-{region}"
 
     @property
     def backend(self) -> SecretBackend:
-        return self._descriptor_backend
+        return SecretBackend.ALIYUN
 
     @property
     def capability(self) -> SecretCapability:
-        return _aliyun_capability()
+        return _aliyun_provider_capability()
 
     @property
     def version(self) -> str:
-        return self._version
+        return "0.2.0"
 
     def descriptor(self) -> SecretProviderDescriptor:
         return SecretProviderDescriptor(
@@ -361,31 +359,70 @@ class AliyunSecretProviderFactory:
         )
 
     def default_configuration(self) -> SecretProviderConfiguration:
+        """Return a `SecretProviderConfiguration` derived from the
+        default properties (or from environment variables when no
+        properties were passed to the constructor).
+        """
+        properties = self._load_default_properties()
         return SecretProviderConfiguration(
-            name=self.name,
-            parameters={},
-            timeout_seconds=self._properties.read_timeout_seconds,
-            retries=self._properties.max_attempts,
-            namespace=self._properties.region,
+            name=self._compute_provider_id(properties),
+            parameters={
+                "region": properties.region,
+            },
+            timeout_seconds=properties.read_timeout_seconds,
+            retries=properties.max_attempts,
+            namespace=properties.region,
         )
 
     def create(
         self,
         configuration: SecretProviderConfiguration,
     ) -> SecretProviderSession:
-        gateway = self._client_factory(self._properties)
-        resolved = self._configuration_resolver.resolve(
-            self._properties,
-            provider_id=configuration.name or self.name,
+        """Build a fresh `AliyunSecretClient` for `configuration`.
+
+        Loads the default `AliyunSecretProperties` (env-driven when
+        none was supplied to the constructor), resolves it through
+        `AliyunConfigurationResolver`, builds the gateway via
+        `AliyunClientFactory.create_gateway(...)`, and constructs
+        the client. The client is configured to close the gateway
+        when `session.close()` is called.
+        """
+        properties = self._load_default_properties()
+        provider_id = configuration.name or self._compute_provider_id(properties)
+        resolved = self._resolver.resolve(
+            properties,
+            provider_id=provider_id,
         )
-        return AliyunSecretClient(
+        gateway_factory = AliyunClientFactory()
+        gateway = gateway_factory.create_gateway(resolved.properties)
+        # Wrap the gateway so the session's `close()` triggers the
+        # SDK's cleanup without leaking references.
+        session = AliyunSecretClient(
             resolved=resolved,
             gateway=gateway,
-            descriptor_backend=self._descriptor_backend,
+            close_action=None,
         )
+        return session
+
+    # --- helpers --------------------------------------------------------
+
+    def _load_default_properties(self) -> AliyunSecretProperties:
+        if self._default_properties is not None:
+            return self._default_properties
+        # Pydantic-settings resolves from environment + `.env` on
+        # construction; we just instantiate it.
+        return AliyunSecretProperties()
+
+    def _compute_provider_id(self, properties: AliyunSecretProperties) -> str:
+        if self._provider_id_template and self._provider_id_template != _DEFAULT_PROVIDER_ID:
+            return self._provider_id_template
+        if properties.region:
+            return f"aliyun-{properties.region}"
+        return _DEFAULT_PROVIDER_ID
 
 
 __all__ = [
     "AliyunClientFactory",
     "AliyunSecretProviderFactory",
+    "ResolvedAliyunConfiguration",
 ]

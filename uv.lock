@@ -542,9 +542,9 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "alibabacloud-credentials", marker = "extra == 'kms'", specifier = ">=1.0.2,<2.0" },
+    { name = "alibabacloud-credentials", marker = "extra == 'kms'", specifier = ">=0.3,<2.0" },
     { name = "alibabacloud-kms20160120", marker = "extra == 'kms'", specifier = ">=3.1,<4.0" },
-    { name = "alibabacloud-tea-openapi", marker = "extra == 'kms'", specifier = ">=0.4.5,<1.0" },
+    { name = "alibabacloud-tea-openapi", marker = "extra == 'kms'", specifier = ">=0.3,<1.0" },
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
     { name = "atlas-richie-secret-core", editable = "components/secret/secret-core" },
     { name = "pydantic", specifier = ">=2.0,<3.0" },

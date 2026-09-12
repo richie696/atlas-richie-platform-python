@@ -21,7 +21,7 @@ dependencies = [
   "atlas-richie-contracts>=0.2.0,<0.3.0",
   "atlas-richie-sentinel>=0.2.0,<0.3.0",
   "atlas-richie-sentinel>=0.2.0,<0.3.0",
-  "atlas-richie-sentinel-source-file>=0.0.1a1,<1.0",
+  "atlas-richie-sentinel-source-file>=0.2.0,<0.3.0",
   "starlette>=0.30,<1.0",
   "psutil>=5.9,<6.0",
 ]
