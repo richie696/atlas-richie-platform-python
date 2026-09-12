@@ -7,27 +7,44 @@ this check cannot accidentally use the editable workspace environment or an inde
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 
+def _read_platform_version() -> str:
+    """Read the canonical version from the repo-root ``versions.toml``.
+
+    The release script must agree with the rest of the toolchain about
+    which wheel version is in flight, otherwise ``pip install`` would
+    silently resolve the latest published (older) release and the check
+    would pass against the wrong artifact.  Falls back to ``"0.0.0"`` if
+    the file is unreadable so the test still reports a clear failure.
+    """
+
+    versions_path = Path(__file__).resolve().parents[2] / "versions.toml"
+    try:
+        text = versions_path.read_text(encoding="utf-8")
+    except OSError:
+        return "0.0.0"
+    match = re.search(r'^\s*platform-version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    return match.group(1) if match else "0.0.0"
+
+
+_VERSION = _read_platform_version()
+
 PACKAGES = (
-    ("atlas-richie-contracts==0.1.0", "atlas_richie.contracts"),
-    ("atlas-richie-testing==0.1.0", "atlas_richie.testing"),
-    ("atlas-richie-http==0.1.0", "atlas_richie.http"),
-    ("atlas-richie-mcp==0.1.0", "atlas_richie.mcp"),
-    ("atlas-richie-resilience==0.1.0", "atlas_richie.resilience"),
-    ("atlas-richie-cache-core==0.1.0", "atlas_richie.cache_core"),
-    ("atlas-richie-cache-redis==0.1.0", "atlas_richie.cache_redis"),
-    ("atlas-richie-mcp-asgi==0.1.0", "atlas_richie.mcp_asgi"),
-    ("atlas-richie-mcp-http==0.1.0", "atlas_richie.mcp_http"),
-    ("atlas-richie-mcp-oauth==0.1.0", "atlas_richie.mcp_oauth"),
-    ("atlas-richie-mcp-schema-jsonschema==0.1.0", "atlas_richie.mcp_schema_jsonschema"),
-    ("atlas-richie-oauth==0.1.0", "atlas_richie.oauth"),
-    ("atlas-richie-oauth-jose==0.1.0", "atlas_richie.oauth_jose"),
-    ("atlas-richie-platform==0.1.0", "atlas_richie.platform"),
+    (f"atlas-richie-contracts=={_VERSION}", "atlas_richie.contracts"),
+    (f"atlas-richie-testing=={_VERSION}", "atlas_richie.testing"),
+    (f"atlas-richie-http=={_VERSION}", "atlas_richie.http"),
+    (f"atlas-richie-mcp=={_VERSION}", "atlas_richie.mcp"),
+    (f"atlas-richie-resilience=={_VERSION}", "atlas_richie.resilience"),
+    (f"atlas-richie-cache-core=={_VERSION}", "atlas_richie.cache_core"),
+    (f"atlas-richie-cache-redis=={_VERSION}", "atlas_richie.cache_redis"),
+    (f"atlas-richie-oauth=={_VERSION}", "atlas_richie.oauth"),
+    (f"atlas-richie-platform=={_VERSION}", "atlas_richie.platform"),
 )
 
 

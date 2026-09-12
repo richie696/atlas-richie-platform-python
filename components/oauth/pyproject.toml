@@ -24,6 +24,11 @@ dependencies = [
   "atlas-richie-contracts>=0.2.0,<0.3.0",
   "atlas-richie-http>=0.2.0,<0.3.0",
 ]
+
+[project.optional-dependencies]
+jose = [
+  "joserfc>=1.0,<2.0",
+]
 [project.license]
 text = "Apache-2.0"
 

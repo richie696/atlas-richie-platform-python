@@ -37,7 +37,7 @@ from atlas_richie.mcp import (
     MrtStateBinding,
     ToolContext,
 )
-from atlas_richie.mcp.stdio import serve_stdio
+from atlas_richie.mcp.transport.stdio import serve_stdio
 
 
 # MRTR state binding — the test client does not need to know the

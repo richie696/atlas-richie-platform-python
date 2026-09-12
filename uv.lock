@@ -9,13 +9,7 @@ members = [
     "atlas-richie-contracts",
     "atlas-richie-http",
     "atlas-richie-mcp",
-    "atlas-richie-mcp-asgi",
-    "atlas-richie-mcp-http",
-    "atlas-richie-mcp-legacy",
-    "atlas-richie-mcp-oauth",
-    "atlas-richie-mcp-schema-jsonschema",
     "atlas-richie-oauth",
-    "atlas-richie-oauth-jose",
     "atlas-richie-platform",
     "atlas-richie-resilience",
     "atlas-richie-testing",
@@ -45,7 +39,7 @@ wheels = [
 
 [[package]]
 name = "atlas-richie-cache-core"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "components/cache/cache-core" }
 dependencies = [
     { name = "atlas-richie-contracts" },
@@ -73,7 +67,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "atlas-richie-cache-redis"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "components/cache/cache-redis" }
 dependencies = [
     { name = "atlas-richie-cache-core" },
@@ -103,12 +97,12 @@ provides-extras = ["test"]
 
 [[package]]
 name = "atlas-richie-contracts"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "foundation/contracts" }
 
 [[package]]
 name = "atlas-richie-http"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "components/http" }
 dependencies = [
     { name = "httpx" },
@@ -119,117 +113,49 @@ requires-dist = [{ name = "httpx", specifier = ">=0.28,<0.29" }]
 
 [[package]]
 name = "atlas-richie-mcp"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "components/mcp" }
 dependencies = [
     { name = "atlas-richie-contracts" },
 ]
 
-[package.metadata]
-requires-dist = [{ name = "atlas-richie-contracts", editable = "foundation/contracts" }]
-
-[[package]]
-name = "atlas-richie-mcp-asgi"
-version = "0.1.0"
-source = { editable = "adapters/mcp-asgi" }
-dependencies = [
-    { name = "atlas-richie-mcp" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "atlas-richie-mcp", editable = "components/mcp" }]
-
-[[package]]
-name = "atlas-richie-mcp-http"
-version = "0.1.0"
-source = { editable = "adapters/mcp-http" }
-dependencies = [
-    { name = "atlas-richie-http" },
-    { name = "atlas-richie-mcp" },
-    { name = "atlas-richie-oauth" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "atlas-richie-http", editable = "components/http" },
-    { name = "atlas-richie-mcp", editable = "components/mcp" },
-    { name = "atlas-richie-oauth", editable = "components/oauth" },
-]
-
-[[package]]
-name = "atlas-richie-mcp-legacy"
-version = "0.1.0"
-source = { editable = "adapters/mcp-legacy" }
-dependencies = [
-    { name = "atlas-richie-mcp" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "atlas-richie-mcp", editable = "components/mcp" }]
-
-[[package]]
-name = "atlas-richie-mcp-oauth"
-version = "0.1.0"
-source = { editable = "adapters/mcp-oauth" }
-dependencies = [
-    { name = "atlas-richie-mcp" },
-    { name = "atlas-richie-oauth" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "atlas-richie-mcp", editable = "components/mcp" },
-    { name = "atlas-richie-oauth", editable = "components/oauth" },
-]
-
-[[package]]
-name = "atlas-richie-mcp-schema-jsonschema"
-version = "0.1.0"
-source = { editable = "adapters/mcp-schema-jsonschema" }
-dependencies = [
-    { name = "atlas-richie-mcp" },
+[package.optional-dependencies]
+jsonschema = [
     { name = "jsonschema" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "atlas-richie-mcp", editable = "components/mcp" },
-    { name = "jsonschema", specifier = ">=4.25,<5" },
+    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "jsonschema", marker = "extra == 'jsonschema'", specifier = ">=4.0,<5.0" },
 ]
+provides-extras = ["jsonschema"]
 
 [[package]]
 name = "atlas-richie-oauth"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "components/oauth" }
 dependencies = [
     { name = "atlas-richie-contracts" },
     { name = "atlas-richie-http" },
 ]
 
-[package.metadata]
-requires-dist = [
-    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
-    { name = "atlas-richie-http", editable = "components/http" },
-]
-
-[[package]]
-name = "atlas-richie-oauth-jose"
-version = "0.1.0"
-source = { editable = "adapters/oauth-jose" }
-dependencies = [
-    { name = "atlas-richie-oauth" },
+[package.optional-dependencies]
+jose = [
     { name = "joserfc" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "atlas-richie-oauth", editable = "components/oauth" },
-    { name = "joserfc", specifier = ">=1.3,<2" },
+    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "atlas-richie-http", editable = "components/http" },
+    { name = "joserfc", marker = "extra == 'jose'", specifier = ">=1.0,<2.0" },
 ]
+provides-extras = ["jose"]
 
 [[package]]
 name = "atlas-richie-platform"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "foundation/platform" }
 dependencies = [
     { name = "atlas-richie-cache-core" },
@@ -237,12 +163,7 @@ dependencies = [
     { name = "atlas-richie-contracts" },
     { name = "atlas-richie-http" },
     { name = "atlas-richie-mcp" },
-    { name = "atlas-richie-mcp-asgi" },
-    { name = "atlas-richie-mcp-http" },
-    { name = "atlas-richie-mcp-oauth" },
-    { name = "atlas-richie-mcp-schema-jsonschema" },
     { name = "atlas-richie-oauth" },
-    { name = "atlas-richie-oauth-jose" },
     { name = "atlas-richie-resilience" },
 ]
 
@@ -253,18 +174,13 @@ requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
     { name = "atlas-richie-http", editable = "components/http" },
     { name = "atlas-richie-mcp", editable = "components/mcp" },
-    { name = "atlas-richie-mcp-asgi", editable = "adapters/mcp-asgi" },
-    { name = "atlas-richie-mcp-http", editable = "adapters/mcp-http" },
-    { name = "atlas-richie-mcp-oauth", editable = "adapters/mcp-oauth" },
-    { name = "atlas-richie-mcp-schema-jsonschema", editable = "adapters/mcp-schema-jsonschema" },
     { name = "atlas-richie-oauth", editable = "components/oauth" },
-    { name = "atlas-richie-oauth-jose", editable = "adapters/oauth-jose" },
     { name = "atlas-richie-resilience", editable = "components/resilience" },
 ]
 
 [[package]]
 name = "atlas-richie-resilience"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "components/resilience" }
 dependencies = [
     { name = "atlas-richie-contracts" },
@@ -275,7 +191,7 @@ requires-dist = [{ name = "atlas-richie-contracts", editable = "foundation/contr
 
 [[package]]
 name = "atlas-richie-testing"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "foundation/testing" }
 dependencies = [
     { name = "atlas-richie-contracts" },

@@ -174,7 +174,7 @@ ASGI/WSGI 协议桥与各框架/SDK adapter 只在 P3/P4 创建；目录预留�
 ## 8. 下一次实施的输入与完成定义
 
 P0/P1、H1 与 OAuth P1 已实施：workspace、foundation 三个发行包、`components/mcp`、
-`components/http`、`components/oauth`、`adapters/oauth-jose`、仓库宪章、规格模板和隔离安装验证均已存在。后续不开始 Gateway、
+`components/http`、`components/oauth`(含 `oauth.jose` 子包)、仓库宪章、规格模板和隔离安装验证均已存在。后续不开始 Gateway、
 Antivirus、OAuth/Redis 或框架 adapter，除非获得新的范围确认。
 
 完成定义是：目录和包元数据符合依赖方向，文档与机器可读规格有单一来源，CI 能证明每包在隔离环境中安装和导入；它不是 MCP 运行时兼容完成声明。

@@ -4,7 +4,7 @@ import json
 import unittest
 
 from atlas_richie.mcp import McpServer, ToolContext
-from atlas_richie.mcp.stdio import decode_line, encode_line, serve_stdio
+from atlas_richie.mcp.transport.stdio import decode_line, encode_line, serve_stdio
 
 
 class StdioContractTests(unittest.TestCase):

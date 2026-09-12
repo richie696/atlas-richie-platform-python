@@ -9,10 +9,10 @@
 ### 0.1 已就绪
 - [x] HTTP 公共 facade + 受控 transport：`components/http/src/atlas_richie/http/client.py`、 `components/http/src/atlas_richie/http/models.py`
 - [x] SSE 解析器（独立于 HTTPX）：`components/http/src/atlas_richie/http/sse.py:30-87`
-- [x] ASGI 协议桥 + 服务端订阅/进度：`adapters/mcp-asgi/src/atlas_richie/mcp_asgi/application.py:1-279`、 `adapters/mcp-asgi/src/atlas_richie/mcp_asgi/streaming.py:1-182`
-- [x] OAuth 2.1 客户端 + DPoP 核心 + JOSE 适配：`components/oauth/src/atlas_richie/oauth/*.py`、 `adapters/oauth-jose/src/atlas_richie/oauth_jose/*.py`
-- [x] MCP `2026-07-28` 核心、stdio、legacy 适配、MRTR、注册表、调用链：`components/mcp/src/atlas_richie/mcp/*.py`
-- [x] MCP HTTP 出站 exchange（仅 JSON 响应）：`adapters/mcp-http/src/atlas_richie/mcp_http/exchange.py:1-93`
+- [x] ASGI 协议桥 + 服务端订阅/进度：`components/mcp/src/atlas_richie/mcp/transport/asgi/application.py:1-279`、 `components/mcp/src/atlas_richie/mcp/transport/asgi/streaming.py:1-182`（路径于 R-232 重整）
+- [x] OAuth 2.1 客户端 + DPoP 核心 + JOSE 适配：`components/oauth/src/atlas_richie/oauth/*.py`、 `components/oauth/src/atlas_richie/oauth/jose/*.py`（路径于 R-232 重整）
+- [x] MCP `2026-07-28` 核心、stdio、legacy 适配、MRTR、注册表、调用链：`components/mcp/src/atlas_richie/mcp/*.py`（stdio 已迁至 `transport/stdio/`）
+- [x] MCP HTTP 出站 exchange（仅 JSON 响应）：`components/mcp/src/atlas_richie/mcp/transport/http/exchange.py:1-93`（路径于 R-232 重整）
 - [x] MCP OAuth bridge + M2M profile（mock 层）：`adapters/mcp-oauth/src/atlas_richie/mcp_oauth/bridge.py:1-109`、 `adapters/mcp-oauth/src/atlas_richie/mcp_oauth/m2m.py:1-30`
 
 ### 0.2 关键缺口（直接对应 5 个最关键源码补齐项）

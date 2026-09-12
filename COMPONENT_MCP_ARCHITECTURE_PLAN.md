@@ -51,7 +51,7 @@ foundation/contracts  -> 生命周期、健康、错误分类、能力描述等�
 foundation/testing    -> 夹具、black-box contract suite、隔离安装工具
 foundation/platform   -> 兼容矩阵与发布组合，不含运行时实现
 components/*          -> 可独立安装、版本化和裁剪的能力
-adapters/*            -> 框架、HTTP、OAuth、Schema、OTel、Provider 接入
+adapters/*            -> **跨组件基础设施**(如 `adapters/cache-redis` 服务多个 component);不在此处放组件内部子能力(MCP 内部 transport/security/schema 在 R-232 已迁回 `components/mcp/` 子包)
 ```
 
 不创建泛化 `base` 运行时包，也不让 Gateway、Antivirus 或任一业务服务进入 Component 依赖树。
@@ -102,13 +102,21 @@ components/mcp/                         # atlas-richie-mcp
     security/                           # auth context、policy、OAuth port/PRM model
     _internal/                          # 不承诺稳定的实现细节
 
-adapters/mcp-schema-jsonschema/         # atlas-richie-mcp-schema-jsonschema
-adapters/mcp-asgi/                      # atlas-richie-mcp-asgi；只依赖 ASGI 协议
-adapters/mcp-wsgi/                      # 可选；不影响 ASGI
-adapters/mcp-httpx/                     # 可选远程 HTTP client
-adapters/mcp-oauth-oidc/                # OAuth/OIDC/JWKS + HTTP 实现
-adapters/mcp-otel/                      # 可选 OTel 注入与导出
+**R-232 重整后(2026-09-12)**:
+
+```text
+components/mcp/src/atlas_richie/mcp/
+├── transport/{stdio,http,asgi}/         # 子包,单 wheel atlas-richie-mcp
+├── security/oauth/                      # 子包,OAuth Bearer → ToolContext
+├── schema/{port,jsonschema}/            # 子包,Schema 端口 + JSON Schema 实现
+├── legacy/                              # 子包,2025-11-25 dialect
+└── testkit/                             # 子包,协议夹具(Java mcp-testkit 对位)
 ```
+
+原 `adapters/mcp-*` 6 个独立 wheel 全部合并进 `atlas-richie-mcp` 单 wheel,
+无 Java mcp-parent 的多 jar 拆分(因为没有 pluggable backend 多实现需求)。
+无 `adapters/mcp-wsgi` / `adapters/mcp-httpx` / `adapters/mcp-oauth-oidc` /
+`adapters/mcp-otel`(未实现)。
 
 初始发布 `atlas-richie-mcp` 只携带 core 和 stdio。HTTP、完整 JSON Schema、OAuth、ASGI、OTel 以 named extra 或独立 adapter 选择性安装，例如：
 

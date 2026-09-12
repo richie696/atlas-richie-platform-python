@@ -55,7 +55,7 @@ from atlas_richie.mcp import (
     McpServer,
     ToolContext,
 )
-from atlas_richie.mcp.stdio import encode_line
+from atlas_richie.mcp.transport.stdio import encode_line
 
 
 pytestmark = pytest.mark.e2e

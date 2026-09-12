@@ -25,7 +25,9 @@ server vertical slice.  The HTTP component owns
 requests, responses, error taxonomy, lifecycle, and an interceptor pipeline while
 using HTTPX internally; it is not an HTTP server or a multi-provider facade.  The
 OAuth core owns endpoint policy, metadata, PKCE S256, token lifecycle and portable
-resource authentication.  The JOSERFC dependency is isolated in `adapters/oauth-jose`.
+resource authentication.  The JOSERFC dependency is isolated in
+`components/oauth/src/atlas_richie/oauth/jose/` (the JOSE binding is a
+sub-package of the OAuth component, not a top-level adapter).
 The repository intentionally contains no Gateway, Antivirus, Authorization Server,
 ORM, or cloud provider SDK.  Its ASGI package is a narrow MCP protocol adapter,
 not an application framework runtime.

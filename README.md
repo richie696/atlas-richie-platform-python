@@ -57,13 +57,8 @@ pagination 与 `input_required` MRTR 结果。Schema、ASGI、OAuth 和远程 HT
 ```bash
 uv lock --check
 uv run python -m unittest discover -s components/mcp/tests -v
-uv run python -m unittest discover -s adapters/mcp-schema-jsonschema/tests -v
-uv run python -m unittest discover -s adapters/mcp-asgi/tests -v
-uv run python -m unittest discover -s adapters/mcp-oauth/tests -v
-uv run python -m unittest discover -s adapters/mcp-http/tests -v
-uv run python -m unittest discover -s adapters/mcp-legacy/tests -v
+uv run python -m unittest discover -s components/mcp/tests -v
 uv run python -m unittest discover -s components/oauth/tests -v
-uv run python -m unittest discover -s adapters/oauth-jose/tests -v
 uv build --all-packages
 /opt/homebrew/opt/python@3.12/bin/python3.12 tools/release/prepare_wheelhouse.py
 /opt/homebrew/opt/python@3.12/bin/python3.12 tools/release/verify_isolated_wheels.py

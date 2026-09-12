@@ -76,7 +76,7 @@ from .models import (
 from .mrtr import MrtRequestStateError, MrtStateBinding
 from .protocol import DEFAULT_DIALECT, Implementation, McpDialect, Request, failure, success
 from .registry import McpRegistryChange, McpRegistrySnapshot, RegistryListener
-from .schema import CompiledSchema, SchemaCompiler, SchemaViolation, require_schema_compiler
+from .schema.port import CompiledSchema, SchemaCompiler, SchemaViolation, require_schema_compiler
 
 ContextFactory = Callable[[Mapping[str, Any]], ToolContext]
 CompletionHandler = Callable[[ToolContext, Mapping[str, Any], Mapping[str, Any]], object]
