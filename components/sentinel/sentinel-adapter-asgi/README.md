@@ -1,27 +1,47 @@
 # atlas-richie-sentinel-adapter-asgi
 
-Sentinel family — adapter asgi module (skeleton).
-
-Part of the **Atlas Richie Sentinel** family — the Python equivalent of
-Alibaba Sentinel + Resilience4j, providing:
-
-- Resource / rule / slot-chain abstraction
-- 5 rule types: Flow / Degrade / ParamFlow / System / Authority
-- ASGI ingress protection + httpx pool protection
-- Per-resource business rules
-
-## Status
-
-**Skeleton — version 0.0.1a1 (ALPHA).** No implementation yet; only
-package metadata, dependency declaration, and `__all__` placeholder.
+Pure ASGI 3.0 middleware for Atlas Richie Sentinel. **No
+Starlette / FastAPI dependency** — works with any ASGI 3.0
+framework (Starlette, FastAPI, Quart, aiohttp, raw uvicorn).
 
 ## Install
 
 ```bash
-pip install atlas-richie-sentinel-adapter-asgi
+uv add atlas-richie-sentinel-adapter-asgi
 ```
 
-## See also
+## Usage
 
-- `docs/acceptance/R-SENTINEL-design.md` — full design doc
-- `components/sentinel/` — sibling wheels in the Sentinel family
+```python
+from atlas_richie.sentinel import SentinelEngine
+from atlas_richie.sentinel_adapter_asgi import SentinelASGIMiddleware
+
+engine = SentinelEngine()
+# Add slots, configure rules, etc.
+
+app = SentinelASGIMiddleware(
+    app=your_asgi_app,
+    engine=engine,
+)
+
+# Run with uvicorn:
+#   uvicorn mymodule:app --lifespan on
+```
+
+## Features
+
+- **Pure ASGI 3.0** — no framework coupling.
+- **Streaming body** — chunks forwarded one at a time; lease
+  released only after body EOF (no premature release).
+- **Client disconnect** — `asyncio.CancelledError` during downstream
+  call updates entry outcome to CANCELLED.
+- **lifespan protocol** — Engine entered at lifespan startup,
+  closed at shutdown with graceful timeout.
+- **Resource naming** — default `"{METHOD} {path}"` (e.g.
+  `"GET /orders/123"`); pluggable via `naming=` parameter.
+- **Origin** — default reads `X-Forwarded-User`; pluggable via
+  `origin_resolver=`.
+
+## License
+
+Apache-2.0.

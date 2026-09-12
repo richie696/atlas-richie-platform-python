@@ -1,53 +1,28 @@
-"""`atlas-richie-sentinel-source-file` — file-based rule source (R-SENTINEL-2).
+"""Sentinel source-file wheel (M3.2) — FileRuleSource adapter.
 
 中文
 ----
-Sentinel 家族的**规则源 — 文件**。从 YAML / JSON 文件加载
-所有 5 类 rule,支持 `watchfiles` 监听文件变更热重载(无需
-重启进程)。
+``sentinel-source-file`` 包装主包的 ``FileRuleSource``;**不**添加新
+逻辑,只是提供一个独立的 wheel 给"只需要文件源"的用户,避免拉
+整个主包 + Nacos/Redis 等其他 source。
 
-**配置文件格式**(YAML):
-```yaml
-flow:
-  - resource: order:create
-    grade: qps
-    count: 100
-    controlBehavior: reject
-  - resource: order:query
-    grade: thread
-    count: 50
-degrade:
-  - resource: pay:charge
-    grade: rt
-    count: 200     # ms
-    timeWindow: 10 # s
-    minRequestAmount: 10
-    slowRatioThreshold: 0.5
-system:
-  - highestSystemLoad: 4.0
-    highestCpuUsage: 0.8
-    qps: 300
-    avgRt: 100
-    maxThread: 200
-```
-
-**与 core 关系**:
-- 实现 `RuleManager.load()` 接口
-- 调用方:`Sentinel.load_rules("file:///etc/sentinel/rules.yaml")`
+扩展 wheel 依赖主包 ``atlas-richie-sentinel>=0.2.0,<0.3.0``;
+**不**拉 pyyaml(JSON-only 时是 0 dep)。
 
 English
 --------
-Sentinel family rule source — file-based. Loads 5 rule
-types from YAML / JSON files with hot-reload via
-`watchfiles`. Mirrors Java sentinel-datasource-file.
+``sentinel-source-file`` wraps main package's ``FileRuleSource``;
+**adds no new logic**, just provides a standalone wheel for "file
+source only" users, avoiding pulling the whole main package +
+Nacos/Redis etc.
+
+Extension wheel depends on main package
+``atlas-richie-sentinel>=0.2.0,<0.3.0``; **does not** pull pyyaml
+(0 dep when JSON-only).
 """
 
-__version__ = "0.2.0"
+from __future__ import annotations
 
-__all__ = [
-    "__version__",
-    # Populated in R-SENTINEL-2.
-    # "FileRuleSource",
-    # "RuleFileFormat",
-    # "RuleFileWatcher",
-]
+from atlas_richie.sentinel.source.rule_source import FileRuleSource
+
+__all__ = ["FileRuleSource"]

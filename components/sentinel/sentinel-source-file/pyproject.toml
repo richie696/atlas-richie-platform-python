@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "atlas-richie-sentinel-source-file"
 version = "0.2.0"
-description = "Atlas Richie Sentinel — file-based rule source. Load Flow / Degrade / ParamFlow / System / Authority rules from YAML or JSON files. Hot-reload on file change."
+description = "Atlas Richie Sentinel — file source adapter (JSON/YAML rules hot-reload)."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
@@ -13,23 +13,18 @@ authors = [{ name = "Atlas Richie" }]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-  "atlas-richie-contracts>=0.2.0,<0.3.0",
   "atlas-richie-sentinel>=0.2.0,<0.3.0",
-  "atlas-richie-sentinel>=0.2.0,<0.3.0",
-  "pyyaml>=6.0,<7.0",
-  "watchfiles>=0.21,<1.0",
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8.0,<9.0"]
-
-[tool.pytest.ini_options]
-markers = [
-    "unit: fast tests with no I/O (default)",
-    "integration: requires filesystem watchers (skipped locally)",
-]
+yaml = ["pyyaml>=6.0,<7.0"]
+test = ["pytest>=8.0,<9.0", "pytest-asyncio>=0.21,<1.0"]
 
 [tool.uv.build-backend]
 module-name = "atlas_richie.sentinel_source_file"

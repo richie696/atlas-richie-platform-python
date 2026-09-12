@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "atlas-richie-sentinel-dashboard"
 version = "0.2.0"
-description = "Atlas Richie Sentinel — control panel. Lightweight FastAPI app exposing real-time metrics (QPS / pass / block / RT) and dynamic rule management (push / pull rules without restart). Mirrors Java sentinel-dashboard."
+description = "Atlas Richie Sentinel — per-process embedded admin Dashboard (loopback REST API)."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
@@ -13,24 +13,18 @@ authors = [{ name = "Atlas Richie" }]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3 :: Only",
-  "Framework :: FastAPI",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Framework :: AsyncIO",
+  "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-  "atlas-richie-contracts>=0.2.0,<0.3.0",
   "atlas-richie-sentinel>=0.2.0,<0.3.0",
-  "atlas-richie-sentinel>=0.2.0,<0.3.0",
-  "fastapi>=0.100,<1.0",
-  "uvicorn[standard]>=0.20,<1.0",
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8.0,<9.0", "pytest-asyncio>=0.21,<1.0", "httpx>=0.27,<1.0"]
-
-[tool.pytest.ini_options]
-markers = [
-    "unit: fast tests with no I/O (default)",
-    "integration: requires a real Sentinel client (skipped locally)",
-]
+test = ["pytest>=8.0,<9.0", "pytest-asyncio>=0.21,<1.0"]
 
 [tool.uv.build-backend]
 module-name = "atlas_richie.sentinel_dashboard"

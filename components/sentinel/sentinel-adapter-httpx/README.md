@@ -1,27 +1,42 @@
 # atlas-richie-sentinel-adapter-httpx
 
-Sentinel family — adapter httpx module (skeleton).
-
-Part of the **Atlas Richie Sentinel** family — the Python equivalent of
-Alibaba Sentinel + Resilience4j, providing:
-
-- Resource / rule / slot-chain abstraction
-- 5 rule types: Flow / Degrade / ParamFlow / System / Authority
-- ASGI ingress protection + httpx pool protection
-- Per-resource business rules
-
-## Status
-
-**Skeleton — version 0.0.1a1 (ALPHA).** No implementation yet; only
-package metadata, dependency declaration, and `__all__` placeholder.
+HTTPX custom transport for Atlas Richie Sentinel.
+OutboundConcurrencyGuard + metrics, no retry by default.
 
 ## Install
 
 ```bash
-pip install atlas-richie-sentinel-adapter-httpx
+uv add atlas-richie-sentinel-adapter-httpx
 ```
 
-## See also
+## Usage
 
-- `docs/acceptance/R-SENTINEL-design.md` — full design doc
-- `components/sentinel/` — sibling wheels in the Sentinel family
+```python
+import httpx
+from atlas_richie.sentinel import SentinelEngine
+from atlas_richie.sentinel_adapter_httpx import SentinelAsyncTransport
+
+engine = SentinelEngine()
+# Configure FlowSlot for outbound concurrency...
+
+transport = SentinelAsyncTransport(
+    engine=engine,
+    flow_slot=flow_slot,
+    inner_transport=httpx.AsyncHTTPTransport(),
+)
+client = httpx.AsyncClient(transport=transport)
+
+resp = await client.get("https://api.example.com/orders")
+```
+
+## Defaults
+
+- **No retry**: HTTPX's own retry middleware is independent; Sentinel
+  doesn't know which operations are idempotent.
+- **Resource naming**: `"{METHOD} {host}{path}"` (e.g.
+  `"GET api.example.com/orders/123"`).
+- **No httpcore private API**: only public `AsyncBaseTransport`.
+
+## License
+
+Apache-2.0.
