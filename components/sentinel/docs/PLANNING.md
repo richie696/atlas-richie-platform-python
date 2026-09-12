@@ -459,7 +459,7 @@
 - **ADR**: ADR-SEN-004, ADR-SEN-005
 - **Deps**: M1.2
 
-### M1.4 [ ] 实现环形 SlidingWindow、MetricRegistry、ResourceRegistry
+### M1.4 [x] 实现环形 SlidingWindow、MetricRegistry、ResourceRegistry
 - **Deliverable**:
   - `metrics/sliding_window.py` — **stdlib ring buffer**(`array.array('q')` 或 list + 索引),**不引入 sortedcontainers**
   - `metrics/registry.py` — `MetricRegistry`(admitted / blocked / success / failure / cancelled / RT)
