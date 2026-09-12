@@ -82,29 +82,32 @@
       - **接口**:`check_version_consistency.py <release_dir>`(强制要求一个干净的专用输出目录;`release_dir` 不存在/为空 → 退出码 1)
       - 校验流程:
         1. 扫 `<release_dir>`,**严格要求**:`*.whl` 恰好 1 个 + `*.tar.gz` 恰好 1 个,其他多/少/类型错都失败
-        2. 解析文件名,要求 wheel 文件名匹配 `atlas_richie_sentinel-*.whl`,sdist 匹配 `atlas-richie-sentinel-*.tar.gz`(包名不匹配 → 失败,防误发其它组件的产物)
-        3. 读 `components/sentinel/sentinel/pyproject.toml` 的 `[project] version` → `pyproject_version`
+        2. 解析文件名,**wheel 和 sdist 都要求匹配 `atlas_richie_sentinel-*`**(PEP 625 规范化:连字符转下划线,跟仓库现有 `atlas_richie_sentinel_primitives-0.2.0.tar.gz` 等一致);包名不匹配 → 失败,防误发其它组件的产物
+        3. 读 `components/sentinel/sentinel/pyproject.toml` 的 `[project] version` + `name` → `pyproject_version` / `pyproject_name`
         4. wheel:解 `*.dist-info/METADATA`,抓 `Version:` 字段 + `Name:` 字段 → `wheel_version` / `wheel_name`
         5. sdist:解 `*.tar.gz` 里的 `PKG-INFO`,抓 `Version:` 字段 + `Name:` 字段 → `sdist_version` / `sdist_name`
-        6. 校验:`wheel_name == sdist_name == "atlas-richie-sentinel"`,`wheel_version == sdist_version == pyproject_version`;任一不等 → 退出码 1 + 冲突报告
+        6. 校验:`wheel_name == sdist_name == pyproject_name == "atlas-richie-sentinel"`,`wheel_version == sdist_version == pyproject_version`;任一不等 → 退出码 1 + 冲突报告
         7. 显式:不调用 `uv publish`;仅返回 0/1 + 冲突报告
     - 发布流程(写在 `components/sentinel/docs/RELEASE.md`,M0.11 同步创建):
       ```bash
       # 1. 专用干净目录,避免和根 dist/ 旧产物混合
       rm -rf /tmp/atlas-richie-sentinel-release
       uv build --package atlas-richie-sentinel --out-dir /tmp/atlas-richie-sentinel-release --clear
-      # 2. 强制要求目录内恰好 1 wheel + 1 sdist + 包名匹配 + 三版本一致
+      # 2. 强制要求目录内恰好 1 wheel + 1 sdist + 文件名匹配 atlas_richie_sentinel-* + 三元组 name/version 一致
       python tools/release/check_version_consistency.py /tmp/atlas-richie-sentinel-release
-      # 3. uv publish 接受文件路径列表(本机 uv publish --help 没有 --package)
-      uv publish /tmp/atlas-richie-sentinel-release/atlas_richie_sentinel-0.2.0-py3-none-any.whl \
-                 /tmp/atlas-richie-sentinel-release/atlas-richie-sentinel-0.2.0.tar.gz
+      # 3. uv publish 接受文件路径列表(本机 uv publish --help 没有 --package);用 glob 避免再次硬编码规范化和版本号
+      uv publish /tmp/atlas-richie-sentinel-release/*.whl \
+                 /tmp/atlas-richie-sentinel-release/*.tar.gz
       ```
+    - **PEP 625 规范化**:本仓所有现有 sdist 用下划线,例如 `atlas_richie_sentinel_primitives-0.2.0.tar.gz`、`atlas_richie_contracts-0.2.0.tar.gz`;新主包 sdist 必为 `atlas_richie_sentinel-0.2.0.tar.gz`(不是 `atlas-richie-sentinel-0.2.0.tar.gz`)。`Name:` / `Version:` 字段在 `METADATA` / `PKG-INFO` 内部保留原始 `atlas-richie-sentinel` / `0.2.0` 字符串,只有**文件名**按 PEP 625 规范化为下划线。
     - **为什么必须专用目录**:仓库根 `dist/` 已有 cache / secret / 其它组件的旧版本产物,直接扫描 `dist/` 或 `uv publish`(不带路径)会误发布;`--clear` 进一步保证 `--out-dir` 内只有本次构建的产物
     - CI 门禁:`check_version_consistency.py` 接进 M0.11 的 `tools/release/release_gate.sh`,作为发布前必经步骤
     - 三产物版本字段位置(wheel 与 sdist 路径不同,容易漏):
-      - wheel: `atlas_richie_sentinel-0.2.0.dist-info/METADATA` 里的 `Version: 0.2.0` + `Name: atlas-richie-sentinel`
-      - sdist: `atlas-richie-sentinel-0.2.0.tar.gz` 里的 `atlas-richie-sentinel-0.2.0/PKG-INFO` 里的 `Version: 0.2.0` + `Name: atlas-richie-sentinel`
-      - pyproject: `[project] version = "0.2.0"` + `name = "atlas-richie-sentinel"`
+      - wheel 文件名: `atlas_richie_sentinel-0.2.0-py3-none-any.whl`(PEP 427/491 规范名)
+      - wheel 内: `atlas_richie_sentinel-0.2.0.dist-info/METADATA` 里的 `Version: 0.2.0` + `Name: atlas-richie-sentinel`
+      - sdist 文件名: `atlas_richie_sentinel-0.2.0.tar.gz`(PEP 625 规范名,下划线)
+      - sdist 内: `atlas_richie_sentinel-0.2.0/PKG-INFO` 里的 `Version: 0.2.0` + `Name: atlas-richie-sentinel`
+      - pyproject: `[project] name = "atlas-richie-sentinel"` + `version = "0.2.0"`
 - **Test ID**: —
 - **ADR**: ADR-SEN-002
 - **Deps**: M0.1, M0.2, M0.3
