@@ -22,6 +22,7 @@ members = [
     "atlas-richie-secret-azure-keyvault",
     "atlas-richie-secret-core",
     "atlas-richie-secret-gcp-kms",
+    "atlas-richie-secret-kmip",
     "atlas-richie-secret-openbao",
     "atlas-richie-secret-pkcs11",
     "atlas-richie-secret-redis",
@@ -692,6 +693,34 @@ requires-dist = [
     { name = "google-auth", specifier = ">=2.30,<3.0" },
     { name = "google-cloud-kms", specifier = ">=2.24,<4.0" },
     { name = "google-cloud-secret-manager", specifier = ">=2.20,<4.0" },
+    { name = "pydantic", specifier = ">=2.0,<3.0" },
+    { name = "pydantic-settings", specifier = ">=2.0,<3.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-secret-kmip"
+version = "0.2.0"
+source = { editable = "components/secret/secret-kmip" }
+dependencies = [
+    { name = "atlas-richie-contracts" },
+    { name = "atlas-richie-secret-core" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "cryptography" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "atlas-richie-secret-core", editable = "components/secret/secret-core" },
+    { name = "cryptography", marker = "extra == 'test'", specifier = ">=42.0,<46.0" },
     { name = "pydantic", specifier = ">=2.0,<3.0" },
     { name = "pydantic-settings", specifier = ">=2.0,<3.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
