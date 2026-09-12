@@ -14,6 +14,9 @@
   (ECDSA-P256-SHA256)
 - `crypto.envelope` — `EnvelopeCrypto` Protocol + `DefaultEnvelopeCrypto`
   + `EnvelopeCodec` + `ArseEnvelopeCodec`(base64 + JSON)
+- `crypto.capability` — capability 门禁(R-242 SDK 化引入):AAD
+  支持 / 读写能力 / capability fingerprint(对位 Java
+  `RemoteSecretProviderClient` 的 capability 门禁)
 
 `DefaultSecretCipher` / `DefaultSigningService` 都需要
 `atlas-richie-secret-core[crypto]` extra(装 `cryptography` 库);无该
@@ -30,6 +33,14 @@ it raises `SecretCryptoException` with an install hint.
 from atlas_richie.secret.crypto.backend import (
     KeyWrappingBackend,
     SigningBackend,
+)
+from atlas_richie.secret.crypto.capability import (
+    assert_can_read,
+    assert_can_write,
+    assert_capability,
+    capability_fingerprint,
+    has_aad,
+    require_aad_support,
 )
 from atlas_richie.secret.crypto.cipher import (
     DefaultSecretCipher,
@@ -77,4 +88,11 @@ __all__ = [
     "EnvelopeCodec",
     "ArseEnvelopeCodec",
     "DefaultEnvelopeCrypto",
+    # capability gates (R-242)
+    "require_aad_support",
+    "has_aad",
+    "assert_can_read",
+    "assert_can_write",
+    "assert_capability",
+    "capability_fingerprint",
 ]
