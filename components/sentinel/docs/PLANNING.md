@@ -77,7 +77,25 @@
   - `python -c "import atlas_richie.sentinel; assert atlas_richie.sentinel.__version__ == '0.2.0'"` 不报错
   - `grep -E '^__version__\s*=\s*["'\'']' components/sentinel/sentinel/src/atlas_richie/sentinel/__init__.py` 返回 0 行(确认无硬编码)
   - `__init__.py` 不 import 任何第三方包(grep 验证)
-  - **build/publish 门禁**(新增,在 M0.11 验证命令里体现):构建产物(sdist + wheel)的 `METADATA` 与 `pyproject.toml` `[project] version` 字符相等,不等则 `uv publish` 拒绝
+  - **版本一致门禁**(M0.11 验证命令里体现;**不要**依赖 `uv publish` 自身做拒绝——`uv publish` 不校验包内 version):
+    - 新增 `tools/release/check_version_consistency.py`(放在主仓 `tools/release/`,与 `verify_isolated_wheels.py` 同级):
+      1. 读 `components/sentinel/sentinel/pyproject.toml` 的 `[project] version` → `pyproject_version`
+      2. `uv build --package atlas-richie-sentinel` 后扫描 `dist/`,分别:
+         - wheel:解 `*.dist-info/METADATA`,抓 `Version:` 字段 → `wheel_version`
+         - sdist:解 `*.tar.gz` 里的 `PKG-INFO`,抓 `Version:` 字段 → `sdist_version`
+      3. 三者必须严格相等;任一不等 → 退出码 1,列出冲突源
+      4. 显式:不调用 `uv publish`;仅返回 0/1 + 冲突报告
+    - 发布流程(写在 `components/sentinel/docs/RELEASE.md`,M0.11 同步创建):
+      ```bash
+      uv build --package atlas-richie-sentinel
+      python tools/release/check_version_consistency.py   # ← 必须先通过
+      uv publish --package atlas-richie-sentinel         # ← 失败也不影响,仅是兜底
+      ```
+    - CI 门禁:`check_version_consistency.py` 接进 M0.11 的 `tools/release/release_gate.sh`,作为发布前必经步骤
+    - 三产物版本字段位置(wheel 与 sdist 路径不同,容易漏):
+      - wheel: `atlas_richie_sentinel-0.2.0.dist-info/METADATA` 里的 `Version: 0.2.0`
+      - sdist: `atlas-richie-sentinel-0.2.0.tar.gz` 里的 `atlas-richie-sentinel-0.2.0/PKG-INFO` 里的 `Version: 0.2.0`
+      - pyproject: `[project] version = "0.2.0"`
 - **Test ID**: —
 - **ADR**: ADR-SEN-002
 - **Deps**: M0.1, M0.2, M0.3
@@ -576,13 +594,19 @@
 - **Deliverable**:
   - `ports/token.py` — 冻结值对象,无 3rd-party 依赖(`dataclasses.dataclass(frozen=True, slots=True)`):
     ```python
+    class TokenDecision(StrEnum):
+        LOCAL_GRANTED   = "local_granted"     # 本地默认实现直接放行(单进程常态)
+        REMOTE_GRANTED  = "remote_granted"    # 集群 token 服务返回 permit
+        FAIL_OPEN       = "fail_open"         # 远端不可达,本地策略性放行(降级事件)
+        DENIED          = "denied"            # 拒绝(配合 deny_reason 看为什么)
+
     class TokenDenyReason(StrEnum):
-        QUEUE_FULL            = "queue_full"          # 等待队列满
-        REMOTE_UNAVAILABLE    = "remote_unavailable"  # 集群 token 服务不可达
-        RATE_LIMITED          = "rate_limited"        # 集群 rate-limit 拒绝
-        FAIL_OPEN             = "fail_open"           # fail-open 策略,本地回退放行
-        SHUTTING_DOWN         = "shutting_down"       # 节点关闭中
-        UNKNOWN               = "unknown"             # 兜底
+        QUEUE_FULL          = "queue_full"          # 等待队列满
+        REMOTE_UNAVAILABLE  = "remote_unavailable"  # 集群 token 服务不可达
+        RATE_LIMITED        = "rate_limited"        # 集群 rate-limit 拒绝
+        SHUTTING_DOWN       = "shutting_down"       # 节点关闭中
+        AUTHORITY_DENIED    = "authority_denied"    # 黑白名单 / 授权拒绝
+        UNKNOWN             = "unknown"             # 兜底
 
     @dataclass(frozen=True, slots=True)
     class Token:
@@ -595,13 +619,18 @@
 
     @dataclass(frozen=True, slots=True)
     class TokenResponse:
-        granted: bool
-        token: Token | None       # granted=False 时为 None
-        reason: TokenDenyReason   # granted=True 时为 TokenDenyReason.FAIL_OPEN(标记本地放行)或自定 NOT_APPLICABLE
-        wait_ns: int              # 0 = 立即;>0 = 建议等待纳秒
+        decision: TokenDecision                 # 必填,4 选 1
+        token: Token | None                     # decision != DENIED 时非空
+        deny_reason: TokenDenyReason | None     # 仅 decision is DENIED 时非空;否则 None
+        wait_ns: int                            # 0 = 立即;>0 = 建议等待纳秒
+
+        def is_granted(self) -> bool:
+            return self.decision in (TokenDecision.LOCAL_GRANTED, TokenDecision.REMOTE_GRANTED, TokenDecision.FAIL_OPEN)
     ```
-    - **永不暴露裸字符串**:`reason` 必传 `TokenDenyReason` 枚举值;`LocalTokenService` 放行时传 `TokenDenyReason.FAIL_OPEN` 而不是 `None`,便于审计。
-    - 加 `class NotApplicableReason(TokenDenyReason):` 内部 sentinel? 不,直接复用 `FAIL_OPEN` 配 `granted=True` 即可,避免语义分裂。
+    - **拆分语义**:`decision` 描述"放行还是拒绝";`deny_reason` 只在 `decision is DENIED` 时存在。
+    - **永不暴露裸字符串**:`decision` / `deny_reason` 必传 `StrEnum` 成员。
+    - **`FAIL_OPEN` ≠ `LOCAL_GRANTED`**:正常单进程默认 `LocalTokenService.acquire()` 走 `LOCAL_GRANTED`;只有集群模式远端不可达、本地策略降级放行时才是 `FAIL_OPEN`(会被 metrics 标成降级事件)。
+    - **`None` 的合法用法**:`deny_reason: None` 表示"没有拒绝原因",不是"原因未知";`UNKNOWN` 是真存在但不可分类。审计代码用 `if response.deny_reason is not None` 而不是 `is TokenDenyReason.UNKNOWN`。
   - `ports/token_service.py` — `TokenService` Protocol,无 3rd-party 依赖
     ```python
     @runtime_checkable
@@ -614,10 +643,12 @@
   - `SlotChain` 默认用 `LocalTokenService`;`SentinelEngine(token_service=...)` 可注入其他实现
   - FlowSlot 在 acquire 资源时调用 `token_service.acquire()`;若 TokenService 暂时不可用(集群模式)按 fail-safe 策略:1.0 fail-open(单进程 = 永远能拿 token)
 - **Exit Criteria**:
-  - `from atlas_richie.sentinel.ports import Token, TokenResponse, TokenService, Resource` 成功
-  - `LocalTokenService().acquire(...)` 永远返回 `TokenResponse(granted=True, ...)`
-  - FlowSlot 测试用 mock TokenService 验证「token 申请/释放」调用路径
+  - `from atlas_richie.sentinel.ports import Token, TokenResponse, TokenService, Resource, TokenDecision, TokenDenyReason` 成功
+  - `LocalTokenService().acquire(...)` 永远返回 `TokenResponse(decision=TokenDecision.LOCAL_GRANTED, token=Token(...), deny_reason=None, ...)`
+  - `LocalTokenService` 产生的响应**绝不**带 `decision=FAIL_OPEN` 标记(只有集群降级路径才用)
+  - FlowSlot 测试用 mock TokenService 验证「token 申请/释放」调用路径,且同时验证 `decision` 流转(本地 grant / 远端 grant / fail-open / denied 4 路)
   - `Token` / `TokenResponse` 是 frozen + slots,`__hash__` 稳定,可放进 set / dict
+  - `TokenResponse.deny_reason` 字段类型是 `TokenDenyReason | None`,不接受裸字符串(类型检查 + 测试覆盖)
   - **不**依赖任何网络 / 进程间通信(零 3rd-party 兼容 1.0 主包约束)
 - **Test ID**: SEN-CORE-001(part:flow)
 - **ADR**: ADR-SEN-011
