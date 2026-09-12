@@ -444,7 +444,7 @@
 - **ADR**: ADR-SEN-004, ADR-SEN-005
 - **Deps**: M1.1
 
-### M1.3 [ ] 实现原子回滚、取消和关闭语义
+### M1.3 [x] 实现原子回滚、取消和关闭语义
 - **Deliverable**:
   - `SlotLease` 实际释放逻辑:逆序 + idempotent + 一个 Lease 失败不阻止其他
   - `CancelledError` 处理:`Outcome.CANCELLED` 不计入异常比例,不重试
