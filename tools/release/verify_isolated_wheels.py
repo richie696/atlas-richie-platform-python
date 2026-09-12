@@ -58,6 +58,7 @@ PACKAGES = (
     (f"atlas-richie-secret-tencent-ssm-kms=={_VERSION}", "atlas_richie.secret_tencent_ssm_kms"),
     (f"atlas-richie-secret-huawei-csms-kms=={_VERSION}", "atlas_richie.secret_huawei_csms_kms"),
     (f"atlas-richie-secret-volcengine-kms=={_VERSION}", "atlas_richie.secret_volcengine_kms"),
+    (f"atlas-richie-secret-oci-vault-kms=={_VERSION}", "atlas_richie.secret_oci_vault_kms"),
     (f"atlas-richie-oauth=={_VERSION}", "atlas_richie.oauth"),
     (f"atlas-richie-platform=={_VERSION}", "atlas_richie.platform"),
 )
