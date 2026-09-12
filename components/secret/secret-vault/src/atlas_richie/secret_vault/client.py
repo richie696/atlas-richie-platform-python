@@ -190,6 +190,7 @@ class VaultSecretClient(
         request_id_capture: VaultRequestIdCapture | None = None,
         snapshot_manager: SecretSnapshotManager | None = None,
         close_action: Callable[[], None] | None = None,
+        descriptor_backend: SecretBackend = SecretBackend.VAULT,
     ) -> None:
         self._resolved = resolved
         self._hvac_client = hvac_client
@@ -200,6 +201,12 @@ class VaultSecretClient(
         self._snapshot_manager = snapshot_manager or SecretSnapshotManager()
         self._close_action = close_action
         self._closed = False
+        # Lets the OpenBao wheel (R-233.4) re-use this class with
+        # `descriptor_backend=SecretBackend.OPENBAO` while keeping
+        # the same `hvac.Client` machinery. Defaults to
+        # `SecretBackend.VAULT` so existing callers (and tests)
+        # see no change.
+        self._descriptor_backend = descriptor_backend
 
     # --- SecretProviderSession Protocol ---------------------------------
 
@@ -207,7 +214,7 @@ class VaultSecretClient(
     def descriptor(self) -> SecretProviderDescriptor:
         return SecretProviderDescriptor(
             name=self._resolved.provider_id,
-            backend=SecretBackend.VAULT,
+            backend=self._descriptor_backend,
             capability=self._resolved.capability,
             version="0.2.0",
         )
@@ -312,7 +319,7 @@ class VaultSecretClient(
         return SecretMetadata(
             reference=reference,
             version=SecretVersion(number=str(latest), created_at=created_at),
-            backend=SecretBackend.VAULT,
+            backend=self._descriptor_backend,
             created_at=created_at,
             expires_at=None,
             tags={
@@ -578,7 +585,7 @@ class VaultSecretClient(
             metadata=SecretMetadata(
                 reference=reference,
                 version=SecretVersion(number=actual_version, created_at=created_at),
-                backend=SecretBackend.VAULT,
+                backend=self._descriptor_backend,
                 created_at=created_at,
                 expires_at=None,
                 tags={
@@ -617,19 +624,39 @@ class VaultSecretClient(
     def _resolve_transit_key(self, reference: KeyReference) -> str:
         """Map `KeyReference` to a Vault Transit key name.
 
-        The default convention is `KeyReference.key_id` IS the
-        physical Transit key name. The framework populates
-        `KeyReference.key_id` from `properties.transit_key_bindings`
-        (if a mapping was configured) or from the caller's literal
-        name. We require a non-empty string here so a misconfigured
-        call surfaces as a clear `SecretConfigurationException`
-        rather than an opaque hvac 400.
+        Resolution order (mirrors Java `VaultSecretClient.physicalKey`):
+
+        1. If `KeyReference.key_id` is in
+           `properties.transit_key_bindings`, use the mapped
+           physical key name. This is the **logical-to-physical
+           indirection** that enables per-environment Transit
+           key rotation: deployment code uses a stable logical
+           name (e.g. ``"tenant-master-dek"``) and the
+           configuration binds it to the right physical key
+           for the current environment (e.g.
+           ``"prod/aes256-gcm96"`` vs ``"staging/aes256-gcm96"``).
+        2. Otherwise, use `KeyReference.key_id` as the physical
+           key name directly. This is a Pythonic backward-
+           compatibility extension; the Java side is strict and
+           raises `SEC-KEY-001` when no binding is found.
+        3. An empty `key_id` always raises
+           `SecretConfigurationException` (SEC-KEY-001) so
+           misconfiguration surfaces as a clear error.
         """
         if not reference.key_id:
             raise SecretConfigurationException(
-                f"vault: KeyReference {reference!r} has an empty key_id; "
-                "cannot resolve a Vault Transit key",
+                f"vault [SEC-KEY-001]: KeyReference {reference!r} "
+                "has an empty key_id; cannot resolve a Vault Transit key",
             )
+        bindings = self._resolved.properties.transit_key_bindings
+        if bindings and reference.key_id in bindings:
+            physical = bindings[reference.key_id]
+            if not physical:
+                raise SecretConfigurationException(
+                    f"vault [SEC-KEY-001]: Transit key binding for "
+                    f"{reference.key_id!r} is empty",
+                )
+            return physical
         return reference.key_id
 
     def _map_provider_error(

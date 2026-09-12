@@ -13,6 +13,7 @@ members = [
   "components/secret/secret-core",
   "components/secret/secret-redis",
   "components/secret/secret-vault",
+  "components/secret/secret-openbao",
   "components/cache/cache-core",
   "components/cache/cache-redis",
 ]
@@ -26,6 +27,7 @@ atlas-richie-resilience = { workspace = true }
 atlas-richie-secret-core = { workspace = true }
 atlas-richie-secret-redis = { workspace = true }
 atlas-richie-secret-vault = { workspace = true }
+atlas-richie-secret-openbao = { workspace = true }
 atlas-richie-cache-core = { workspace = true }
 atlas-richie-cache-redis = { workspace = true }
 atlas-richie-testing = { workspace = true }

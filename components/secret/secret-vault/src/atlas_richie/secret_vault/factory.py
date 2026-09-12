@@ -48,6 +48,7 @@ from typing import Protocol, runtime_checkable
 import hvac
 
 from atlas_richie.secret.errors import SecretConfigurationException, SecretException
+from atlas_richie.secret.metadata import SecretBackend, SecretCapability
 from atlas_richie.secret.provider.configuration import SecretProviderConfiguration
 from atlas_richie.secret.provider.descriptor import SecretProviderDescriptor
 from atlas_richie.secret.provider.factory import SecretProviderFactory
@@ -131,6 +132,7 @@ class VaultSecretProviderFactory:
     __slots__ = (
         "_client_factory",
         "_configuration_resolver",
+        "_descriptor_backend",
         "_name_override",
         "_properties",
         "_version",
@@ -144,6 +146,7 @@ class VaultSecretProviderFactory:
         version: str = "0.2.0",
         client_factory: _HvacClientFactory | None = None,
         configuration_resolver: VaultConfigurationResolver | None = None,
+        descriptor_backend: SecretBackend = SecretBackend.VAULT,
     ) -> None:
         self._properties = properties
         self._name_override = name
@@ -152,6 +155,11 @@ class VaultSecretProviderFactory:
         self._configuration_resolver = (
             configuration_resolver or VaultConfigurationResolver()
         )
+        # Lets the OpenBao wheel (R-233.4) re-use this factory with
+        # a different `SecretBackend` value on the produced
+        # `VaultSecretClient.descriptor`. Defaults to VAULT so
+        # existing callers see no change.
+        self._descriptor_backend = descriptor_backend
 
     @property
     def properties(self) -> VaultSecretProperties:
@@ -164,15 +172,11 @@ class VaultSecretProviderFactory:
         return f"vault-{self._properties.namespace}"
 
     @property
-    def backend(self):  # type: ignore[no-untyped-def]
-        # Imported lazily to keep the module top-level import surface
-        # small for callers that just want the factory class.
-        from atlas_richie.secret.metadata import SecretBackend
-        return SecretBackend.VAULT
+    def backend(self) -> SecretBackend:
+        return self._descriptor_backend
 
     @property
-    def capability(self):  # type: ignore[no-untyped-def]
-        from atlas_richie.secret.metadata import SecretCapability
+    def capability(self) -> SecretCapability:
         return SecretCapability(
             can_read=True,
             can_write=True,
@@ -225,6 +229,7 @@ class VaultSecretProviderFactory:
                 resolved=resolved,
                 hvac_client=hvac_client,
                 close_action=_make_close_action(hvac_client),
+                descriptor_backend=self._descriptor_backend,
             )
         except Exception as error:
             # Tear down the partially-constructed hvac.Client so

@@ -81,6 +81,14 @@ class VaultSecretProperties(BaseSettings):
     kv_mount: str = Field(default="secret")
     transit_mount: str = Field(default="transit")
 
+    # Transit key bindings: logical name → physical Transit key name.
+    # Mirrors Java `VaultSecretProperties.Transit.keyBindings`. When
+    # a `KeyReference.key_id` is present in this map, the client
+    # uses the mapped physical key; otherwise the key_id is used
+    # as-is (backward-compatible with deployments that pass the
+    # physical name directly).
+    transit_key_bindings: dict[str, str] = Field(default_factory=dict)
+
     # Retry
     max_retries: int = Field(default=3, ge=0)
     retry_backoff_seconds: float = Field(default=0.5, gt=0)

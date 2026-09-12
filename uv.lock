@@ -13,6 +13,7 @@ members = [
     "atlas-richie-platform",
     "atlas-richie-resilience",
     "atlas-richie-secret-core",
+    "atlas-richie-secret-openbao",
     "atlas-richie-secret-redis",
     "atlas-richie-secret-vault",
     "atlas-richie-testing",
@@ -169,6 +170,7 @@ dependencies = [
     { name = "atlas-richie-oauth" },
     { name = "atlas-richie-resilience" },
     { name = "atlas-richie-secret-core" },
+    { name = "atlas-richie-secret-openbao" },
     { name = "atlas-richie-secret-redis" },
     { name = "atlas-richie-secret-vault" },
 ]
@@ -183,6 +185,7 @@ requires-dist = [
     { name = "atlas-richie-oauth", editable = "components/oauth" },
     { name = "atlas-richie-resilience", editable = "components/resilience" },
     { name = "atlas-richie-secret-core", editable = "components/secret/secret-core" },
+    { name = "atlas-richie-secret-openbao", editable = "components/secret/secret-openbao" },
     { name = "atlas-richie-secret-redis", editable = "components/secret/secret-redis" },
     { name = "atlas-richie-secret-vault", editable = "components/secret/secret-vault" },
 ]
@@ -221,6 +224,28 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
 ]
 provides-extras = ["crypto", "test"]
+
+[[package]]
+name = "atlas-richie-secret-openbao"
+version = "0.2.0"
+source = { editable = "components/secret/secret-openbao" }
+dependencies = [
+    { name = "atlas-richie-contracts" },
+    { name = "atlas-richie-secret-vault" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "atlas-richie-secret-vault", editable = "components/secret/secret-vault" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+]
+provides-extras = ["test"]
 
 [[package]]
 name = "atlas-richie-secret-redis"

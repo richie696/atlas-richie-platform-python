@@ -100,3 +100,25 @@ def test_env_prefix_drives_field_binding(monkeypatch: pytest.MonkeyPatch) -> Non
     assert p.url == "http://from-env:8200"
     assert p.token == "env-token"
     assert p.kv_mount == "kv-from-env"
+
+
+def test_transit_key_bindings_default_empty() -> None:
+    p = VaultSecretProperties(url="http://127.0.0.1:8200", token="x")
+    assert p.transit_key_bindings == {}
+
+
+def test_transit_key_bindings_default_isolated_per_instance() -> None:
+    """Two instances must not share a default-dict reference."""
+    p1 = VaultSecretProperties(url="http://127.0.0.1:8200", token="x")
+    p2 = VaultSecretProperties(url="http://127.0.0.1:8200", token="x")
+    p1.transit_key_bindings["logical"] = "physical"
+    assert p2.transit_key_bindings == {}
+
+
+def test_transit_key_bindings_explicit() -> None:
+    p = VaultSecretProperties(
+        url="http://127.0.0.1:8200",
+        token="x",
+        transit_key_bindings={"tenant-master": "prod/aes256-gcm96"},
+    )
+    assert p.transit_key_bindings == {"tenant-master": "prod/aes256-gcm96"}

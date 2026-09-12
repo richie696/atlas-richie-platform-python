@@ -263,21 +263,18 @@ note at the bottom of this doc).
 - hvac SDK types do not appear in any public signature; the
   facade exposes only framework-protocol types.
 
-## R-233.0 follow-up noticed in this commit (NOT fixed here)
+## R-233.0 follow-up notice (clarified post-merge)
 
-`atlas-richie-secret-core`'s `pyproject.toml` does not list
-`pydantic` or `pydantic-settings` as runtime dependencies,
-even though several core modules use them. Today, this is
-hidden because pydantic is pulled in transitively by other
-workspace packages (`cache-core` → `pydantic`). For the
-isolated-wheel test, the secret-vault venv has no
-`cache-core`, so the secret-core `import` succeeds (the
-unused `pydantic` symbols are not actually imported by
-secret-core on its hot path), but a future refactor that
-exposes a pydantic-using API on secret-core would silently
-break in isolation. **Recommended**: R-233.0.x follow-up
-to add `pydantic>=2.0,<3.0` and `pydantic-settings>=2.0,<3.0`
-to `components/secret/secret-core/pyproject.toml`.
+The R-233.2 handoff originally suggested a follow-up to add
+`pydantic` / `pydantic-settings` to `atlas-richie-secret-core`'s
+`pyproject.toml`. **That suggestion was wrong** — `grep -rE
+"import pydantic" components/secret/secret-core/src/` returns
+zero matches, and a clean isolated venv that installs only
+`atlas-richie-secret-core==0.2.0` (and its only declared dep
+`atlas-richie-contracts==0.2.0`) successfully runs
+`import atlas_richie.secret` with no pydantic installed.
+`pydantic` is a transitive dep of `cache-core`, not of
+`secret-core`, so the supposed "latent risk" does not exist.
 
 ## Acceptance checklist
 

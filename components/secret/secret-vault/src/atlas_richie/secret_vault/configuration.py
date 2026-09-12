@@ -140,6 +140,10 @@ class VaultConfigurationResolver:
         auth type / mounts / key bindings-equivalent) so the hash
         changes when the deployment-relevant config changes.
         """
+        bindings = properties.transit_key_bindings or {}
+        bindings_canonical = "\n".join(
+            f"{k}={v}" for k, v in sorted(bindings.items())
+        )
         canonical = (
             f"{provider_id}\n"
             f"{properties.url}\n"
@@ -151,6 +155,7 @@ class VaultConfigurationResolver:
             f"{properties.kubernetes_mount_point}\n"
             f"{properties.approle_role_id or ''}\n"
             f"{properties.approle_mount_point}\n"
+            f"{bindings_canonical}\n"
         )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
