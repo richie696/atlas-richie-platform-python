@@ -91,20 +91,44 @@
 - **ADR**: ADR-SEN-001
 - **Deps**: M0.4
 
-### M0.5-A [ ] 唯一异常层:`atlas_richie.sentinel.errors`(原语从其导入)
-- **背景**: 若把 `errors.py` 放进 `primitives/`,而 M1.1 又新建 `sentinel/errors/`,会出现两套同名异常(`CircuitOpen` / `BulkheadFull` / `RetryExhausted` / `RetryNotPermitted` / `RateLimitExceeded` / `ResilienceError`),用户代码无法用单一 `except` 跨模块捕获。
-- **决策**:**唯一异常层 = `atlas_richie.sentinel.errors`**,**所有原语模块从中导入**
+### M0.5-A [ ] 唯一异常层:`atlas_richie.sentinel.errors`(原语从其导入,零 3rd-party 兼容)
+- **背景**: 现有 `errors.py` 继承 `atlas_richie.contracts.PlatformError`,这会让主包**反向依赖 contracts**,违反 §2.4 "Sentinel 不依赖 platform contracts"。此外,M0.5 必须建立**唯一异常树**,让所有 `except` 能跨原语和 engine 边界捕获。
+- **决策**:**唯一异常层 = `atlas_richie.sentinel.errors`**,**所有原语模块从中导入**,**根异常 `SentinelError` 继承 stdlib `Exception`**(零依赖)
 - **Deliverable**:
   - M0.5 把 `errors.py` 直接 `git mv` 到 `src/atlas_richie/sentinel/errors/__init__.py`(不是 `primitives/errors.py`)
+  - **删除** `from atlas_richie.contracts.errors import PlatformError`,改为 `class SentinelError(Exception): ...` 内部定义
+  - `class ResilienceError(SentinelError): ...`(原基类从继承 `PlatformError` 改为继承 `SentinelError`)
+  - 5 个具体异常(`RetryExhausted` / `RetryNotPermitted` / `CircuitOpen` / `RateLimitExceeded` / `BulkheadFull`)继承 `ResilienceError`
   - `primitives/circuit_breaker.py` 等从 `from atlas_richie.sentinel.errors import CircuitOpen` 导入
-  - 5 个 `from atlas_richie.sentinel.errors import ...` 引用覆盖所有 5 个具体异常
+- **唯一异常树**:
+  ```
+  SentinelError(Exception)            ← 根,stdlib Exception
+  ├── ResilienceError(SentinelError)
+  │   ├── RetryExhausted
+  │   ├── RetryNotPermitted
+  │   ├── CircuitOpen
+  │   ├── RateLimitExceeded
+  │   └── BulkheadFull
+  ├── SentinelBlockedError(SentinelError)     ← M1.1 加
+  │   ├── FlowBlocked
+  │   ├── ParamFlowBlocked
+  │   ├── SystemBlocked
+  │   ├── CircuitBlocked → CircuitOpen(复用)
+  │   ├── AuthorityDenied
+  │   └── BulkheadFull(可复用 M0.5 版本)
+  ├── SentinelConfigurationError(SentinelError)   ← M1.1 加
+  ├── SentinelLifecycleError(SentinelError)        ← M1.1 加
+  └── RuleSnapshotError(SentinelLifecycleError)     ← M1.1 加
+  ```
 - **Exit Criteria**:
   - `ls components/sentinel/sentinel/src/atlas_richie/sentinel/errors/__init__.py` 存在
+  - `grep "from atlas_richie.contracts" components/sentinel/sentinel/src/atlas_richie/sentinel/errors/__init__.py` 返回 0 行(无 contracts 反向依赖)
   - `grep "from atlas_richie.sentinel.errors" components/sentinel/sentinel/src/atlas_richie/sentinel/primitives/` 返回 ≥ 5 行
-  - `grep "from atlas_richie.sentinel.errors" components/sentinel/sentinel/src/atlas_richie/sentinel/primitives/` 0 重复定义
-  - M1.1 实现 `sentinel/errors/base.py / block.py / configuration.py / lifecycle.py` 时**继承/复用** M0.5 提供的 5 个具体异常,**不**新建同名类
+  - `grep -E "^class (CircuitOpen|BulkheadFull|RetryExhausted|RetryNotPermitted|RateLimitExceeded|ResilienceError)" components/sentinel/sentinel/src/atlas_richie/sentinel/` 0 重复定义
+  - 5 个具体异常 + `ResilienceError` 都在 `atlas_richie.sentinel.errors` 模块下,`isinstance(x, SentinelError)` 对原语异常为真
+  - M1.1 实现 `sentinel/errors/{base,block,configuration,lifecycle}.py` 时**继承** M0.5-A 提供的 `SentinelError`,**不**新建同名根
 - **Test ID**: —
-- **ADR**: ADR-SEN-001 扩展
+- **ADR**: ADR-SEN-001, ADR-SEN-003(Sentinel 不依赖 platform)
 - **Deps**: M0.5
 
 ### M0.6 [ ] 删除 sentinel-primitives/core/rules 三个基础 wheel 骨架
@@ -130,19 +154,19 @@
 - **ADR**: ADR-SEN-003
 - **Deps**: M0.5
 
-### M0.7.1 ⬜ 主 wheel 本地 build + 干净 venv install + import 验证
-- **Deliverable**(对应原 M0.11):
-  - `uv build --package atlas-richie-sentinel` 产出 wheel
-  - 干净 venv 装构建产物:
-    - `uv venv /tmp/sentinel-m0-test`
-    - `VIRTUAL_ENV=/tmp/sentinel-m0-test uv pip install /path/to/atlas_richie_sentinel-0.2.0-py3-none-any.whl`
-  - `python -c "import atlas_richie.sentinel; print(dir(atlas_richie.sentinel))"` 成功
-  - `python -c "from atlas_richie.sentinel.primitives import Retry, CircuitBreaker, TokenBucket, Bulkhead, IdempotencyKey, Clock; print(Retry, CircuitBreaker, TokenBucket, Bulkhead, IdempotencyKey, Clock)"` 成功
-  - `pip show atlas-richie-sentinel` 显示 `Requires:` 为空
-- **Exit Criteria**: 上面 4 个步骤全过,`Requires:` 行为空(确认零依赖)
+### M0.7.1 ⬜ 唯一 `primitives/__init__.py` 集中 re-export 公开原语
+- **背景**: M0 不改任何公开类名(`RetryPolicy` / `RetryExecutor` / `IdempotencyKey` / `StatelessIdempotencyKey` / `NeverIdempotencyKey` / `CallableIdempotencyKey` / `CircuitBreaker` / `TokenBucket` / `Bulkhead` / `Clock` / `SystemClock` / `ManualClock` / `RandomSource` / `SystemRandom` / `DeterministicRandom` / `system_sleep`),但需要 1 个入口让用户用 `from atlas_richie.sentinel.primitives import ...` 一次拿全。
+- **Deliverable**:
+  - `primitives/__init__.py` 内容:re-export 每个原语模块的**公开类型**
+  - `__all__` 列完整清单
+  - **不**引入任何额外类名(如不存在的 `Retry`,沿用 `RetryPolicy` + `RetryExecutor`)
+- **Exit Criteria**:
+  - `cat components/sentinel/sentinel/src/atlas_richie/sentinel/primitives/__init__.py` 含完整 re-export
+  - `python -c "from atlas_richie.sentinel.primitives import RetryPolicy, RetryExecutor, CircuitBreaker, TokenBucket, Bulkhead, IdempotencyKey, Clock, SystemClock, ManualClock, RandomSource, StatelessIdempotencyKey, NeverIdempotencyKey, CallableIdempotencyKey"` 成功
+  - `python -c "from atlas_richie.sentinel.primitives import Retry"` 抛 `ImportError`(确认 `Retry` 不存在,避免外部代码误用)
 - **Test ID**: —
-- **ADR**: ADR-SEN-002, ADR-SEN-003
-- **Deps**: M0.7
+- **ADR**: ADR-SEN-001
+- **Deps**: M0.5, M0.5-A
 
 ### M0.8 [ ] 更新真实消费者依赖(全仓 grep 已验证)
 - **背景**: 2026-09-13 `grep -rE "atlas_richie\.resilience|atlas-richie-resilience" components/ foundation/ --include="pyproject.toml" --include="*.py" | grep -v __pycache__` 的**实际命中**(排除 sentinel 自指):
@@ -181,11 +205,14 @@
   - 移除 `tools/release/verify_isolated_wheels.py` 中 `(f"atlas-richie-resilience==...")` 行
   - 同步更新 `uv.lock`(`uv lock` 触发)
   - 同步更新 `components/sentinel/docs/M0-skeleton-handoff.md` 标注 M0 状态
+  - 同步更新根目录 `HANDOFF.md`:**历史验收事实保留**(Phase B.4 引入 resilience / Phase E E2E 等已 DONE 的记录),但 "当前架构" 章节中 resilience 描述改为"Sentinel 主包已收编"并指向 `components/sentinel/docs/DESIGN.md`;新增 `R-SENTINEL-M0-handoff.md` 占位段落
+  - 同步更新 `components/resilience/README.md`(如果目录还在,虽然 `git rm` 会删整个目录,本条以防删失败)开头加 "DEPRECATED → see components/sentinel/"
 - **Exit Criteria**:
   - `ls components/resilience/` 不存在
-  - `grep "atlas-richie-resilience" pyproject.toml versions.toml tools/release/verify_isolated_wheels.py components/sentinel/docs/M0-skeleton-handoff.md` 返回 0 行
+  - `grep "atlas-richie-resilience" pyproject.toml versions.toml tools/release/verify_isolated_wheels.py components/sentinel/docs/M0-skeleton-handoff.md HANDOFF.md` 返回 0 行
   - `uv lock` 成功
   - 全仓 release/verify 脚本不引用 `atlas-richie-resilience`
+  - `HANDOFF.md` 仍包含历史 Phase B-E 验收事实(事实保留),但"当前架构"段落已更新
 - **Test ID**: —
 - **ADR**: ADR-SEN-001
 - **Deps**: M0.8(consumer 已迁走),M0.8.1(命名空间检查工具就位)
@@ -203,14 +230,24 @@
 - **ADR**: —
 - **Deps**: M0.6(主 wheel 骨架就位)
 
-### M0.10 [ ] 现有 67 个 Resilience 测试迁移后全部通过
-- **Deliverable**:
-  - `components/sentinel/sentinel/tests/test_retry.py` / `test_circuit_breaker.py` / `test_token_bucket.py` / `test_bulkhead.py` / `test_idempotency.py` / `test_clock.py` / `test_random_source.py` / `test_errors.py`
-  - 每个测试 import 改成 `from atlas_richie.sentinel.primitives import ...`
+### M0.10 [ ] 现有 67 个 Resilience 测试迁移后全部通过(按现状 7 文件 + 1 helpers)
+- **Deliverable**(测试文件**按现状 7 个 + 1 helpers**,不预先拆分):
+  - `git mv components/resilience/tests/test_retry.py` → `components/sentinel/sentinel/tests/test_retry.py`
+  - `git mv components/resilience/tests/test_rate_limit.py` → `.../test_rate_limit.py`(**测试文件名不变**,只 import 改;`rate_limit.py` 源码改名为 `token_bucket.py` 是源码侧,测试侧保持 `test_rate_limit.py` 与历史一致)
+  - `git mv components/resilience/tests/test_circuit_breaker.py` → `...`
+  - `git mv components/resilience/tests/test_bulkhead.py` → `...`
+  - `git mv components/resilience/tests/test_idempotency.py` → `...`
+  - `git mv components/resilience/tests/test_composition.py` → `...`
+  - `git mv components/resilience/tests/test_e2e_resilience.py` → `...`
+  - `git mv components/resilience/tests/_helpers.py` → `.../tests/_helpers.py`
+  - **不**预先拆分出 `test_clock.py` / `test_random_source.py` / `test_errors.py` 等(clock / random_source / errors 是源码侧的拆分,不是测试侧的拆分;M0 阶段保留单一 `test_retry.py` 等)
+  - 每个测试 import 改成 `from atlas_richie.sentinel.primitives import ...` 或 `from atlas_richie.sentinel.errors import ...`
   - 测试用例本身不改(只改 import + namespace 字符串)
+  - 如果 `from atlas_richie.resilience import errors` 这类集合 import 改成 `from atlas_richie.sentinel import errors` 或 `from atlas_richie.sentinel.errors import ...`
 - **Exit Criteria**:
   - `uv run --no-sync pytest components/sentinel/sentinel/tests/ -q` 显示 ≥ 67 passed
   - 无 1 个 skipped / failed / error
+  - `ls components/sentinel/sentinel/tests/` 含 7 个 `test_*.py` + 1 个 `_helpers.py`,**不**含 `test_token_bucket.py` / `test_clock.py` / `test_random_source.py` / `test_errors.py`(后三者是计划虚构的,会随 M1.x 真实拆分时再产生)
 - **Test ID**: SEN-CORE-001, SEN-CB-001
 - **ADR**: —
 - **Deps**: M0.9
@@ -218,17 +255,20 @@
 ### M0.11 [ ] 主 wheel 独立构建、安装和 public import 验证通过
 - **Deliverable**:
   - 干净 venv(无任何 atlas-richie-* 包预装)中:
+    - `uv build --package atlas-richie-sentinel` 产出 wheel
     - `uv venv /tmp/sentinel-m0-test`
-    - `uv pip install /path/to/atlas-richie-sentinel-0.2.0-py3-none-any.whl` (用 `uv build` 出的 wheel)
-    - `python -c "import atlas_richie.sentinel; print(dir(atlas_richie.sentinel))"` 不报错
-    - `pip show atlas-richie-sentinel` 显示 `Requires: <空列表>`
+    - `VIRTUAL_ENV=/tmp/sentinel-m0-test uv pip install /path/to/atlas_richie_sentinel-0.2.0-py3-none-any.whl`
+    - `python -c "import atlas_richie.sentinel"` 不报错
+    - `python -c "from atlas_richie.sentinel.primitives import RetryPolicy, RetryExecutor, CircuitBreaker, TokenBucket, Bulkhead, IdempotencyKey, Clock; print(RetryPolicy, RetryExecutor, CircuitBreaker, TokenBucket, Bulkhead, IdempotencyKey, Clock)"` 全部成功
+    - `python -c "from atlas_richie.sentinel.errors import SentinelError, ResilienceError, CircuitOpen, BulkheadFull, RetryExhausted, RetryNotPermitted, RateLimitExceeded"` 全部成功
+    - `pip show atlas-richie-sentinel` 显示 `Requires:` 为空
 - **Exit Criteria**:
-  - `Requires:` 行为空(确认零依赖)
-  - `python -c "import atlas_richie.sentinel"` 成功
-  - `python -c "from atlas_richie.sentinel.primitives import Retry; print(Retry)"` 成功
+  - `Requires:` 行为空(确认零依赖,无 contracts 反向依赖)
+  - 4 个 import 测试全过(主 facade + 7 个原语 + 7 个异常)
+  - `python -c "from atlas_richie.sentinel.primitives import Retry"` 抛 `ImportError`(确认 `Retry` 不存在,守住公开 API 边界)
 - **Test ID**: —
 - **ADR**: ADR-SEN-002, ADR-SEN-003
-- **Deps**: M0.10
+- **Deps**: M0.10, M0.7.1
 
 ### M0 Exit [ ] (M0.1-M0.11 全部完成)
 - **Exit Criteria**(由 §21 + 11 个子项汇总):
