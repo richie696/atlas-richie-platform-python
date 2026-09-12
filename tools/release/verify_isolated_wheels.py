@@ -60,6 +60,7 @@ PACKAGES = (
     (f"atlas-richie-secret-volcengine-kms=={_VERSION}", "atlas_richie.secret_volcengine_kms"),
     (f"atlas-richie-secret-oci-vault-kms=={_VERSION}", "atlas_richie.secret_oci_vault_kms"),
     (f"atlas-richie-secret-ibm-key-protect=={_VERSION}", "atlas_richie.secret_ibm_key_protect"),
+    (f"atlas-richie-secret-baidu-kms=={_VERSION}", "atlas_richie.secret_baidu_kms"),
     (f"atlas-richie-oauth=={_VERSION}", "atlas_richie.oauth"),
     (f"atlas-richie-platform=={_VERSION}", "atlas_richie.platform"),
 )

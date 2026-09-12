@@ -27,6 +27,7 @@ members = [
   "components/secret/secret-volcengine-kms",
   "components/secret/secret-oci-vault-kms",
   "components/secret/secret-ibm-key-protect",
+  "components/secret/secret-baidu-kms",
   "components/cache/cache-core",
   "components/cache/cache-redis",
 ]
@@ -54,6 +55,7 @@ atlas-richie-secret-huawei-csms-kms = { workspace = true }
 atlas-richie-secret-volcengine-kms = { workspace = true }
 atlas-richie-secret-oci-vault-kms = { workspace = true }
 atlas-richie-secret-ibm-key-protect = { workspace = true }
+atlas-richie-secret-baidu-kms = { workspace = true }
 atlas-richie-cache-core = { workspace = true }
 atlas-richie-cache-redis = { workspace = true }
 atlas-richie-testing = { workspace = true }
