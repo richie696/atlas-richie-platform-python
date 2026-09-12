@@ -803,12 +803,24 @@
 
 ### M3.6 [x] 完成真实多 worker 语义测试
 - **Deliverable**:
-  - 启动 2 个 ASGI worker(uvicorn workers=2)
-  - **测试重点**:每个 worker 的规则和指标**彼此隔离**(per-process 语义)
-  - **不**断言"configured threshold × worker count = capacity"(负载分配不均时仅是近似,非保证值)
+  - `tests/test_sen_multiprocess.py` — 3 个测试
+  - 用 `multiprocessing.get_context("spawn")` 启动 2 个真子进程,
+    各自独立创建 Engine / RuleRepository
+  - **不**走 uvicorn / gunicorn(测试不引入 web server 依赖)
+- **覆盖**:
+  - `test_two_workers_have_independent_state` — 2 个进程独立 Engine,
+    验证 PID 不同 + admitted 计数独立(5 / 7 都返回,无 cross-talk)
+  - `test_two_workers_do_not_share_repository_state` — Worker A apply
+    快照,Worker B 看到自己空 repo
+  - `test_two_engines_have_independent_inflight` — In-process 类比:
+    engine_a.in_flight 增 1 不影响 engine_b.in_flight
+- **测试重点**:每个 worker 的规则和指标**彼此隔离**(per-process 语义)
+  - **不**断言"configured threshold × worker count = capacity"
   - 文档明确说明 per-process 语义,Cluster 模式下才有跨 worker 精确总量
   - Dashboard 不会把单 worker 数据描述成整个服务
 - **Exit Criteria**:
+  - 2 个独立 worker 状态完全隔离 — ✅ 3/3 通过
+  - per-process 文档明确 — ✅ PLANNING §M3.6 + DESIGN §M3.6
   - 2 worker 跑 30s 持续,每个 worker 的 metric 报告**独立**正确
   - 同一 resource 在 worker A 累计的 pass_count + worker B 累计的 pass_count ≠ 全局 pass_count(各自独立)
   - 同一 resource 触发的 BlockReason 在两个 worker 中分别记录
