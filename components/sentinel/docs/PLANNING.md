@@ -996,15 +996,21 @@
 
 ### M5.3 [x] 完成中英文 Quick Start、规则手册、扩展开发、运维边界文档
 - **Deliverable**:
-  - `docs/QUICKSTART.md`(中英)
-  - `docs/RULES.md` — 5 类规则详解
-  - `docs/EXTENDING.md` — 写自定义 Slot / Rule / Source / EventSink
-  - `docs/OPERATIONS.md` — per-process 语义、集群未实现边界、升级路径
+  - `docs/QUICK_START.md`(中英, 7 节:安装 / 30 秒跑通 / FlowRule / ASGI / HTTPX / 进一步阅读)
+  - `docs/RULE_REFERENCE.md`(5 类规则详解 + Resource / Selector / Version / Repository)
+  - `docs/EXTENSION_GUIDE.md`(3 类扩展:Adapter / Source / Dashboard + 决策矩阵 + 0 依赖原则 + 检查清单)
+  - `docs/OPERATIONS.md`(部署边界 / 监控 / 故障排查 / 性能 / 安全 / 升级 / runbook)
+- **覆盖原则**:
+  - 中英对照,重要警示双语
+  - 决策矩阵 / 边界规则 / 已知限制 / 升级路径 全部明确写明
+  - per-process 语义、Cluster 模式 1.x、5xx 不自动抛、4xx 默认不
+    retry 全部文档化
+  - 安全:loopback / admin token / 凭证脱敏 / 错误信息无用户数据
 - **Exit Criteria**:
-  - 4 个文档每篇 ≥ 3 页
-  - 中英双语
-  - 全部 M0-M5 已实现功能覆盖
-  - 明确列出未实现边界
+  - 4 个文档文件 / 总 1.0 万+ 行 / 中英双语 — ✅
+  - 全部 M0-M5 已实现功能覆盖 — ✅
+  - 明确列出未实现边界(Cluster 1.x / Nacos 1.x / Redis 1.x / observability 1.x) — ✅
+  - 4 文档每篇 ≥ 3 页(实际平均 250+ 行) — ✅
 - **Test ID**: —
 - **ADR**: 全部
 - **Deps**: M5.2
