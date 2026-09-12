@@ -270,7 +270,6 @@
   - 移除 `versions.toml` 中 `atlas-richie-resilience` 条目
   - 移除 `tools/release/verify_isolated_wheels.py` 中 `(f"atlas-richie-resilience==...")` 行
   - 同步更新 `uv.lock`(`uv lock` 触发)
-  - 同步更新 `components/sentinel/docs/M0-skeleton-handoff.md` 标注 M0 状态
   - 同步更新根目录 `HANDOFF.md`:**历史验收事实保留**(Phase B.4 引入 resilience / Phase E E2E 等已 DONE 的记录),但 "当前架构" 章节中 resilience 描述改为"Sentinel 主包已收编"并指向 `components/sentinel/docs/DESIGN.md`;新增 `R-SENTINEL-M0-handoff.md` 占位段落
   - 同步更新 `components/resilience/README.md`(如果目录还在,虽然 `git rm` 会删整个目录,本条以防删失败)开头加 "DEPRECATED → see components/sentinel/"
 - **Exit Criteria**:
@@ -279,7 +278,6 @@
     - `pyproject.toml`(workspace member + sources)
     - `versions.toml`
     - `tools/release/verify_isolated_wheels.py`
-    - `components/sentinel/docs/M0-skeleton-handoff.md`
     - `components/sentinel/docs/DESIGN.md`
     - `components/sentinel/docs/PLANNING.md`
   - 根目录 `HANDOFF.md` 验收用**确定性 sentinel 标记**(M0.9 实施时在 `## 2. 总体架构决策` 段的开头/结尾插入明确注释,避免"假绿"):
