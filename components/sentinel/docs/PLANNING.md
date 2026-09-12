@@ -384,7 +384,7 @@
 ## M1：Engine、生命周期和指标内核
 
 ### M1.1 [ ] 实现领域模型和异常体系(基于 M0.5-A 已有异常层)
-- **背景**(M0.5-A): M0.5 已经把 5 个原语具体异常(`CircuitOpen` / `BulkheadFull` / `RetryExhausted` / `RetryNotPermitted` / `RateLimitExceeded`)+ 基类 `ResilienceError` 移到 `atlas_richie/sentinel/errors/__init__.py`。M1.1 **不再新建同名类**,只补 M0 还没建的部分。
+- **背景**(M0.5-A): M0.5 已经把 5 个原语具体异常(`CircuitOpen` / `BulkheadFull` / `RetryExhausted` / `RetryNotPermitted` / `RateLimitExceeded`)+ 基类 `ResilienceError` 移到 `atlas_richie/sentinel/errors/__init__.py`,根异常 `SentinelError(Exception)` 已定义。M1.1 **不再新建同名类**,只补 M0 还没建的部分。
 - **Deliverable**:
   - `model/`:
     - `resource.py` — `Resource` / `ResourceKind` / `TrafficType`
@@ -393,38 +393,39 @@
     - `outcome.py` — `OutcomeKind` 枚举(ADMITTED/SUCCEEDED/FAILED/CANCELLED/BLOCKED) + `Outcome` dataclass
     - `decision.py` — `SlotLease` Protocol + `NoopSlotLease` 不可变
     - `enums.py` — `BlockReason` / `RuleMatchKind` / `EngineState`
-  - `errors/` 拆分(复用 M0.5 已有 5 个具体异常):
-    - `__init__.py` — 现有(M0.5 移入,5 个具体异常 + `ResilienceError` 基类)
-    - `base.py` — 新增 `SentinelError`(M1 engine/lifecycle 异常的共同基类);**继承** `ResilienceError`(保留原语异常的捕获能力)
-    - `block.py` — 新增 `SentinelBlockedError` + 6 子类(`FlowBlocked` / `ParamFlowBlocked` / `SystemBlocked` / `CircuitBlocked` / `AuthorityDenied` / `BulkheadFull`);**`CircuitBlocked` 复用 M0.5 的 `CircuitOpen`**(继承或别名)
-    - `configuration.py` — 新增 `SentinelConfigurationError`(继承 `SentinelError`)
-    - `lifecycle.py` — 新增 `SentinelLifecycleError` + `RuleSnapshotError`(继承 `SentinelError`)
-  - 完整异常树:
+  - `errors/` 拆分(复用 M0.5 已有根 + 5 个具体异常):
+    - `__init__.py` — re-export 全部公开异常(根 + ResilienceError + 5 原语 + SentinelBlockedError + 6 子类 + SentinelConfigurationError + SentinelLifecycleError + RuleSnapshotError)
+    - `base.py` — **新文件,集中定义** `SentinelError(Exception)`,**从 M0 errors/__init__.py 迁出**;`__init__.py` 仅 re-export(避免两个地方定义根异常)
+    - `block.py` — 新增 `SentinelBlockedError(SentinelError)` + 6 子类(`FlowBlocked` / `ParamFlowBlocked` / `SystemBlocked` / `CircuitBlocked` / `AuthorityDenied`);`CircuitBlocked` 暴露 `retry_after` / `state` / `rule` 但**不是** `CircuitOpen` 子类(单继承不复用)
+    - `configuration.py` — 新增 `SentinelConfigurationError(SentinelError)`
+    - `lifecycle.py` — 新增 `SentinelLifecycleError(SentinelError)` + `RuleSnapshotError(SentinelLifecycleError)`
+  - 完整异常树(M0.5-A 锁定,单继承,不复用原语异常):
     ```
-    SentinelError
-    ├── (ResilienceError  ← 来自 M0.5)
+    SentinelError(Exception)        ← 根,stdlib
+    ├── ResilienceError(SentinelError)   ← 原语 throw
     │   ├── RetryExhausted
     │   ├── RetryNotPermitted
-    │   ├── CircuitOpen(可作 CircuitBlocked 别名)
+    │   ├── CircuitOpen
     │   ├── RateLimitExceeded
     │   └── BulkheadFull
-    ├── SentinelBlockedError
+    ├── SentinelBlockedError(SentinelError)    ← Engine 拒绝契约,独立分支
     │   ├── FlowBlocked
     │   ├── ParamFlowBlocked
     │   ├── SystemBlocked
-    │   ├── CircuitBlocked → CircuitOpen
-    │   ├── AuthorityDenied
-    │   └── BulkheadFull(可复用 M0.5 版本)
-    ├── SentinelConfigurationError
-    ├── SentinelLifecycleError
-    └── RuleSnapshotError
+    │   ├── CircuitBlocked                  ← 暴露 retry_after/state/rule 字段,非 CircuitOpen 子类
+    │   └── AuthorityDenied
+    ├── SentinelConfigurationError(SentinelError)
+    ├── SentinelLifecycleError(SentinelError)
+    └── RuleSnapshotError(SentinelLifecycleError)
     ```
 - **Exit Criteria**:
   - `from atlas_richie.sentinel.model import Resource, SentinelContext, Outcome, ...` 成功
   - `from atlas_richie.sentinel.errors import SentinelBlockedError, FlowBlocked, ...` 成功
   - 全部 frozen dataclass,`__init__` 拒绝可变默认值
-  - `CircuitOpen` 和 `CircuitBlocked` 是同一个类(无重复定义)
+  - `CircuitOpen` 和 `CircuitBlocked` **不是** 同一个类(单继承不复用,符合 M0.5-A);`isinstance(CircuitBlocked(), CircuitOpen) == False`
+  - `SentinelBlockedError` 与 `ResilienceError` 互不为子类
   - 异常有 `stable_code` / `BlockReason` / `resource` / `rule_id` / `retry_after` / `message` 字段
+  - `grep -E "^class (SentinelError|ResilienceError)" components/sentinel/sentinel/src/atlas_richie/sentinel/errors/` 只有 1 处定义(SentinelError 在 base.py,ResilienceError 在 __init__.py)
 - **Test ID**: SEN-CORE-001(part:outcome 5 种区分)
 - **ADR**: ADR-SEN-001, ADR-SEN-006
 - **Deps**: M0.5-A
