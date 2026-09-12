@@ -519,7 +519,7 @@
 
 ## M2：五类规则
 
-### M2.1 [ ] FlowRule/FlowSlot,覆盖 direct/origin/associated/call-path
+### M2.1 [x] FlowRule/FlowSlot,覆盖 direct/origin/associated/call-path
 - **Deliverable**:
   - `rules/flow.py` — `FlowRule` + `FlowGrade` / `FlowBehavior` / `FlowScope` 枚举
   - `slots/flow.py` — `FlowSlot`(Order=500),4 种 scope 各自实现
@@ -532,7 +532,7 @@
 - **ADR**: ADR-SEN-006
 - **Deps**: M1.6
 
-### M2.2 [ ] DegradeRule/DegradeSlot,并复用唯一 CircuitBreaker
+### M2.2 [x] DegradeRule/DegradeSlot,并复用唯一 CircuitBreaker
 - **Deliverable**:
   - `rules/degrade.py` — `DegradeRule` + `DegradeStrategy` 枚举
   - `slots/degrade.py` — `DegradeSlot`(Order=700),复用 `primitives.CircuitBreaker` 状态机
@@ -548,7 +548,7 @@
 - **ADR**: ADR-SEN-006
 - **Deps**: M2.1(共享 SlotChain 框架)
 
-### M2.3 [ ] ParamFlowRule/ParamFlowSlot 和基数治理
+### M2.3 [x] ParamFlowRule/ParamFlowSlot 和基数治理
 - **Deliverable**:
   - `rules/param_flow.py` — `ParamFlowRule` + `ParameterSpec` + `ParameterOverride` + `ParameterSource` 枚举
   - `slots/param_flow.py` — `ParamFlowSlot`(Order=600)
@@ -562,7 +562,7 @@
 - **ADR**: —
 - **Deps**: M2.1
 
-### M2.4 [ ] SystemRule/SystemSlot/SystemMetricSampler,覆盖 direct 和 adaptive capacity
+### M2.4 [x] SystemRule/SystemSlot/SystemMetricSampler,覆盖 direct 和 adaptive capacity
 - **Deliverable**:
   - `rules/system.py` — `SystemRule`(直接继承 `Rule`,**不是** `ResourceRule`)
   - `slots/system.py` — `SystemSlot`(Order=400),**只对 INBOUND 资源生效**
@@ -578,7 +578,7 @@
 - **ADR**: ADR-SEN-014, ADR-SEN-015
 - **Deps**: M2.1
 
-### M2.5 [ ] AuthorityRule/AuthoritySlot
+### M2.5 [x] AuthorityRule/AuthoritySlot
 - **Deliverable**:
   - `rules/authority.py` — `AuthorityRule` + `AuthorityStrategy` 枚举(ALLOW_LIST / DENY_LIST)
   - `slots/authority.py` — `AuthoritySlot`(Order=300)
@@ -592,7 +592,7 @@
 - **ADR**: —
 - **Deps**: M2.1
 
-### M2.6 [ ] 完成所有规则边界、状态、并发和组合测试
+### M2.6 [x] 完成所有规则边界、状态、并发和组合测试
 - **Deliverable**:
   - 每类规则:边界、状态、并发 3 类测试
   - 组合测试:Flow + Degrade + ParamFlow + Authority + System 同 resource 触发
@@ -605,7 +605,7 @@
 - **ADR**: 全部
 - **Deps**: M2.1-M2.5 全部
 
-### M2.7 [ ] 定义无第三方依赖的 `TokenService` Protocol + 本地默认实现
+### M2.7 [x] 定义无第三方依赖的 `TokenService` Protocol + 本地默认实现
 - **背景**: DESIGN.md ADR-SEN-011 要求 1.0 主包**必须预留** `TokenService` Port,Cluster M6+ 填入实现。若 M2 阶段不预留,FlowSlot 完成后再加会重写 FlowSlot。
 - **Deliverable**:
   - `ports/token.py` — 冻结值对象,无 3rd-party 依赖(`dataclasses.dataclass(frozen=True, slots=True)`):
