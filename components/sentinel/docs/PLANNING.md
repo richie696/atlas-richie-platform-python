@@ -51,7 +51,7 @@
 - **ADR**: ADR-SEN-004 ~ ADR-SEN-006
 - **Deps**: M0.1
 
-### M0.4 [ ] 创建 atlas-richie-sentinel 主 wheel
+### M0.4 [x] 创建 atlas-richie-sentinel 主 wheel
 - **Deliverable**:
   - `components/sentinel/sentinel/pyproject.toml` — name=`atlas-richie-sentinel`, `[project] version = "0.2.0"`, deps=空数组
     - **唯一版本源 = `pyproject.toml` 的 `[project] version`**;`__init__.py` 不再硬编码。
@@ -117,7 +117,7 @@
 - **ADR**: ADR-SEN-002
 - **Deps**: M0.1, M0.2, M0.3
 
-### M0.5 [ ] 使用 git mv 迁入 Resilience 源码和测试(保持现有公开 API,按目标结构重命名/拆分)
+### M0.5 [x] 使用 git mv 迁入 Resilience 源码和测试(保持现有公开 API,按目标结构重命名/拆分)
 - **Deliverable**(实际文件名按 `ls components/resilience/src/atlas_richie/resilience/` 现状):
   - `git mv` + 原地重命名/拆分:
     - `retry.py` → `primitives/retry.py`(名称不变,**公开类名 `RetryPolicy` / `RetryExecutor` 保持** — M0 不重命名)
@@ -144,7 +144,7 @@
 - **ADR**: ADR-SEN-001
 - **Deps**: M0.4
 
-### M0.5-A [ ] 唯一异常层:`atlas_richie.sentinel.errors`(原语从其导入,零 3rd-party 兼容)
+### M0.5-A [x] 唯一异常层:`atlas_richie.sentinel.errors`(原语从其导入,零 3rd-party 兼容)
 - **背景**: 现有 `errors.py` 继承 `atlas_richie.contracts.PlatformError`,这会让主包**反向依赖 contracts**,违反 §2.4 "Sentinel 不依赖 platform contracts"。此外,M0.5 必须建立**唯一异常树**,让所有 `except` 能跨原语和 engine 边界捕获。
 - **决策**:**唯一异常层 = `atlas_richie.sentinel.errors`**,**所有原语模块从中导入**,**根异常 `SentinelError` 继承 stdlib `Exception`**(零依赖)
 - **Deliverable**:
@@ -197,7 +197,7 @@
 - **ADR**: ADR-SEN-001, ADR-SEN-003(Sentinel 不依赖 platform)
 - **Deps**: M0.5
 
-### M0.6 [ ] 删除 sentinel-primitives/core/rules 三个基础 wheel 骨架
+### M0.6 [x] 删除 sentinel-primitives/core/rules 三个基础 wheel 骨架
 - **Deliverable**:
   - `git rm -r components/sentinel/sentinel-primitives/`
   - `git rm -r components/sentinel/sentinel-core/`
@@ -209,7 +209,7 @@
 - **ADR**: ADR-SEN-002
 - **Deps**: M0.4(主 wheel 先建好)
 
-### M0.7 [ ] 去除主包对 atlas-richie-contracts 的依赖
+### M0.7 [x] 去除主包对 atlas-richie-contracts 的依赖
 - **Deliverable**:
   - 主 wheel `pyproject.toml` `dependencies` = 空数组
   - 内部异常、生命周期、事件、Protocol 全部在 `atlas_richie.sentinel.errors` / `.ports` 内部定义
@@ -220,7 +220,7 @@
 - **ADR**: ADR-SEN-003
 - **Deps**: M0.5
 
-### M0.7.1 ⬜ 唯一 `primitives/__init__.py` 集中 re-export 公开原语
+### M0.7.1 [x] 唯一 `primitives/__init__.py` 集中 re-export 公开原语
 - **背景**: M0 不改任何公开类名(`RetryPolicy` / `RetryExecutor` / `IdempotencyKey` / `StatelessIdempotencyKey` / `NeverIdempotencyKey` / `CallableIdempotencyKey` / `CircuitBreaker` / `TokenBucket` / `Bulkhead` / `Clock` / `SystemClock` / `ManualClock` / `RandomSource` / `SystemRandom` / `DeterministicRandom` / `system_sleep`),但需要 1 个入口让用户用 `from atlas_richie.sentinel.primitives import ...` 一次拿全。
 - **Deliverable**:
   - `primitives/__init__.py` 内容:re-export 每个原语模块的**公开类型**
@@ -234,7 +234,7 @@
 - **ADR**: ADR-SEN-001
 - **Deps**: M0.5, M0.5-A
 
-### M0.8 [ ] 更新真实消费者依赖(全仓 grep 已验证)
+### M0.8 [x] 更新真实消费者依赖(全仓 grep 已验证)
 - **背景**: 2026-09-13 `grep -rE "atlas_richie\.resilience|atlas-richie-resilience" components/ foundation/ --include="pyproject.toml" --include="*.py" | grep -v __pycache__` 的**实际命中**(排除 sentinel 自指):
   - `foundation/platform/pyproject.toml` 列出 `atlas-richie-resilience>=0.2.0,<0.3.0` 作为 platform 聚合依赖
   - `components/http/src/` 和 `components/mcp/src/` **不**直接 import resilience
@@ -249,7 +249,7 @@
 - **ADR**: ADR-SEN-001
 - **Deps**: M0.7
 
-### M0.8.1 ⬜ wheel 命名空间所有权 + 文件重叠校验(构建时检查)
+### M0.8.1 [x] wheel 命名空间所有权 + 文件重叠校验(构建时检查)
 - **Deliverable**:
   - 工具脚本:`tools/release/check_sentinel_namespace.py`
   - 校验:对每个 sentinel 扩展 wheel 跑 `python -c "import importlib.metadata; ...; print([f for f in m.files if 'atlas_richie/sentinel' in str(f)])"`,断言没有任何扩展 wheel 写 `atlas_richie/sentinel/__init__.py` 或 `atlas_richie/sentinel/engine/...`
@@ -262,7 +262,7 @@
 - **ADR**: ADR-SEN-002(主 wheel 独占),DESIGN.md §3.1 命名空间所有权
 - **Deps**: M0.5, M0.6
 
-### M0.9 [ ] 删除 components/resilience 及发布配置
+### M0.9 [x] 删除 components/resilience 及发布配置
 - **Deliverable**:
   - `git rm -r components/resilience/`
   - 移除 workspace `pyproject.toml` 中 `components/resilience` member
@@ -313,7 +313,7 @@
 - **ADR**: ADR-SEN-001
 - **Deps**: M0.8(consumer 已迁走),M0.8.1(命名空间检查工具就位)
 
-### M0.9.1 ⬜ DESIGN.md §19 测试矩阵补 SEN-SYSTEM-001 + SEN-AUTH-001
+### M0.9.1 [x] DESIGN.md §19 测试矩阵补 SEN-SYSTEM-001 + SEN-AUTH-001
 - **背景**: 现有 §19 矩阵只有 SEN-CORE-001/002 / SEN-CB-001 / SEN-FLOW-001 / SEN-PARAM-001 / SEN-RULE-001 / SEN-ASGI-001 / SEN-HTTPX-001 / SEN-MP-001 / SEN-DASH-001 / SEN-CLUSTER-001 / SEN-PERF-001。SystemRule 和 AuthorityRule 没有专属 Test ID。
 - **Deliverable**:
   - DESIGN.md §19.1 表格新增:
@@ -326,7 +326,7 @@
 - **ADR**: —
 - **Deps**: M0.6(主 wheel 骨架就位)
 
-### M0.10 [ ] 现有 67 个 Resilience 测试迁移后全部通过(按现状 7 文件 + 1 helpers)
+### M0.10 [x] 现有 67 个 Resilience 测试迁移后全部通过(按现状 7 文件 + 1 helpers)
 - **Deliverable**(测试文件**按现状 7 个 + 1 helpers**,不预先拆分):
   - `git mv components/resilience/tests/test_retry.py` → `components/sentinel/sentinel/tests/test_retry.py`
   - `git mv components/resilience/tests/test_rate_limit.py` → `.../test_rate_limit.py`(**测试文件名不变**,只 import 改;`rate_limit.py` 源码改名为 `token_bucket.py` 是源码侧,测试侧保持 `test_rate_limit.py` 与历史一致)
@@ -348,7 +348,7 @@
 - **ADR**: —
 - **Deps**: M0.9
 
-### M0.11 [ ] 主 wheel 独立构建、安装和 public import 验证通过
+### M0.11 [x] 主 wheel 独立构建、安装和 public import 验证通过
 - **Deliverable**:
   - 干净 venv(无任何 atlas-richie-* 包预装)中:
     - `uv build --package atlas-richie-sentinel` 产出 wheel
@@ -366,7 +366,7 @@
 - **ADR**: ADR-SEN-002, ADR-SEN-003
 - **Deps**: M0.10, M0.7.1
 
-### M0 Exit [ ] (M0.1-M0.11 全部完成)
+### M0 Exit [x] (M0.1-M0.11 全部完成)
 - **Exit Criteria**(由 §21 + 11 个子项汇总):
   - 仓库只有一份原语实现
   - 不再存在 Resilience 产品或兼容 shim

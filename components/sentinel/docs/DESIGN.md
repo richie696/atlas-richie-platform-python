@@ -1374,8 +1374,10 @@ emit 不执行网络 I/O。需要远程发送的 Adapter 将事件放入自己�
 | SEN-CORE-001 | Slot 中途拒绝泄漏 permit | 单元 + 组件测试 | 每个进入点故障注入，逆序释放断言 |
 | SEN-CORE-002 | CancelledError 被吞或计为失败 | asyncio 组件测试 | 等待、业务执行、流式响应三个取消点 |
 | SEN-CB-001 | 熔断状态错误 | 状态迁移测试 | 合法/非法迁移、并发半开、时间推进 |
+| SEN-SYSTEM-001 | 系统自适应阈值错误地放过/误拒 | 确定性时钟 + 2 策略 + sampler 失败降级 | CPU/load/event-loop-lag/in-flight 指标采集正确性，指标采样器失败时按 fail-safe 降级 |
 | SEN-FLOW-001 | QPS/并发越界 | 确定性时钟测试 | 边界、burst、等待、公平、取消 |
 | SEN-PARAM-001 | 热点参数造成内存增长 | 基数/淘汰测试 | overflow 和 idle TTL |
+| SEN-AUTH-001 | 黑白名单/可信 origin resolver 误判 | origin 不可信 + ALLOW/DENY 互斥 + 配置错误拒绝 | 默认所有客户端 origin 不可信；DENY_LIST 命中即拒；OriginResolver 配置错误也拒绝并写审计 |
 | SEN-RULE-001 | 热更新产生半快照 | RuleSource contract test | 解析失败、乱序、重复、原子交换 |
 | SEN-ASGI-001 | 流式响应提前释放 | ASGI 协议集成测试 | body EOF、断连、异常 |
 | SEN-HTTPX-001 | 响应流未关闭导致 permit 泄漏 | HTTPX 集成测试 | EOF、aclose、异常、取消 |
