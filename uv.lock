@@ -30,6 +30,7 @@ members = [
     "atlas-richie-secret-rotation-daemon",
     "atlas-richie-secret-tencent-ssm-kms",
     "atlas-richie-secret-vault",
+    "atlas-richie-secret-volcengine-kms",
     "atlas-richie-testing",
 ]
 
@@ -905,6 +906,36 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
 ]
 provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-secret-volcengine-kms"
+version = "0.2.0"
+source = { editable = "components/secret/secret-volcengine-kms" }
+dependencies = [
+    { name = "atlas-richie-contracts" },
+    { name = "atlas-richie-secret-core" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+]
+
+[package.optional-dependencies]
+sdk = [
+    { name = "volcengine-python-sdk" },
+]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "atlas-richie-secret-core", editable = "components/secret/secret-core" },
+    { name = "pydantic", specifier = ">=2.0,<3.0" },
+    { name = "pydantic-settings", specifier = ">=2.0,<3.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+    { name = "volcengine-python-sdk", marker = "extra == 'sdk'", specifier = ">=1.0,<2.0" },
+]
+provides-extras = ["sdk", "test"]
 
 [[package]]
 name = "atlas-richie-testing"
@@ -2157,6 +2188,18 @@ sdist = { url = "https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897", size = 131087, upload-time = "2026-05-07T16:13:17.151Z" },
 ]
+
+[[package]]
+name = "volcengine-python-sdk"
+version = "1.1.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "python-dateutil" },
+    { name = "six" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0b/f1/de0e1bb7287c22fb5e4a490c844c6e73a0e5a07cfac1573dc2774e1ccf02/volcengine-python-sdk-1.1.6.tar.gz", hash = "sha256:74d442f71254741f8fff0a64dc658e14391e1d68d2d49db881c98e364d67406d", size = 3953115, upload-time = "2025-04-24T12:42:15.048Z" }
 
 [[package]]
 name = "websocket-client"

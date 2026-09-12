@@ -24,6 +24,7 @@ members = [
   "components/secret/secret-barbican",
   "components/secret/secret-tencent-ssm-kms",
   "components/secret/secret-huawei-csms-kms",
+  "components/secret/secret-volcengine-kms",
   "components/cache/cache-core",
   "components/cache/cache-redis",
 ]
@@ -48,6 +49,7 @@ atlas-richie-secret-kmip = { workspace = true }
 atlas-richie-secret-barbican = { workspace = true }
 atlas-richie-secret-tencent-ssm-kms = { workspace = true }
 atlas-richie-secret-huawei-csms-kms = { workspace = true }
+atlas-richie-secret-volcengine-kms = { workspace = true }
 atlas-richie-cache-core = { workspace = true }
 atlas-richie-cache-redis = { workspace = true }
 atlas-richie-testing = { workspace = true }
