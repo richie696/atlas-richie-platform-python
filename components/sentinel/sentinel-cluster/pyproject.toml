@@ -1,0 +1,35 @@
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "atlas-richie-sentinel-cluster"
+version = "0.2.0"
+description = "Atlas Richie Sentinel — distributed cluster mode. Aggregate Flow/Degrade statistics across multiple Python processes via Redis (token-server / embedded mode). Mirrors Java sentinel-cluster."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Atlas Richie" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+  "atlas-richie-contracts>=0.2.0,<0.3.0",
+  "atlas-richie-sentinel-core>=0.0.1a1,<1.0",
+  "atlas-richie-sentinel-rules>=0.0.1a1,<1.0",
+  "redis>=5.0,<9.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0,<9.0", "pytest-asyncio>=0.21,<1.0"]
+
+[tool.pytest.ini_options]
+markers = [
+    "unit: fast tests with no I/O (default)",
+    "integration: requires a real Redis (skipped locally)",
+]
+
+[tool.uv.build-backend]
+module-name = "atlas_richie.sentinel_cluster"
+module-root = "src"

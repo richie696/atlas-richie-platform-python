@@ -61,6 +61,12 @@ PACKAGES = (
     (f"atlas-richie-secret-oci-vault-kms=={_VERSION}", "atlas_richie.secret_oci_vault_kms"),
     (f"atlas-richie-secret-ibm-key-protect=={_VERSION}", "atlas_richie.secret_ibm_key_protect"),
     (f"atlas-richie-secret-baidu-kms=={_VERSION}", "atlas_richie.secret_baidu_kms"),
+    (f"atlas-richie-sentinel-primitives=={_VERSION}", "atlas_richie.sentinel_primitives"),
+    (f"atlas-richie-sentinel-core=={_VERSION}", "atlas_richie.sentinel_core"),
+    (f"atlas-richie-sentinel-rules=={_VERSION}", "atlas_richie.sentinel_rules"),
+    (f"atlas-richie-sentinel-source-file=={_VERSION}", "atlas_richie.sentinel_source_file"),
+    (f"atlas-richie-sentinel-adapter-asgi=={_VERSION}", "atlas_richie.sentinel_adapter_asgi"),
+    (f"atlas-richie-sentinel-dashboard=={_VERSION}", "atlas_richie.sentinel_dashboard"),
     (f"atlas-richie-oauth=={_VERSION}", "atlas_richie.oauth"),
     (f"atlas-richie-platform=={_VERSION}", "atlas_richie.platform"),
 )
