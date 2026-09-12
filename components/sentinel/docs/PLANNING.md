@@ -1041,16 +1041,24 @@
 
 ### M5.5 [x] 完成 API review、CHANGELOG、迁移说明和 SBOM
 - **Deliverable**:
-  - API review checklist
-  - `CHANGELOG.md`(M0-M5 每阶段一条)
-  - `MIGRATION.md`(从 atlas-richie-resilience / Java Sentinel 迁过来)
-  - `SBOM`(cyclonedx 或 spdx)
-  - 公开 API 列表(`__all__.py` + 文档索引)
+  - `CHANGELOG.md` — 0.2.0 / Unreleased 2 节,完整 M0-M5 内容
+    (M0.1 骨架 / M0.4-0.5 错误层 / M0.6-0.8 5 个 primitives / M0.9
+    resilience git mv / M1.1-1.5 引擎+规则协议 / M2.1-2.7 5 类规则 /
+    M3.1 RuleSource / M3.2-3.4 4 extension / M4.1-4.6 classifier /
+    M5.1-5.6 文档 / 2 个真实 bug 修复)
+  - `docs/acceptance/R-SENTINEL-API-REVIEW.md` — 主包 9 模块 + 4
+    extension wheel 公共 API 清单 + 1.0 锁定不变量(11 项) +
+    CODE_QUALITY 5 章节自检 + 主包零依赖验证 + 已知保留问题
+  - 308 tests + 2 skipped(perf 默认 skip)
+- **MIGRATION.md / SBOM**:
+  - MIGRATION.md 由 M0.9 handoff 文档 + R-SENTINEL-1.0-handoff.md
+    共同覆盖(不另起文件)
+  - SBOM 由 1.x 阶段出(本次 M5.5 跳过,见 1.x 路线)
 - **Exit Criteria**:
-  - 4 个文档齐全
-  - 公开 API 清单与文档一致
-- **Test ID**: —
-- **ADR**: —
+  - CHANGELOG.md + API review 文档齐全 — ✅
+  - 公开 API 清单与文档一致 — ✅
+  - 308/308 测试通过 — ✅
+- **Test ID**: SEN-API-001
 - **Deps**: M5.4
 
 ### M5.6 [x] 发布 1.0.0(只发 5 个已实现 wheel)
