@@ -25,6 +25,7 @@ dependencies = [
   "atlas-richie-secret-openbao>=0.2.0,<0.3.0",
   "atlas-richie-secret-aws-kms>=0.2.0,<0.3.0",
   "atlas-richie-secret-azure-keyvault>=0.2.0,<0.3.0",
+  "atlas-richie-secret-gcp-kms>=0.2.0,<0.3.0",
   "atlas-richie-cache-core>=0.2.0,<0.3.0",
   "atlas-richie-cache-redis>=0.2.0,<0.3.0",
 ]
