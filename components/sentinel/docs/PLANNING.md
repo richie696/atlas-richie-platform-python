@@ -54,11 +54,15 @@
 ### M0.4 [ ] 创建 atlas-richie-sentinel 主 wheel
 - **Deliverable**:
   - `components/sentinel/sentinel/pyproject.toml` — name=`atlas-richie-sentinel`, version=`0.2.0`, deps=空数组
-  - `components/sentinel/sentinel/src/atlas_richie/sentinel/__init__.py` — 公开 Facade,`__all__` 注释
+  - `components/sentinel/sentinel/src/atlas_richie/sentinel/__init__.py` — 公开 Facade,显式定义:
+    ```python
+    from atlas_richie.sentinel._version import __version__  # 或者直接在 __init__.py 写 __version__ = "0.2.0"
+    ```
+    - 优先用 `__init__.py` 顶部的 module-level `__version__ = "0.2.0"`,跟 wheel version 单点对齐(避免 install 前 import 失败)。
   - `components/sentinel/sentinel/README.md` — 4 段:What / Why / Compare / Quick Start
 - **Exit Criteria**:
   - `uv build --package atlas-richie-sentinel` 成功
-  - 在干净 venv `pip install` 后 `python -c "import atlas_richie.sentinel; print(atlas_richie.sentinel.__version__)"` 不报错
+  - 在干净 venv `pip install` 后 `python -c "import atlas_richie.sentinel; assert atlas_richie.sentinel.__version__ == '0.2.0'"` 不报错
   - `__init__.py` 不 import 任何第三方包(grep 验证)
 - **Test ID**: —
 - **ADR**: ADR-SEN-002
@@ -100,26 +104,39 @@
   - `class ResilienceError(SentinelError): ...`(原基类从继承 `PlatformError` 改为继承 `SentinelError`)
   - 5 个具体异常(`RetryExhausted` / `RetryNotPermitted` / `CircuitOpen` / `RateLimitExceeded` / `BulkheadFull`)继承 `ResilienceError`
   - `primitives/circuit_breaker.py` 等从 `from atlas_richie.sentinel.errors import CircuitOpen` 导入
-- **唯一异常树**:
+- **唯一异常树**(单继承,不复用原语异常类):
   ```
-  SentinelError(Exception)            ← 根,stdlib Exception
+  SentinelError(Exception)            ← 根,stdlib Exception(零 3rd-party)
   ├── ResilienceError(SentinelError)
-  │   ├── RetryExhausted
+  │   ├── RetryExhausted               ← 原语直接调用时使用
   │   ├── RetryNotPermitted
-  │   ├── CircuitOpen
+  │   ├── CircuitOpen                  ← 原语直接调用时使用(熔断器直接 throw)
   │   ├── RateLimitExceeded
-  │   └── BulkheadFull
-  ├── SentinelBlockedError(SentinelError)     ← M1.1 加
-  │   ├── FlowBlocked
-  │   ├── ParamFlowBlocked
-  │   ├── SystemBlocked
-  │   ├── CircuitBlocked → CircuitOpen(复用)
-  │   ├── AuthorityDenied
-  │   └── BulkheadFull(可复用 M0.5 版本)
-  ├── SentinelConfigurationError(SentinelError)   ← M1.1 加
-  ├── SentinelLifecycleError(SentinelError)        ← M1.1 加
-  └── RuleSnapshotError(SentinelLifecycleError)     ← M1.1 加
+  │   └── BulkheadFull                 ← 原语直接调用时使用(信号量直接 throw)
+  ├── SentinelBlockedError(SentinelError)            ← M1.1 加,Engine 拒绝契约
+  │   ├── FlowBlocked                  ← FlowSlot 拒绝
+  │   ├── ParamFlowBlocked             ← ParamFlowSlot 拒绝
+  │   ├── SystemBlocked                ← SystemSlot 拒绝
+  │   ├── AuthorityDenied              ← AuthoritySlot 拒绝
+  │   └── CircuitBlocked               ← DegradeSlot 拒绝(熔断开)
+  ├── SentinelConfigurationError(SentinelError)      ← M1.1 加
+  ├── SentinelLifecycleError(SentinelError)          ← M1.1 加
+  └── RuleSnapshotError(SentinelLifecycleError)      ← M1.1 加
   ```
+  - **不复用原则**:`CircuitOpen` / `BulkheadFull` 只属于 `ResilienceError` 分支;`CircuitBlocked` / `FlowBlocked` 等是**独立**类型,不能多重继承自 `CircuitOpen`。
+  - **Engine 拒绝契约**:DegradeSlot 拒绝时**不是** `raise CircuitOpen()`,而是:
+    ```python
+    raise CircuitBlocked(
+        resource=resource,
+        retry_after=circuit.retry_after,
+        state=circuit.state,
+    ) from underlying_circuit_open
+    ```
+    - 复制可观察字段(`retry_after` / `state` / `rule`),但**不**伪装成原语异常。
+  - 用户代码两种捕获方式:
+    - `except CircuitOpen` / `except BulkheadFull` — 捕获直接调原语(`async with circuit_breaker:`)的拒绝。
+    - `except SentinelBlockedError` / `except CircuitBlocked` — 捕获 Engine / Slot 的拒绝。
+  - M1.1 退出条件:`SentinelBlockedError` 与 `ResilienceError` **互不为子类**;`isinstance(CircuitBlocked(), CircuitOpen) == False`。
 - **Exit Criteria**:
   - `ls components/sentinel/sentinel/src/atlas_richie/sentinel/errors/__init__.py` 存在
   - `grep "from atlas_richie.contracts" components/sentinel/sentinel/src/atlas_richie/sentinel/errors/__init__.py` 返回 0 行(无 contracts 反向依赖)
@@ -209,7 +226,17 @@
   - 同步更新 `components/resilience/README.md`(如果目录还在,虽然 `git rm` 会删整个目录,本条以防删失败)开头加 "DEPRECATED → see components/sentinel/"
 - **Exit Criteria**:
   - `ls components/resilience/` 不存在
-  - `grep "atlas-richie-resilience" pyproject.toml versions.toml tools/release/verify_isolated_wheels.py components/sentinel/docs/M0-skeleton-handoff.md HANDOFF.md` 返回 0 行
+  - 下列**配置/发布/设计文档**中 `atlas-richie-resilience` 出现次数 = 0:
+    - `pyproject.toml`(workspace member + sources)
+    - `versions.toml`
+    - `tools/release/verify_isolated_wheels.py`
+    - `components/sentinel/docs/M0-skeleton-handoff.md`
+    - `components/sentinel/docs/DESIGN.md`
+    - `components/sentinel/docs/PLANNING.md`
+  - 根目录 `HANDOFF.md` 验收用**分段 grep**(只查 "当前架构" 段落,不查历史验收日志):
+    - 用 `awk '/^## /{section=$0} /atlas-richie-resilience/ && section ~ /当前架构|Current Architecture/{print FILENAME":"NR":"$0}' HANDOFF.md` 返回 0 行
+    - 显式确认历史验收章节(Phase B.4 / Phase E E2E 等)仍可读、可检索 `atlas-richie-resilience` 字符串(事实记录保留)
+    - 检查完后追加 commit message 一句:"HANDOFF.md 历史事实保留,当前架构段已切换到 Sentinel"
   - `uv lock` 成功
   - 全仓 release/verify 脚本不引用 `atlas-richie-resilience`
   - `HANDOFF.md` 仍包含历史 Phase B-E 验收事实(事实保留),但"当前架构"段落已更新
@@ -511,6 +538,24 @@
 ### M2.7 [ ] 定义无第三方依赖的 `TokenService` Protocol + 本地默认实现
 - **背景**: DESIGN.md ADR-SEN-011 要求 1.0 主包**必须预留** `TokenService` Port,Cluster M6+ 填入实现。若 M2 阶段不预留,FlowSlot 完成后再加会重写 FlowSlot。
 - **Deliverable**:
+  - `ports/token.py` — 冻结值对象,无 3rd-party 依赖(`dataclasses.dataclass(frozen=True, slots=True)`):
+    ```python
+    @dataclass(frozen=True, slots=True)
+    class Token:
+        resource: str
+        permits: float
+        issued_at_ns: int        # SystemClock 纳秒
+        ttl_ns: int              # 0 = 永久
+
+        def is_expired(self, now_ns: int) -> bool: ...
+
+    @dataclass(frozen=True, slots=True)
+    class TokenResponse:
+        granted: bool
+        token: Token | None       # granted=False 时为 None
+        reason: str | None        # "queue_full" / "fail_open" / "remote_unavailable"
+        wait_ns: int              # 0 = 立即;>0 = 建议等待纳秒
+    ```
   - `ports/token_service.py` — `TokenService` Protocol,无 3rd-party 依赖
     ```python
     @runtime_checkable
@@ -518,13 +563,15 @@
         async def acquire(self, resource: Resource, permits: float) -> TokenResponse: ...
         async def release(self, token: Token) -> None: ...
     ```
+  - `ports/__init__.py` re-export `Token` / `TokenResponse` / `TokenService` / `Resource`
   - `slots/_local_token_service.py` — `LocalTokenService`,永远 grant permit(单进程不需要 token 协调)
   - `SlotChain` 默认用 `LocalTokenService`;`SentinelEngine(token_service=...)` 可注入其他实现
   - FlowSlot 在 acquire 资源时调用 `token_service.acquire()`;若 TokenService 暂时不可用(集群模式)按 fail-safe 策略:1.0 fail-open(单进程 = 永远能拿 token)
 - **Exit Criteria**:
-  - `from atlas_richie.sentinel.ports import TokenService` 成功
-  - `LocalTokenService().acquire(...)` 永远返回 granted
+  - `from atlas_richie.sentinel.ports import Token, TokenResponse, TokenService, Resource` 成功
+  - `LocalTokenService().acquire(...)` 永远返回 `TokenResponse(granted=True, ...)`
   - FlowSlot 测试用 mock TokenService 验证「token 申请/释放」调用路径
+  - `Token` / `TokenResponse` 是 frozen + slots,`__hash__` 稳定,可放进 set / dict
   - **不**依赖任何网络 / 进程间通信(零 3rd-party 兼容 1.0 主包约束)
 - **Test ID**: SEN-CORE-001(part:flow)
 - **ADR**: ADR-SEN-011
