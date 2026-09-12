@@ -15,6 +15,7 @@ members = [
   "components/secret/secret-vault",
   "components/secret/secret-openbao",
   "components/secret/secret-aws-kms",
+  "components/secret/secret-azure-keyvault",
   "components/cache/cache-core",
   "components/cache/cache-redis",
 ]
@@ -30,6 +31,7 @@ atlas-richie-secret-redis = { workspace = true }
 atlas-richie-secret-vault = { workspace = true }
 atlas-richie-secret-openbao = { workspace = true }
 atlas-richie-secret-aws-kms = { workspace = true }
+atlas-richie-secret-azure-keyvault = { workspace = true }
 atlas-richie-cache-core = { workspace = true }
 atlas-richie-cache-redis = { workspace = true }
 atlas-richie-testing = { workspace = true }

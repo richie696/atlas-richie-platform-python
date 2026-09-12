@@ -48,6 +48,7 @@ PACKAGES = (
     (f"atlas-richie-secret-vault=={_VERSION}", "atlas_richie.secret_vault"),
     (f"atlas-richie-secret-openbao=={_VERSION}", "atlas_richie.secret_openbao"),
     (f"atlas-richie-secret-aws-kms=={_VERSION}", "atlas_richie.secret_aws_kms"),
+    (f"atlas-richie-secret-azure-keyvault=={_VERSION}", "atlas_richie.secret_azure_keyvault"),
     (f"atlas-richie-oauth=={_VERSION}", "atlas_richie.oauth"),
     (f"atlas-richie-platform=={_VERSION}", "atlas_richie.platform"),
 )
