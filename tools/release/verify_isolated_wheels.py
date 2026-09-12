@@ -40,7 +40,6 @@ PACKAGES = (
     (f"atlas-richie-testing=={_VERSION}", "atlas_richie.testing"),
     (f"atlas-richie-http=={_VERSION}", "atlas_richie.http"),
     (f"atlas-richie-mcp=={_VERSION}", "atlas_richie.mcp"),
-    (f"atlas-richie-resilience=={_VERSION}", "atlas_richie.resilience"),
     (f"atlas-richie-cache-core=={_VERSION}", "atlas_richie.cache_core"),
     (f"atlas-richie-cache-redis=={_VERSION}", "atlas_richie.cache_redis"),
     (f"atlas-richie-secret-core=={_VERSION}", "atlas_richie.secret"),

@@ -50,6 +50,15 @@ atlas-richie-platform-rust
 
 ## 2. 总体架构决策
 
+<!-- SENTINEL_HANDOFF_CURRENT_ARCH_START -->
+
+> **当前架构状态 (2026-09-13)**: 五类原语(Retry / CircuitBreaker /
+> RateLimit / Bulkhead / Idempotency + Clock / Random)已收编进
+> `atlas-richie-sentinel` 主 wheel(零 3rd-party 依赖)。完整设计基线
+> 见 `components/sentinel/docs/DESIGN.md` + `PLANNING.md`。旧包名
+> 在历史验收章节保留事实记录(Phase B.4 引入 / Phase E E2E 等),但
+> 当前架构段不再使用。
+
 采用单仓库、多发行包的 workspace 模式，而不是一个巨型 Python 包。
 
 ```text
@@ -81,6 +90,8 @@ contracts ← components ← adapters ← profiles/examples
 - 把所有公共代码堆进一个 `core` 包；
 - 在核心包中直接引入 FastAPI、HTTPX、Redis、Pydantic、OpenTelemetry 等第三方库；
 - 将业务领域模型、数据库表结构或具体厂商协议放入中台核心。
+
+<!-- SENTINEL_HANDOFF_CURRENT_ARCH_END -->
 
 ## 3. 推荐仓库结构
 

@@ -16,8 +16,8 @@ classifiers = [
 ]
 dependencies = [
   "atlas-richie-contracts>=0.2.0,<0.3.0",
-  "atlas-richie-sentinel-core>=0.0.1a1,<1.0",
-  "atlas-richie-sentinel-rules>=0.0.1a1,<1.0",
+  "atlas-richie-sentinel>=0.2.0,<0.3.0",
+  "atlas-richie-sentinel>=0.2.0,<0.3.0",
   "pyyaml>=6.0,<7.0",
   "watchfiles>=0.21,<1.0",
 ]

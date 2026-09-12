@@ -15,7 +15,6 @@ members = [
     "atlas-richie-mcp",
     "atlas-richie-oauth",
     "atlas-richie-platform",
-    "atlas-richie-resilience",
     "atlas-richie-secret-aliyun-kms",
     "atlas-richie-secret-aws-kms",
     "atlas-richie-secret-azure-keyvault",
@@ -34,13 +33,11 @@ members = [
     "atlas-richie-secret-tencent-ssm-kms",
     "atlas-richie-secret-vault",
     "atlas-richie-secret-volcengine-kms",
+    "atlas-richie-sentinel",
     "atlas-richie-sentinel-adapter-asgi",
     "atlas-richie-sentinel-adapter-httpx",
     "atlas-richie-sentinel-cluster",
-    "atlas-richie-sentinel-core",
     "atlas-richie-sentinel-dashboard",
-    "atlas-richie-sentinel-primitives",
-    "atlas-richie-sentinel-rules",
     "atlas-richie-sentinel-source-file",
     "atlas-richie-sentinel-source-nacos",
     "atlas-richie-sentinel-source-redis",
@@ -122,15 +119,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/29/a6/442e18b5afeade534d877a2dc3c3e392aff8d49787890b0cf84790410267/aiohttp-3.14.3-cp313-cp313-win32.whl", hash = "sha256:5f08ec777f35ee70720233b8b9811d3bb5d728137f30ac91b7457709c3261ac0", size = 451069, upload-time = "2026-07-23T01:55:36.121Z" },
     { url = "https://files.pythonhosted.org/packages/9d/69/3d876ac02659f271cf7f6769f14a8e3de5b6e888ed8b5a7e998086a4cec8/aiohttp-3.14.3-cp313-cp313-win_amd64.whl", hash = "sha256:dff9461ec275f22135650d5ba4b4931a11f3958df7dfbb8db630000d4dee0883", size = 476518, upload-time = "2026-07-23T01:55:38.303Z" },
     { url = "https://files.pythonhosted.org/packages/b2/0e/50d6e6471cd31edce8b282bdec59375a3a69124d8a989a0b1313355cae52/aiohttp-3.14.3-cp313-cp313-win_arm64.whl", hash = "sha256:ddcac3c6b382e81f1dd0499199d4136b877beb4cb5ef770bbbfba56c4b8f55d2", size = 447676, upload-time = "2026-07-23T01:55:40.451Z" },
-]
-
-[[package]]
-name = "aiolimiter"
-version = "1.3.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/26/60/0d16f90083a2f0ae9421d11ad98287f7942414f091ae9ad318389a764f85/aiolimiter-1.3.0.tar.gz", hash = "sha256:7343008c2228e89def7d4ce29ab98ee98822bf5db69018c09c90088929f7c104", size = 10051, upload-time = "2026-09-07T14:40:27.876Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/56/d8/9237b1d29e561bd37ffe9487ea1a4551d2df2902d9b79a6ea6b18e4fcc73/aiolimiter-1.3.0-py3-none-any.whl", hash = "sha256:c0c16c377049fb2e40cc3373770e29c063de32aa25d84e5db168c854da6462b7", size = 6955, upload-time = "2026-09-07T14:40:26.753Z" },
 ]
 
 [[package]]
@@ -499,7 +487,6 @@ dependencies = [
     { name = "atlas-richie-http" },
     { name = "atlas-richie-mcp" },
     { name = "atlas-richie-oauth" },
-    { name = "atlas-richie-resilience" },
     { name = "atlas-richie-secret-aws-kms" },
     { name = "atlas-richie-secret-azure-keyvault" },
     { name = "atlas-richie-secret-core" },
@@ -509,6 +496,7 @@ dependencies = [
     { name = "atlas-richie-secret-redis" },
     { name = "atlas-richie-secret-rotation-daemon" },
     { name = "atlas-richie-secret-vault" },
+    { name = "atlas-richie-sentinel" },
 ]
 
 [package.metadata]
@@ -519,7 +507,6 @@ requires-dist = [
     { name = "atlas-richie-http", editable = "components/http" },
     { name = "atlas-richie-mcp", editable = "components/mcp" },
     { name = "atlas-richie-oauth", editable = "components/oauth" },
-    { name = "atlas-richie-resilience", editable = "components/resilience" },
     { name = "atlas-richie-secret-aws-kms", editable = "components/secret/secret-aws-kms" },
     { name = "atlas-richie-secret-azure-keyvault", editable = "components/secret/secret-azure-keyvault" },
     { name = "atlas-richie-secret-core", editable = "components/secret/secret-core" },
@@ -529,18 +516,8 @@ requires-dist = [
     { name = "atlas-richie-secret-redis", editable = "components/secret/secret-redis" },
     { name = "atlas-richie-secret-rotation-daemon", editable = "components/secret/secret-rotation-daemon" },
     { name = "atlas-richie-secret-vault", editable = "components/secret/secret-vault" },
+    { name = "atlas-richie-sentinel", editable = "components/sentinel/sentinel" },
 ]
-
-[[package]]
-name = "atlas-richie-resilience"
-version = "0.2.0"
-source = { editable = "components/resilience" }
-dependencies = [
-    { name = "atlas-richie-contracts" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "atlas-richie-contracts", editable = "foundation/contracts" }]
 
 [[package]]
 name = "atlas-richie-secret-aliyun-kms"
@@ -1061,13 +1038,36 @@ requires-dist = [
 provides-extras = ["sdk", "test"]
 
 [[package]]
+name = "atlas-richie-sentinel"
+version = "0.2.0"
+source = { editable = "components/sentinel/sentinel" }
+
+[package.optional-dependencies]
+docs = [
+    { name = "mkdocs" },
+    { name = "mkdocs-material" },
+]
+test = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.5,<2.0" },
+    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.0,<10.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21,<1.0" },
+]
+provides-extras = ["test", "docs"]
+
+[[package]]
 name = "atlas-richie-sentinel-adapter-asgi"
 version = "0.2.0"
 source = { editable = "components/sentinel/sentinel-adapter-asgi" }
 dependencies = [
     { name = "atlas-richie-contracts" },
-    { name = "atlas-richie-sentinel-core" },
-    { name = "atlas-richie-sentinel-rules" },
+    { name = "atlas-richie-sentinel" },
     { name = "atlas-richie-sentinel-source-file" },
     { name = "psutil" },
     { name = "starlette" },
@@ -1083,8 +1083,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
-    { name = "atlas-richie-sentinel-core", editable = "components/sentinel/sentinel-core" },
-    { name = "atlas-richie-sentinel-rules", editable = "components/sentinel/sentinel-rules" },
+    { name = "atlas-richie-sentinel", editable = "components/sentinel/sentinel" },
     { name = "atlas-richie-sentinel-source-file", editable = "components/sentinel/sentinel-source-file" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.27,<1.0" },
     { name = "psutil", specifier = ">=5.9,<6.0" },
@@ -1100,8 +1099,7 @@ version = "0.2.0"
 source = { editable = "components/sentinel/sentinel-adapter-httpx" }
 dependencies = [
     { name = "atlas-richie-contracts" },
-    { name = "atlas-richie-sentinel-core" },
-    { name = "atlas-richie-sentinel-rules" },
+    { name = "atlas-richie-sentinel" },
     { name = "httpx" },
 ]
 
@@ -1114,8 +1112,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
-    { name = "atlas-richie-sentinel-core", editable = "components/sentinel/sentinel-core" },
-    { name = "atlas-richie-sentinel-rules", editable = "components/sentinel/sentinel-rules" },
+    { name = "atlas-richie-sentinel", editable = "components/sentinel/sentinel" },
     { name = "httpx", specifier = ">=0.27,<1.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21,<1.0" },
@@ -1128,8 +1125,7 @@ version = "0.2.0"
 source = { editable = "components/sentinel/sentinel-cluster" }
 dependencies = [
     { name = "atlas-richie-contracts" },
-    { name = "atlas-richie-sentinel-core" },
-    { name = "atlas-richie-sentinel-rules" },
+    { name = "atlas-richie-sentinel" },
     { name = "redis" },
 ]
 
@@ -1142,35 +1138,10 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
-    { name = "atlas-richie-sentinel-core", editable = "components/sentinel/sentinel-core" },
-    { name = "atlas-richie-sentinel-rules", editable = "components/sentinel/sentinel-rules" },
+    { name = "atlas-richie-sentinel", editable = "components/sentinel/sentinel" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21,<1.0" },
     { name = "redis", specifier = ">=5.0,<9.0" },
-]
-provides-extras = ["test"]
-
-[[package]]
-name = "atlas-richie-sentinel-core"
-version = "0.2.0"
-source = { editable = "components/sentinel/sentinel-core" }
-dependencies = [
-    { name = "atlas-richie-contracts" },
-    { name = "atlas-richie-sentinel-primitives" },
-]
-
-[package.optional-dependencies]
-test = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
-    { name = "atlas-richie-sentinel-primitives", editable = "components/sentinel/sentinel-primitives" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21,<1.0" },
 ]
 provides-extras = ["test"]
 
@@ -1180,8 +1151,7 @@ version = "0.2.0"
 source = { editable = "components/sentinel/sentinel-dashboard" }
 dependencies = [
     { name = "atlas-richie-contracts" },
-    { name = "atlas-richie-sentinel-core" },
-    { name = "atlas-richie-sentinel-rules" },
+    { name = "atlas-richie-sentinel" },
     { name = "fastapi" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -1196,8 +1166,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
-    { name = "atlas-richie-sentinel-core", editable = "components/sentinel/sentinel-core" },
-    { name = "atlas-richie-sentinel-rules", editable = "components/sentinel/sentinel-rules" },
+    { name = "atlas-richie-sentinel", editable = "components/sentinel/sentinel" },
     { name = "fastapi", specifier = ">=0.100,<1.0" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.27,<1.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
@@ -1207,69 +1176,12 @@ requires-dist = [
 provides-extras = ["test"]
 
 [[package]]
-name = "atlas-richie-sentinel-primitives"
-version = "0.2.0"
-source = { editable = "components/sentinel/sentinel-primitives" }
-dependencies = [
-    { name = "aiolimiter" },
-    { name = "atlas-richie-contracts" },
-    { name = "stamina" },
-]
-
-[package.optional-dependencies]
-docs = [
-    { name = "mkdocs" },
-    { name = "mkdocs-material" },
-]
-test = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiolimiter", specifier = ">=1.1,<2.0" },
-    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
-    { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.5,<2.0" },
-    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.0,<10.0" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21,<1.0" },
-    { name = "stamina", specifier = ">=0.10,<30.0" },
-]
-provides-extras = ["test", "docs"]
-
-[[package]]
-name = "atlas-richie-sentinel-rules"
-version = "0.2.0"
-source = { editable = "components/sentinel/sentinel-rules" }
-dependencies = [
-    { name = "atlas-richie-contracts" },
-    { name = "atlas-richie-sentinel-core" },
-]
-
-[package.optional-dependencies]
-test = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
-    { name = "atlas-richie-sentinel-core", editable = "components/sentinel/sentinel-core" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21,<1.0" },
-]
-provides-extras = ["test"]
-
-[[package]]
 name = "atlas-richie-sentinel-source-file"
 version = "0.2.0"
 source = { editable = "components/sentinel/sentinel-source-file" }
 dependencies = [
     { name = "atlas-richie-contracts" },
-    { name = "atlas-richie-sentinel-core" },
-    { name = "atlas-richie-sentinel-rules" },
+    { name = "atlas-richie-sentinel" },
     { name = "pyyaml" },
     { name = "watchfiles" },
 ]
@@ -1282,8 +1194,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
-    { name = "atlas-richie-sentinel-core", editable = "components/sentinel/sentinel-core" },
-    { name = "atlas-richie-sentinel-rules", editable = "components/sentinel/sentinel-rules" },
+    { name = "atlas-richie-sentinel", editable = "components/sentinel/sentinel" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
     { name = "pyyaml", specifier = ">=6.0,<7.0" },
     { name = "watchfiles", specifier = ">=0.21,<1.0" },
@@ -1296,8 +1207,7 @@ version = "0.2.0"
 source = { editable = "components/sentinel/sentinel-source-nacos" }
 dependencies = [
     { name = "atlas-richie-contracts" },
-    { name = "atlas-richie-sentinel-core" },
-    { name = "atlas-richie-sentinel-rules" },
+    { name = "atlas-richie-sentinel" },
     { name = "nacos-sdk-python" },
 ]
 
@@ -1309,8 +1219,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
-    { name = "atlas-richie-sentinel-core", editable = "components/sentinel/sentinel-core" },
-    { name = "atlas-richie-sentinel-rules", editable = "components/sentinel/sentinel-rules" },
+    { name = "atlas-richie-sentinel", editable = "components/sentinel/sentinel" },
     { name = "nacos-sdk-python", specifier = ">=2.0,<3.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
 ]
@@ -1322,8 +1231,7 @@ version = "0.2.0"
 source = { editable = "components/sentinel/sentinel-source-redis" }
 dependencies = [
     { name = "atlas-richie-contracts" },
-    { name = "atlas-richie-sentinel-core" },
-    { name = "atlas-richie-sentinel-rules" },
+    { name = "atlas-richie-sentinel" },
     { name = "redis" },
 ]
 
@@ -1335,8 +1243,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
-    { name = "atlas-richie-sentinel-core", editable = "components/sentinel/sentinel-core" },
-    { name = "atlas-richie-sentinel-rules", editable = "components/sentinel/sentinel-rules" },
+    { name = "atlas-richie-sentinel", editable = "components/sentinel/sentinel" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
     { name = "redis", specifier = ">=5.0,<9.0" },
 ]
@@ -2991,18 +2898,6 @@ wheels = [
 ]
 
 [[package]]
-name = "stamina"
-version = "26.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "tenacity" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/80/bd/b2f71ae14368a066f103d182f25bbc6c3bf4aa695889f3ed3cba026d6f36/stamina-26.1.0.tar.gz", hash = "sha256:0214d05fdf5102c518194a4aac7520ce53cf660550ae3b940701aad88cf50c17", size = 568171, upload-time = "2026-04-13T17:44:31.012Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/1d/f0/1ff90a1d1dd02de23feafdf9dffaecef3958348be5c192df56670ccb4f86/stamina-26.1.0-py3-none-any.whl", hash = "sha256:62e06829bec87c06d4cafde520b32a6097d1017c378a9eb63253c5bf5ebbbb88", size = 18508, upload-time = "2026-04-13T17:44:29.545Z" },
-]
-
-[[package]]
 name = "starlette"
 version = "0.52.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3031,15 +2926,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5e/89/b4a0bcfdf4f71a3dea31379f095929613d7e4528a0996bca6aa964cd0dca/structlog-26.1.0.tar.gz", hash = "sha256:f63a716cbd1b1291cf7661de7794b455acfa4c43c5bcf1630e6ad5ddc1adb3b7", size = 1459881, upload-time = "2026-06-06T07:33:39.348Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/18/489c97b834dfff9cf2fc2507cede4bcd4b11e67f84bc462acd1992496f86/structlog-26.1.0-py3-none-any.whl", hash = "sha256:e081a26d6c373e6d201eca24eede26d8ffab07f88f477822e679183428d3d91e", size = 73764, upload-time = "2026-06-06T07:33:38.046Z" },
-]
-
-[[package]]
-name = "tenacity"
-version = "9.1.4"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/47/c6/ee486fd809e357697ee8a44d3d69222b344920433d3b6666ccd9b374630c/tenacity-9.1.4.tar.gz", hash = "sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a", size = 49413, upload-time = "2026-02-07T10:45:33.841Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/c1/eb8f9debc45d3b7918a32ab756658a0904732f75e555402972246b0b8e71/tenacity-9.1.4-py3-none-any.whl", hash = "sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55", size = 28926, upload-time = "2026-02-07T10:45:32.24Z" },
 ]
 
 [[package]]

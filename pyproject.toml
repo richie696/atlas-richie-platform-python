@@ -9,7 +9,6 @@ members = [
   "components/http",
   "components/mcp",
   "components/oauth",
-  "components/resilience",
   "components/secret/secret-core",
   "components/secret/secret-redis",
   "components/secret/secret-vault",
@@ -45,7 +44,6 @@ atlas-richie-contracts = { workspace = true }
 atlas-richie-http = { workspace = true }
 atlas-richie-mcp = { workspace = true }
 atlas-richie-oauth = { workspace = true }
-atlas-richie-resilience = { workspace = true }
 atlas-richie-secret-core = { workspace = true }
 atlas-richie-secret-redis = { workspace = true }
 atlas-richie-secret-vault = { workspace = true }
