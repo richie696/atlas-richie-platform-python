@@ -491,10 +491,10 @@
 - **ADR**: ADR-SEN-007
 - **Deps**: M1.4
 
-### M1.6 [ ] 完成 SEN-CORE、SEN-RULE、SEN-PERF 测试基线(不设绝对阈值)
+### M1.6 [x] 完成 SEN-CORE、SEN-RULE、SEN-PERF 测试基线(不设绝对阈值)
 - **Deliverable**:
-  - `tests/test_sen_core.py` — Slot 逆序释放 + CancelledError + 故障注入
-  - `tests/test_sen_rule.py` — RuleSnapshot 校验 / 原子替换 / 乱序
+  - `tests/test_sen_core.py` — Slot 逆序释放 + CancelledError + 故障注入(30 / 30)
+  - `tests/test_sen_rule.py` — RuleSnapshot 校验 / 原子替换 / 乱序(36 / 36)
   - `tests/benchmark/test_sen_perf.py` — **收集数据,不是断言**:跑 5 个场景(无规则准入 / 单 FlowRule / 5 类规则同时 / 1000 条 exact 索引命中 / 1000 条索引未命中),输出 commit / Python / OS / CPU / 规则数 / 资源数 / 并发度 / p50 p95 p99 max / CPU RSS alloc GC
   - **基线报告**:`docs/acceptance/R-SENTINEL-M1-baseline.md`,只报告**观测到的数据**,不写"通过/不通过"硬阈值
 - **Exit Criteria**:
@@ -505,6 +505,11 @@
 - **Test ID**: SEN-CORE-001~002, SEN-RULE-001, SEN-PERF-001(数据采集,无阈值)
 - **ADR**: 全部
 - **Deps**: M1.5
+- **实现中修复的真 bug**:
+  - 并发 entry 共享 `_context_token` 导致 `ValueError: Token was created
+    in a different Context` → token 改存 `EntryLease._context_token`(per-entry)
+  - lease 释放异常完全不可观测 → 新增 `EntryLease.last_release_error()`,
+    `SentinelEngine._finalize_entry` 把它写到 `engine.last_error`
 
 ### M1 Exit [ ] (子项全部完成)
 - **Exit Criteria**(§21 + 修正 4):

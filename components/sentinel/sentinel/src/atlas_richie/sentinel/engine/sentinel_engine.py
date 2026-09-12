@@ -143,8 +143,13 @@ class _EngineContext:
     last_error: BaseException | None = None
     last_outcome: Outcome | None = None
     in_flight: int = 0
-    # Track bind tokens for contextvars cleanup
-    _context_token: object | None = None
+    # NOTE: ``_context_token`` previously lived here, but that caused a
+    # bug under concurrent entries: each entry's asyncio.Task has its
+    # own contextvars.Context, so a shared per-engine token was
+    # clobbered by the second entry. The token is now stored on
+    # ``EntryLease`` (per-entry); see ``engine.entry`` -> ``EntryRequest``.
+    # This field is kept as a sentinel for backward grep; do not rely
+    # on it. Will be removed in a follow-up cleanup.
 
 
 class SentinelEngine:
@@ -500,7 +505,10 @@ class SentinelEngine:
         """
         # Bind context for downstream code that calls current_context()
         token = bind_current_context(context)
-        self._ctx._context_token = token
+        # Store the per-entry token on the lease (NOT on the engine) so
+        # concurrent entries in different asyncio.Tasks do not clobber
+        # each other's tokens.
+        lease._context_token = token
         self._ctx.in_flight += 1
         try:
             for slot in self._chain.frozen_slots():
@@ -540,9 +548,9 @@ class SentinelEngine:
             # in_flight -1 + contextvars reset;即使 BLOCKED / FAIL_FAST
             # 路径,本方法退出后 __aexit__ 不会被调用,必须自己清理
             self._ctx.in_flight -= 1
-            if self._ctx._context_token is not None:
-                reset_current_context(self._ctx._context_token)  # type: ignore[arg-type]
-                self._ctx._context_token = None
+            if lease._context_token is not None:
+                reset_current_context(lease._context_token)
+                lease._context_token = None
             raise
 
     async def _finalize_entry(
@@ -572,6 +580,12 @@ class SentinelEngine:
         start_ns = time.time_ns()  # rough; M1.3 will instrument properly
         await entry_lease.release_all()
         elapsed_ns = time.time_ns() - start_ns
+        # Surface any release error to engine.last_error for observability
+        # (release errors are swallowed by EntryLease; we re-raise them
+        # to last_error so a downstream metric / health check can see them).
+        rel_err = entry_lease.last_release_error()
+        if rel_err is not None:
+            self._ctx.last_error = rel_err
         # Determine Outcome kind
         if exc is not None and isinstance(exc, asyncio.CancelledError):
             kind = OutcomeKind.CANCELLED
@@ -594,10 +608,10 @@ class SentinelEngine:
                 for slot in self._chain.frozen_slots():
                     with suppress(BaseException):
                         slot.on_entry_complete(self._ctx.last_outcome)
-                # Reset context
-                if self._ctx._context_token is not None:
-                    reset_current_context(self._ctx._context_token)  # type: ignore[arg-type]
-                    self._ctx._context_token = None
+                # Reset per-entry context (token lives on the lease)
+                if entry_lease._context_token is not None:
+                    reset_current_context(entry_lease._context_token)
+                    entry_lease._context_token = None
                 self._ctx.in_flight -= 1
                 return
             kind = OutcomeKind.SUCCEEDED
@@ -616,10 +630,10 @@ class SentinelEngine:
         for slot in self._chain.frozen_slots():
             with suppress(BaseException):
                 slot.on_entry_complete(outcome)
-        # Reset context
-        if self._ctx._context_token is not None:
-            reset_current_context(self._ctx._context_token)  # type: ignore[arg-type]
-            self._ctx._context_token = None
+        # Reset per-entry context (token lives on the lease)
+        if entry_lease._context_token is not None:
+            reset_current_context(entry_lease._context_token)
+            entry_lease._context_token = None
         self._ctx.in_flight -= 1
 
 

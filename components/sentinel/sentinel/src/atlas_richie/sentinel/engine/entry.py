@@ -43,6 +43,7 @@ Design points:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -95,6 +96,11 @@ class EntryLease:
     _leases: list[tuple[int, SlotLease]] = field(default_factory=list)
     _released: bool = False
     _release_errors: list[BaseException] = field(default_factory=list)
+    # Per-entry contextvars token: stored on the lease (NOT on the
+    # Engine) so that concurrent entries in different asyncio.Tasks
+    # do not clobber each other's tokens. Reset in
+    # ``SentinelEngine._finalize_entry``.
+    _context_token: contextvars.Token | None = None
 
     def push(self, order: int, lease: SlotLease) -> None:
         """中文
@@ -147,6 +153,22 @@ class EntryLease:
                 await lease.release()
             except BaseException as e:  # noqa: BLE001 — intentional swallow
                 self._release_errors.append(e)
+
+    def last_release_error(self) -> BaseException | None:
+        """中文
+        ----
+        最近一次 ``release_all()`` 过程中收集到的首个异常(``None`` = 全部成功)。
+
+        Engine 在 finalize 时读这个并写到 ``engine.last_error`` 让外部
+        观测到。
+
+        English
+        --------
+        First exception collected during the most recent ``release_all()``
+        (``None`` = all succeeded). The Engine reads this at finalize
+        time and surfaces it to ``engine.last_error`` for observability.
+        """
+        return self._release_errors[0] if self._release_errors else None
 
 
 # ---------------------------------------------------------------------------
