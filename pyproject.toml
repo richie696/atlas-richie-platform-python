@@ -21,6 +21,7 @@ members = [
   "components/secret/secret-rotation-daemon",
   "components/secret/secret-aliyun-kms",
   "components/secret/secret-kmip",
+  "components/secret/secret-barbican",
   "components/cache/cache-core",
   "components/cache/cache-redis",
 ]
@@ -42,6 +43,7 @@ atlas-richie-secret-pkcs11 = { workspace = true }
 atlas-richie-secret-rotation-daemon = { workspace = true }
 atlas-richie-secret-aliyun-kms = { workspace = true }
 atlas-richie-secret-kmip = { workspace = true }
+atlas-richie-secret-barbican = { workspace = true }
 atlas-richie-cache-core = { workspace = true }
 atlas-richie-cache-redis = { workspace = true }
 atlas-richie-testing = { workspace = true }

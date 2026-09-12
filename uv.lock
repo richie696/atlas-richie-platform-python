@@ -20,6 +20,7 @@ members = [
     "atlas-richie-secret-aliyun-kms",
     "atlas-richie-secret-aws-kms",
     "atlas-richie-secret-azure-keyvault",
+    "atlas-richie-secret-barbican",
     "atlas-richie-secret-core",
     "atlas-richie-secret-gcp-kms",
     "atlas-richie-secret-kmip",
@@ -637,6 +638,34 @@ requires-dist = [
     { name = "azure-identity", specifier = ">=1.18,<2.0" },
     { name = "azure-keyvault-keys", specifier = ">=4.10,<5.0" },
     { name = "azure-keyvault-secrets", specifier = ">=4.10,<5.0" },
+    { name = "pydantic", specifier = ">=2.0,<3.0" },
+    { name = "pydantic-settings", specifier = ">=2.0,<3.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-secret-barbican"
+version = "0.2.0"
+source = { editable = "components/secret/secret-barbican" }
+dependencies = [
+    { name = "atlas-richie-contracts" },
+    { name = "atlas-richie-secret-core" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "atlas-richie-secret-core", editable = "components/secret/secret-core" },
+    { name = "httpx", specifier = ">=0.28,<1.0" },
     { name = "pydantic", specifier = ">=2.0,<3.0" },
     { name = "pydantic-settings", specifier = ">=2.0,<3.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
