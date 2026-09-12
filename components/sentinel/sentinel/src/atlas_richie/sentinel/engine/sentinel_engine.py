@@ -285,30 +285,80 @@ class SentinelEngine:
         ----
         Engine 进入 ``SHUTTING_DOWN`` → ``SHUTDOWN``。
 
-        M1.2 占位:不等 in-flight(M1.3 实现 graceful close);不进
-        FAILED 状态(出错由 ``entry()`` 路径切)。
+        **M1.3 graceful close**: 默认 ``graceful_timeout=30.0`` 秒等待
+        in-flight 归零;超时后切到 ``SHUTDOWN``(in-flight 仍会被
+        ``_finalize_entry`` 走完释放流程,但**不**抛错)。
 
         English
         --------
         Engine transitions to ``SHUTTING_DOWN`` → ``SHUTDOWN``.
 
-        M1.2 placeholder: does not wait for in-flight (M1.3 implements
-        graceful close); does not transition to FAILED (errors are
-        routed through ``entry()`` path).
+        **M1.3 graceful close**: by default waits up to
+        ``graceful_timeout=30.0`` seconds for in-flight to drain; on
+        timeout, transitions to ``SHUTDOWN`` (in-flight entries still
+        run ``_finalize_entry`` to completion; no error raised).
+        """
+        await self.close(graceful_timeout=30.0)
+
+    async def close(self, *, graceful_timeout: float = 30.0) -> None:
+        """中文
+        ----
+        显式关闭 Engine(不依赖 ``async with``)。
+
+        - READY → SHUTTING_DOWN,等待 in_flight == 0 或 timeout
+        - SHUTTING_DOWN → SHUTDOWN(timeout 触发也走完)
+        - SHUTDOWN / FAILED 重复调用安全(no-op)
+        - 非 READY / SHUTTING_DOWN 抛 ``SentinelLifecycleError``
+
+        ``aclose()`` 是此方法的别名,匹配 Python async close 协议。
+
+        English
+        --------
+        Explicit Engine close (independent of ``async with``).
+
+        - READY → SHUTTING_DOWN, wait for in_flight == 0 or timeout.
+        - SHUTTING_DOWN → SHUTDOWN (timeout-triggered also completes).
+        - SHUTDOWN / FAILED: repeated calls are no-ops.
+        - Other states: raise ``SentinelLifecycleError``.
+
+        ``aclose()`` is an alias matching Python's async close protocol.
         """
         async with self._state_lock:
             if self._ctx.state is EngineState.SHUTDOWN:
                 return
             if self._ctx.state is not EngineState.READY:
-                raise SentinelLifecycleError(
-                    f"__aexit__ only allowed in READY (current: {self._ctx.state.value})",
-                    from_state=self._ctx.state.value,
-                    to_state=EngineState.SHUTDOWN.value,
-                    component="engine",
-                )
+                # FAILED is allowed for idempotent close
+                if self._ctx.state is not EngineState.FAILED:
+                    raise SentinelLifecycleError(
+                        f"close() requires READY/SHUTTING_DOWN/SHUTDOWN/FAILED "
+                        f"(current: {self._ctx.state.value})",
+                        from_state=self._ctx.state.value,
+                        to_state=EngineState.SHUTDOWN.value,
+                        component="engine",
+                    )
+                return
             self._ctx.state = EngineState.SHUTTING_DOWN
-            # M1.2 placeholder: M1.3 waits for in_flight == 0 here.
+        # Wait for in-flight outside the lock (so new entries can fail fast)
+        if graceful_timeout is not None and graceful_timeout > 0:
+            deadline = time.monotonic() + graceful_timeout
+            while self._ctx.in_flight > 0 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+        # Transition to SHUTDOWN regardless of whether in-flight drained
+        async with self._state_lock:
             self._ctx.state = EngineState.SHUTDOWN
+
+    async def aclose(self) -> None:
+        """中文
+        ----
+        ``close()`` 的别名;匹配 Python async close 协议
+        (e.g. 配合 ``async with engine:`` 之后的清理)。
+
+        English
+        --------
+        Alias of ``close()``; matches Python's async close protocol
+        (e.g. for use after ``async with engine:`` block exit).
+        """
+        await self.close()
 
     # ------------------------------------------------------------------
     # Slot management
@@ -379,16 +429,18 @@ class SentinelEngine:
         ----
         构造一次 entry(async context manager)。
 
-        **非** READY 状态抛 ``SentinelLifecycleError``;READY 时构造
-        ``EntryRequest`` 并返回,延迟到 ``__aenter__`` 才走 SlotChain。
+        **非** READY 状态抛 ``SentinelLifecycleError``(SHUTTING_DOWN /
+        SHUTDOWN / FAILED 全部拒绝);READY 时构造 ``EntryRequest`` 并返回,
+        延迟到 ``__aenter__`` 才走 SlotChain。
 
         English
         --------
         Construct a single entry (async context manager).
 
-        Non-READY states raise ``SentinelLifecycleError``; READY
-        constructs an ``EntryRequest`` and returns it; the actual
-        SlotChain run is deferred to ``__aenter__``.
+        Non-READY states raise ``SentinelLifecycleError`` (SHUTTING_DOWN
+        / SHUTDOWN / FAILED all reject); READY constructs an
+        ``EntryRequest`` and returns it; the actual SlotChain run is
+        deferred to ``__aenter__``.
         """
         if self._ctx.state is not EngineState.READY:
             raise SentinelLifecycleError(
@@ -422,8 +474,14 @@ class SentinelEngine:
         Engine 内部: 按 Order 调 ``Slot.enter``;任一抛
         ``SentinelBlockedError`` 即短路 + 释放已收 lease。
 
-        M1.2 占位逻辑(同步 Slot,顺序 await);M1.3 增加 CancelledError
-        处理。
+        **in_flight 簿记**:本方法进入时 +1,退出时 -1(无论成功 / 失败)。
+        BLOCKED 路径的 Outcome 已经在本方法内构造,``__aexit__`` 不会再
+        调 ``_finalize_entry``(Python 不会在 ``__aenter__`` 抛异常时调
+        ``__aexit__``)。
+
+        M1.3 在 M1.2 基础上: 增加 fail-safe 三策略落地(FailSafe
+        FAIL_CLOSED / FAIL_OPEN / FAIL_FAST),BLOCKED 路径下 in_flight
+        在 finally 块回收。
 
         English
         --------
@@ -431,8 +489,14 @@ class SentinelEngine:
         ``SentinelBlockedError`` short-circuits and releases already-
         collected leases.
 
-        M1.2 placeholder logic (sync Slots, sequential await); M1.3
-        adds CancelledError handling.
+        **in_flight bookkeeping**: +1 on entry, -1 on exit (success or
+        failure). The BLOCKED path's Outcome is constructed here, and
+        ``__aexit__`` will NOT call ``_finalize_entry`` (Python does
+        not call ``__aexit__`` when ``__aenter__`` raises).
+
+        M1.3 builds on M1.2: full fail-safe three-strategy landing
+        (FAIL_CLOSED / FAIL_OPEN / FAIL_FAST), and in_flight is
+        decremented in the finally block even on the BLOCKED path.
         """
         # Bind context for downstream code that calls current_context()
         token = bind_current_context(context)
@@ -458,15 +522,28 @@ class SentinelEngine:
                     raise
                 except BaseException as e:
                     # Slot 内部非 Sentinel 异常 — fail_safe 处理
-                    self._ctx._handle_slot_failure(slot, e)
-                    # FAIL_FAST 时直接抛
-                    raise
+                    self._ctx._handle_slot_failure(slot, e, fail_safe=self._ctx.fail_safe)
+                    if self._ctx.fail_safe is FailSafe.FAIL_CLOSED:
+                        await lease.release_all()
+                        raise
+                    elif self._ctx.fail_safe is FailSafe.FAIL_OPEN:
+                        # 记录 last_error 但继续;lease 不发(假装 Slot 放行)
+                        # 因为我们没拿到 lease,所以 noop
+                        continue
+                    else:  # FAIL_FAST
+                        await lease.release_all()
+                        self._ctx.state = EngineState.FAILED
+                        raise
                 else:
                     lease.push(slot.order, sub_lease)
-        finally:
-            # NOTE: do NOT reset context here — finalization (in __aexit__)
-            # may still observe the context. Reset happens in _finalize_entry.
-            pass
+        except BaseException:
+            # in_flight -1 + contextvars reset;即使 BLOCKED / FAIL_FAST
+            # 路径,本方法退出后 __aexit__ 不会被调用,必须自己清理
+            self._ctx.in_flight -= 1
+            if self._ctx._context_token is not None:
+                reset_current_context(self._ctx._context_token)  # type: ignore[arg-type]
+                self._ctx._context_token = None
+            raise
 
     async def _finalize_entry(
         self,
@@ -547,13 +624,15 @@ class SentinelEngine:
 
 
 # Patch the _EngineContext to add the helper for slot failure handling
-def _handle_slot_failure(self, slot: Slot, exc: BaseException) -> None:  # noqa: ANN001
+def _handle_slot_failure(
+    self, slot: Slot, exc: BaseException, *, fail_safe: FailSafe  # noqa: ANN001
+) -> None:
     """中文
     ----
     根据 ``fail_safe`` 策略处理 Slot 内部非 Sentinel 异常。
 
     - FAIL_CLOSED: 记录 ``last_error``,调用方抛出(已 ``raise``)
-    - FAIL_OPEN: 记录 ``last_error``,不放行(由调用方继续收集 lease)
+    - FAIL_OPEN: 记录 ``last_error``,调用方继续(假装放行)
     - FAIL_FAST: 切到 FAILED,Engine 不可再用
 
     English
@@ -561,7 +640,7 @@ def _handle_slot_failure(self, slot: Slot, exc: BaseException) -> None:  # noqa:
     Handle non-Sentinel Slot exceptions per ``fail_safe`` strategy.
 
     - FAIL_CLOSED: record ``last_error``; caller raises.
-    - FAIL_OPEN: record ``last_error``; caller continues collecting.
+    - FAIL_OPEN: record ``last_error``; caller continues (as if admit).
     - FAIL_FAST: transition to FAILED; Engine is unusable.
     """
     self.last_error = exc

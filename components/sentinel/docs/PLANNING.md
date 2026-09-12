@@ -430,7 +430,7 @@
 - **ADR**: ADR-SEN-001, ADR-SEN-006
 - **Deps**: M0.5-A
 
-### M1.2 [ ] 实现 SentinelEngine、EntryLease、Slot/SlotLease、SlotChain
+### M1.2 [x] 实现 SentinelEngine、EntryLease、Slot/SlotLease、SlotChain
 - **Deliverable**:
   - `engine/sentinel_engine.py` — `SentinelEngine`(async context manager,6 状态机)
   - `engine/entry.py` — `EntryRequest` / `EntryLease`
