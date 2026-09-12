@@ -23,6 +23,7 @@ members = [
     "atlas-richie-secret-core",
     "atlas-richie-secret-gcp-kms",
     "atlas-richie-secret-huawei-csms-kms",
+    "atlas-richie-secret-ibm-key-protect",
     "atlas-richie-secret-kmip",
     "atlas-richie-secret-oci-vault-kms",
     "atlas-richie-secret-openbao",
@@ -714,6 +715,38 @@ requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
     { name = "atlas-richie-secret-core", editable = "components/secret/secret-core" },
     { name = "huaweicloud-sdk-python", marker = "extra == 'sdk'", specifier = ">=1.0,<2.0" },
+    { name = "pydantic", specifier = ">=2.0,<3.0" },
+    { name = "pydantic-settings", specifier = ">=2.0,<3.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+]
+provides-extras = ["sdk", "test"]
+
+[[package]]
+name = "atlas-richie-secret-ibm-key-protect"
+version = "0.2.0"
+source = { editable = "components/secret/secret-ibm-key-protect" }
+dependencies = [
+    { name = "atlas-richie-contracts" },
+    { name = "atlas-richie-secret-core" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+]
+
+[package.optional-dependencies]
+sdk = [
+    { name = "ibm-cloud-sdk-core" },
+]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "atlas-richie-secret-core", editable = "components/secret/secret-core" },
+    { name = "httpx", specifier = ">=0.27,<1.0" },
+    { name = "ibm-cloud-sdk-core", marker = "extra == 'sdk'", specifier = ">=3.18,<4.0" },
     { name = "pydantic", specifier = ">=2.0,<3.0" },
     { name = "pydantic-settings", specifier = ">=2.0,<3.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
@@ -1570,6 +1603,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e2/57/b46c397fb3842cfb02a44609aa834c887f38dd75f290c2fc5a34da4b2fee/hvac-2.4.0.tar.gz", hash = "sha256:e0056ad9064e7923e874e6769015b032580b639e29246f5ab1044f7959c1c7e0", size = 332543, upload-time = "2025-10-30T12:57:47.512Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/55/33/71e45a6bd6875f44a26f99da31c63b6840123e88bedf2c0b1ce429b8be12/hvac-2.4.0-py3-none-any.whl", hash = "sha256:008db5efd8c2f77bd37d2368ea5f713edceae1c65f11fd608393179478649e0f", size = 155921, upload-time = "2025-10-30T12:57:46.253Z" },
+]
+
+[[package]]
+name = "ibm-cloud-sdk-core"
+version = "3.26.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyjwt" },
+    { name = "python-dateutil" },
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ed/bd/0a2fd3c960d3be84e8197b420dd2a0b92124b44c5d4a2e9cfe8bee919539/ibm_cloud_sdk_core-3.26.1.tar.gz", hash = "sha256:f1ba689371392e9a71ead7d6fcc700b065832a4be7d56641e816a0b72b14e2a3", size = 83833, upload-time = "2026-08-31T11:23:47.315Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ad/cf/4ca3030a99214e218b4e135ba26e1d7f87bca0f145f8770bded97067a4e3/ibm_cloud_sdk_core-3.26.1-py3-none-any.whl", hash = "sha256:b0e39dcca9894fb5a46c33176e3f2cda5fc846f91672472eaf7b41522e960325", size = 76601, upload-time = "2026-08-31T11:23:46.345Z" },
 ]
 
 [[package]]
