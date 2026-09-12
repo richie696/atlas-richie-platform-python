@@ -695,7 +695,7 @@
 
 ## M3：File Source 与 ASGI
 
-### M3.1 [ ] 实现 RuleSource contract test kit(M3 仅供 File Source 使用)
+### M3.1 [x] 实现 RuleSource contract test kit(M3 仅供 File Source 使用)
 - **Deliverable**:
   - `tests/contract/test_rule_source.py` — 公用的 RuleSource 契约测试集
   - 覆盖:首次迭代成功/失败、迭代结束 / 监听退出 / 重连、指数退避 + jitter、消费速度慢于更新速度的合并/背压、stale 状态、aclose 幂等、凭证脱敏
@@ -709,7 +709,7 @@
 - **ADR**: ADR-SEN-007
 - **Deps**: M1.6
 
-### M3.2 [ ] 实现 JSON/YAML File Source 和 last-known-good 热更新
+### M3.2 [x] 实现 JSON/YAML File Source 和 last-known-good 热更新
 - **Deliverable**:
   - 新 wheel `components/sentinel/sentinel-source-file/`
   - JSON 规范 + YAML 便捷两种 codec
@@ -726,7 +726,7 @@
 - **ADR**: ADR-SEN-007
 - **Deps**: M3.1, M1.6
 
-### M3.3 [ ] 实现纯 ASGI Middleware
+### M3.3 [x] 实现纯 ASGI Middleware
 - **Deliverable**:
   - 新 wheel `components/sentinel/sentinel-adapter-asgi/`
   - `SentinelASGIMiddleware`:**纯 ASGI callable,不继承 Starlette / FastAPI**,不强制任何 web framework
@@ -746,7 +746,7 @@
 - **ADR**: ADR-SEN-008
 - **Deps**: M1.6, M2.5(Authority)
 
-### M3.4 [ ] 实现资源命名、可信 origin 和参数提取 Strategy
+### M3.4 [x] 实现资源命名、可信 origin 和参数提取 Strategy
 - **Deliverable**:
   - `components/sentinel/sentinel-adapter-asgi/src/atlas_richie/sentinel/adapters/asgi/strategies/`:
     - `resource_name.py` — `MethodRouteResolver`("POST /orders")等
@@ -761,7 +761,7 @@
 - **ADR**: ADR-SEN-008
 - **Deps**: M3.3
 
-### M3.5 [ ] 验证普通响应、流式响应、断连、取消、异常、lifespan
+### M3.5 [x] 验证普通响应、流式响应、断连、取消、异常、lifespan
 - **Deliverable**:
   - 6 个 ASGI 协议场景测试:
     1. 普通响应(返回 200 + body)
@@ -778,7 +778,7 @@
 - **ADR**: ADR-SEN-008
 - **Deps**: M3.3, M3.4
 
-### M3.6 [ ] 完成真实多 worker 语义测试
+### M3.6 [x] 完成真实多 worker 语义测试
 - **Deliverable**:
   - 启动 2 个 ASGI worker(uvicorn workers=2)
   - **测试重点**:每个 worker 的规则和指标**彼此隔离**(per-process 语义)
@@ -805,7 +805,7 @@
 
 ## M4：HTTPX 出站保护
 
-### M4.1 [ ] 实现 SentinelAsyncTransport
+### M4.1 [x] 实现 SentinelAsyncTransport
 - **Deliverable**:
   - 新 wheel `components/sentinel/sentinel-adapter-httpx/`
   - `SentinelAsyncTransport`:**只读公开的 `httpx.AsyncBaseTransport`**,**不**碰 `httpcore` 私有属性
@@ -820,7 +820,7 @@
 - **ADR**: ADR-SEN-009
 - **Deps**: M1.6
 
-### M4.2 [ ] 实现全局和 per-origin 并发/排队保护
+### M4.2 [x] 实现全局和 per-origin 并发/排队保护
 - **Deliverable**:
   - per-origin key:scheme + normalized host + effective port
   - 全局和 per-origin 都有 permit 上限
@@ -834,7 +834,7 @@
 - **ADR**: ADR-SEN-009
 - **Deps**: M4.1
 
-### M4.3 [ ] 包装响应流并在 EOF/aclose 释放
+### M4.3 [x] 包装响应流并在 EOF/aclose 释放
 - **Deliverable**:
   - 包装 response stream,**在 EOF 或 `aclose()` 时释放 permit**(不是 `__aexit__` —— HTTPX 用户常用 `await response.aread()` 读 body,不需要 `__aexit__` 入口)
   - permit 释放是 idempotent,多个 aclose 调用只释放一次
@@ -849,7 +849,7 @@
 - **ADR**: ADR-SEN-009
 - **Deps**: M4.2
 
-### M4.4 [ ] 实现 OutcomeClassifier
+### M4.4 [x] 实现 OutcomeClassifier
 - **Deliverable**:
   - 把连接错误 / 超时 / 5xx / 4xx / 2xx / 取消分别映射 Outcome
   - **HTTPX 实际语义**:响应 5xx **不会**自动抛 `httpx.HTTPStatusError`;只在调用方 `raise_for_status()` 时才抛。OutcomeClassifier 必须**显式**读取 `response.status_code`,**不**依赖 `raise_for_status()` 已调用
@@ -864,7 +864,7 @@
 - **ADR**: ADR-SEN-009
 - **Deps**: M4.3
 
-### M4.5 [ ] 与 Retry/CircuitBreaker 组合测试(默认不重试)
+### M4.5 [x] 与 Retry/CircuitBreaker 组合测试(默认不重试)
 - **背景**(DESIGN.md §12.3 + §8.1):
   - HTTPX Adapter **默认不重试**;Adapter 自身不在 `handle_async_request` 内 retry
   - 只有调用方**显式组合 `RetryPolicy`**(从 `primitives.retry`)+ `IdempotencyKey` 显式允许 + 把 retry 接入到出站调用链中,5xx 才触发重试
@@ -890,7 +890,7 @@
 - **ADR**: ADR-SEN-009
 - **Deps**: M4.4
 
-### M4.6 [ ] 禁止任何 httpcore 私有 API 使用
+### M4.6 [x] 禁止任何 httpcore 私有 API 使用
 - **Deliverable**:
   - `tests/test_no_httpcore_private.py` — 静态扫描所有 sentinel-adapter-httpx 源码,断言没有任何 `httpcore._xxx` 或私有 attr 访问
   - CI lint 规则(可选,grep 也可以)
@@ -910,7 +910,7 @@
 
 ## M5：Embedded Dashboard、文档和 1.0
 
-### M5.1 [ ] 实现 per-process embedded 管理 API
+### M5.1 [x] 实现 per-process embedded 管理 API
 - **Deliverable**:
   - 新 wheel `components/sentinel/sentinel-dashboard/`
   - REST API:
@@ -928,7 +928,7 @@
 - **ADR**: ADR-SEN-010
 - **Deps**: M1.6, M3.1(依赖 RuleRepository)
 
-### M5.2 [ ] 默认 loopback/read-only,写操作认证授权审计
+### M5.2 [x] 默认 loopback/read-only,写操作认证授权审计
 - **Deliverable**:
   - 默认绑定 127.0.0.1
   - 默认 read-only
@@ -945,7 +945,7 @@
 - **ADR**: ADR-SEN-010
 - **Deps**: M5.1
 
-### M5.3 [ ] 完成中英文 Quick Start、规则手册、扩展开发、运维边界文档
+### M5.3 [x] 完成中英文 Quick Start、规则手册、扩展开发、运维边界文档
 - **Deliverable**:
   - `docs/QUICKSTART.md`(中英)
   - `docs/RULES.md` — 5 类规则详解
@@ -960,7 +960,7 @@
 - **ADR**: 全部
 - **Deps**: M5.2
 
-### M5.4 [ ] 完成 Python/OS matrix、isolated wheel、性能和 soak 门禁
+### M5.4 [x] 完成 Python/OS matrix、isolated wheel、性能和 soak 门禁
 - **Deliverable**:
   - CI matrix:Python 3.12 / 3.13 / 3.14 × Linux / macOS
   - **1.0 只发布 5 个 wheel**:main + asgi + httpx + source-file + dashboard
@@ -977,7 +977,7 @@
 - **Deps**: M4.6, M5.3
 - **observability 处理**(M5 决策):若要 1.0 含 observability,**必须先**补 ADR + DESIGN.md §3.1 发行包表行,且实现满足 SEN-PERF-001 label 约束。否则推迟到 1.x。**不**发空 wheel。
 
-### M5.5 [ ] 完成 API review、CHANGELOG、迁移说明和 SBOM
+### M5.5 [x] 完成 API review、CHANGELOG、迁移说明和 SBOM
 - **Deliverable**:
   - API review checklist
   - `CHANGELOG.md`(M0-M5 每阶段一条)
@@ -991,7 +991,7 @@
 - **ADR**: —
 - **Deps**: M5.4
 
-### M5.6 [ ] 发布 1.0.0(只发 5 个已实现 wheel)
+### M5.6 [x] 发布 1.0.0(只发 5 个已实现 wheel)
 - **Deliverable**:
   - 5 个 wheel 发到 PyPI:
     - `atlas-richie-sentinel`(主)
