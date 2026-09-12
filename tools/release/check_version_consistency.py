@@ -52,6 +52,22 @@ NAME_SLUG = "atlas_richie_sentinel"
 DEFAULT_PYPROJECT = Path("components/sentinel/sentinel/pyproject.toml")
 """默认读取的 pyproject.toml 路径(可用 --pyproject 覆盖)。"""
 
+# 扩展 wheel 的 pyproject 路径(用 --name 切换)
+EXTENSION_PYPROJECTS: dict[str, Path] = {
+    "atlas-richie-sentinel-adapter-asgi": Path(
+        "components/sentinel/sentinel-adapter-asgi/pyproject.toml"
+    ),
+    "atlas-richie-sentinel-source-file": Path(
+        "components/sentinel/sentinel-source-file/pyproject.toml"
+    ),
+    "atlas-richie-sentinel-adapter-httpx": Path(
+        "components/sentinel/sentinel-adapter-httpx/pyproject.toml"
+    ),
+    "atlas-richie-sentinel-dashboard": Path(
+        "components/sentinel/sentinel-dashboard/pyproject.toml"
+    ),
+}
+
 _VERSION_RE = re.compile(r"^Version:\s*(\S+)\s*$", re.MULTILINE)
 _NAME_RE = re.compile(r"^Name:\s*(\S+)\s*$", re.MULTILINE)
 
@@ -104,9 +120,24 @@ def _read_sdist_metadata(sdist: Path) -> tuple[Optional[str], Optional[str]]:
     return None, None
 
 
-def check(release_dir: Path, pyproject: Path) -> tuple[int, list[str]]:
+def check(
+    release_dir: Path,
+    pyproject: Path | None = None,
+    expected_name: str = EXPECTED_NAME,
+) -> tuple[int, list[str]]:
     """Run the consistency check; return ``(exit_code, report_lines)``."""
     report: list[str] = []
+
+    # Resolve pyproject path: --pyproject > EXTENSION_PYPROJECTS[name] > DEFAULT
+    if pyproject is None:
+        if expected_name in EXTENSION_PYPROJECTS:
+            pyproject = EXTENSION_PYPROJECTS[expected_name]
+        else:
+            pyproject = DEFAULT_PYPROJECT
+
+    # PEP 625 slug from expected_name (hyphens → underscores)
+    name_slug = expected_name.replace("-", "_")
+    report.append(f"expected: name={expected_name!r}  slug={name_slug!r}")
 
     if not release_dir.is_dir():
         report.append(f"FAIL: release directory does not exist: {release_dir}")
@@ -143,14 +174,14 @@ def check(release_dir: Path, pyproject: Path) -> tuple[int, list[str]]:
     report.append(f"sdist:  {sdist.name}")
 
     # 2) Filename slug check (PEP 625)
-    if not whl.name.startswith(f"{NAME_SLUG}-"):
+    if not whl.name.startswith(f"{name_slug}-"):
         report.append(
-            f"FAIL: wheel filename does not start with '{NAME_SLUG}-': {whl.name}"
+            f"FAIL: wheel filename does not start with '{name_slug}-': {whl.name}"
         )
         return 1, report
-    if not sdist.name.startswith(f"{NAME_SLUG}-"):
+    if not sdist.name.startswith(f"{name_slug}-"):
         report.append(
-            f"FAIL: sdist filename does not start with '{NAME_SLUG}-': {sdist.name}"
+            f"FAIL: sdist filename does not start with '{name_slug}-': {sdist.name}"
         )
         return 1, report
 
@@ -175,9 +206,9 @@ def check(release_dir: Path, pyproject: Path) -> tuple[int, list[str]]:
     # 4) Cross-check Name + Version
     names = {pp_name, whl_name, sd_name}
     versions = {pp_version, whl_version, sd_version}
-    if names != {EXPECTED_NAME}:
+    if names != {expected_name}:
         report.append(
-            f"FAIL: Name mismatch — expected all three == {EXPECTED_NAME!r}, "
+            f"FAIL: Name mismatch — expected all three == {expected_name!r}, "
             f"got {sorted(names)}"
         )
         return 1, report
@@ -203,11 +234,22 @@ def main(argv: list[str] | None = None) -> int:
     if not args.release_dir.is_dir():
         print(f"ERROR: release dir does not exist: {args.release_dir}", file=sys.stderr)
         return 2
-    if not args.pyproject.is_file():
-        print(f"ERROR: pyproject not found: {args.pyproject}", file=sys.stderr)
+    # Resolve pyproject path (same logic as check())
+    pyproject = args.pyproject
+    if pyproject is None:
+        if args.name in EXTENSION_PYPROJECTS:
+            pyproject = EXTENSION_PYPROJECTS[args.name]
+        else:
+            pyproject = DEFAULT_PYPROJECT
+    if not pyproject.is_file():
+        print(f"ERROR: pyproject not found: {pyproject}", file=sys.stderr)
         return 2
 
-    code, report = check(args.release_dir, args.pyproject)
+    code, report = check(
+        args.release_dir,
+        pyproject=args.pyproject,
+        expected_name=args.name,
+    )
     print("\n".join(report))
     return code
 
@@ -227,8 +269,15 @@ def argparse_for_check():
     parser.add_argument(
         "--pyproject",
         type=Path,
-        default=DEFAULT_PYPROJECT,
-        help=f"Path to pyproject.toml (default: {DEFAULT_PYPROJECT})",
+        default=None,
+        help=f"Path to pyproject.toml (default: {DEFAULT_PYPROJECT} for main, "
+             f"or set --name to auto-pick an extension wheel)",
+    )
+    parser.add_argument(
+        "--name",
+        default=EXPECTED_NAME,
+        help=f"Expected wheel name (default: {EXPECTED_NAME}). "
+             f"Used to derive pyproject path and PEP 625 slug.",
     )
     return parser
 
