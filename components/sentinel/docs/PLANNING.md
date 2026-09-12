@@ -79,23 +79,32 @@
   - `__init__.py` 不 import 任何第三方包(grep 验证)
   - **版本一致门禁**(M0.11 验证命令里体现;**不要**依赖 `uv publish` 自身做拒绝——`uv publish` 不校验包内 version):
     - 新增 `tools/release/check_version_consistency.py`(放在主仓 `tools/release/`,与 `verify_isolated_wheels.py` 同级):
-      1. 读 `components/sentinel/sentinel/pyproject.toml` 的 `[project] version` → `pyproject_version`
-      2. `uv build --package atlas-richie-sentinel` 后扫描 `dist/`,分别:
-         - wheel:解 `*.dist-info/METADATA`,抓 `Version:` 字段 → `wheel_version`
-         - sdist:解 `*.tar.gz` 里的 `PKG-INFO`,抓 `Version:` 字段 → `sdist_version`
-      3. 三者必须严格相等;任一不等 → 退出码 1,列出冲突源
-      4. 显式:不调用 `uv publish`;仅返回 0/1 + 冲突报告
+      - **接口**:`check_version_consistency.py <release_dir>`(强制要求一个干净的专用输出目录;`release_dir` 不存在/为空 → 退出码 1)
+      - 校验流程:
+        1. 扫 `<release_dir>`,**严格要求**:`*.whl` 恰好 1 个 + `*.tar.gz` 恰好 1 个,其他多/少/类型错都失败
+        2. 解析文件名,要求 wheel 文件名匹配 `atlas_richie_sentinel-*.whl`,sdist 匹配 `atlas-richie-sentinel-*.tar.gz`(包名不匹配 → 失败,防误发其它组件的产物)
+        3. 读 `components/sentinel/sentinel/pyproject.toml` 的 `[project] version` → `pyproject_version`
+        4. wheel:解 `*.dist-info/METADATA`,抓 `Version:` 字段 + `Name:` 字段 → `wheel_version` / `wheel_name`
+        5. sdist:解 `*.tar.gz` 里的 `PKG-INFO`,抓 `Version:` 字段 + `Name:` 字段 → `sdist_version` / `sdist_name`
+        6. 校验:`wheel_name == sdist_name == "atlas-richie-sentinel"`,`wheel_version == sdist_version == pyproject_version`;任一不等 → 退出码 1 + 冲突报告
+        7. 显式:不调用 `uv publish`;仅返回 0/1 + 冲突报告
     - 发布流程(写在 `components/sentinel/docs/RELEASE.md`,M0.11 同步创建):
       ```bash
-      uv build --package atlas-richie-sentinel
-      python tools/release/check_version_consistency.py   # ← 必须先通过
-      uv publish --package atlas-richie-sentinel         # ← 失败也不影响,仅是兜底
+      # 1. 专用干净目录,避免和根 dist/ 旧产物混合
+      rm -rf /tmp/atlas-richie-sentinel-release
+      uv build --package atlas-richie-sentinel --out-dir /tmp/atlas-richie-sentinel-release --clear
+      # 2. 强制要求目录内恰好 1 wheel + 1 sdist + 包名匹配 + 三版本一致
+      python tools/release/check_version_consistency.py /tmp/atlas-richie-sentinel-release
+      # 3. uv publish 接受文件路径列表(本机 uv publish --help 没有 --package)
+      uv publish /tmp/atlas-richie-sentinel-release/atlas_richie_sentinel-0.2.0-py3-none-any.whl \
+                 /tmp/atlas-richie-sentinel-release/atlas-richie-sentinel-0.2.0.tar.gz
       ```
+    - **为什么必须专用目录**:仓库根 `dist/` 已有 cache / secret / 其它组件的旧版本产物,直接扫描 `dist/` 或 `uv publish`(不带路径)会误发布;`--clear` 进一步保证 `--out-dir` 内只有本次构建的产物
     - CI 门禁:`check_version_consistency.py` 接进 M0.11 的 `tools/release/release_gate.sh`,作为发布前必经步骤
     - 三产物版本字段位置(wheel 与 sdist 路径不同,容易漏):
-      - wheel: `atlas_richie_sentinel-0.2.0.dist-info/METADATA` 里的 `Version: 0.2.0`
-      - sdist: `atlas-richie-sentinel-0.2.0.tar.gz` 里的 `atlas-richie-sentinel-0.2.0/PKG-INFO` 里的 `Version: 0.2.0`
-      - pyproject: `[project] version = "0.2.0"`
+      - wheel: `atlas_richie_sentinel-0.2.0.dist-info/METADATA` 里的 `Version: 0.2.0` + `Name: atlas-richie-sentinel`
+      - sdist: `atlas-richie-sentinel-0.2.0.tar.gz` 里的 `atlas-richie-sentinel-0.2.0/PKG-INFO` 里的 `Version: 0.2.0` + `Name: atlas-richie-sentinel`
+      - pyproject: `[project] version = "0.2.0"` + `name = "atlas-richie-sentinel"`
 - **Test ID**: —
 - **ADR**: ADR-SEN-002
 - **Deps**: M0.1, M0.2, M0.3
@@ -605,8 +614,8 @@
         REMOTE_UNAVAILABLE  = "remote_unavailable"  # 集群 token 服务不可达
         RATE_LIMITED        = "rate_limited"        # 集群 rate-limit 拒绝
         SHUTTING_DOWN       = "shutting_down"       # 节点关闭中
-        AUTHORITY_DENIED    = "authority_denied"    # 黑白名单 / 授权拒绝
         UNKNOWN             = "unknown"             # 兜底
+        # 注:授权拒绝不属于 TokenService,AuthoritySlot 走 SentinelBlockedError.AuthorityDenied
 
     @dataclass(frozen=True, slots=True)
     class Token:
@@ -620,14 +629,28 @@
     @dataclass(frozen=True, slots=True)
     class TokenResponse:
         decision: TokenDecision                 # 必填,4 选 1
-        token: Token | None                     # decision != DENIED 时非空
-        deny_reason: TokenDenyReason | None     # 仅 decision is DENIED 时非空;否则 None
+        token: Token | None                     # 强制不变量(见 __post_init__)
+        deny_reason: TokenDenyReason | None     # 强制不变量(见 __post_init__)
         wait_ns: int                            # 0 = 立即;>0 = 建议等待纳秒
+
+        def __post_init__(self) -> None:
+            if self.decision is TokenDecision.DENIED:
+                if self.token is not None:
+                    raise ValueError("TokenResponse: DENIED 必须 token is None")
+                if self.deny_reason is None:
+                    raise ValueError("TokenResponse: DENIED 必须 deny_reason is not None")
+            else:  # LOCAL_GRANTED / REMOTE_GRANTED / FAIL_OPEN
+                if self.token is None:
+                    raise ValueError(f"TokenResponse: {self.decision.value} 必须 token is not None")
+                if self.deny_reason is not None:
+                    raise ValueError(f"TokenResponse: {self.decision.value} 必须 deny_reason is None")
 
         def is_granted(self) -> bool:
             return self.decision in (TokenDecision.LOCAL_GRANTED, TokenDecision.REMOTE_GRANTED, TokenDecision.FAIL_OPEN)
     ```
     - **拆分语义**:`decision` 描述"放行还是拒绝";`deny_reason` 只在 `decision is DENIED` 时存在。
+    - **强制不变量**:`__post_init__` 兜底所有错误组合,违反即 `ValueError`(测试覆盖四种非法组合:granted+deny_reason、granted+token=None、denied+token!=None、denied+deny_reason=None)。
+    - **授权拒绝不在本层**:`TokenDenyReason` 不含 `AUTHORITY_DENIED`;黑白名单/授权拒绝由 `AuthoritySlot` 在 `SentinelBlockedError` 树上独立表达,`TokenService` 只管配额/限流/集群协调。
     - **永不暴露裸字符串**:`decision` / `deny_reason` 必传 `StrEnum` 成员。
     - **`FAIL_OPEN` ≠ `LOCAL_GRANTED`**:正常单进程默认 `LocalTokenService.acquire()` 走 `LOCAL_GRANTED`;只有集群模式远端不可达、本地策略降级放行时才是 `FAIL_OPEN`(会被 metrics 标成降级事件)。
     - **`None` 的合法用法**:`deny_reason: None` 表示"没有拒绝原因",不是"原因未知";`UNKNOWN` 是真存在但不可分类。审计代码用 `if response.deny_reason is not None` 而不是 `is TokenDenyReason.UNKNOWN`。
