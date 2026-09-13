@@ -1,12 +1,30 @@
-"""Sentinel RuleSource Port + File Source (M3.2)。
+"""Sentinel RuleSource Port + File Source (M3.2 + M6.1.0d-1)。
 
 中文
 ----
-``RuleSource`` 是 RuleRepository 拉取规则的 Port;1.0 主包提供
-``FileRuleSource`` 读取本地 JSON / YAML 文件(可选 pyyaml;**不**强制
-3rd-party)。
+M6.1.0d-1 在 1.0 ``RuleSource`` 之上引入**两个独立 Port**:
 
-设计要点:
+- :class:`LegacyRuleSource` — 1.0 旧契约 (``start`` / ``stop`` /
+  ``latest``); 1.x 全程保留, ``SentinelEngine.install_legacy_source()``
+  接受
+- :class:`SnapshotRuleSource` — 新契约 (``snapshots() -> AsyncIterator
+  [RuleSnapshot]`` + ``aclose()``); ``SentinelEngine.assemble_sources()``
+  仅接受
+
+**Type alias** ``RuleSource = LegacyRuleSource`` — 1.0 公共符号保留为
+``LegacyRuleSource`` 的 alias, 1.0 用户零代码改动; 1.x 全程**不**删除,
+**不**发 deprecation warning (API delta v3 决策 3 / MIGRATION-M6 §2.3)。
+
+**DTO** :class:`RuleSourceAssembly` — 公开 immutable assembly DTO, 包含
+``source`` / ``priority`` / ``failover_after``, ``__post_init__`` 校验
+priority≥0 / failover_after≥0; ``__post_init__`` 不触发生命周期调用
+(重入校验由 contract test 负责)。
+
+**FileRuleSource** 是 1.0 ``LegacyRuleSource`` 实现; 公共 API
+(start / stop / latest) 不变, 行为锁定 (API delta v3 决策 3 / MIGRATION-M6
+§1.A / DESIGN §10.3 L1091-1093)。
+
+设计要点 (FileRuleSource):
 
 - **Polling 间隔** (默认 3s):``start()`` 启动后台 task,定期 read →
   parse → 推送给 ``RuleRepository.apply_snapshot``;任何步骤失败保留
@@ -19,13 +37,30 @@
 
 English
 --------
-Sentinel RuleSource Port + File Source (M3.2).
+M6.1.0d-1 introduces two independent Ports over 1.0 ``RuleSource``:
 
-``RuleSource`` is the Port for ``RuleRepository`` to pull rules; 1.0
-main wheel provides ``FileRuleSource`` for local JSON / YAML files
-(pyyaml optional; **not** required 3rd-party).
+- :class:`LegacyRuleSource` — 1.0 old contract (``start`` / ``stop`` /
+  ``latest``); preserved for the entire 1.x phase, accepted by
+  ``SentinelEngine.install_legacy_source()``.
+- :class:`SnapshotRuleSource` — new contract (``snapshots() -> AsyncIterator
+  [RuleSnapshot]`` + ``aclose()``); the only type accepted by
+  ``SentinelEngine.assemble_sources()``.
 
-Design points:
+**Type alias** ``RuleSource = LegacyRuleSource`` — the 1.0 public symbol
+is kept as an alias of ``LegacyRuleSource``, so 1.0 users see zero code
+changes; never removed during 1.x, and **no** deprecation warning (API
+delta v3 decision 3 / MIGRATION-M6 §2.3).
+
+**DTO** :class:`RuleSourceAssembly` — public immutable assembly DTO
+with ``source`` / ``priority`` / ``failover_after``; ``__post_init__``
+validates priority≥0 / failover_after≥0 and does **not** trigger
+lifecycle calls (re-entrancy is contract test territory).
+
+**FileRuleSource** is a 1.0 ``LegacyRuleSource`` implementation; public
+API (start / stop / latest) is unchanged, behavior is locked (API delta
+v3 decision 3 / MIGRATION-M6 §1.A / DESIGN §10.3 L1091-1093).
+
+Design points (FileRuleSource):
 
 - **Polling interval** (default 3s): ``start()`` launches a background
   task, periodically reads → parses → pushes to
@@ -44,30 +79,61 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Protocol, runtime_checkable
+from datetime import timedelta
+from typing import Any, AsyncIterator, Callable, Mapping, Protocol, runtime_checkable
 
 from ..rules.repository import RuleRepository
-from ..rules.snapshot import RuleVersion, RuleSnapshot
+from ..rules.snapshot import RuleSnapshot, RuleVersion
+
+
+# ---------------------------------------------------------------------------
+# Protocol 1: LegacyRuleSource (1.0 旧契约) + RuleSource alias
+# ---------------------------------------------------------------------------
 
 
 @runtime_checkable
-class RuleSource(Protocol):
+class LegacyRuleSource(Protocol):
     """中文
     ----
-    规则源 Port。
+    1.0 旧契约 Port。``start(repository)`` 直连 ``RuleRepository.apply
+    _snapshot``; 不经 Supervisor; 1.x 全程保留。
 
-    - ``start(repository)`` 启动后台拉取;返回时已注册
-    - ``stop()`` 停止;幂等
-    - ``latest()`` 同步拉一次最新(测试用)
+    1.0 公共符号 ``RuleSource`` 是本类的 type alias (见下)。
+
+    接受方式:
+
+    - 旧单源用户: ``SentinelEngine.install_legacy_source(source, *,
+      repository=repo)`` 走 1.0 行为, **不**获多源 / failover
+    - 等同 1.0 直连 ``source.start(repository)``
+
+    **不**接受方式:
+
+    - ``SentinelEngine.assemble_sources()`` 只接受 ``SnapshotRuleSource``
+    - 不要 shim 包装成 ``SnapshotRuleSource`` (违反 1.0 行为锁定)
 
     English
     --------
-    Rule source Port.
+    1.0 legacy contract Port. ``start(repository)`` connects directly
+    to ``RuleRepository.apply_snapshot``; bypasses the Supervisor;
+    preserved for the entire 1.x phase.
 
-    - ``start(repository)`` starts background pull; returns after
-      registration.
-    - ``stop()`` stops; idempotent.
-    - ``latest()`` synchronous one-shot pull (for tests)."""
+    The 1.0 public symbol ``RuleSource`` is a type alias of this class
+    (see below).
+
+    Accepted via:
+
+    - Legacy single-source users:
+      ``SentinelEngine.install_legacy_source(source, *, repository=repo)``
+      preserves 1.0 behavior; **no** multi-source / failover.
+    - Equivalent to direct 1.0 ``source.start(repository)``.
+
+    **Not** accepted via:
+
+    - ``SentinelEngine.assemble_sources()`` only accepts
+      ``SnapshotRuleSource``.
+    - Do not shim-wrap as ``SnapshotRuleSource`` (violates 1.0 behavior
+      lock).
+    """
 
     def start(self, repository: RuleRepository) -> None:
         ...
@@ -79,13 +145,174 @@ class RuleSource(Protocol):
         ...
 
 
+# 1.0 公共符号保留: type alias 到 LegacyRuleSource
+RuleSource = LegacyRuleSource
+"""中文
+----
+1.0 公共符号 ``RuleSource`` 保留为 :class:`LegacyRuleSource` 的 type
+alias; 1.0 用户 ``from atlas_richie.sentinel.source import RuleSource``
+继续工作, 1.x 阶段**不**发 deprecation warning, **不**删除
+(API delta v3 决策 3 / MIGRATION-M6 §2.2)。
+
+English
+--------
+The 1.0 public symbol ``RuleSource`` is kept as a type alias of
+:class:`LegacyRuleSource`; 1.0 users
+``from atlas_richie.sentinel.source import RuleSource`` keep working;
+no deprecation warning during 1.x, never removed (API delta v3
+decision 3 / MIGRATION-M6 §2.2).
+"""
+
+
+# ---------------------------------------------------------------------------
+# Protocol 2: SnapshotRuleSource (新契约) — assemble_sources 唯一接受
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class SnapshotRuleSource(Protocol):
+    """中文
+    ----
+    新契约 Port; ``SentinelEngine.assemble_sources()`` 仅接受本类型。
+
+    关键差异 (与 1.0 ``LegacyRuleSource``):
+
+    - ``source_id`` — 配置时用户提供的 stable 字符串 (e.g.
+      ``"nacos-prod"``); 不自动从 endpoint / path / token 构造
+      (rule_source_activation.md §7)。 Supervisor 把它转写到
+      ``_RuleSourceBinding.source_id`` 并出现在 activation fact 中。
+    - ``snapshots()`` 是**异步迭代器**, 单向 yield 已校验完整
+      ``RuleSnapshot``; 不持有 ``RuleRepository`` 引用
+    - ``aclose()`` 幂等关闭; 由 ``SentinelEngine.aclose()`` 经
+      Supervisor 统一关闭 (DESIGN §10.3 L1081-1089)
+    - 不直接调 ``RuleRepository.apply_snapshot`` (由 Supervisor 仲裁)
+    - 不暴露 priority / failover_after; 由 ``RuleSourceAssembly`` 显式
+      声明, 防止 Source 自己声明优先级 (DESIGN §10.5)
+
+    English
+    --------
+    New-contract Port; the only type accepted by
+    ``SentinelEngine.assemble_sources()``.
+
+    Key differences (vs 1.0 ``LegacyRuleSource``):
+
+    - ``source_id`` — user-provided stable string at configuration
+      time (e.g. ``"nacos-prod"``); never auto-derived from endpoint /
+      path / token (rule_source_activation.md §7). The Supervisor
+      transcribes it into ``_RuleSourceBinding.source_id`` and
+      includes it in the activation fact.
+    - ``snapshots()`` is an **async iterator**, one-way yielding
+      already-validated ``RuleSnapshot``; no ``RuleRepository`` ref.
+    - ``aclose()`` idempotent close; closed by
+      ``SentinelEngine.aclose()`` through Supervisor (DESIGN §10.3
+      L1081-1089).
+    - Does not call ``RuleRepository.apply_snapshot`` directly (the
+      Supervisor arbitrates).
+    - Does not expose priority / failover_after; declared explicitly
+      via ``RuleSourceAssembly``, preventing the Source from claiming
+      its own priority (DESIGN §10.5).
+    """
+
+    source_id: str
+    """中文
+    ----
+    配置时 stable 字符串标识 (e.g. ``"nacos-prod"``); Supervisor 在
+    转换 ``_RuleSourceBinding`` 时读取, 写入 activation fact 的
+    ``previous_source_id`` / ``source_id`` 字段。
+
+    **不**自动从 endpoint / path / token 构造 (rule_source_activation.md
+    §7)。
+
+    English
+    --------
+    User-supplied stable identifier at configuration time (e.g.
+    ``"nacos-prod"``); the Supervisor reads it during conversion to
+    ``_RuleSourceBinding`` and includes it in activation fact
+    ``previous_source_id`` / ``source_id`` fields.
+
+    **Never** auto-derived from endpoint / path / token
+    (rule_source_activation.md §7).
+    """
+
+    def snapshots(self) -> AsyncIterator[RuleSnapshot]:
+        ...
+
+    async def aclose(self) -> None:
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Public DTO: RuleSourceAssembly
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class RuleSourceAssembly:
+    """中文
+    ----
+    公开 immutable assembly DTO, 用于 ``SentinelEngine.assemble_sources()``。
+
+    - ``source`` — 必须实现 :class:`SnapshotRuleSource` (新契约)
+    - ``priority`` — 整数, 大值优先; 全局唯一 (重复 = 公共契约违反,
+      由 contract test 兜底; 启动时 Supervisor 抛
+      ``SentinelConfigurationError("duplicate_priority")``)
+    - ``failover_after`` — 短抖动容错窗口; active stale 后等这么久才
+      切到次高 priority ready source (rule_source_activation.md §1)
+
+    ``__post_init__`` 校验 (不触发生命周期):
+
+    - ``priority >= 0``
+    - ``failover_after.total_seconds() >= 0``
+
+    English
+    --------
+    Public immutable assembly DTO, used by
+    ``SentinelEngine.assemble_sources()``.
+
+    - ``source`` — must implement :class:`SnapshotRuleSource` (new
+      contract).
+    - ``priority`` — int, larger wins; globally unique (duplicate =
+      public contract violation, caught by contract test; Supervisor
+      raises ``SentinelConfigurationError("duplicate_priority")`` at
+      start).
+    - ``failover_after`` — short-jitter tolerance window; after active
+      becomes stale, wait this long before switching to the next
+      highest priority ready source (rule_source_activation.md §1).
+
+    ``__post_init__`` validates (no lifecycle calls):
+
+    - ``priority >= 0``
+    - ``failover_after.total_seconds() >= 0``
+    """
+
+    source: SnapshotRuleSource
+    priority: int
+    failover_after: timedelta
+
+    def __post_init__(self) -> None:
+        if self.priority < 0:
+            raise ValueError(
+                f"RuleSourceAssembly.priority must be >= 0 (got {self.priority})"
+            )
+        if self.failover_after.total_seconds() < 0:
+            raise ValueError(
+                f"RuleSourceAssembly.failover_after must be >= 0 "
+                f"(got {self.failover_after})"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Public impl: FileRuleSource (1.0 LegacyRuleSource 形态, 公共 API 不变)
+# ---------------------------------------------------------------------------
+
+
 @dataclass(slots=True)
 class FileRuleSource:
     """中文
     ----
-    本地文件 RuleSource(JSON / YAML)。
+    本地文件 RuleSource(JSON / YAML) — 1.0 ``LegacyRuleSource`` 形态。
 
-    行为:
+    行为(1.0 锁定, 1.x 全程不变):
 
     - 启动后台 task,每 ``poll_interval_sec`` 检查文件 ``mtime_ns``
     - 文件改了 → 读全文 + 解析 + 构造 ``RuleSnapshot`` + 推 Repository
@@ -94,11 +321,17 @@ class FileRuleSource:
 
     YAML 支持:尝试 import yaml;失败时只能解析 JSON。
 
+    **M6.1.0d-1 状态**: 本类**仍**是 ``LegacyRuleSource`` 形态; 1.x
+    全程**不**升级为 ``SnapshotRuleSource`` (DESIGN §10.3 L1091-1093);
+    1.0 用户通过 ``SentinelEngine.install_legacy_source(self, *,
+    repository=repo)`` 接入, 走 1.0 行为, 不经 Supervisor。
+
     English
     --------
-    Local file RuleSource (JSON / YAML).
+    Local file RuleSource (JSON / YAML) — 1.0 ``LegacyRuleSource``
+    shape.
 
-    Behavior:
+    Behavior (1.0 lock, unchanged for the entire 1.x):
 
     - Start background task, check file ``mtime_ns`` every
       ``poll_interval_sec``.
@@ -110,6 +343,12 @@ class FileRuleSource:
 
     YAML support: try to import yaml; if not available, only JSON
     works.
+
+    **M6.1.0d-1 status**: this class **remains** a
+    ``LegacyRuleSource``; the 1.x phase will **not** upgrade it to
+    ``SnapshotRuleSource`` (DESIGN §10.3 L1091-1093); 1.0 users plug
+    in via ``SentinelEngine.install_legacy_source(self, *,
+    repository=repo)`` and get 1.0 behavior, bypassing the Supervisor.
     """
 
     path: str
@@ -241,9 +480,16 @@ class FileRuleSource:
         ----
         启动后台拉取 task,推送给 ``repository``。
 
+        1.0 行为: 直连 ``RuleRepository.apply_snapshot``, 不经
+        Supervisor, 不发 activation fact。1.x 全程保留。
+
         English
         --------
         Start background pull task, push to ``repository``.
+
+        1.0 behavior: direct call to ``RuleRepository.apply_snapshot``,
+        bypasses Supervisor, no activation fact emitted. Preserved for
+        the entire 1.x.
         """
         if self._running:
             return
@@ -302,4 +548,15 @@ class FileRuleSource:
             self._task = None
 
 
-__all__ = ["RuleSource", "FileRuleSource"]
+# Re-export for the contract base / convenience imports
+__all__ = [
+    # 1.0 公共符号保留 (alias)
+    "RuleSource",
+    # 新增公开 Port
+    "LegacyRuleSource",
+    "SnapshotRuleSource",
+    # 新增公开 DTO
+    "RuleSourceAssembly",
+    # 1.0 实现 (公共 API 不变)
+    "FileRuleSource",
+]
