@@ -21,8 +21,7 @@ FastAPI、Django、Flask、CLI、Worker 或无框架脚本中显式装配所需�
 | `atlas-richie-platform` | 已验证组合的安装入口 | contracts + HTTP + MCP + OAuth |
 
 基线为 Python 3.12；支持窗口与版本策略见
-[VERSIONING.md](VERSIONING.md)。完整实施、验证与待办状态见
-[TASK_CHECKLIST.md](TASK_CHECKLIST.md)。`uv.lock` 是可提交的开发/CI 解析记录。
+[VERSIONING.md](VERSIONING.md)。`uv.lock` 是可提交的开发/CI 解析记录。
 GitHub Actions 会在 Python 3.12–3.15 运行同一受控验证；带 `v*` tag 的受保护发布流程使用 PyPI trusted publishing。
 
 ## MCP 最小使用方式

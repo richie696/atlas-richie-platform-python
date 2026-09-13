@@ -5,4 +5,5 @@ semantics, typed failures, lifecycle, audit-safe events, and an ordered intercep
 pipeline.  HTTPX is its one hidden transport implementation; this package neither
 exposes HTTPX objects nor provides a provider-selection SPI.
 
-See the repository-level [HTTP component design](../../HTTP_COMPONENT_DESIGN.md).
+See the repository-level [Architecture](../../ARCHITECTURE.md) and
+[HTTP component source](src/atlas_richie/http/) for design details.
