@@ -235,15 +235,12 @@ class _NacosAdapter:
             .password(cfg.auth.password if cfg.auth else None)
             .grpc_config(grpc_cfg)
             .timeout_ms(int(cfg.read_timeout.total_seconds() * 1000))
-            .load_cache_at_start(False)  # M6.1.7 spike: 关掉 SDK 启动时从磁盘读 cache
-                                       # (本地 dev 环境下 cache_dir 是空目录, 无害; 但
-                                       #  集成测试场景下, 跨进程 publish + 新 client 拉,
-                                       #  cache_dir 不一致, 关闭防 stale 干扰)
             .build()
         )
-        # M6.1.7 spike: 同时关掉 fail-over cache, 强制每次 get_config 走 gRPC query
-        # (SDK 默认 get_fail_over_config_cache 优先, 拿到 stale content 跳过 query)
-        client_config.disable_use_config_cache = True
+        # SDK 3.2.0 默认 fail-over cache 行为: get_config 优先读
+        # `get_fail_over_config_cache` (磁盘), 空走 `query_config` (gRPC).
+        # 在 Nacos 3.2.3 server 跨 client publish + get 场景下, 1 秒
+        # 稳定可见, 跟 Java sentinel-datasource-nacos 行为近似.
         self._client = await self._client_factory(client_config)
         return self._client
 
@@ -405,7 +402,13 @@ class NacosRuleSource(SnapshotRuleSource):
         self._lock = asyncio.Lock()
 
         # 观测
-        self._last_success_version: RuleVersion | None = None
+        self._last_yielded_version: RuleVersion | None = None
+        # M6.1.7 polling 内部状态: 上次 _load_snapshot() 拉到的 candidate
+        # version; _poll_loop 用它跟 _last_yielded_version 比较, 决定
+        # 是否触发新 snapshot. 不能跟 _last_yielded_version 合并, 否则
+        # _load_snapshot 写 _last_yielded_version 后 _poll_loop 立刻读
+        # 出来比较, 永远相等, polling 推不出新 snapshot.
+        self._last_pulled_version: RuleVersion | None = None
         self._last_error: NacosSourceError | None = None
         self._last_error_message: str | None = None
         self._error_counts: dict[NacosSourceError, int] = {
@@ -432,7 +435,23 @@ class NacosRuleSource(SnapshotRuleSource):
 
     @property
     def last_success_version(self) -> RuleVersion | None:
-        return self._last_success_version
+        """上次 **成功 yield 给 caller** 的 :class:`RuleSnapshot` version.
+
+        中文
+        ----
+        这是"caller 真正收到过" 的版本 (caller-side observable), 不等于
+        "上次 poll 拉到的" (_last_pulled_version, 内部状态)。两者分开
+        是因为 polling 模式下:
+        - ``_load_snapshot()`` 拉 candidate, 写 _last_pulled_version
+        - ``_poll_loop()`` 比较 candidate vs _last_yielded_version, 变化
+          则把 candidate 提升为 yielded (写 _last_yielded_version)
+        - 写 _last_yielded_version 后, ``_poll_event.set()`` 通知 caller
+
+        如果合二为一, 写 _last_pulled_version 时也写 _last_yielded_version,
+        ``_poll_loop`` 比较永远相等, 推不出新 snapshot (M6.1.7 polling
+        bug 修复 1, 2026-09-13)。
+        """
+        return self._last_yielded_version
 
     @property
     def last_error(self) -> NacosSourceError | None:
@@ -546,9 +565,12 @@ class NacosRuleSource(SnapshotRuleSource):
         else:
             self._set_state(NacosSourceState.READY)
             self._clear_error()
-        # NOTE: snapshot 已成功生成 → 记 last_success_version
-        # STALE 状态 (部分 data_id 缺失) 也算成功, last-known-good 保留
-        self._last_success_version = snapshot.version
+        # M6.1.7 polling bug 修复 1: 写 _last_pulled_version (candidate),
+        # **不**写 _last_yielded_version. _poll_loop 比较
+        # candidate vs _last_yielded_version, 变化时才把 candidate
+        # 提升为 yielded (写 _last_yielded_version).
+        # STALE 状态 (部分 data_id 缺失) 也算拉取成功, last-known-good 保留
+        self._last_pulled_version = snapshot.version
 
         return snapshot, warnings
 
@@ -574,6 +596,10 @@ class NacosRuleSource(SnapshotRuleSource):
         # 1) 首次拉取 — 失败进入退避循环; 成功才 yield
         snapshot, _warnings = await self._initial_load_with_backoff()
         if snapshot is not None:
+            # M6.1.7 polling bug 修复 1: yield 前把 candidate 提升为 yielded.
+            # _load_snapshot 写 _last_pulled_version, 但 _last_yielded_version
+            # 必须由 yield 路径写, 否则 _poll_loop 比较时永远相等.
+            self._last_yielded_version = snapshot.version
             yield snapshot
         if self._closed:
             return
@@ -593,6 +619,8 @@ class NacosRuleSource(SnapshotRuleSource):
                 return
             if next_snapshot is None or self._closed:
                 return
+            # _poll_loop 在 set event 前已经写 _last_yielded_version
+            # (candidate 提升为 yielded), 不需要这里再写
             yield next_snapshot
 
     async def _wait_for_next_snapshot(self) -> RuleSnapshot | None:
@@ -635,13 +663,15 @@ class NacosRuleSource(SnapshotRuleSource):
                 await self._sleep_with_cancel(self._backoff_seconds())
                 continue
 
-            # 成功: 跟上次 yield 的 snapshot 比对
+            # 成功: 跟上次 yielded snapshot 比对 (不是 _last_pulled_version!
+            # 那是刚 _load_snapshot 写的; 见上方 M6.1.7 polling bug 修复 1)
             self._reconnect_attempt = 0
             if (
-                self._last_success_version is None
-                or snapshot.version.checksum != self._last_success_version.checksum
+                self._last_yielded_version is None
+                or snapshot.version.checksum != self._last_yielded_version.checksum
             ):
-                self._last_success_version = snapshot.version
+                # candidate 提升为 yielded
+                self._last_yielded_version = snapshot.version
                 self._pending_snapshot = snapshot
                 if self._poll_event is not None:
                     self._poll_event.set()
