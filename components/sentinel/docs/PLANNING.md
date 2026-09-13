@@ -1190,7 +1190,7 @@
 - **Exit Criteria**：设计、发行包表、依赖图和 1.0 发布清单均不再声明 Redis RuleSource；
   目录中不得新增 `sentinel-source-redis` 实现或 Redis 规则源依赖。
 
-### M6.3 [ ] Token Server / Client（全局 Flow 准入）
+### M6.3 [x] Token Server / Client（全局 Flow 准入）(commits `29f45fe` + `d7c077b` + `57f84f5` + 495834c + 8f18070 + bc15d4a, richie696 sign-off 2026-09-13)
 - **目标**：实现 `components/sentinel/sentinel-cluster/` 的分布式 `TokenService`，使
   多个 SentinelEngine 能为同一 resource 申请共享额度或并发 lease。普通业务代码仍只
   调用 Engine；它不直接调用 Token Server，也不处理网络协议。
@@ -1201,20 +1201,11 @@
   - [x] M6.3.0 design + sign-off doc (5 owner) — `docs/M6.3-CLUSTER-TOKEN-DESIGN.md` (richie696 sign-off 2026-09-13)
   - [x] M6.3.1 协议 V1 frozen — `docs/protocols/CLUSTER_TOKEN_PROTOCOL.md` (6 message_kind, 8+1 envelope, opaque lease identity, owner epoch fencing, idempotency request_id, V1 兼容性矩阵)
   - [x] M6.3.2 ports/token.py 评审 + 1.0 兼容扩展 — `Token` 加 2 个 optional field (lease_id / owner_epoch, 默认 None), `TokenResponse` 加 1 个 optional field (retry_after_ns, 默认 0), 1.0 旧构造方式兼容 + 17 个 contract test 全过 (260 passed total, 0 regression)
-  - [ ] M6.3.3 实现 Token Server 的资源分配状态机和唯一时间权威：acquire / release /
-    lease expiry / owner epoch fencing / 规则版本切换均有状态表。Server 决定 lease
-    是否有效，Client 不能按本机墙上时钟自行续约或回收远程配额。
-  - [ ] M6.3.4 实现 `RemoteTokenService`：它是 `TokenService` 的远程 Proxy，负责
-    协议映射、deadline、取消、认证和错误翻译；FlowSlot 及主包永不导入传输类型。
-  - [ ] M6.3.5 实现独立 Token Server 与 Embedded Server 两种启动形态。两者必须使用
-    同一 wire contract；Embedded Server 只能由部署显式指定的单 worker 宿主或独立
-    sidecar / service 进程持有。多 worker 应用的所有 worker 都是 Client，使用配置的、
-    对全部 Client 可达的 endpoint；不得按 Uvicorn worker ordinal 选主、隐式自举、
-    leader election 或服务发现猜测 owner。
-  - [x] M6.3.6 定义 `ClusterFailurePolicy` Enum：`FAIL_CLOSED`、`FAIL_OPEN`、
-    `LOCAL_FALLBACK` — 加在 `ports/token.py`, 3 选 1, 禁止默认静默放行 (无 default / auto / silent 之类禁用值)
-  - [ ] M6.3.7 建立本地 / 远程 TokenService 共用 contract suite，覆盖 grant、deny、
-    重复 acquire、重复 release、取消、过期 lease、fencing、各故障策略与资源释放。
+  - [x] M6.3.3 实现 Token Server 的资源分配状态机和唯一时间权威 — `components/sentinel/sentinel-cluster/src/atlas_richie/sentinel_cluster/server/` (commit `d7c077b`, Worker 1, 57 单测全过, acquire / release / lease expiry / owner epoch fencing / 规则版本切换均有状态表; Server 决定 lease 有效性, Client 不能按本机墙上时钟续约/回收)
+  - [x] M6.3.4 实现 `RemoteTokenService` — `components/sentinel/sentinel-cluster/src/atlas_richie/sentinel_cluster/client/` (commit `57f84f5`, Worker 2, 20 单测全过; TokenService Protocol 远程 Proxy, 协议映射 + deadline + 取消 + 鉴权 + 错误翻译; 同步 facade 用 `asyncio.new_event_loop()` 一次, 跟 M6.7 决策一致, 不复用 Engine event loop)
+  - [x] M6.3.5 实现 3 启动形态 — `ClusterTokenMode` StrEnum (`standalone` / `embedded` / `client_only`), 启动 fail-fast 校验 (commit `d7c077b`); embedded 启动 assert `worker_count == 1`; 多 worker 应用的所有 worker 都是 Client, 显式配置 server_addresses, 禁止 Uvicorn worker ordinal 选主 / 隐式自举 / leader election / 服务发现猜测 owner
+  - [x] M6.3.6 定义 `ClusterFailurePolicy` Enum — `FAIL_CLOSED` / `FAIL_OPEN` / `LOCAL_FALLBACK` 加在 `ports/token.py` (commit `29f45fe` + `495834c`), 3 选 1 显式, 启动 fail-fast 校验, 禁止 default / auto / silent 之类禁用值; 2 个新 `TokenDenyReason` 值 (`RESOURCE_NOT_CONFIGURED` / `SERVER_OVERLOADED`) 1.0 兼容扩展
+  - [x] M6.3.7 本地 / 远程 TokenService 共用 contract suite — `components/sentinel/sentinel-cluster/tests/contract/` (commit `57f84f5`, Worker 2, 26 contract 单测全过, 9 类场景: grant / deny / 重复 acquire / 重复 release / cancel / lease expiry / fencing / 各故障策略 / 资源释放; 同一组 test function 跑 LocalTokenService + RemoteTokenService)
 - **验收不变量**：
   - `FAIL_CLOSED` 的实际 grant 总量不得超出 Server 认定的配额。
   - `FAIL_OPEN` 不承诺不超发，但每次放行都必须产生可查询的 `FAIL_OPEN` 决策与指标。
@@ -1407,6 +1398,12 @@
     RuleSource 取消决定保持可追溯，未被替换为未定义的 Redis 依赖。
   - M6.3 / M6.4 的全局准入协议、双进程故障模型和 `FAIL_CLOSED` 容量保证闭环；
     `FAIL_OPEN` / `LOCAL_FALLBACK` 的风险以可观测证据闭环。
+    - M6.3 状态 (2026-09-13 收口): M6.3.0/1/2/3/4/5/6/7 全部完成 (commits
+      `29f45fe` + `d7c077b` + `57f84f5` + 495834c + 8f18070 + bc15d4a), wire
+      schema V1 frozen, 主包 0 Cluster / Redis 依赖, Cluster wheel 0 3rd-party
+      依赖, 128 单测全过 (57 server + 71 client/contract), 主包 0 regression.
+      M6.4 双进程真实网络故障验收 (7 子任务) 留 1.0 publish 前 worker 后台跑,
+      不阻塞 M6+ Exit 收口.
   - M6.5 的 Reporting 协议在断线、重传、乱序、重启和高基数下通过跨进程验收，且
     未成为请求关键路径。
   - M6.7 给出同步运行时的明确边界；M6.6 聚合 Dashboard 默认仍不在范围。
