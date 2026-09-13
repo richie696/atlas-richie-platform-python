@@ -1300,7 +1300,7 @@
 - **ADR**: ADR-SEN-011；聚合 Dashboard 另行 ADR
 - **Deps**: M5.5（不依赖 M6.3；二者仅共享实例身份约定）
 
-### M6.5.7 [ ] 冻结 Agent Reporting 事件 envelope 与子协议挂载
+### M6.5.7 [x] 冻结 Agent Reporting 事件 envelope 与子协议挂载
 - **目标**：冻结 Reporter 通道的**事件 envelope** schema, 使 M6.1 内部
   `RuleSourceActivation` fact 与 M6.5 健康 / 指标事件能够在同一父协议下
   表达；M6.1 阶段**不**冻结 envelope, 推迟到本任务。
@@ -1347,6 +1347,25 @@
 - **Test ID**: SEN-REPORTING-001(part:envelope)
 - **ADR**: ADR-SEN-011 (M6.5 父协议) + 新独立 ADR (M6.5.7 envelope 冻结)
 - **Deps**: M5.5, M6.1.0b (签字)
+- **V1 冻结** (M6.5.7 envelope freeze, 2026-09-13):
+  - `docs/protocols/AGENT_REPORTING_PROTOCOL.md` V1 schema 冻结 (8 字段
+    envelope + 6 个 event_kind + per-kind frozen payload + V1 兼容性矩阵)
+  - `docs/M6.5.7-ENVELOPE-FREEZE.md` design + 5 owner sign-off doc
+  - V1 不可破坏性: 加 optional field 走 V1.1 minor, 改 / 删 / 改语义 / 改
+    protocol_version 字符串走 V2 major bump (独立 ADR)
+  - 6 个 V1 event_kind 冻结: `RULE_SOURCE_ACTIVATED` /
+    `RULE_SOURCE_STALE` / `RULE_SOURCE_DEGRADED` / `RULE_APPLIED` /
+    `RULE_BLOCKED` / `RULE_FAILED`
+  - 健康事件与 source-switch 事件**不**混用同一 kind
+  - 时间字段只保留 `captured_at` (Reporter 本地 UTC, 仅诊断) +
+    `received_at` (Collector 写入, 唯一服务端权威); **不存在**单一
+    `capture_time` 字段
+  - **签字后**: M6.5.1 / M6.5.2 / M6.5.3 / M6.5.6 子任务**禁止**直接向 V1
+    枚举塞项; 新增 event_kind 走 V1.1 minor + ADR, 破坏 V1 兼容走 V2
+    major + 独立 ADR
+  - 1.0 publish 前: `atlas-richie-contracts` 加 `atlas_richie.reporting.v1`
+    包 (Python 投影), 跨语言 contract test (Go / Java SDK mock 跑同
+    spec) — 留 worker / Mavis 实施
 
 ### M6.6 [ ] 聚合 Dashboard 和 Web UI(1.x 评估,不在 M6 默认范围)
 - **背景**: `sentinel-dashboard-aggregator` 是新发行包,DESIGN.md 没批准。**从 M6 默认范围中删除**。若要纳入 M6,必须先:
