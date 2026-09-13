@@ -1372,7 +1372,7 @@
 - **ADR**: ADR-SEN-018（Proposed；用户签字后才可实施）
 - **Deps**: M6.5(协议)
 
-### M6.7 [ ] WSGI/同步阻塞引擎可行性评估
+### M6.7 [x] WSGI/同步阻塞引擎可行性评估 (评估完成, 决策: 1.x 不支持, 详见 `docs/M6.7-WSGI-SYNC-EVAL.md`, ADR-SEN-018)
 - **Deliverable**:
   - 调研报告：同步 API、已有 event loop 中 `asyncio.run()` 的非法性、线程 / contextvars
     传播、取消、连接资源释放、fork / worker 模型和性能风险
