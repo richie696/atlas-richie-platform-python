@@ -9,8 +9,8 @@
 
 - **SDK 升级**: ``nacos-sdk-python`` 0.1.16 → 3.2.0 (模块 ``v2.nacos``,
   async + gRPC)
-- **长轮询 push 不可用**: SDK 3.2.0 gRPC listener 跟 Nacos 3.2.3 server
-  协议 drift, 30 秒等待仍 0 events。改 polling 模式: 后台
+- **轮询为正确性路径**: 当前 SDK 3.2.0 / Nacos 3.2.3 部署中未能稳定验证
+  listener 回调；适配器不依赖 push，而由后台
   ``asyncio.create_task`` 每 ``poll_interval`` 秒拉一次 5 个 data_id,
   checksum 比对, 变化则 yield snapshot
 - **SDK 端取消**: 不再调 ``add_listener`` / ``add_config_watcher``; 适配层
@@ -46,8 +46,8 @@ lifecycle, M6.1.4 5-way error classification, M6.1.5 idempotent aclose.
 **M6.1.7 architecture (replaces M6.1.0-1.6 push path)**:
 
 - ``nacos-sdk-python`` upgraded to 3.2.0 (``v2.nacos`` module, async + gRPC).
-- Long-poll push is **not** used: SDK 3.2.0 gRPC listener is incompatible
-  with Nacos 3.2.3 server (0 events / 30s). A background
+- Listener push is **not** a correctness dependency: it was not reliably
+  validated in the current SDK 3.2.0 / Nacos 3.2.3 deployment. A background
   ``asyncio.create_task`` polls 5 data-ids every ``poll_interval`` seconds,
   compares checksums, yields a new :class:`RuleSnapshot` on change.
 - SDK ``add_listener`` / ``add_config_watcher`` are **not** called. Adapter
@@ -76,6 +76,23 @@ from .config import NacosRuleSourceConfig, NacosSourceError, NacosSourceState
 
 
 _logger = logging.getLogger("atlas_richie.sentinel_source_nacos")
+
+# Nacos SDK can use a negative 401-like code while its gRPC client is simply
+# disconnected.  These markers take precedence over an authentication code:
+# a source must retry a lost transport, not wait for a credential change.
+_TRANSPORT_UNAVAILABLE_MARKERS: tuple[str, ...] = (
+    "client not connected",
+    "rpcclientstatus.unhealthy",
+    "failed to connect nacos server",
+)
+
+
+def _is_transport_unavailable(message: str) -> bool:
+    """Return whether an SDK error reports an unavailable transport."""
+    normalized_message = message.casefold()
+    return any(
+        marker in normalized_message for marker in _TRANSPORT_UNAVAILABLE_MARKERS
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -235,12 +252,12 @@ class _NacosAdapter:
             .password(cfg.auth.password if cfg.auth else None)
             .grpc_config(grpc_cfg)
             .timeout_ms(int(cfg.read_timeout.total_seconds() * 1000))
+            .load_cache_at_start(False)
             .build()
         )
-        # SDK 3.2.0 默认 fail-over cache 行为: get_config 优先读
-        # `get_fail_over_config_cache` (磁盘), 空走 `query_config` (gRPC).
-        # 在 Nacos 3.2.3 server 跨 client publish + get 场景下, 1 秒
-        # 稳定可见, 跟 Java sentinel-datasource-nacos 行为近似.
+        # Rules are control-plane authority.  A restarted process must not
+        # silently serve an SDK disk-cache snapshot in preference to Nacos.
+        client_config.disable_use_config_cache = True
         self._client = await self._client_factory(client_config)
         return self._client
 
@@ -257,6 +274,16 @@ class _NacosAdapter:
             )
         finally:
             self._client = None
+
+    async def reset_after_network_error(self) -> None:
+        """Discard an unhealthy SDK service so the next poll creates a new one.
+
+        The Nacos 3.x SDK can retain an ``UNHEALTHY`` gRPC client after a
+        server restart.  Retrying through that instance only repeats
+        ``client not connected``; recreating the private SDK service is the
+        bounded recovery action for a classified transport failure.
+        """
+        await self.aclose()
 
     async def fetch_all(
         self,
@@ -283,16 +310,30 @@ class _NacosAdapter:
                     ConfigParam(data_id=data_id, group=cfg.group)
                 )
             except NacosException as e:
-                # SDK 抛 NacosException(error_code, message);
-                # 401/403 → AUTH; 400/404 → NOT_FOUND; 其它 → DECODE
+                # SDK 会在 gRPC client 失联时抛带 -401 的
+                # "client not connected"。它不是凭据拒绝，必须优先按
+                # NETWORK 分类以进入退避/重连；真正 401/403 才是 AUTH。
                 msg = str(e)
                 code = getattr(e, "error_code", None)
-                if code in (401, 403) or "401" in msg or "403" in msg or "Insufficient privilege" in msg:
+                if _is_transport_unavailable(msg):
+                    errors.append((data_id, NacosSourceError.NETWORK, msg))
+                elif (
+                    code in (401, 403)
+                    or "401" in msg
+                    or "403" in msg
+                    or "insufficient privilege" in msg.casefold()
+                ):
                     errors.append((data_id, NacosSourceError.AUTH, msg))
                 elif code in (400, 404) or "404" in msg or "not found" in msg.lower():
                     errors.append((data_id, NacosSourceError.NOT_FOUND, msg))
+                elif (
+                    isinstance(code, int)
+                    and 500 <= code <= 599
+                ) or "get access token failed" in msg.casefold():
+                    errors.append((data_id, NacosSourceError.NETWORK, msg))
                 else:
-                    # SDK V3 protocol 错 (5xx / 其它 4xx 业务错); 视为 DECODE
+                    # 协议层的不可分类错误。规则 JSON/schema 错误由
+                    # decode_rule_snapshot 明确归为 DECODE。
                     errors.append((data_id, NacosSourceError.DECODE, msg))
                 continue
             except (URLError, TimeoutError, ConnectionError, OSError) as e:
@@ -403,12 +444,6 @@ class NacosRuleSource(SnapshotRuleSource):
 
         # 观测
         self._last_yielded_version: RuleVersion | None = None
-        # M6.1.7 polling 内部状态: 上次 _load_snapshot() 拉到的 candidate
-        # version; _poll_loop 用它跟 _last_yielded_version 比较, 决定
-        # 是否触发新 snapshot. 不能跟 _last_yielded_version 合并, 否则
-        # _load_snapshot 写 _last_yielded_version 后 _poll_loop 立刻读
-        # 出来比较, 永远相等, polling 推不出新 snapshot.
-        self._last_pulled_version: RuleVersion | None = None
         self._last_error: NacosSourceError | None = None
         self._last_error_message: str | None = None
         self._error_counts: dict[NacosSourceError, int] = {
@@ -440,16 +475,9 @@ class NacosRuleSource(SnapshotRuleSource):
         中文
         ----
         这是"caller 真正收到过" 的版本 (caller-side observable), 不等于
-        "上次 poll 拉到的" (_last_pulled_version, 内部状态)。两者分开
-        是因为 polling 模式下:
-        - ``_load_snapshot()`` 拉 candidate, 写 _last_pulled_version
-        - ``_poll_loop()`` 比较 candidate vs _last_yielded_version, 变化
-          则把 candidate 提升为 yielded (写 _last_yielded_version)
-        - 写 _last_yielded_version 后, ``_poll_event.set()`` 通知 caller
-
-        如果合二为一, 写 _last_pulled_version 时也写 _last_yielded_version,
-        ``_poll_loop`` 比较永远相等, 推不出新 snapshot (M6.1.7 polling
-        bug 修复 1, 2026-09-13)。
+        候选快照仅在当前 poll tick 的局部变量中存在；只有该快照将要
+        ``yield`` 时才更新本字段。若让加载路径提前更新，本次 tick 与
+        "已交付"版本的比较必然相等，polling 将无法发出更新。
         """
         return self._last_yielded_version
 
@@ -536,6 +564,7 @@ class NacosRuleSource(SnapshotRuleSource):
             self._set_state(NacosSourceState.DISCONNECTED)
             for _, err, msg in errors:
                 self._set_error(err, msg)
+            await self._adapter.reset_after_network_error()
             return None, [NacosSourceError.NETWORK]
 
         # NOT_FOUND / EMPTY / DECODE — 生成 snapshot, 标记 STALE
@@ -565,13 +594,6 @@ class NacosRuleSource(SnapshotRuleSource):
         else:
             self._set_state(NacosSourceState.READY)
             self._clear_error()
-        # M6.1.7 polling bug 修复 1: 写 _last_pulled_version (candidate),
-        # **不**写 _last_yielded_version. _poll_loop 比较
-        # candidate vs _last_yielded_version, 变化时才把 candidate
-        # 提升为 yielded (写 _last_yielded_version).
-        # STALE 状态 (部分 data_id 缺失) 也算拉取成功, last-known-good 保留
-        self._last_pulled_version = snapshot.version
-
         return snapshot, warnings
 
     # --- 公开: snapshots() 异步迭代器 (M6.1.7 polling 模式) ---
@@ -596,9 +618,7 @@ class NacosRuleSource(SnapshotRuleSource):
         # 1) 首次拉取 — 失败进入退避循环; 成功才 yield
         snapshot, _warnings = await self._initial_load_with_backoff()
         if snapshot is not None:
-            # M6.1.7 polling bug 修复 1: yield 前把 candidate 提升为 yielded.
-            # _load_snapshot 写 _last_pulled_version, 但 _last_yielded_version
-            # 必须由 yield 路径写, 否则 _poll_loop 比较时永远相等.
+            # 仅在 caller 实际取得 snapshot 的 yield 路径推进公开版本。
             self._last_yielded_version = snapshot.version
             yield snapshot
         if self._closed:
@@ -619,8 +639,8 @@ class NacosRuleSource(SnapshotRuleSource):
                 return
             if next_snapshot is None or self._closed:
                 return
-            # _poll_loop 在 set event 前已经写 _last_yielded_version
-            # (candidate 提升为 yielded), 不需要这里再写
+            # 候选快照直到此处才成为 caller 实际收到的版本。
+            self._last_yielded_version = next_snapshot.version
             yield next_snapshot
 
     async def _wait_for_next_snapshot(self) -> RuleSnapshot | None:
@@ -663,15 +683,12 @@ class NacosRuleSource(SnapshotRuleSource):
                 await self._sleep_with_cancel(self._backoff_seconds())
                 continue
 
-            # 成功: 跟上次 yielded snapshot 比对 (不是 _last_pulled_version!
-            # 那是刚 _load_snapshot 写的; 见上方 M6.1.7 polling bug 修复 1)
+            # 成功: 只与 caller 已实际收到的版本比较。
             self._reconnect_attempt = 0
             if (
                 self._last_yielded_version is None
                 or snapshot.version.checksum != self._last_yielded_version.checksum
             ):
-                # candidate 提升为 yielded
-                self._last_yielded_version = snapshot.version
                 self._pending_snapshot = snapshot
                 if self._poll_event is not None:
                     self._poll_event.set()

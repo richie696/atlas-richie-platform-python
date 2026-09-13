@@ -153,20 +153,12 @@ async def nacos_admin_client(
     测试用 ``admin.publish_config(...)`` / ``admin.remove_config(...)``
     增删 data_id; teardown 自动 shutdown。
     """
-    from v2.nacos import ClientConfigBuilder, GRPCConfig, NacosConfigService
-
-    grpc_cfg = GRPCConfig(port_offset=1000, grpc_timeout=10000)
-    cfg = (
-        ClientConfigBuilder()
-        .server_address(nacos_url)
-        .namespace_id(nacos_namespace)
-        .username(nacos_user)
-        .password(nacos_password)
-        .grpc_config(grpc_cfg)
-        .timeout_ms(10000)
-        .build()
+    svc = await create_ready_nacos_config_service(
+        nacos_url=nacos_url,
+        nacos_user=nacos_user,
+        nacos_password=nacos_password,
+        nacos_namespace=nacos_namespace,
     )
-    svc = await NacosConfigService.create_config_service(cfg)
     try:
         yield svc
     finally:
@@ -174,6 +166,77 @@ async def nacos_admin_client(
             await svc.shutdown()
         except Exception:
             pass
+
+
+async def create_nacos_config_service(
+    *,
+    nacos_url: str,
+    nacos_user: str,
+    nacos_password: str,
+    nacos_namespace: str,
+) -> Any:
+    """Create one SDK config service bound to the current asyncio loop."""
+    from v2.nacos import ClientConfigBuilder, GRPCConfig, NacosConfigService
+
+    grpc_config = GRPCConfig(port_offset=1000, grpc_timeout=10000)
+    client_config = (
+        ClientConfigBuilder()
+        .server_address(nacos_url)
+        .namespace_id(nacos_namespace)
+        .username(nacos_user)
+        .password(nacos_password)
+        .grpc_config(grpc_config)
+        .timeout_ms(10000)
+        .build()
+    )
+    return await NacosConfigService.create_config_service(client_config)
+
+
+async def create_ready_nacos_config_service(
+    *,
+    nacos_url: str,
+    nacos_user: str,
+    nacos_password: str,
+    nacos_namespace: str,
+    timeout_seconds: float = 30.0,
+) -> Any:
+    """Return a config service only after an authenticated config read works.
+
+    A listening TCP port is insufficient after a Nacos restart: the HTTP
+    endpoint can be open while the authentication and gRPC config services
+    are still initializing.  A read of a unique missing data-id is
+    side-effect free and proves the exact control-plane capability the tests
+    need.
+    """
+    from v2.nacos.config.model.config_param import ConfigParam
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    last_error: Exception | None = None
+    readiness_data_id = f"atlas-richie-readiness-{uuid.uuid4().hex}"
+    while loop.time() < deadline:
+        service = await create_nacos_config_service(
+            nacos_url=nacos_url,
+            nacos_user=nacos_user,
+            nacos_password=nacos_password,
+            nacos_namespace=nacos_namespace,
+        )
+        try:
+            await service.get_config(
+                ConfigParam(data_id=readiness_data_id, group="DEFAULT_GROUP")
+            )
+            return service
+        except Exception as error:
+            last_error = error
+            try:
+                await service.shutdown()
+            except Exception:
+                pass
+            await asyncio.sleep(1.0)
+    raise RuntimeError(
+        "Nacos config service did not become ready within "
+        f"{timeout_seconds:.0f}s: {last_error!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +298,8 @@ __all__ = [
     "NACOS_USER",
     "NACOS_PASSWORD",
     "NacosSourceState",
+    "create_nacos_config_service",
+    "create_ready_nacos_config_service",
     "make_config",
     "collect_first_snapshot",
 ]

@@ -3,7 +3,7 @@
 中文
 ----
 Sentinel 家族的**规则源 — Nacos** (M6.1)。从 Nacos 配置中心加载 5 类
-rule,使用 long-poll 拉取变更;实现新契约 :class:`SnapshotRuleSource`,
+rule,使用 polling 拉取变更;实现新契约 :class:`SnapshotRuleSource`,
 经主包 :class:`SentinelEngine` 的 ``assemble_sources`` 入口接入多源仲裁。
 
 1:1 对位 Java `sentinel-datasource-nacos`;5 个 rule data-id 约定:
@@ -27,12 +27,12 @@ rule,使用 long-poll 拉取变更;实现新契约 :class:`SnapshotRuleSource`,
 - M6.1.4 ✅ 5 类错误分类 (AUTH / NOT_FOUND / EMPTY / DECODE / NETWORK) +
   状态机 (CONNECTING / READY / STALE / DISCONNECTED / CLOSED) +
   有界指数退避 + last-known-good
-- M6.1.5 ✅ 显式管理订阅 + 幂等 aclose() + 脱敏
-- M6.1.6 ⏳ contract suite + Nacos-specific tests (留给 Mavis / M6.1 真实验收)
+- M6.1.5 ✅ polling 生命周期 + 幂等 aclose() + 脱敏
+- M6.1.6 ✅ contract suite + Nacos-specific tests
 
 **依赖隔离 (M6.1.1 硬约束)**:
 
-- 仅本 wheel 声明 `nacos-sdk-python>=2.0,<3.0` 依赖
+- 仅本 wheel 声明 `nacos-sdk-python>=3.0,<4.0` 依赖
 - 主包 / ASGI / HTTPX / Dashboard 依赖图**不**变 (主包仍零 3rd-party)
 - `rg "nacos"` 主包源码验证不命中 (extension isolation)
 
@@ -44,7 +44,7 @@ rule,使用 long-poll 拉取变更;实现新契约 :class:`SnapshotRuleSource`,
 English
 --------
 Sentinel family rule source — Nacos-based (M6.1). Loads 5 rule types
-from Nacos config center with long-poll refresh; implements the new
+from Nacos config center with polling refresh; implements the new
 :class:`SnapshotRuleSource` contract, plugged in via main package's
 ``assemble_sources`` entry.
 
@@ -54,7 +54,7 @@ conventions listed above (full data-id via
 
 **Dependency isolation (M6.1.1 hard constraint)**:
 
-- Only this wheel declares `nacos-sdk-python>=2.0,<3.0`
+- Only this wheel declares `nacos-sdk-python>=3.0,<4.0`
 - Main package / ASGI / HTTPX / Dashboard dependency graph **unchanged**
   (main package remains zero 3rd-party)
 - `rg "nacos"` on main package source proves isolation
@@ -94,4 +94,3 @@ __all__ = [
     # M6.1.3 - M6.1.5 (done): 完整生命周期 + 错误分类 + aclose
     "NacosRuleSource",
 ]
-

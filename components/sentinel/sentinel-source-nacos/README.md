@@ -2,7 +2,7 @@
 
 Nacos-based rule source for Atlas Richie Sentinel. Loads Flow / Degrade
 / ParamFlow / System / Authority rules from Nacos config center with
-long-poll refresh; implements the new `SnapshotRuleSource` contract,
+polling refresh; implements the new `SnapshotRuleSource` contract,
 plugged in via the main package's `assemble_sources` entry.
 
 Part of the **Atlas Richie Sentinel** family — the Python equivalent of
@@ -10,24 +10,23 @@ Alibaba Sentinel + Resilience4j.
 
 ## Status
 
-**M6.1.5 — implementation done.** M6.1.2 - M6.1.5 land
-`NacosRuleSource` with full lifecycle, 5-way error classification, and
-idempotent `aclose()`. M6.1.6 contract suite + real-service validation
-land in a follow-up milestone.
+**M6.1.7 — Nacos 3.x polling implementation.** `NacosRuleSource` uses
+the async `nacos-sdk-python` 3.x API, with a bounded polling loop as its
+correctness path, 5-way error classification, and idempotent `aclose()`.
 
 | Sub-task | Status |
 | -------- | ------ |
 | M6.1.1 wheel scaffold + workspace | ✅ done |
 | M6.1.2 `NacosRuleSourceConfig` frozen dataclass + value objects | ✅ done |
-| M6.1.3 lifecycle (first read → publish → subscribe) | ✅ done |
+| M6.1.3 lifecycle (first read → poll → yield) | ✅ done |
 | M6.1.4 error classification + last-known-good + backoff | ✅ done |
 | M6.1.5 idempotent `aclose()` + redaction | ✅ done |
-| M6.1.6 contract suite + Nacos tests | ⏳ (follow-up worker) |
-| M6.1 real-service validation (5 scenarios) | ⏳ (M6.1 真实验收) |
+| M6.1.6 contract suite + Nacos tests | ✅ done |
+| M6.1.7 Nacos 3.x SDK + polling | ✅ done |
 
 ## Dependency isolation (M6.1.1 hard constraint)
 
-- Only this wheel declares `nacos-sdk-python>=2.0,<3.0`.
+- Only this wheel declares `nacos-sdk-python>=3.0,<4.0`.
 - Main package / ASGI / HTTPX / Dashboard dependency graph is
   **unchanged** (main package remains zero 3rd-party).
 - `rg "nacos" components/sentinel/sentinel/src/` must return empty
@@ -125,12 +124,13 @@ Use `config.data_id_for(rule_type)` to get the exact data-id string.
 2. `async for snap in source.snapshots():` first `__anext__` triggers:
    pull 5 data-ids → decode → yield first `RuleSnapshot` → state =
    `READY` (or `STALE` on partial success).
-3. Register 5 Nacos long-poll watchers; SDK callback marshals into
-   the asyncio event loop.
-4. On Nacos push: re-pull 5 data-ids → re-decode → yield new
+3. Start one bounded polling task. Each tick reads the five data-ids,
+   compares the combined checksum with the last delivered snapshot, and
+   wakes the iterator only on change.
+4. On a changed poll result: re-decode → yield new
    `RuleSnapshot` with updated `RuleVersion`.
-5. `aclose()` cancels the listener task, stops the SDK subscription,
-   and transitions to `CLOSED`. Idempotent.
+5. `aclose()` cancels the polling task, shuts down the SDK client, and
+   transitions to `CLOSED`. Idempotent.
 
 ### Error classification (M6.1.4)
 

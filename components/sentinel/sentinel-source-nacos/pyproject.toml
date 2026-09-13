@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "atlas-richie-sentinel-source-nacos"
 version = "0.2.0"
-description = "Atlas Richie Sentinel — Nacos-based rule source. Load Flow / Degrade / ParamFlow / System / Authority rules from Nacos config center, with long-poll refresh. Mirrors Java sentinel-datasource-nacos."
+description = "Atlas Richie Sentinel — Nacos-based rule source. Load Flow / Degrade / ParamFlow / System / Authority rules from Nacos config center with polling refresh."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
@@ -16,7 +16,6 @@ classifiers = [
 ]
 dependencies = [
   "atlas-richie-contracts>=0.2.0,<0.3.0",
-  "atlas-richie-sentinel>=0.2.0,<0.3.0",
   "atlas-richie-sentinel>=0.2.0,<0.3.0",
   "nacos-sdk-python>=3.0,<4.0",
 ]

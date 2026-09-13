@@ -49,7 +49,11 @@ from atlas_richie.sentinel_source_nacos import (
     NacosSourceState,
 )
 
-from .conftest import collect_first_snapshot, make_config
+from .conftest import (
+    collect_first_snapshot,
+    create_nacos_config_service,
+    make_config,
+)
 
 
 pytestmark = pytest.mark.integration
@@ -143,6 +147,18 @@ class TestLegalUpdate:
         v1_content = '[{"resource":"/v1","grade":1,"count":10}]'
         v2_content = '[{"resource":"/v2","grade":1,"count":20}]'
 
+        # M6.1.7 经验: Nacos 3.2.3 server 跨 client 拉取 1 秒最终一致窗口;
+        # 跨 SDK 客户端 publish + read 必须等 server 端同步完成。
+        # 策略: pre-publish v1, 等 server 同步 1s, 然后启动 source 拉。
+        # 之后再 publish v2, 让 polling 检测变化 yield 新 snapshot。
+
+        # 1) 预 publish v1, 等 server 同步
+        assert await nacos_admin_client.publish_config(
+            ConfigParam(data_id=flow_data_id, group="DEFAULT_GROUP", content=v1_content)
+        )
+        # Nacos 3.2.3 server 跨 client 一致性窗口 1s+ safety margin
+        await asyncio.sleep(3.0)
+
         cfg = make_config(
             nacos_url=nacos_url,
             nacos_user=nacos_user,
@@ -162,30 +178,20 @@ class TestLegalUpdate:
                     return
 
         task = asyncio.create_task(_collect())
-        # 等 1s 让 source 启动 + 首次拉 (含 SDK gRPC 连接 + 首次 get_config 5 个 data_id)
-        await asyncio.sleep(1.0)
-        # publish v1
-        assert await nacos_admin_client.publish_config(
-            ConfigParam(data_id=flow_data_id, group="DEFAULT_GROUP", content=v1_content)
-        )
-        # Nacos 3.x server publish 跟 read 最终一致延迟 ~100ms; 轮询确认
-        # admin 看到 v1 再继续 (避免 NacosRuleSource 拉不到刚 publish 的数据)
-        for _ in range(20):
-            got = await nacos_admin_client.get_config(
-                ConfigParam(data_id=flow_data_id, group="DEFAULT_GROUP")
-            )
-            if got == v1_content:
-                break
-            await asyncio.sleep(0.1)
-        # 等 ≤ 3s 让 polling tick 拉 v1 (poll 0.3s, 给 10 tick 富裕)
-        await asyncio.sleep(3.0)
-        # publish v2 → 触发新 snapshot
+        # 等 source 启动 + 首次拉 (含 SDK gRPC 连接 + 首次 get_config 5 个 data_id)
+        await asyncio.sleep(2.0)
+
+        # 2) publish v2 → 触发新 snapshot
         assert await nacos_admin_client.publish_config(
             ConfigParam(data_id=flow_data_id, group="DEFAULT_GROUP", content=v2_content)
         )
+        # 同上, 1s 跨 client 一致性 + safety margin
+        await asyncio.sleep(3.0)
+        # 等 ≤ 5s 让 polling tick 拉 v2 (poll 0.3s, 给 17 tick 富裕)
+        await asyncio.sleep(5.0)
 
         try:
-            await asyncio.wait_for(task, timeout=10.0)
+            await asyncio.wait_for(task, timeout=5.0)
         except asyncio.TimeoutError:
             pass
         finally:
@@ -207,13 +213,16 @@ class TestLegalUpdate:
         )
         s1, s2 = snapshots[0], snapshots[-1]
         assert s1.version.checksum != s2.version.checksum, (
-            f"snapshots should have different checksums, both = {s1.version.checksum}"
+            f"snapshots should have different checksums, both = {s1.version.checksum[:8]}"
         )
         # v2 content 应含 /v2
         assert any(
-            getattr(r, "resource", None) == "/v2"
+            getattr(getattr(r, "selector", None), "pattern", None) == "/v2"
             for r in s2.rules.values()
-        ), f"v2 should have /v2 resource, got {list(s2.rules.values())}"
+        ), (
+            "v2 should have /v2 selector, got "
+            f"{[getattr(getattr(r, 'selector', None), 'pattern', None) for r in s2.rules.values()]}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -251,68 +260,59 @@ class TestInvalidUpdate:
         )
         src = NacosRuleSource(cfg)
         snapshots: list[RuleSnapshot] = []
+        first_snapshot_received = asyncio.Event()
 
         async def _collect() -> None:
             async for s in src.snapshots():
                 snapshots.append(s)
-                if len(snapshots) >= 1:
-                    return
+                first_snapshot_received.set()
 
-        task = asyncio.create_task(_collect())
-        await asyncio.sleep(1.0)  # 让 source 启动 + SDK 连接
-        # publish v1 (合法)
+        # 先发布 v1，避免 initial load 把“尚未配置的空快照”作为 LKG。
         assert await nacos_admin_client.publish_config(
             ConfigParam(data_id=flow_data_id, group="DEFAULT_GROUP", content=v1_content)
         )
-        # 轮询确认 v1 server 端可见
-        for _ in range(20):
-            got = await nacos_admin_client.get_config(
-                ConfigParam(data_id=flow_data_id, group="DEFAULT_GROUP")
-            )
-            if got == v1_content:
-                break
-            await asyncio.sleep(0.1)
-        # 等 3s 让 poll tick 拉 v1
-        await asyncio.sleep(3.0)
+        # Nacos 3.2.3 跨客户端 query 有短暂最终一致窗口。
+        await asyncio.sleep(2.0)
+        task = asyncio.create_task(_collect())
         try:
-            await asyncio.wait_for(task, timeout=10.0)
+            await asyncio.wait_for(first_snapshot_received.wait(), timeout=10.0)
         except asyncio.TimeoutError:
-            pass
+            pytest.fail("expected the initial v1 snapshot within 10s")
 
         # 记第一个 snapshot 的 checksum
         assert snapshots, "expected at least 1 snapshot (v1)"
         v1_checksum = snapshots[0].version.checksum
-        await src.aclose()
 
-        # 现在 publish 坏 JSON
+        # 在同一条已持续消费的 Source 上发布坏 JSON。这样才可验证其
+        # polling 的 DECODE 状态以及 v1 last-known-good 不会被破坏。
         assert await nacos_admin_client.publish_config(
             ConfigParam(data_id=flow_data_id, group="DEFAULT_GROUP", content=bad_content)
         )
 
-        # 重新构造 source, 期望坏 JSON 让它 DECODE 错误 + STALE
-        src2 = NacosRuleSource(cfg)
+        async def _wait_for_decode_error() -> None:
+            while src.error_count(NacosSourceError.DECODE) == 0:
+                await asyncio.sleep(0.1)
+
         try:
-            # 等 5s 让 poll tick 看到坏 JSON + DECODE 错误累计
-            await asyncio.sleep(5.0)
-            # last_error 应设置 (具体类型取决于 SDK 拿到坏 JSON 的行为)
-            # SDK 3.2.0 拿到坏 JSON: JSON parser 在 SDK 内部抛 → 我们 catch 不到
-            # → 走 NETWORK 路径; 或者 codec 层抛 NacosCodecError → DECODE
-            assert src2.last_error is not None, (
-                "expected an error after bad JSON publish"
+            await asyncio.wait_for(_wait_for_decode_error(), timeout=10.0)
+            assert src.error_count(NacosSourceError.DECODE) > 0, (
+                "expected at least one DECODE after bad JSON publish"
             )
             # last_success_version 仍是 v1 的 (旧 snapshot 保留)
-            assert src2.last_success_version is not None
-            assert src2.last_success_version.checksum == v1_checksum, (
+            assert src.last_success_version is not None
+            assert src.last_success_version.checksum == v1_checksum, (
                 f"last_success_version.checksum should remain v1 ({v1_checksum[:8]}), "
-                f"got {src2.last_success_version.checksum[:8]}"
+                f"got {src.last_success_version.checksum[:8]}"
             )
-            # state 应是 STALE 或 DISCONNECTED
-            assert src2.state in (
-                NacosSourceState.STALE,
-                NacosSourceState.DISCONNECTED,
-            ), f"expected STALE/DISCONNECTED, got {src2.state}"
+            assert src.state is NacosSourceState.STALE, (
+                f"expected STALE after bad JSON, got {src.state}"
+            )
         finally:
-            await src2.aclose()
+            await src.aclose()
+            try:
+                await asyncio.wait_for(task, timeout=1.0)
+            except asyncio.TimeoutError:
+                task.cancel()
             try:
                 await nacos_admin_client.remove_config(
                     ConfigParam(data_id=flow_data_id, group="DEFAULT_GROUP")
@@ -376,37 +376,62 @@ class TestDisconnectRecover:
         assert await nacos_admin_client.publish_config(
             ConfigParam(data_id=flow_data_id, group="DEFAULT_GROUP", content=v1_content)
         )
+        # Nacos 3.2.3 跨客户端 query 有短暂最终一致窗口。
+        await asyncio.sleep(2.0)
         src = NacosRuleSource(cfg_fast)
-        first_snap = await collect_first_snapshot(src, timeout=10.0)
-        assert first_snap is not None
-        v1_checksum = first_snap.version.checksum
+        recovered_admin_client: Any | None = None
+        snapshots: list[RuleSnapshot] = []
+        initial_snapshot_received = asyncio.Event()
+        updated_snapshot_received = asyncio.Event()
+
+        async def _collect() -> None:
+            async for snapshot in src.snapshots():
+                snapshots.append(snapshot)
+                if len(snapshots) == 1:
+                    initial_snapshot_received.set()
+                elif len(snapshots) == 2:
+                    updated_snapshot_received.set()
+
+        task = asyncio.create_task(_collect())
+        try:
+            await asyncio.wait_for(initial_snapshot_received.wait(), timeout=10.0)
+        except asyncio.TimeoutError:
+            await src.aclose()
+            task.cancel()
+            pytest.fail("expected the initial v1 snapshot within 10s")
+
+        v1_checksum = snapshots[0].version.checksum
 
         # docker stop Nacos
-        docker_result = subprocess.run(
+        docker_result = await asyncio.to_thread(
+            subprocess.run,
             ["docker", "stop", "nacos-pg-3.2.3"],
             capture_output=True, text=True, timeout=30,
         )
         if docker_result.returncode != 0:
             await src.aclose()
+            task.cancel()
             pytest.skip(
                 f"docker stop failed (rc={docker_result.returncode}): "
                 f"{docker_result.stderr[:200]}"
             )
 
+        async def _wait_for_network_error() -> None:
+            while src.error_count(NacosSourceError.NETWORK) == 0:
+                await asyncio.sleep(0.1)
+
         try:
-            # 等 polling 触发 NETWORK 错误 + 退避
-            await asyncio.sleep(5.0)
-            # state 应是 DISCONNECTED 或 STALE (退避中)
-            assert src.state in (
-                NacosSourceState.DISCONNECTED,
-                NacosSourceState.STALE,
-            ), f"after docker stop, expected DISCONNECTED/STALE, got {src.state}"
+            await asyncio.wait_for(_wait_for_network_error(), timeout=15.0)
+            assert src.state is NacosSourceState.DISCONNECTED, (
+                f"after docker stop, expected DISCONNECTED, got {src.state}"
+            )
             # last_success_version 仍是 v1
             assert src.last_success_version is not None
             assert src.last_success_version.checksum == v1_checksum
 
             # docker start Nacos
-            start_result = subprocess.run(
+            start_result = await asyncio.to_thread(
+                subprocess.run,
                 ["docker", "start", "nacos-pg-3.2.3"],
                 capture_output=True, text=True, timeout=30,
             )
@@ -414,21 +439,59 @@ class TestDisconnectRecover:
                 f"docker start failed: {start_result.stderr}"
             )
 
-            # 等 Nacos 启完 + 重连
-            await asyncio.sleep(5.0)
+            async def _publish_after_nacos_recovers() -> Any:
+                """Wait for an authenticated control-plane write, not a TCP port."""
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + 30.0
+                last_error: Exception | None = None
+                while loop.time() < deadline:
+                    candidate = await create_nacos_config_service(
+                        nacos_url=nacos_url,
+                        nacos_user=nacos_user,
+                        nacos_password=nacos_password,
+                        nacos_namespace=nacos_namespace,
+                    )
+                    try:
+                        if await candidate.publish_config(
+                            ConfigParam(
+                                data_id=flow_data_id,
+                                group="DEFAULT_GROUP",
+                                content=v2_content,
+                            )
+                        ):
+                            return candidate
+                    except Exception as error:
+                        last_error = error
+                    await candidate.shutdown()
+                    await asyncio.sleep(1.0)
+                raise AssertionError(
+                    "Nacos did not accept an authenticated publish within 30s: "
+                    f"{last_error!r}"
+                )
 
-            # publish v2 让重连后 poll 拉到
-            assert await nacos_admin_client.publish_config(
-                ConfigParam(data_id=flow_data_id, group="DEFAULT_GROUP", content=v2_content)
-            )
-            # 等 ≤ 10s 让 poll 重连 + 拉 v2
-            await asyncio.sleep(10.0)
-            # state 应回到 READY (重连成功)
-            # 注: 不强制必须 READY (可能 STALE / READY 都行, 主要看 last_success_version 更新)
+            # 服务重启使原 gRPC service 进入 UNHEALTHY；创建新的管理 client
+            # 并以真实 publish 成功作为 Nacos 已恢复的判据。
+            recovered_admin_client = await _publish_after_nacos_recovers()
+            await asyncio.wait_for(updated_snapshot_received.wait(), timeout=15.0)
+            assert snapshots[-1].version.checksum != v1_checksum
+            assert any(
+                getattr(getattr(rule, "selector", None), "pattern", None) == "/post"
+                for rule in snapshots[-1].rules.values()
+            ), "expected the recovered source to yield the /post rule"
         finally:
             await src.aclose()
+            try:
+                await asyncio.wait_for(task, timeout=1.0)
+            except asyncio.TimeoutError:
+                task.cancel()
+            if recovered_admin_client is not None:
+                try:
+                    await recovered_admin_client.shutdown()
+                except Exception:
+                    pass
             # 确保 docker start (防止 tearDown 失败)
-            subprocess.run(
+            await asyncio.to_thread(
+                subprocess.run,
                 ["docker", "start", "nacos-pg-3.2.3"],
                 capture_output=True, text=True, timeout=30,
             )
@@ -440,12 +503,6 @@ class TestDisconnectRecover:
                 )
             except Exception:
                 pass
-
-        # 重连后 last_success_version 应该已经更新 (不一定是 v2, 因为 polling 拉到的内容
-        # 取决于 v2 publish 跟 last_success_version.checksum 检查顺序, 但至少 last_success_version
-        # 应该已经更新过, 不再是 v1 的 snapshot)
-        # 注: 因为 source 已 aclose, 这里只验证 final 状态
-
 
 # ---------------------------------------------------------------------------
 # 5. Source 关闭 (aclose 幂等)

@@ -374,6 +374,30 @@ class TestAcloseIdempotency:
         # 日志有 warn (但不含敏感字段)
         assert any("failed" in r.message.lower() for r in caplog.records)
 
+
+class TestSdkClientConfiguration:
+    """SDK client construction keeps Nacos as the control-plane authority."""
+
+    @pytest.mark.asyncio
+    async def test_disables_sdk_config_cache(
+        self, config: NacosRuleSourceConfig
+    ) -> None:
+        received_configs: list[Any] = []
+
+        async def factory(client_config: Any) -> _FakeNacosClient:
+            received_configs.append(client_config)
+            return _FakeNacosClient()
+
+        source = NacosRuleSource(config, client_factory=factory)
+        iterator = source.snapshots()
+        await anext(iterator)
+        await source.aclose()
+
+        assert len(received_configs) == 1
+        client_config = received_configs[0]
+        assert client_config.load_cache_at_start is False
+        assert client_config.disable_use_config_cache is True
+
     @pytest.mark.asyncio
     async def test_snapshots_ends_after_aclose(
         self, config: NacosRuleSourceConfig
@@ -611,6 +635,78 @@ class TestErrorClassification:
             NacosSourceState.DISCONNECTED,
             NacosSourceState.CLOSED,
         )
+
+    @pytest.mark.asyncio
+    async def test_sdk_unhealthy_client_error_retries_as_network(
+        self, config: NacosRuleSourceConfig
+    ) -> None:
+        """SDK 的 -401 client-not-connected 不是鉴权失败，必须重试。"""
+        from v2.nacos import NacosException
+
+        async def factory(client_config: Any) -> _FakeNacosClient:
+            client = _FakeNacosClient(
+                server_addresses=getattr(client_config, "server_address", None),
+                namespace=getattr(client_config, "namespace_id", None),
+            )
+
+            async def boom(*a: Any, **kw2: Any) -> Any:
+                raise NacosException(
+                    -401,
+                    "client not connected,status:RpcClientStatus.UNHEALTHY",
+                )
+
+            client.get_config = boom  # type: ignore[method-assign]
+            return client
+
+        src = NacosRuleSource(config, client_factory=factory)
+
+        async def _drive() -> None:
+            async for _ in src.snapshots():
+                pass
+
+        task = asyncio.create_task(_drive())
+        await asyncio.sleep(0.1)
+        await src.aclose()
+        try:
+            await asyncio.wait_for(task, timeout=1.0)
+        except asyncio.TimeoutError:
+            task.cancel()
+
+        assert src.error_count(NacosSourceError.NETWORK) >= 1
+        assert src.error_count(NacosSourceError.AUTH) == 0
+
+    @pytest.mark.asyncio
+    async def test_sdk_server_error_retries_as_network(
+        self, config: NacosRuleSourceConfig
+    ) -> None:
+        """Nacos 重启期的 5xx 不是规则 decode 失败，必须重试。"""
+        from v2.nacos import NacosException
+
+        async def factory(client_config: Any) -> _FakeNacosClient:
+            client = _FakeNacosClient()
+
+            async def boom(*a: Any, **kw2: Any) -> Any:
+                raise NacosException(500, "get access token failed")
+
+            client.get_config = boom  # type: ignore[method-assign]
+            return client
+
+        src = NacosRuleSource(config, client_factory=factory)
+
+        async def _drive() -> None:
+            async for _ in src.snapshots():
+                pass
+
+        task = asyncio.create_task(_drive())
+        await asyncio.sleep(0.1)
+        await src.aclose()
+        try:
+            await asyncio.wait_for(task, timeout=1.0)
+        except asyncio.TimeoutError:
+            task.cancel()
+
+        assert src.error_count(NacosSourceError.NETWORK) >= 1
+        assert src.error_count(NacosSourceError.DECODE) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -958,7 +1054,7 @@ class TestSnapshotsEndToEnd:
         async def _drive() -> None:
             async for s in src.snapshots():
                 snapshots.append(s)
-                if len(snapshots) >= 1:
+                if len(snapshots) >= 2:
                     return
 
         task = asyncio.create_task(_drive())
@@ -975,22 +1071,15 @@ class TestSnapshotsEndToEnd:
             config.data_id_for("flow"),
             '[{"resource":"/x","grade":1,"count":10}]',
         )
-        # 继续消费: 等 polling 触发新 snapshot
-        async def _drive_2() -> None:
-            async for s in src.snapshots():
-                snapshots.append(s)
-
-        task2 = asyncio.create_task(_drive_2())
+        # 同一个 async iterator 必须继续消费；重新调用 snapshots() 只会
+        # 触发一次新的 initial load，不能证明后台 polling 更新路径。
         # 等最多 5s (默认 poll_interval=1s, 给 5 个 tick 富裕)
         try:
-            await asyncio.wait_for(task2, timeout=5.0)
+            await asyncio.wait_for(task, timeout=5.0)
         except asyncio.TimeoutError:
-            pass
+            task.cancel()
+            pytest.fail("polling did not yield the updated snapshot within 5s")
         await src.aclose()
-        try:
-            await asyncio.wait_for(task2, timeout=1.0)
-        except asyncio.TimeoutError:
-            task2.cancel()
         # 至少 2 个 snapshot
         assert len(snapshots) >= 2, f"expected >= 2, got {len(snapshots)}"
         # 找到第一个 version 与初始不同的 snapshot

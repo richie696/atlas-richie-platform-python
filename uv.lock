@@ -1205,6 +1205,7 @@ dependencies = [
 [package.optional-dependencies]
 test = [
     { name = "pytest" },
+    { name = "pytest-asyncio" },
 ]
 
 [package.metadata]
@@ -1213,6 +1214,7 @@ requires-dist = [
     { name = "atlas-richie-sentinel", editable = "components/sentinel/sentinel" },
     { name = "nacos-sdk-python", specifier = ">=3.0,<4.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21,<1.0" },
 ]
 provides-extras = ["test"]
 
