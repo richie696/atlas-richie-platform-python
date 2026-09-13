@@ -219,17 +219,47 @@ categories and Semantic Versioning.
   (polling 时序 + SDK -401 误判 AUTH + 500 get access token 误判
   DECODE + 禁用本地 cache + 集成测试重写).
 
-- **Sentinel M6.5.7 — Agent Reporting 事件 envelope V1 frozen**
-  (commit `cfe25a0`): `docs/protocols/AGENT_REPORTING_PROTOCOL.md`
-  V1 schema (8 字段 envelope + 6 event_kind + 3 per-kind payload
-  + 9 错误码). 时间字段强制分离: `captured_at` (Reporter 本地 UTC,
-  诊断) + `received_at` (Collector 权威). V1 兼容性矩阵: 加
-  optional field 走 V1.1 minor, 破坏 V1 走 V2 major + 独立 ADR.
+- **Sentinel M6.5.7 — Agent Reporting 事件 envelope V1 协议 BUG 收口 + 路径重组**
+  (commits `72f4452` + `377375f`, richie696 2026-09-13 sign-off):
+  协议 BUG 收口 (Mavis 代 commit richie696 working tree 状态,
+  `git diff --check` 已通过):
+  - ingress envelope 改为 7 字段; `received_at` 只由 Collector 在
+    Ack / 持久化投影写入, 不再是 ingress 字段
+  - `startup_epoch` 改为跨重启持久化、严格递增、不得复用
+  - V1 改为单 sender 严格 FIFO (连续 sequence + 精确重传 +
+    `max_contiguous_sequence` + 去重逻辑一致)
+  - 错误改为 batch 原子拒绝; 补齐 `ENVELOPE_TOO_LARGE`, Ack 使用
+    `duplicate_count`, 不再有无法表达的"单事件拒绝"
+  - batch 强制单一 identity/generation, 禁止混装
+  - Health 支持"尚无有效规则快照"状态; `ReasonClass` 变为冻结枚举
+  - V1 Collector 强制 loopback bind, 统一认证 Header 为
+    `X-Atlas-Reporting-Token`
+  - V1 明确不携带原始 RT、熔断状态或通用 metrics; 它们必须有独立
+    schema 并走 V2
+  - 文档从伪 `Frozen / Released` 回退为 `Draft / Provisional`;
+    `M6.5.7` 状态回退为未完成, 待合同测试和 5-owner 签字.
+  配套 docs/ 重组: protocol 移到 `docs/protocol/` (4 个 V1 协议 doc
+  中英文双份), 过程文档移到 `docs/process/` (含 M6.5.7 / M6.3 / M6.4
+  / M6.7 / Nacos / R-SENTINEL / acceptance 等 12 个 doc), 11 个
+  product doc 保留 `docs/` 根 (DESIGN / USAGE / QUICK_START /
+  OPERATIONS / RULE_REFERENCE / EXTENSION_GUIDE / MIGRATION-M6 /
+  RELEASE / README 等), 删 6 个 intermediate 文档 (HANDOFF /
+  TASK_CHECKLIST / IMPLEMENTATION_PLAN / COMPONENT_MCP_ARCHITECTURE_PLAN
+  / HTTP_COMPONENT_DESIGN / OAUTH_COMPONENT_DESIGN). 跨文档
+  cross-reference 同步更新.
+  撤回 commit `9de57c7` 的 reporting.v1 V1 frozen Python 投影
+  (commit `377375f`): 旧 8 字段 envelope 跟新 7 字段 + batch /
+  Ack / `duplicate_count` / `ReasonClass` 冻结枚举 /
+  `X-Atlas-Reporting-Token` / loopback bind / Health"无有效规则
+  快照"状态完全错位, 1:1 镜像旧 spec 已无意义. cluster.v1 投影
+  保留 (跟 M6.3 实施一致, 0 偏差). 1.0 publish 前 Mavis 重做
+  reporting.v1 投影 (7 字段 + 上述新概念), 留 worker / Mavis.
 
-- **Sentinel M6.3 design 阶段 + Python 投影**
-  (commits `29f45fe` + `8f18070` + `495834c` + `bc15d4a`):
+- **Sentinel M6.3 design 阶段 + cluster Python 投影**
+  (commits `29f45fe` + `495834c` + `bc15d4a` + `9de57c7` 撤回 reporting.v1
+  部分后保留 cluster.v1 投影 + `377375f`):
   Cluster Token Server / Client design + 5 owner sign-off, V1 wire
-  schema 冻结 (`docs/protocols/CLUSTER_TOKEN_PROTOCOL.md` 6 message_kind
+  schema 冻结 (`docs/protocol/cluster-token-protocol-v1.md` 6 message_kind
   + 8+1 envelope + opaque lease identity + owner epoch fencing +
   idempotency request_id). 主包 `ports/token.py` 加 3 个 optional field
   (`Token.lease_id` / `Token.owner_epoch` / `TokenResponse.retry_after_ns`,
@@ -237,13 +267,13 @@ categories and Semantic Versioning.
   + `ClusterFailurePolicy` enum (3 选 1, 禁止 default / auto / silent
   之类禁用值) + 2 个新 `TokenDenyReason` 值
   (`RESOURCE_NOT_CONFIGURED` / `SERVER_OVERLOADED`, 12 单测覆盖 1.0
-  兼容). Python 投影 `atlas_richie.contracts.cluster.v1` (cluster wire)
-  + `atlas_richie.contracts.reporting.v1` (reporting wire) 88 单测全过
-  (严格 JSON codec, 拒绝未知 field / 缺必填 / 类型错 / 枚举不合法 /
-  超 size). `sentinel-cluster` wheel 移除 `redis` 依赖 (违反 M6.3
-  design "Cluster wheel 不强依赖 Redis") + 加 `atlas-richie-contracts`
-  依赖. 实施阶段 (M6.3.3/4/5/7) 留 worker 后台跑 (bc15d4a
-  `M6.3-IMPLEMENTATION-PLAN.md`).
+  兼容). Python 投影 `atlas_richie.contracts.cluster.v1` (cluster wire,
+  1:1 镜像 `docs/protocol/cluster-token-protocol-v1.md` V1 frozen) 56
+  单测全过 (严格 JSON codec, 拒绝未知 field / 缺必填 / 类型错 /
+  枚举不合法 / 超 size). `sentinel-cluster` wheel 移除 `redis`
+  依赖 (违反 M6.3 design "Cluster wheel 不强依赖 Redis") + 加
+  `atlas-richie-contracts` 依赖. 实施阶段 (M6.3.3/4/5/7) 留 worker
+  后台跑 (bc15d4a `docs/process/M6.3-IMPLEMENTATION-PLAN.md`).
 
 - **Sentinel M6.7 — WSGI / 同步阻塞引擎可行性评估**
   (commit `c8d03ed`, ADR-SEN-018): 1.x **不支持** 同步阻塞引擎, 不
