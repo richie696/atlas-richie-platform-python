@@ -235,8 +235,15 @@ class _NacosAdapter:
             .password(cfg.auth.password if cfg.auth else None)
             .grpc_config(grpc_cfg)
             .timeout_ms(int(cfg.read_timeout.total_seconds() * 1000))
+            .load_cache_at_start(False)  # M6.1.7 spike: 关掉 SDK 启动时从磁盘读 cache
+                                       # (本地 dev 环境下 cache_dir 是空目录, 无害; 但
+                                       #  集成测试场景下, 跨进程 publish + 新 client 拉,
+                                       #  cache_dir 不一致, 关闭防 stale 干扰)
             .build()
         )
+        # M6.1.7 spike: 同时关掉 fail-over cache, 强制每次 get_config 走 gRPC query
+        # (SDK 默认 get_fail_over_config_cache 优先, 拿到 stale content 跳过 query)
+        client_config.disable_use_config_cache = True
         self._client = await self._client_factory(client_config)
         return self._client
 
