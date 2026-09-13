@@ -19,11 +19,11 @@ docs/
 ├── MIGRATION-M6.md              # 升级迁移指南 (产品)
 ├── RELEASE.md                   # 发布流程 (产品)
 │
-├── protocol/                    # V1 协议 frozen (产品, 跨语言 wire, IETF RFC 风格)
-│   ├── 集群令牌协议-v1.md        # cluster-token-protocol-v1 (M6.3.1)
-│   ├── 事件上报协议-v1.md        # agent-reporting-protocol-v1 (M6.5.7 envelope schema)
-│   ├── 上报父协议-v1.md          # reporting-protocol-v1 (M6.5 parent protocol)
-│   └── 事件包冻结-v1.md          # envelope-schema-freeze-record-v1 (sign-off)
+├── protocol/                    # V1 协议 frozen (产品, 跨语言 wire, IETF RFC 风格, 中英双语)
+│   ├── 集群令牌协议-v1.md         + cluster-token-protocol-v1.md
+│   ├── 事件上报协议-v1.md         + agent-reporting-protocol-v1.md
+│   ├── 上报父协议-v1.md           + reporting-protocol-v1.md
+│   └── 事件包冻结-v1.md           + envelope-schema-freeze-record-v1.md
 │
 └── process/                     # 过程文档 (1.0 publish 后清理)
     ├── README.md                # 过程文档约定

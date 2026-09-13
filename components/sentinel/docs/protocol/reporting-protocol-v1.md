@@ -7,7 +7,7 @@
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0
 >
-> 🌐 **语言**: [中文 (本文件)](./上报父协议-v1.md) · [English](./reporting-protocol-v1.md)
+> 🌐 **Languages**: [English (this file)](./reporting-protocol-v1.md) · [中文](./上报父协议-v1.md)
 
 ---
 
@@ -22,8 +22,9 @@ batch format, sequence and deduplication keys, ack semantics, stale
 generation behavior, and cardinality limits.
 
 The on-the-wire envelope schema itself is specified in a companion
-document, [`事件上报协议-v1.md`](./事件上报协议-v1.md). The companion
-document is the schema only; this document is the protocol.
+document, [`agent-reporting-protocol-v1.md`](./agent-reporting-protocol-v1.md).
+The companion document is the schema only; this document is the
+protocol.
 
 ## Status of This Memo
 
@@ -76,16 +77,16 @@ third-party dependencies.
 
 This document specifies the protocol that wraps the inner envelope
 schema. The inner schema is specified in
-[`事件上报协议-v1.md`](./事件上报协议-v1.md).
+[`agent-reporting-protocol-v1.md`](./agent-reporting-protocol-v1.md).
 
 ### 1.2. Relationship to Companion Documents
 
 | Document                                           | Scope                                                |
 | -------------------------------------------------- | ---------------------------------------------------- |
-| `事件上报协议-v1.md` (this protocol family)         | Inner envelope schema (8 fields, 6 event kinds).     |
-| `上报父协议-v1.md` (this document)                 | Outer transport, auth, version, error codes, batch.   |
-| `事件包冻结-v1.md` (sign-off record)              | Formal V1 freeze record.                              |
-| `集群令牌协议-v1.md` (sibling)                     | The Atlas Richie Cluster Token Protocol (admission).  |
+| `agent-reporting-protocol-v1.md` (this family)     | Inner envelope schema (8 fields, 6 event kinds).     |
+| `reporting-protocol-v1.md` (this document)        | Outer transport, auth, version, error codes, batch.   |
+| `envelope-schema-freeze-record-v1.md` (sign-off)   | Formal V1 freeze record.                              |
+| `cluster-token-protocol-v1.md` (sibling)          | The Atlas Richie Cluster Token Protocol (admission).  |
 
 ## 2. Data Boundary
 
@@ -114,7 +115,7 @@ The protocol MAY carry:
 
 The transport is HTTP/1.1 with JSON over TCP. This choice is
 consistent with the Atlas Richie Cluster Token Protocol V1 (see
-[`集群令牌协议-v1.md`](./集群令牌协议-v1.md)) and avoids introducing
+[`cluster-token-protocol-v1.md`](./cluster-token-protocol-v1.md)) and avoids introducing
 any third-party dependency.
 
 ### 3.2. Wire Format
@@ -139,7 +140,7 @@ The Collector returns either `200 OK` plus an ack envelope
 
 - A single batch MUST NOT exceed **64 KB** serialized.
 - A single envelope MUST NOT exceed **16 KB** serialized
-  (see [`事件上报协议-v1.md` §3.4](./事件上报协议-v1.md#34-size-limits)).
+  (see [`agent-reporting-protocol-v1.md` §3.4](./agent-reporting-protocol-v1.md#34-size-limits)).
 - A batch MUST contain at most 256 envelopes.
 - Exceeding a limit returns the appropriate error code (§6).
 
@@ -282,7 +283,7 @@ V1.1 minor release and an ADR.
   "batch_id": "550e8400-e29b-41d4-a716-446655440001",
   "sent_at": "2026-09-13T10:00:00.123456Z",
   "events": [
-    { /* event envelope 1, see 事件上报协议-v1.md §3 */ },
+    { /* event envelope 1, see agent-reporting-protocol-v1.md §3 */ },
     { /* event envelope 2 */ }
   ],
   "dropped_count": 0
@@ -306,7 +307,7 @@ V1.1 minor release and an ADR.
 - `events.length` ≤ 256; if exceeded, split into multiple batches.
 - Serialized batch ≤ 64 KB; if exceeded, return `BATCH_TOO_LARGE`.
 - Single envelope ≤ 16 KB (see
-  [`事件上报协议-v1.md` §3.4](./事件上报协议-v1.md#34-size-limits)).
+  [`agent-reporting-protocol-v1.md` §3.4](./agent-reporting-protocol-v1.md#34-size-limits)).
 
 ## 8. Sequence and Deduplication
 
@@ -400,7 +401,7 @@ The Collector considers an event stale when
 - The Collector increments a per-side `dropped_count` for monitoring.
 
 This is consistent with the Cluster Token Protocol's
-`STALE_EPOCH` fence (see [`集群令牌协议-v1.md` §3.1](./集群令牌协议-v1.md#31-three-core-invariants)).
+`STALE_EPOCH` fence (see [`cluster-token-protocol-v1.md` §3.1](./cluster-token-protocol-v1.md#31-three-core-invariants)).
 
 ### 10.3. Rationale
 
@@ -608,8 +609,9 @@ Connection: close
 
 This V1 specification was frozen under 5-owner sign-off. The
 sign-off record is maintained at
-[`docs/protocol/事件包冻结-v1.md`](./事件包冻结-v1.md). Subsequent
-revisions require a new sign-off cycle and the changes listed in §15.
+[`docs/protocol/envelope-schema-freeze-record-v1.md`](./envelope-schema-freeze-record-v1.md).
+Subsequent revisions require a new sign-off cycle and the changes
+listed in §15.
 
 ## Version History
 

@@ -7,7 +7,7 @@
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0
 >
-> 🌐 **语言**: [中文 (本文件)](./事件上报协议-v1.md) · [English](./agent-reporting-protocol-v1.md)
+> 🌐 **Languages**: [English (this file)](./agent-reporting-protocol-v1.md) · [中文](./事件上报协议-v1.md)
 
 ---
 
@@ -17,7 +17,7 @@ This document specifies the **Atlas Richie Agent Reporting Envelope
 Schema V1** (wire identifier: `atlas-richie.reporting/v1`), the
 event envelope schema shared by all Reporter → Collector traffic.
 The schema is the inner data structure of the Atlas Richie Reporting
-Protocol V1 (see [`上报父协议-v1.md`](./上报父协议-v1.md) for the
+Protocol V1 (see [`reporting-protocol-v1.md`](./reporting-protocol-v1.md) for the
 outer transport, authentication, and batching). It is designed for
 cross-language interoperability and uses JSON over UTF-8.
 
@@ -81,16 +81,16 @@ schema on the wire MUST be self-describing and language-neutral.
 The schema defined here is the inner event envelope. The outer
 transport (HTTP/1.1 + JSON over TCP), authentication, batching,
 sequence, deduplication, and ack semantics are specified separately
-in [`上报父协议-v1.md`](./上报父协议-v1.md).
+in [`reporting-protocol-v1.md`](./reporting-protocol-v1.md).
 
 ### 1.2. Scope
 
 This document covers the V1 envelope schema only. It does NOT
 specify:
 
-- The transport layer (see `上报父协议-v1.md` §2).
-- The authentication mechanism (see `上报父协议-v1.md` §4).
-- The batch format (see `上报父协议-v1.md` §6).
+- The transport layer (see `reporting-protocol-v1.md` §2).
+- The authentication mechanism (see `reporting-protocol-v1.md` §4).
+- The batch format (see `reporting-protocol-v1.md` §7).
 - The Collector's internal state model.
 
 ## 2. Conventions
@@ -266,7 +266,7 @@ Source switches always go through `RULE_SOURCE_ACTIVATED`.
 ## 6. Error Codes
 
 Nine error codes are defined. The behavior of each is specified
-fully in [`上报父协议-v1.md` §5](./上报父协议-v1.md#5-error-codes);
+fully in [`reporting-protocol-v1.md` §5](./reporting-protocol-v1.md#5-error-codes);
 this section merely lists them for completeness.
 
 - `PROTOCOL_VERSION_MISMATCH`
@@ -293,7 +293,7 @@ this section merely lists them for completeness.
 - **Reason message length**: `reason_message` is capped at 64 bytes
   to bound diagnostic leakage.
 - **Authentication**: the outer transport applies
-  `X-Atlas-Cluster-Reporting-Token` (see `上报父协议-v1.md` §4).
+  `X-Atlas-Cluster-Reporting-Token` (see `reporting-protocol-v1.md` §4).
   This schema does not redefine authentication.
 
 ## 8. IANA Considerations
@@ -338,7 +338,7 @@ of this schema:
 - Add per-rule `latency_ns` to `RuleExecPayload` (V1.1 candidate).
 - Add `ENVELOPE_TOO_LARGE` to outer transport error codes
   (already declared here; documented in
-  [`上报父协议-v1.md` §5](./上报父协议-v1.md#5-error-codes)).
+  [`reporting-protocol-v1.md` §5](./reporting-protocol-v1.md#5-error-codes)).
 
 ## Appendix A. Examples
 
@@ -389,8 +389,9 @@ of this schema:
 
 This V1 schema was frozen under 5-owner sign-off. The sign-off
 record is maintained at
-[`docs/protocol/事件包冻结-v1.md`](./事件包冻结-v1.md). Subsequent
-revisions require a new sign-off cycle and the changes listed in §9.
+[`docs/protocol/envelope-schema-freeze-record-v1.md`](./envelope-schema-freeze-record-v1.md).
+Subsequent revisions require a new sign-off cycle and the changes
+listed in §9.
 
 ## Version History
 

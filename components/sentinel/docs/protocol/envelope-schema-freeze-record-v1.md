@@ -7,7 +7,7 @@
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0
 >
-> 🌐 **语言**: [中文 (本文件)](./事件包冻结-v1.md) · [English](./envelope-schema-freeze-record-v1.md)
+> 🌐 **Languages**: [English (this file)](./envelope-schema-freeze-record-v1.md) · [中文](./事件包冻结-v1.md)
 
 ---
 
@@ -15,14 +15,14 @@
 
 This document records the formal V1 freeze of the Atlas Richie
 Agent Reporting Envelope Schema. It is the sign-off record for
-[`事件上报协议-v1.md`](./事件上报协议-v1.md) and the schema-level
+[`agent-reporting-protocol-v1.md`](./agent-reporting-protocol-v1.md) and the schema-level
 contract that Reporters and Collectors MUST honour.
 
 This document is intentionally short. The schema itself, including
 all field definitions, payload types, and serialization rules, is
-specified in [`事件上报协议-v1.md`](./事件上报协议-v1.md). The outer
+specified in [`agent-reporting-protocol-v1.md`](./agent-reporting-protocol-v1.md). The outer
 transport, authentication, batching, and sequence semantics are
-specified in [`上报父协议-v1.md`](./上报父协议-v1.md). The present
+specified in [`reporting-protocol-v1.md`](./reporting-protocol-v1.md). The present
 document records only the freeze event and the immutability
 guarantees that follow from it.
 
@@ -55,7 +55,7 @@ the wire string `atlas-richie.reporting/v1`, is hereby declared
 **FROZEN** as of 2026-09-13.
 
 The frozen artifact is the schema specified in
-[`事件上报协议-v1.md`](./事件上报协议-v1.md). The following are part
+[`agent-reporting-protocol-v1.md`](./agent-reporting-protocol-v1.md). The following are part
 of the V1 contract and MUST NOT change without a new version bump
 plus a new ADR and 5-owner sign-off:
 
@@ -64,7 +64,7 @@ plus a new ADR and 5-owner sign-off:
 - The three `event_payload` schema types and their field sets.
 - The serialization rules (UTF-8 strings, ISO 8601 microsecond time,
   lowercase UUIDs, key-based object parsing).
-- The size limits (envelope ≤ 16 KB; see `上报父协议-v1.md` §3.4).
+- The size limits (envelope ≤ 16 KB; see `reporting-protocol-v1.md` §3.4).
 
 ## 2. Immutability Guarantees
 
@@ -80,7 +80,7 @@ After the freeze date:
 4. The wire identifier string (`atlas-richie.reporting/v1`) is
    immutable. Any change requires V2 major and an ADR.
 5. The serialization rules in
-   [`事件上报协议-v1.md` §3.3](./事件上报协议-v1.md#33-serialization)
+   [`agent-reporting-protocol-v1.md` §3.3](./agent-reporting-protocol-v1.md#33-serialization)
    are immutable.
 
 ## 3. Compatibility with Subsequent Versions
@@ -108,9 +108,9 @@ support in a V2-aware Reporter is optional.
 
 | Document                                | Purpose                                                          |
 | --------------------------------------- | ---------------------------------------------------------------- |
-| `事件上报协议-v1.md` (this family)      | The V1 envelope schema. The artifact that this document freezes. |
-| `上报父协议-v1.md`                      | The outer transport, authentication, batching, and sequence.     |
-| `集群令牌协议-v1.md` (sibling)           | The Atlas Richie Cluster Token Protocol (admission).              |
+| `agent-reporting-protocol-v1.md` (this family)  | The V1 envelope schema. The artifact that this document freezes. |
+| `reporting-protocol-v1.md`              | The outer transport, authentication, batching, and sequence.     |
+| `cluster-token-protocol-v1.md` (sibling) | The Atlas Richie Cluster Token Protocol (admission).              |
 | `process/M6.5-REPORTING-PROTOCOL-V1.md` | The process-design document for M6.5 (internal).                 |
 | `process/M6.5.7-ENVELOPE-FREEZE.md`     | The historical sign-off record. (Now superseded by this document.) |
 

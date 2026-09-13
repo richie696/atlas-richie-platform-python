@@ -7,7 +7,7 @@
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0
 >
-> 🌐 **语言**: [中文 (本文件)](./集群令牌协议-v1.md) · [English](./cluster-token-protocol-v1.md)
+> 🌐 **Languages**: [English (this file)](./cluster-token-protocol-v1.md) · [中文](./集群令牌协议-v1.md)
 
 ---
 
@@ -559,8 +559,8 @@ Connection: close
 
 This V1 specification was frozen under 5-owner sign-off. The
 sign-off record is maintained at
-[`docs/protocol/事件包冻结-v1.md`](./事件包冻结-v1.md) (for the
-envelope schema) and at
+[`docs/protocol/envelope-schema-freeze-record-v1.md`](./envelope-schema-freeze-record-v1.md)
+(for the envelope schema) and at
 [`docs/process/M6.3-CLUSTER-TOKEN-DESIGN.md`](../process/M6.3-CLUSTER-TOKEN-DESIGN.md)
 (for the cluster-token design discussion). Subsequent revisions
 require a new sign-off cycle and the changes listed in §10.
