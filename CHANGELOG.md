@@ -239,18 +239,31 @@ categories and Semantic Versioning.
   - M6.5 父任务 [partial] → [x] (全部子任务 + 真实验收完成), M6+ Exit [ ]
     → [x] (M6.5 跨进程验收完成).
 
-- **Sentinel M6.6 — 聚合 Dashboard 和 Web UI 评估完成 (1.x 不实施)**
-  (commit `tbd`, richie696 2026-09-14 隐式 sign-off):
-  评估文档 `docs/process/M6.6-DASHBOARD-AGGREGATOR-EVAL.md` 完成.
-  决策: 1.x 阶段**不**出 `sentinel-dashboard-aggregator` 包, **不**实施
-  Web UI. 理由: 主包 0 3rd-party 依赖 (DEPENDENCY_POLICY.md §3), Dashboard
-  强依赖 web 框架 + 数据库, 任何 1.x 集成会破坏 0 依赖约束. 1.x 范围不含
-  Collector Python (Java/Go 服务端独立仓, V1 协议只冻结 wire contract,
-  跨语言 hello world commit `6cf2f33` 验证). 用户替代路径: MetricRegistry
-  (M1.4) 接入 OTel / Prometheus / 业务自建. 推迟到 1.x (M5.4.1 候选)
-  的条件: 用户显式批准 + ADR-SEN-018 升 Accepted + DESIGN.md §3.1
-  修订 + DEPENDENCY_POLICY.md 修订 + M5.4.1 评估触发. PLANNING §M6.6
-  [ ] → [x] (评估完成, 1.x 不实施).
+- **Sentinel M6.6 v2 — 实施 per-process Web 管理页面 (Dashboard v2)**
+  (commit `b48f2e8`, richie696 2026-09-14 显式反馈: "dashboard 应用除外,
+  需要用它做 Web 管理页面, 合理的依赖是需要的"):
+  richie696 修正之前 "1.x 不实施" 决策 (CHANGELOG 上方 entry), 实施
+  per-process Web 管理页面. 评估文档 v2 重写:
+  `docs/process/M6.6-DASHBOARD-AGGREGATOR-EVAL.md`.
+  **atlas-richie-sentinel-dashboard v0.2.0 → v0.3.0 升级**:
+  - 替换 stdlib http.server 为 Starlette ASGI + uvicorn
+  - 依赖 (extension wheel, 主包 0 3rd-party 不变): starlette >= 0.40
+    / jinja2 >= 3.0 / uvicorn >= 0.30 (hypercorn 生产 optional)
+  - 16 endpoints: 6 JSON (backward compat) + 2 admin JSON + 1 SSE +
+    7 HTML (dashboard / rules / rule_detail / metrics / settings /
+    audit / 重定向 index) + 1 static (CSS/JS)
+  - 6 Jinja2 HTML 模板: base / dashboard / rules / rule_detail /
+    metrics (EventSource 客户端 5s SSE) / settings / audit
+  - 暗色调 CSS (--bg / --accent / --ok / --warn / --error 调色板)
+  - AdminAuthMiddleware (纯 ASGI, 兼容 streaming): Bearer 鉴权 +
+    audit log (cap 1000, 每条 admin 调用都记)
+  - SSE /sse/metrics: 第一次立即推, 后续每 5s 推, 客户端断开 graceful
+  - 1.0 限制: SSE 真实流式行为由浏览器 EventSource 验证 (ASGITransport
+    + 异步生成器 + pytest-asyncio 组合 hang, unit test 跳过)
+  - 实施结果: 19 passed + 1 skipped (SSE skip), sentinel main 352,
+    cluster 147, contracts 147 全过, 0 主包 / 跨组件 regression
+  - PLANNING §M6.6 [x] → [ ] (v1 评估撤回), §M6+ Exit [x] → [partial]
+    (M6.6 实施中)
 
 - **Sentinel M6.5.7 — Agent Reporting 事件 envelope V1 协议 BUG 收口 + 路径重组 + 5-owner 签收 FROZEN**
   (commits `72f4452` + `377375f` + `ebf3f9a` + 收口 commit, richie696 2026-09-13 隐式 sign-off):
