@@ -19,11 +19,11 @@ docs/
 ├── MIGRATION-M6.md              # 升级迁移指南 (产品)
 ├── RELEASE.md                   # 发布流程 (产品)
 │
-├── protocol/                    # V1 协议 frozen (产品, 跨语言 wire, 中文文件名)
-│   ├── 事件上报协议.md           # AGENT_REPORTING_PROTOCOL (M6.5.7 envelope schema)
-│   ├── 集群令牌协议.md           # CLUSTER_TOKEN_PROTOCOL (M6.3.1 cluster wire)
-│   ├── 上报父协议.md             # REPORTING-PROTOCOL (M6.5 parent protocol)
-│   └── 事件包冻结.md             # ENVELOPE-SCHEMA-FREEZE (M6.5.7 sign-off)
+├── protocol/                    # V1 协议 frozen (产品, 跨语言 wire, IETF RFC 风格)
+│   ├── 集群令牌协议-v1.md        # cluster-token-protocol-v1 (M6.3.1)
+│   ├── 事件上报协议-v1.md        # agent-reporting-protocol-v1 (M6.5.7 envelope schema)
+│   ├── 上报父协议-v1.md          # reporting-protocol-v1 (M6.5 parent protocol)
+│   └── 事件包冻结-v1.md          # envelope-schema-freeze-record-v1 (sign-off)
 │
 └── process/                     # 过程文档 (1.0 publish 后清理)
     ├── README.md                # 过程文档约定
@@ -37,7 +37,7 @@ docs/
 
 **V1 协议 命名约定** (richie696 决策 2026-09-13):
 
-- V1 frozen 协议**不**带 M 编号 (例: `protocol/上报父协议.md`
+- V1 frozen 协议**不**带 M 编号 (例: `protocol/上报父协议-v1.md`
   而不是 `protocol/M6.5-REPORTING-PROTOCOL-V1.md`).
 - V1 frozen 协议统一放 `docs/protocol/` 子目录, 不混在根目录.
 - 协议在 1.x 阶段**只允许** V1.1 minor 兼容变更; 任何破坏性变更走 V2
@@ -51,7 +51,7 @@ alongside code.
 V1 protocol naming (richie696 decision 2026-09-13):
 
 - V1 frozen protocols do **not** use M-numbers (e.g.
-  `protocol/上报父协议.md` not `protocol/M6.5-REPORTING-PROTOCOL-V1.md`).
+  `protocol/上报父协议-v1.md` not `protocol/M6.5-REPORTING-PROTOCOL-V1.md`).
 - V1 frozen protocols live in `docs/protocol/` subdir, not at root.
 - 1.x only allows V1.1 minor-compatible changes; breaking changes go
   V2 major + independent ADR + 5 owner sign-off.

@@ -7,8 +7,8 @@
 **约定** (richie696 决策 2026-09-13):
 
 - **产品最终保留** 的文档放在 `docs/` 根 (跟 `DESIGN.md`, `OPERATIONS.md`,
-  `RELEASE.md` 同级); V1 协议冻结后也不带 M 编号 (例: `上报父协议.md`,
-  `事件上报协议.md`, `集群令牌协议.md`).
+  `RELEASE.md` 同级); V1 协议冻结后也不带 M 编号 (例: `上报父协议-v1.md`,
+  `事件上报协议-v1.md`, `集群令牌协议-v1.md`).
 - **过程文档** 放本目录 (`docs/process/`); M 系列开发结束 (1.0 publish)
   后, 本目录的文档会被清理掉, 不会随产品一起发布。
 - **acceptance/** 子目录放 M 系列的测试 / 验收证据 (R-XXX-handoff,
@@ -31,8 +31,8 @@ Convention (richie696 decision 2026-09-13):
 
 - **Final product docs** (retained) live in `docs/` root (alongside
   `DESIGN.md`, `OPERATIONS.md`, `RELEASE.md`); V1 protocol docs
-  also use non-M-number names (e.g. `上报父协议.md`,
-  `事件上报协议.md`, `集群令牌协议.md`).
+  also use non-M-number names (e.g. `上报父协议-v1.md`,
+  `事件上报协议-v1.md`, `集群令牌协议-v1.md`).
 - **Process docs** (deleted after 1.0 publish) live in this directory.
 - **acceptance/** subdirectory holds M-series test/evidence docs
   (R-XXX-handoff, test-matrix, baseline report), also deleted.
