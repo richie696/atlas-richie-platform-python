@@ -186,7 +186,7 @@ exporter in 1.x) or wrap `engine.last_outcome` yourself.
 | `source.error_count(NacosSourceError.DECODE)` sustained > 0 | immediate | Nacos data-id has bad JSON / missing field / type wrong; last-known-good preserved |
 | `source.error_count(NacosSourceError.NOT_FOUND)` sustained > 0 | 1 min | data-id does not exist (typo / deployment miss) |
 | `source.error_count(NacosSourceError.EMPTY)` sustained > 0 | 1 min | Nacos config deleted (e.g. ops mis-operation) |
-| `source.last_success_version` unchanged for long | sustained > 1 h (business-dependent) | Nacos push link may be broken; check SDK subscription + network |
+| `source.last_success_version` unchanged for long | sustained > 1 h (business-dependent) | M6.1.7 polling 模式: polling 后台 task 可能停止 / Nacos 拉取失败; 检查 `source.state` + SDK gRPC 连接 |
 
 ---
 

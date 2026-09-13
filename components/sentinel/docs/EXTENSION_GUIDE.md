@@ -401,10 +401,10 @@ should read this wheel before writing their own.
 | ------ | ------- |
 | `NacosAuth` | Username + password value object (password redacted in `__repr__`) |
 | `NacosTLS` | CA + optional mTLS `cert`/`key` (PEM redacted in `__repr__`) |
-| `NacosRuleSourceConfig` | Frozen DTO: `source_id` / `server_addresses` / `namespace` / `group` / `data_id_prefix` / `auth` / `tls` / 4 `timedelta` timing fields |
+| `NacosRuleSourceConfig` | Frozen DTO: `source_id` / `server_addresses` / `namespace` / `group` / `data_id_prefix` / `auth` / `tls` / 4 `timedelta` timing fields + `poll_interval` (M6.1.7) |
 | `NacosSourceState` (StrEnum) | `CONNECTING` / `READY` / `STALE` / `DISCONNECTED` / `CLOSED` |
 | `NacosSourceError` (StrEnum) | `AUTH` / `NOT_FOUND` / `EMPTY` / `DECODE` / `NETWORK` |
-| `NacosRuleSource` | The `SnapshotRuleSource` implementation |
+| `NacosRuleSource` | The `SnapshotRuleSource` implementation (M6.1.7 polling 架构) |
 
 **5 data-id convention** (Java sentinel-datasource-nacos 1:1):
 
@@ -418,29 +418,31 @@ should read this wheel before writing their own.
 
 Use `config.data_id_for(rule_type)` to get the exact data-id string.
 
-**Lifecycle** (M6.1.3):
+**Lifecycle** (M6.1.3 + M6.1.7 polling 改造):
 
 1. `__init__` validates config; state = `CONNECTING`; SDK client is
    **lazy** (not yet constructed).
 2. First `__anext__` on `snapshots()`: pull 5 data-ids → decode → yield
    first `RuleSnapshot` → state = `READY` (or `STALE` on partial
    success).
-3. Register 5 Nacos long-poll watchers; SDK callback marshals into
-   the asyncio event loop.
-4. On Nacos push: re-pull → re-decode → yield new `RuleSnapshot` with
-   updated `RuleVersion`.
-5. `aclose()` cancels the listener task, stops the SDK subscription,
-   closes the client, transitions to `CLOSED`. **Idempotent**.
+3. **M6.1.7 polling** (替代 M6.1.0-1.6 push): 启动 `_poll_loop` 后台 task,
+   每 `config.poll_interval` 秒拉 5 个 data-id, 跟上次 checksum 比对,
+   变化 yield 新 snapshot。**不**用 SDK listener (SDK 3.2.0 gRPC listener
+   跟 Nacos 3.2.3 server 协议 drift; polling 是唯一兼容路径)。
+4. `poll_interval` 默认 `1s`, 下限 `100ms` (default-deny 资源上限,
+   ADR-SEN-007 追加); 用户可调
+5. `aclose()` cancels the poll task, stops the SDK client, transitions
+   to `CLOSED`. **Idempotent**.
 
-**Error classification** (M6.1.4):
+**Error classification** (M6.1.4 + M6.1.7 调整):
 
 | Error | Trigger | Recovery | State |
 | ----- | ------- | -------- | ----- |
-| `AUTH` | 401/403 / SDK `NacosException` | **No auto-retry**; await human | `DISCONNECTED` |
-| `NOT_FOUND` | `get_config` returns `None` (404) | last-known-good preserved | `STALE` |
-| `EMPTY` | `""` / `b""` / `"[]"` / `"null"` content | last-known-good preserved | `STALE` |
-| `DECODE` | JSON parse / field missing / type wrong | last-known-good preserved | `STALE` |
-| `NETWORK` | connection refused / timeout / DNS failure | bounded exponential backoff | `DISCONNECTED` |
+| `AUTH` | 401/403 / SDK `NacosException(error_code in (401, 403))` / "Insufficient privilege" message | **No auto-retry**; await human | `DISCONNECTED` |
+| `NOT_FOUND` | `NacosException(error_code in (400, 404))` / "not found" / `content is None` (SDK 0.1.16 行为) | last-known-good preserved | `STALE` |
+| `EMPTY` | `content == ""` / `content.strip() in ("[]", "null")` (SDK 3.2.0 缺失返回空字符串) | last-known-good preserved | `STALE` |
+| `DECODE` | 其它 `NacosException` 4xx / JSON parse / field missing / type wrong | last-known-good preserved | `STALE` |
+| `NETWORK` | `URLError` / `TimeoutError` / `ConnectionError` / `OSError` | bounded exponential backoff | `DISCONNECTED` |
 
 Errors **do not** yield a new `RuleSnapshot` (last-known-good is
 preserved in the caller-side `RuleRepository`).
