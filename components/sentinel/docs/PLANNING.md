@@ -1098,7 +1098,7 @@
 > `TokenService` 的远程 Proxy，故障模式是显式 Strategy；Reporting 是可丢失、可重传的
 > Observer 事实流。不得用模块级 singleton、服务定位器或跨包具体实现绕过这些边界。
 
-### M6.1 [ ] Nacos RuleSource（只使用配置管理）
+### M6.1 [x] Nacos RuleSource（只使用配置管理）
 - **目标**：交付 `components/sentinel/sentinel-source-nacos/`，让已有 Nacos
   用户能够把规范规则快照动态下发给 Sentinel；不把 Nacos 变成 Sentinel 的必需基础设施。
 - **明确不做**：不使用 Naming / Service Discovery API，不自动注册应用实例，不发现或
