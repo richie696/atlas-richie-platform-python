@@ -4,13 +4,15 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>com.atlas-richie</groupId>
-  <artifactId>reporting-mock</artifactId>
-  <version>1.0.0-DRAFT</version>
+  <groupId>com.atlas-richie.reporting</groupId>
+  <artifactId>hello-world</artifactId>
+  <version>0.1.0</version>
   <packaging>jar</packaging>
 
-  <name>Atlas Richie Reporting Mock</name>
-  <description>Strict JSON codec mock for the V1 reporting protocol. 1:1 mirror of the Python codec at foundation/contracts/src/atlas_richie/contracts/reporting/v1/codec.py. No third-party runtime dependencies.</description>
+  <name>Atlas Richie Reporting Hello World (Java)</name>
+  <description>Wire-format compatibility smoke test (Java). HTTP/1.1
+    server that validates the two wire marker fields. JDK 21 stdlib
+    only — no third-party dependencies.</description>
 
   <properties>
     <maven.compiler.source>21</maven.compiler.source>
@@ -18,28 +20,13 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
 
-  <dependencies>
-    <!-- Test only: JUnit 5 is permitted by the brief ("Java 没有 Maven 依赖 (或只有 JUnit 5)") -->
-    <dependency>
-      <groupId>org.junit.jupiter</groupId>
-      <artifactId>junit-jupiter</artifactId>
-      <version>5.10.2</version>
-      <scope>test</scope>
-    </dependency>
-  </dependencies>
-
   <build>
-    <finalName>reporting-mock</finalName>
+    <finalName>hello-world-0.1.0</finalName>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
         <version>3.11.0</version>
-      </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-surefire-plugin</artifactId>
-        <version>3.2.5</version>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

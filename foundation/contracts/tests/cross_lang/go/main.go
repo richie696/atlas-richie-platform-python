@@ -1,118 +1,146 @@
-// main.go: Go CLI entry for the V1 reporting mock codec.
+// Hello world web service: Atlas Richie Agent Reporting Protocol V1
+// wire compatibility smoke test.
 //
-// Usage:
+// Spins up a minimal HTTP/1.1 server (no third-party dependencies —
+// Go stdlib only) that accepts a POST body containing the strict JSON
+// envelope produced by the Python reporting codec at
+// ``foundation/contracts/src/atlas_richie/contracts/reporting/v1/codec.py``.
 //
-//	main -kind envelope < input.json > output.json
-//	main -kind batch    < input.json > output.json
-//	main -kind ack      < input.json > output.json
-//	main -kind error    < input.json > output.json
+// Endpoints:
 //
-// Reads JSON bytes from stdin, decodes + validates + re-encodes to stdout.
-// On any validation error, prints a JSON error envelope to stdout and exits 1.
+//   GET  /healthz -> 200 {"status":"ok"}
+//   POST /report  -> 200 with key_order echo, or 4xx with an error
+//                    envelope. Body must contain the two wire marker
+//                    fields ``protocol_version`` and ``event_kind``.
+//
+// Full wire semantics (FIFO, Ack, duplicate_count, batch atomicity,
+// ...) are out of scope for hello world; this is purely a wire-format
+// compatibility check driven by the Python cross-language contract
+// tests in ``foundation/contracts/tests/cross_lang/test_go_hello.py``.
+//
+// Run: ``go run main.go -addr 127.0.0.1:18080`` then POST a 7-field
+// envelope JSON to ``http://127.0.0.1:18080/report``.
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"log"
+	"net/http"
 	"os"
+	"sort"
 )
 
+const (
+	protocolVersion = "atlas-richie.reporting/v1"
+)
+
+var allowedEventKinds = map[string]bool{
+	"RULE_SOURCE_ACTIVATED": true,
+	"RULE_SOURCE_STALE":    true,
+	"RULE_SOURCE_DEGRADED": true,
+	"RULE_APPLIED":         true,
+	"RULE_BLOCKED":         true,
+	"RULE_FAILED":          true,
+}
+
 func main() {
-	kind := flag.String("kind", "envelope",
-		"wire kind: envelope | batch | ack | error")
+	addr := flag.String("addr", "127.0.0.1:18080", "listen address (loopback only)")
 	flag.Parse()
 
-	raw, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		failAndExit("MALFORMED_ENVELOPE", "read stdin: "+err.Error())
-	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", handleHealthz)
+	mux.HandleFunc("/report", handleReport)
 
-	var out []byte
-	switch *kind {
-	case "envelope":
-		obj, err := DecodeEnvelope(raw)
-		if err != nil {
-			cerr := asCodecError(err)
-			failAndExit(cerr.Code, cerr.Message)
-		}
-		out, err = EncodeEnvelope(obj)
-		if err != nil {
-			cerr := asCodecError(err)
-			failAndExit(cerr.Code, cerr.Message)
-		}
-	case "batch":
-		obj, err := DecodeBatch(raw)
-		if err != nil {
-			cerr := asCodecError(err)
-			failAndExit(cerr.Code, cerr.Message)
-		}
-		out, err = EncodeBatch(obj)
-		if err != nil {
-			cerr := asCodecError(err)
-			failAndExit(cerr.Code, cerr.Message)
-		}
-	case "ack":
-		obj, err := DecodeAck(raw)
-		if err != nil {
-			cerr := asCodecError(err)
-			failAndExit(cerr.Code, cerr.Message)
-		}
-		out, err = EncodeAck(obj)
-		if err != nil {
-			cerr := asCodecError(err)
-			failAndExit(cerr.Code, cerr.Message)
-		}
-	case "error":
-		obj, err := DecodeErrorEnvelope(raw)
-		if err != nil {
-			cerr := asCodecError(err)
-			failAndExit(cerr.Code, cerr.Message)
-		}
-		out, err = EncodeErrorEnvelope(obj)
-		if err != nil {
-			cerr := asCodecError(err)
-			failAndExit(cerr.Code, cerr.Message)
-		}
-	default:
-		failAndExit("MALFORMED_ENVELOPE",
-			fmt.Sprintf("unknown -kind=%q (expect envelope|batch|ack|error)", *kind))
-	}
-
-	if _, err := os.Stdout.Write(out); err != nil {
-		fmt.Fprintln(os.Stderr, "write stdout:", err)
-		os.Exit(2)
-	}
-	if _, err := os.Stdout.Write([]byte("\n")); err != nil {
-		fmt.Fprintln(os.Stderr, "write newline:", err)
-		os.Exit(2)
+	log.Printf("cross_lang hello world listening on http://%s", *addr)
+	if err := http.ListenAndServe(*addr, mux); err != nil {
+		fmt.Fprintln(os.Stderr, "listen:", err)
+		os.Exit(1)
 	}
 }
 
-func failAndExit(code, msg string) {
-	obj := map[string]interface{}{
-		"protocol_version": ProtocolVersion,
+func handleHealthz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, `{"status":"ok"}`)
+}
+
+func handleReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED",
+			"only POST is accepted on /report")
+		return
+	}
+	defer r.Body.Close()
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "MALFORMED_ENVELOPE",
+			"read body: "+err.Error())
+		return
+	}
+
+	var obj map[string]interface{}
+	if err := json.Unmarshal(body, &obj); err != nil {
+		writeError(w, http.StatusBadRequest, "MALFORMED_ENVELOPE",
+			"unmarshal: "+err.Error())
+		return
+	}
+
+	pv, hasPV := obj["protocol_version"].(string)
+	if !hasPV {
+		writeError(w, http.StatusBadRequest, "PROTOCOL_VERSION_MISMATCH",
+			"protocol_version must be a string")
+		return
+	}
+	if pv != protocolVersion {
+		writeError(w, http.StatusBadRequest, "PROTOCOL_VERSION_MISMATCH",
+			fmt.Sprintf("protocol_version must equal %q, got %q",
+				protocolVersion, pv))
+		return
+	}
+
+	ek, hasEK := obj["event_kind"].(string)
+	if !hasEK {
+		writeError(w, http.StatusBadRequest, "MALFORMED_ENVELOPE",
+			"event_kind must be a string")
+		return
+	}
+	if !allowedEventKinds[ek] {
+		writeError(w, http.StatusBadRequest, "UNKNOWN_EVENT_KIND",
+			fmt.Sprintf("event_kind=%q not in V1 6 enums", ek))
+		return
+	}
+
+	// Echo the observed wire keys in deterministic order so Python
+	// contract tests can assert byte-for-byte wire preservation.
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	out := map[string]interface{}{
+		"status":           "ok",
+		"fields_count":     len(obj),
+		"protocol_version": pv,
+		"event_kind":       ek,
+		"key_order":        keys,
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+func writeError(w http.ResponseWriter, status int, code, msg string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"protocol_version": protocolVersion,
 		"error_code":       code,
 		"message":          msg,
 		"details":          nil,
-	}
-	raw, err := EncodeErrorEnvelope(obj)
-	if err != nil {
-		raw = []byte(fmt.Sprintf(
-			`{"protocol_version":%q,"error_code":%q,"message":%q,"details":null}`,
-			ProtocolVersion, code, msg))
-	}
-	os.Stdout.Write(raw)
-	os.Stdout.Write([]byte("\n"))
-	os.Exit(1)
-}
-
-func asCodecError(err error) *CodecError {
-	if err == nil {
-		return nil
-	}
-	if ce, ok := err.(*CodecError); ok {
-		return ce
-	}
-	return newCodecError("MALFORMED_ENVELOPE", err.Error())
+	})
 }
