@@ -1061,29 +1061,26 @@
 - **Test ID**: SEN-API-001
 - **Deps**: M5.4
 
-### M5.6 [x] 发布 1.0.0(只发 5 个已实现 wheel)
-- **Deliverable**:
-  - 5 个 wheel 发到 PyPI:
-    - `atlas-richie-sentinel`(主)
-    - `atlas-richie-sentinel-asgi`
-    - `atlas-richie-sentinel-httpx`
-    - `atlas-richie-sentinel-source-file`
-    - `atlas-richie-sentinel-dashboard`
-  - **不**发 `sentinel-{source-nacos,source-redis,cluster,observability}`(M6+ 才发,符合 DESIGN.md "不发布空 wheel" 约束)
-  - GitHub release tag
-  - release notes 链接 CHANGELOG
-- **Exit Criteria**:
-  - `pip install atlas-richie-sentinel` 在干净环境成功
-  - 1.0.0 不可变(后续 1.0.x 修复 bug,1.x 加 feature,2.0 破坏性)
-- **Test ID**: —
-- **ADR**: —
-- **Deps**: M5.5
+### M5.6 → 移到 M6.8(M6 末位,见 M6.8)
 
-### M5 Exit [ ] (子项全部完成)
-- **Exit Criteria**(§21 + §24):
-  - 主包和已实现扩展达到公开 API 稳定承诺
-  - 所有未验证边界明确列出
-  - §24 1.0 Definition of Done 全部满足
+> **变更**(2026-09-13 user 决定):1.0 PyPI publish **不**在 M5 闭环
+> 触发。改为:**M6 所有任务全部闭环 + 实际使用验证过以后**再发布。
+> 原因:5 个 wheel 已就绪但**没在真实业务里跑过**就发 1.0,违反
+> DESIGN.md §1.0 release gate 的 "实际使用" 约束。M5.6 重命名为
+> M6.8,作为 M6 最后一个任务。
+>
+> 见 `M6.8 发布 1.0.0(5 个 wheel,M5 已闭环)`。
+
+### M5 Exit [x] (M5.5 退出标准)
+- **Exit Criteria**(§21 + §24,以 M5.5 为 gate):
+  - 主包和已实现扩展达到公开 API 稳定承诺 — ✅ M5.5 API review 通过
+  - 所有未验证边界明确列出 — ✅ 5 wheel matrix 报告 + API review 锁定 11 项不变量
+  - §24 1.0 Definition of Done 全部满足 — ✅
+  - **不**要求 M5.6 publish 完成(M5.6 已挪到 M6.8,见上)
+  - **不**要求 M6+ 任何任务完成(M6+ 是 1.x 路线,见 M6+ 章节)
+- **背景**:M5 内部的"实现 / 测试 / 文档 / 验收 / 锁定"已完整;
+  真正的"发版"决策放到 M6 之后。1.0 release gate 不只看代码,还看
+  真实使用情况。
 
 ---
 
@@ -1158,8 +1155,34 @@
 - **ADR**: —
 - **Deps**: M5.6
 
-### M6+ Exit [ ] (M6.1-M6.5 全部完成;M6.6 默认不在范围)
-- **Exit Criteria**(隐含):M6.1-M6.5 完成 + 双实例 + 跨进程验收;M6.6 聚合 dashboard 默认不在范围
+### M6.8 [ ] 发布 1.0.0(原 M5.6,5 个 wheel,实际使用验证后)
+- **变更原因**(2026-09-13 user 决定):
+  原 M5.6 是"实现完成后立即 publish"。User 决定改成"**M6 所有任务
+  闭环 + 实际使用验证**后再 publish"。原因:DESIGN.md §1.0 release
+  gate 的"实际使用"约束 — 5 个 wheel 实现完成不等于"经过真实业务
+  验证过",过早发版风险高。
+- **Deliverable**:
+  - 5 个 wheel 发到 PyPI:
+    - `atlas-richie-sentinel`(主)
+    - `atlas-richie-sentinel-adapter-asgi`
+    - `atlas-richie-sentinel-adapter-httpx`
+    - `atlas-richie-sentinel-source-file`
+    - `atlas-richie-sentinel-dashboard`
+  - **不**发 `sentinel-{source-nacos,source-redis,cluster,observability}`(还没实现,符合 DESIGN.md "不发布空 wheel" 约束)
+  - **前置**:M6.1-M6.7 全部 [x] + 真实业务使用验证报告
+  - GitHub release tag
+  - release notes 链接 CHANGELOG
+- **Exit Criteria**:
+  - M6.1 / M6.2 / M6.3 / M6.4 / M6.5 / M6.7 全部 [x]
+  - 实际使用验证报告归档(至少 1 个真实业务接入 + 跑通 1 周)
+  - `pip install atlas-richie-sentinel` 在干净环境成功
+  - 1.0.0 不可变(后续 1.0.x 修复 bug,1.x 加 feature,2.0 破坏性)
+- **Test ID**: —
+- **ADR**: —
+- **Deps**: M6.1, M6.2, M6.3, M6.4, M6.5, M6.7, 实际使用验证
+
+### M6+ Exit [ ] (M6.1-M6.5 + M6.7 + M6.8 全部完成;M6.6 默认不在范围)
+- **Exit Criteria**(隐含):M6.1-M6.5 + M6.7 完成 + 双实例 + 跨进程验收;M6.6 聚合 dashboard 默认不在范围;M6.8 publish 1.0.0 成功
 
 ---
 
@@ -1176,9 +1199,17 @@ M3 (File Source + ASGI)  ──需要 M2 完整退出──
   ↓
 M4 (HTTPX 出站)  ──需要 M1 退出(用 Engine) + M2 CB 规则──
   ↓
-M5 (Dashboard + 1.0)  ──需要 M3+M4 退出──
+M5 Exit @ M5.5 (实现 / 测试 / 文档 / 验收 / API 锁定)
+  ── M5.6 publish 已在 2026-09-13 决定挪到 M6.8 ──
   ↓
-M6+ (集群 / 聚合)  ──需要 M5 1.0 稳定──
+M6+ (集群 / 聚合)
+  M6.1 Nacos Source
+  M6.2 Redis Source
+  M6.3 Token Server/Client
+  M6.4 双实例故障 / 恢复
+  M6.5 Agent Reporting
+  M6.7 WSGI 可行性评估
+  M6.8 (原 M5.6) 实际使用验证后 publish 1.0.0
 ```
 
 ---
