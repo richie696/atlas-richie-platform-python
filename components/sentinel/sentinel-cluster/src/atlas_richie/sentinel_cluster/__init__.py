@@ -13,10 +13,11 @@ Sentinel 家族的**集群模式** (M6.3)。把多个 Python 进程的 Flow/Degr
   (永远 LOCAL_GRANTED), 零 Cluster / Redis 依赖
 - **集群 wheel (本仓)**: ``TokenServer`` (资源分配状态机) + ``HttpTransport``
   (HTTP/1.1 + JSON) + ``StandaloneTokenServer`` / ``EmbeddedTokenServer`` 启动形态
+  + ``RemoteTokenService`` Client 端 (TokenService Port 远程实现)
 - **wire protocol 投影**: ``atlas_richie.contracts.cluster.v1`` (Foundation wheel,
   跨语言 wire schema frozen)
 
-**1.0 公开 API** (本任务实现 M6.3.3 + M6.3.5; M6.3.4 Client 留 Worker 2):
+**1.0 公开 API** (M6.3.3 + M6.3.4 + M6.3.5 + M6.3.7 收口):
 
 - ``ClusterTokenConfig`` — frozen dataclass (启动配置)
 - ``ClusterTokenMode`` — StrEnum (standalone / embedded / client_only)
@@ -30,6 +31,8 @@ Sentinel 家族的**集群模式** (M6.3)。把多个 Python 进程的 Flow/Degr
 - ``LeaseStore`` — 进程内 lease + 配额 store
 - ``Lease`` — Server 生成的 opaque lease 句柄
 - ``IdempotencyCache`` — request_id 短期 cache (5 min TTL)
+- ``RemoteTokenService`` — Client 端 (TokenService Port 远程实现, M6.3.4)
+- ``ClientIdentity`` — Client 端身份 (frozen slots, M6.3.4)
 - 错误类: ``ClusterServerError`` / ``ClusterConfigError`` /
   ``ClusterLeaseNotFound`` / ``ClusterLeaseExpired`` / ``ClusterStaleEpoch`` /
   ``ClusterResourceNotConfigured`` / ``ClusterServerOverloaded``
@@ -49,8 +52,7 @@ Sentinel 家族的**集群模式** (M6.3)。把多个 Python 进程的 Flow/Degr
 
 **不在 1.0 范围** (留 M6.3.x future):
 
-- ❌ ``RemoteTokenService`` (Client, M6.3.4 Worker 2 实施)
-- ❌ 任何 ``ClusterTokenClient`` / ``ClusterClient`` (M6.3.4 命名)
+- ❌ 任何 ``ClusterTokenClient`` / ``ClusterClient`` (M6.3.4 命名决策, Client 类名是 ``RemoteTokenService``)
 - ❌ Server 进程内 store 持久化 (Server 重启 lease 失效, 设计 §8 接受)
 - ❌ mTLS / OAuth 鉴权 (1.0 仅 shared secret)
 - ❌ Embedded Server 多 worker 模式 (强制单 worker 启动 fail-fast)
@@ -74,7 +76,7 @@ Architecture (per M6.3-CLUSTER-TOKEN-DESIGN.md §2):
 - **wire protocol projection**: ``atlas_richie.contracts.cluster.v1``
   (Foundation wheel, cross-language schema frozen)
 
-1.0 public API (M6.3.3 + M6.3.5; M6.3.4 Client deferred to Worker 2):
+1.0 public API (M6.3.3 + M6.3.4 + M6.3.5 + M6.3.7 closed):
 
 - ``ClusterTokenConfig`` — frozen dataclass (startup config)
 - ``ClusterTokenMode`` — StrEnum (standalone / embedded / client_only)
@@ -88,6 +90,8 @@ Architecture (per M6.3-CLUSTER-TOKEN-DESIGN.md §2):
 - ``LeaseStore`` — in-process lease + quota store
 - ``Lease`` — Server-generated opaque lease handle
 - ``IdempotencyCache`` — request_id short-term cache (5 min TTL)
+- ``RemoteTokenService`` — Client-side (TokenService Port remote impl, M6.3.4)
+- ``ClientIdentity`` — Client-side identity (frozen slots, M6.3.4)
 - Errors: ``ClusterServerError`` / ``ClusterConfigError`` /
   ``ClusterLeaseNotFound`` / ``ClusterLeaseExpired`` / ``ClusterStaleEpoch`` /
   ``ClusterResourceNotConfigured`` / ``ClusterServerOverloaded``
@@ -109,8 +113,7 @@ Key invariants (PLANNING §M6.3 acceptance):
 
 Out of 1.0 scope (deferred to M6.3.x future):
 
-- ❌ ``RemoteTokenService`` (Client, M6.3.4 Worker 2)
-- ❌ any ``ClusterTokenClient`` / ``ClusterClient`` (M6.3.4 naming)
+- ❌ any ``ClusterTokenClient`` / ``ClusterClient`` (M6.3.4 naming decision, Client class is ``RemoteTokenService``)
 - ❌ Server in-process store persistence (restart invalidates leases, design §8)
 - ❌ mTLS / OAuth auth (1.0 shared secret only)
 - ❌ Embedded Server multi-worker (strict single-worker, fail-fast on multi)
@@ -119,6 +122,7 @@ Out of 1.0 scope (deferred to M6.3.x future):
 
 from __future__ import annotations
 
+from .client import ClientIdentity, RemoteTokenService
 from .config import ClusterTokenConfig, ClusterTokenMode, ResourceConfig
 from .errors import (
     ClusterConfigError,
@@ -172,6 +176,9 @@ __all__ = [
     "IdempotencyCache",
     "CacheEntry",
     "epoch_key",
+    # Client 端 (M6.3.4)
+    "RemoteTokenService",
+    "ClientIdentity",
     # CLI 入口 (standalone)
     "main",
 ]
