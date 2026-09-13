@@ -51,14 +51,25 @@ conventions listed above.
 
 from __future__ import annotations
 
+from .config import (
+    NacosAuth,
+    NacosRuleSourceConfig,
+    NacosSourceError,
+    NacosSourceState,
+    NacosTLS,
+)
+
 __version__ = "0.2.0"
 
 __all__ = [
     "__version__",
-    # Populated by M6.1.2 - M6.1.5:
+    # M6.1.2 (done): 不可变 config + 值对象 + 状态 / 错误 enum
+    "NacosAuth",
+    "NacosTLS",
+    "NacosRuleSourceConfig",
+    "NacosSourceState",
+    "NacosSourceError",
+    # Populated by M6.1.3 - M6.1.5:
     # "NacosRuleSource",
-    # "NacosRuleSourceConfig",
-    # "NacosSourceState",          # StrEnum: CONNECTING / READY / STALE / DISCONNECTED
-    # "NacosSourceError",          # StrEnum: AUTH / NOT_FOUND / EMPTY / DECODE / NETWORK
-    # "NacosSourceMetricSnapshot", # 公开 metric DTO (operator observability)
+    # "NacosSourceMetricSnapshot",  # 公开 metric DTO (operator observability)
 ]
