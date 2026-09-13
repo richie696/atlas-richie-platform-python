@@ -132,6 +132,15 @@ Engine 内部维护:
 | `in_flight` 接近 0 | 持续 5 分钟 | 可能上游熔断 / 流量下降 |
 | `BLOCKED` outcome 频率 | 取决于业务 | 限流触发,正常;但**激增**需要看规则 |
 
+**M6.1 多源路径 (1.x+)**:
+| 指标 | 告警阈值(参考) | 含义 |
+| ---- | -------------- | ---- |
+| `SentinelConfigurationError("multimode_conflict")` 抛出 | 立即 | 同一 Engine 同时调 `assemble_sources` 与 `install_legacy_source`,违反互斥约束 |
+| `SentinelConfigurationError("repository_required")` 抛出 | 立即 | 装配入口 `repository=None`,违反 default-deny |
+| `SentinelConfigurationError("duplicate_priority")` 抛出 | 启动时立即 | 多源 priority 不唯一,违反公开契约 |
+| `RuleSourceActivation` observer 异常频率 | 持续 1 分钟 > 0 | observer 抛异常被隔离,主链路不挂;**激增**需查 observer 实现 |
+| `aclose()` 等待 Supervisor 超时 | 持续 > 30s | Source 任务未在 30s 内关闭,可能是 Source `aclose()` 没正确实现 |
+
 ## 2. Monitoring (English)
 
 ### 2.1 Built-in (main package, no 3rd-party)
@@ -228,6 +237,51 @@ token 改存 `EntryLease._context_token` per-entry)。
 
 **修复**:用 `Bulkhead` 限制并发 + `BulkheadFull` 触发 503。
 
+### 3.7 `SentinelConfigurationError("multimode_conflict")` (M6.1+)
+
+**根因**:同一 `SentinelEngine` 实例同时调用了 `assemble_sources` 与
+`install_legacy_source` 两个入口;违反双入口互斥约束 (API delta v3 决策 3 / 5)。
+
+**修复**:
+
+1. 决定业务路径: 多源 (1.x 新路径) **或** 1.0 兼容 (老路径), 不要混用
+2. 如果坚持"先用 1.0 后升多源": 创建**新** `SentinelEngine` 实例, 老实例
+   shutdown 后再调 `assemble_sources`
+3. 1.x 不存在"多源 + Legacy 共存" 的混用模式 (违反 C/B 模型 + 1.0 行为锁定)
+
+### 3.8 `assemble_sources` 启动后 Engine 卡住 (M6.1+)
+
+**根因 1**: `SnapshotRuleSource.snapshots()` 实现里死循环 yield 同一条
+snapshot; Supervisor 等 `failover_after` 窗口, 不会立即切到次高 priority。
+等 `failover_after` 触发后仍未 yield 新 version → 标 stale → 切换。
+
+**根因 2**: 多个 Source 的 `priority` 重复, 启动时抛
+`SentinelConfigurationError("duplicate_priority")`; 这**不是**卡住, 是抛错,
+查堆栈。
+
+**根因 3**: `Repository` 由用户创建但**没**传给 `assemble_sources` (default-deny
+拒绝 `Optional[RuleRepository]`), 抛 `SentinelConfigurationError("repository_required")`。
+
+**修复**:
+
+1. `failover_after` 设短一点 (e.g. 200ms), 让 stale 判定更快
+2. priority 全局唯一, 启动前自检
+3. Repository 必填, **不**传 `None`
+
+### 3.9 `aclose()` 等待 Supervisor 超时 (M6.1+)
+
+**根因**: `SnapshotRuleSource.aclose()` 实现**不**幂等或**不**正确取消
+后台 task; `SentinelEngine.aclose()` 等 Supervisor 关闭所有 Source 任务,
+被阻塞。
+
+**修复**:
+
+1. `aclose()` 实现: 取消 listener → 等待 cancel propagation → 关闭 SDK
+2. 测试: `test_sen_legacy_source_compat.py` / `test_sen_assemble_sources.py` /
+   `test_sen_supervisor_internal.py` 有 `aclose_idempotent` 测试, 跑全量确认
+3. 给 `aclose()` 加 timeout (e.g. 30s), 超时记 ERROR log, 但**不**抛 (避免
+   关 Engine 时崩)
+
 ## 3. Troubleshooting (English)
 
 ### 3.1 Engine `state == FAILED`
@@ -261,6 +315,59 @@ Fixed in M1.6 (token moved to `EntryLease`). Upgrade to 1.0+.
 
 `SentinelASGIMiddleware` is a pass-through; downstream hangs propagate.
 Use `Bulkhead` for backpressure.
+
+### 3.7 `SentinelConfigurationError("multimode_conflict")` (M6.1+)
+
+**Root cause**: same `SentinelEngine` instance called both
+`assemble_sources` and `install_legacy_source`; violates the dual-entry
+mutex (API delta v3 decision 3 / 5).
+
+**Fix**:
+
+1. Decide one path: multi-source (1.x new) **or** 1.0 compat (old); do not
+   mix
+2. If you need "1.0 first, multi-source later": create a **new**
+   `SentinelEngine` instance, shut down the old one, then call
+   `assemble_sources` on the new instance
+3. 1.x does not support "multi-source + Legacy coexisting" (violates
+   C/B model + 1.0 behavior lock)
+
+### 3.8 `assemble_sources` hangs after start (M6.1+)
+
+**Root cause 1**: `SnapshotRuleSource.snapshots()` implementation has an
+infinite loop yielding the same snapshot; the Supervisor waits for
+`failover_after` window before failover. After the window expires without
+a new version, marks the source stale and switches.
+
+**Root cause 2**: multiple sources with duplicate `priority`; the
+Engine raises `SentinelConfigurationError("duplicate_priority")` at
+startup (this is **not** a hang, check the stack trace).
+
+**Root cause 3**: Repository created by the user but **not** passed to
+`assemble_sources` (default-deny rejects `Optional[RuleRepository]`);
+raises `SentinelConfigurationError("repository_required")`.
+
+**Fix**:
+
+1. Set a short `failover_after` (e.g. 200ms) for faster stale detection
+2. Globally unique priorities; self-check before startup
+3. Repository is required, do **not** pass `None`
+
+### 3.9 `aclose()` waits for Supervisor timeout (M6.1+)
+
+**Root cause**: `SnapshotRuleSource.aclose()` is **not** idempotent or
+**not** correctly cancelling the background task; `SentinelEngine.aclose()`
+waits for the Supervisor to close all Source tasks, blocked.
+
+**Fix**:
+
+1. `aclose()` implementation: cancel listener → wait for cancel
+   propagation → close SDK
+2. Tests: `test_sen_legacy_source_compat.py` /
+   `test_sen_assemble_sources.py` / `test_sen_supervisor_internal.py` all
+   have `aclose_idempotent` tests; run the full suite to confirm
+3. Add a timeout to `aclose()` (e.g. 30s); on timeout, log ERROR but
+   **do not** raise (avoid crashing during Engine shutdown)
 
 ---
 
@@ -406,6 +513,27 @@ reason), no user data.
 
 **Adapter / Source / Dashboard wheel**:每个独立升级。CHANGELOG 看
 每个 wheel 自己的版本。
+
+**M6.1.0b Source 路径升级** (双 Port, 详见 `docs/MIGRATION-M6.md`):
+
+- **1.0 单源用户**: 零代码改动; `FileRuleSource` 公共 API 不变, 1.0 行为锁定
+- **1.0 多源用户** (罕见): 必须升级到 `SnapshotRuleSource` + `engine.assemble_sources([...])`
+- **extension 作者**: 1.0 旧 `RuleSource` 1.x 全程保留 (走 `install_legacy_source`); 新 extension 必须实现 `SnapshotRuleSource`
+
+**互斥约束**: 同一 `SentinelEngine` 实例上 `assemble_sources` 与 `install_legacy_source` 互斥
+(`multimode_conflict`); 违反抛 `SentinelConfigurationError("multimode_conflict")`。
+
+**Repository 所有权 (M6.1 P1 #2)**: `RuleRepository` 无 `close()` / `aclose()`
+(被动容器); 关闭责任在 Supervisor + 各 Source, `SentinelEngine.aclose()` 等它们。
+**不**要把"用户负责关闭 Repository" 当作承诺 (Repository 无此生命周期)。
+
+**跨语言 wire 推迟**: M6.1 阶段**不**冻结 `event_kind` 字符串 / wire schema /
+时间戳; 跨进程 / 跨语言订阅由 M6.5.7 envelope 任务统一冻结。
+
+**C 层物理隔离 (M6.1 P0 决策 1)**: `atlas_richie.sentinel.source._supervisor.*`
+模块**不**进 `__all__`, extension 不可 import。M6.1.0d-3 阶段补 ruff
+`no-private-import` 静态检查; d-1 阶段由 contract test 兜底 (启动 extension
+时 import 反射测试)。
 
 ### 6.2 集群模式(1.x)
 

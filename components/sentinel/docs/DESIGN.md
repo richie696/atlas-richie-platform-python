@@ -28,7 +28,7 @@ Atlas Richie Sentinel 是一套面向 Python 服务的流量治理与韧性保�
 
 1. 安装一个主包即可获得完整的本地 Sentinel 能力。
 2. 主包默认零第三方运行时依赖，不绑定任何 Web、HTTP、配置中心或监控框架。
-3. ASGI、HTTPX、文件、Nacos、Redis、Dashboard 和 Cluster 作为独立扩展能力安装。
+3. ASGI、HTTPX、文件、Nacos、Dashboard 和 Cluster 作为独立扩展能力安装。
 4. 同时覆盖入口保护、业务资源保护和出站依赖保护。
 5. 所有规则、状态迁移、拒绝结果和指标口径都有稳定、可测试的行为契约。
 6. 不使用魔法字符串表达公开配置；Python API 使用 Enum、不可变值对象和 Protocol。
@@ -93,7 +93,7 @@ HTTPX attempt -> concurrency / queue budget / Flow / CircuitBreaker / Retry
 | asyncio 业务 API | 支持 | Trio/同步引擎按独立设计评估 |
 | ASGI HTTP | 支持 | WebSocket 消息级、更多协议 Adapter |
 | HTTPX async transport | 支持 | 其他 HTTP 客户端 Adapter |
-| File Source | 支持 | Nacos、Redis 等远程 Source |
+| File Source | 支持 | Nacos 等具有持久化事实来源的远程 Source |
 | 多 worker | 明确 per-process | Cluster 提供共享配额和聚合状态 |
 | Dashboard | embedded per-process | 独立聚合控制面和 Web UI |
 | Java 兼容 | 规则语义与配置 codec | 跨语言控制面协议 |
@@ -167,7 +167,7 @@ Sentinel 不能反向依赖 Atlas Richie 平台基础包，否则无法成为真
 | atlas-richie-sentinel-httpx | atlas_richie.sentinel.adapters.httpx | HTTPX 出站保护 | sentinel + httpx |
 | atlas-richie-sentinel-source-file | atlas_richie.sentinel.sources.file | JSON/YAML 文件规则源和热更新 | sentinel + PyYAML + watchfiles |
 | atlas-richie-sentinel-source-nacos | atlas_richie.sentinel.sources.nacos | Nacos 规则源 | sentinel + Nacos SDK |
-| atlas-richie-sentinel-source-redis | atlas_richie.sentinel.sources.redis | Redis 规则源 | sentinel + redis |
+| atlas-richie-sentinel-source-opensergo | atlas_richie.sentinel.sources.opensergo | OpenSergo 控制面规则兼容 | sentinel + selected OpenSergo control-plane transport |
 | atlas-richie-sentinel-dashboard | atlas_richie.sentinel.dashboard | 管理 API 和可选 Web UI | sentinel + FastAPI/Uvicorn |
 | atlas-richie-sentinel-cluster | atlas_richie.sentinel.cluster | 分布式 Token Client/Server | sentinel + selected transport |
 | atlas-richie-sentinel-observability | atlas_richie.sentinel.observability | Prometheus/OpenTelemetry 导出 | sentinel + selected exporter |
@@ -367,7 +367,7 @@ SentinelEngine 是用户完成资源保护所需的统一入口，负责协调�
 
 ### 4.5 Adapter：外部技术边界
 
-ASGI、HTTPX、文件、Nacos、Redis、Prometheus/OpenTelemetry 都是 Adapter。
+ASGI、HTTPX、文件、Nacos、Prometheus/OpenTelemetry 都是 Adapter。
 Adapter 负责类型和错误翻译，不能把 SDK 类型传给 engine。
 
 ### 4.6 Observer：观测事件
@@ -1021,9 +1021,10 @@ epoch 标识一次连续版本历史，revision 是同一 epoch 内单调递增�
 任一步失败都保留 last-known-good，不允许先清空旧规则。
 
 版本相同且 checksum 相同的更新是幂等 no-op；版本相同但 checksum 不同必须拒绝并报警。
-同一 epoch 的旧 revision 默认拒绝。每个 source_id 拥有自己的完整规则快照，更新只替换
-该来源的规则集合；多个来源的有效视图按照显式 source priority 合并，不能由最后回调时间
-隐式覆盖。
+同一 epoch 的旧 revision 默认拒绝。每个 source_id 拥有自己的**完整**规则快照；多来源
+不是按 rule 或 Resource 拼接，而是迁移 / 故障切换关系：同一时刻只有一个 active Source
+的完整快照可进入 `RuleRepository`。这样避免不同权威来源的规则被隐式混合，也使生效的
+`source_id` 和 version 可明确报告。
 
 ### 10.3 RuleSource Port
 
@@ -1036,9 +1037,60 @@ class RuleSource(Protocol):
         ...
 ~~~
 
-RuleSource 以异步迭代器单向产生快照，不持有具体 RuleManager/RuleRepository，
-RuleRepository 也不反向拉取具体 Source。Engine 的 RuleSourceSupervisor 拥有消费任务、
-取消和关闭顺序，Source 不在 start 方法中隐藏创建后台任务。
+RuleSource 协议**在 M6.1.0 拆为两个独立 Port**（v3 事实源），不是
+单一 contract 升级：
+
+- **`SnapshotRuleSource`**（新契约，M6.1 引入）：
+  - `def snapshots(self) -> AsyncIterator[RuleSnapshot]`
+  - `async def aclose(self) -> None`
+  - 异步迭代器单向产生快照，不持有具体 RuleManager/RuleRepository，
+    RuleRepository 也不反向拉取具体 Source。Engine 的 `RuleSourceSupervisor`
+    拥有消费任务、取消、关闭顺序和多来源仲裁；Source 不在 `snapshots()`
+    中隐藏创建后台任务。
+  - **唯一**可被 `SentinelEngine.assemble_sources()` 接受。
+
+- **`LegacyRuleSource`**（1.0 旧契约，M6.1 显式导出兼容 Port）：
+  - `def start(self, repository: RuleRepository) -> None`
+  - `def stop(self) -> None`
+  - `def latest(self) -> RuleSnapshot | None`
+  - 1.0 公共符号 `RuleSource` 保留为 `LegacyRuleSource` 的 alias，1.x
+    全程保留可用。
+  - 走 `SentinelEngine.install_legacy_source(LegacyRuleSource, *,
+    repository: RuleRepository)`，**不**经 Supervisor，等同 1.0 行为。
+
+**两入口互斥**：同一 Engine 上 `assemble_sources()` 之后调
+`install_legacy_source` 抛 `SentinelConfigurationError("multimode_conflict")`，
+反之亦然。防止遗留 Source 绕过 Supervisor 改写多源仲裁结果。
+
+Supervisor 是唯一理解 source priority 的对象。它把经 Engine 级公开装配入口校验后的选择
+配置转换为私有、不可变的 `_RuleSourceBinding(source_id, priority, failover_after)`：priority
+必须唯一，较大值优先；`failover_after` 到期前，暂时断线的 active Source 仍保留其
+last-known-good，防止短抖动触发切换。每个 ready Source 只保留一份最近验证成功的完整快照，
+不建立无界 pending 队列。active Source 变 stale 后，Supervisor 才选择优先级最高的其他
+ready Source 作为新 active，并把其完整快照交给 Repository 原子替换。
+
+Engine、Slot、Rule、RuleRepository 和具体 Source 都不读取 priority；它不是 Rule 字段，
+也不是"最后一个回调获胜"的 Repository 策略。内部切换以私有
+`_RuleSourceActivatedEvent` 在 M6.1 v3 事实源里**已重命名**为
+`RuleSourceActivation`（C 层 frozen dataclass）；该名称是 v3 的**唯一**
+内部 fact 命名，`_RuleSourceActivatedEvent` **不再使用**。**不**冻结
+`event_name` 字符串，跨语言 wire schema / transport / envelope 推迟到
+M6.5.7（Agent Reporting 事件 envelope 冻结任务），详见
+`docs/rule_source_activation.md`。单 Source 配置不需要任何仲裁行为。
+
+`RuleSourceSupervisor` 是主包的私有实现（`source._supervisor`），不导出到
+`atlas_richie.sentinel.__all__`，也不允许 Nacos / OpenSergo 等 extension import 它。应用
+需要多来源装配时，只能使用 M6.1.0 完成并通过 API review 的 Engine 级装配入口；该入口
+必须接受 `SnapshotRuleSource` Port 与**公开、不可变的装配 DTO**（`RuleSourceAssembly`），
+随后由 Engine 转换为私有 `_RuleSourceBinding`。私有 binding 不能成为公开方法的入参。
+该入口的最终方法名、签名和 `RuleRepository` 所有权由
+`R-SENTINEL-M6.1.0b-api-delta.md`（v3）冻结：禁止使用 `repository=None` 这类所有权
+不明的可选参数，禁止暴露 Supervisor、Repository 或 SDK 对象。这样 Source extension
+只依赖其最小 Port，仲裁实现仍可在不破坏应用契约的前提下演进。
+
+`LegacyRuleSource` 路径**保持** 1.0 行为，不经 Supervisor，不支持多源仲裁
+和 failover。`FileRuleSource` 1.0 实现是 `LegacyRuleSource` 形态，1.x 阶段
+**不**改造为 `SnapshotRuleSource`，避免 1.0 用户必须升级代码。
 
 RuleSource 必须定义：
 
@@ -1060,17 +1112,128 @@ RuleSource 必须定义：
 - 文件不存在、权限错误、语法错误和规则校验错误分别报告。
 - 文件 Source 不由 ASGI Adapter 自动安装或启动。
 
-### 10.5 Nacos 与 Redis Source
+### 10.5 远程 RuleSource：共同边界
 
-Nacos 和 Redis 实现同一 RuleSource 契约，并执行同一套 contract tests。
+远程 Source 必须有可恢复、可审计的**持久化事实来源**，而不是仅能保存临时状态的
+缓存。当前批准的远程 Source 是 Nacos；未来新增的 Source 也必须实现同一
+`RuleSource` 契约并执行同一套 contract tests。它们只把已校验的完整 `RuleSnapshot`
+交给 `RuleSourceSupervisor`，不能直接修改 Engine、RuleIndex 或 FlowSlot。
 
-Redis pub/sub 只负责变更通知时，规则正文需要有可恢复存储；单纯 pub/sub 不能保证
-离线期间消息补偿。必须选择以下一种：
+每个远程来源都必须：
 
-- Redis key 保存最新快照，pub/sub 只发送版本通知。
-- Redis Streams 提供可恢复消费。
+- 把 `source_id`、`version`、`checksum` 和完整正文作为一个逻辑快照处理；通知不是
+  规则正文的唯一来源。
+- 首次同步成功后才标记 ready；连接、鉴权或解析失败时保留 last-known-good 快照，
+  并公开 stale 状态和最后一次成功时间。
+- 在断线重连、收到重复通知、乱序通知或发现版本跳跃时重新读取权威快照；version 与
+  checksum 都相同才是幂等 no-op。version 相同而 checksum 不同是完整性冲突，必须拒绝
+  并报告；旧 version 不得覆盖新 version。
+- 在发布前执行完整 codec / schema / 业务校验；任一失败都不得部分更新本地规则。
+- 对凭证、地址和 SDK 异常做边界翻译及脱敏；主包公开 API 中不得出现 SDK 类型。
 
-Nacos/Redis 更新都必须携带 version/checksum，且不得把 SDK 返回类型传入主包。
+多来源时，调用方通过经审查的 Engine 装配入口声明 `source_id` 到 priority / failover window
+的映射；Source 自身不得声明或覆盖自己的优先级。inactive Source 的最近成功完整快照由
+Supervisor 有界保存，只有在它被选为 active 后才应用；它不是 RuleRepository 的 pending
+更新队列。Source 切换、回退和回切必须由显式配置与 **M6.5.7 冻结的跨语言
+事件 envelope** 投影可观测（M6.1 阶段不预设任何事件名；详见
+`docs/rule_source_activation.md`），不能由 callback 到达顺序、版本字符串排序
+或隐式服务发现触发。
+
+远程来源不负责发布服务实例、服务发现、Token 分配、指标上报或 Dashboard 聚合。
+这些是独立控制面职责，不能因共用基础设施而共享实现或生命周期。
+
+Redis 不属于已批准的 RuleSource。它可以在未来作为通知加速器或缓存使用，但不得成为
+规则的唯一事实来源，也不得在 Redis 重启、故障切换、数据淘汰或持久化恢复后决定应当
+生效的规则版本；这类扩展必须先有一个独立、持久化的权威 Source，并通过新的 ADR。
+
+### 10.6 Nacos RuleSource
+
+`atlas-richie-sentinel-source-nacos` 只使用 Nacos 的**配置管理**能力读取和监听规则；
+它不是 Nacos Naming Client，也不会自动注册 Sentinel 所在应用、查询业务服务实例，
+或参与业务请求的服务发现。
+
+- 启动配置至少由 namespace、group、data identifier 和认证配置组成，全部封装在
+  Nacos extension 的不可变配置对象中；主包不认识这些字段。
+- 每次回调或重连后都以 Nacos 当前完整配置为准，再交给通用 codec 校验；不能把
+  callback payload 当作可信、可直接应用的增量。
+- 配置为空、删除、权限不足、连接中断和不合法规则必须分别产生可观测状态；除非
+  显式启用并通过校验的“空规则快照”，否则空值不得静默清空 last-known-good 规则。
+- SDK 的连接、订阅、重连和 `aclose()` 仅由该 Source 持有；不使用模块级 client 或
+  隐式后台线程。应用启动层显式构造并交给 supervisor。
+
+### 10.7 OpenSergo 兼容：可选控制面 Adapter
+
+OpenSergo 是跨语言治理的**控制面规范**，不是 Sentinel Python Engine 的内部模型或
+运行时依赖。Atlas Richie Sentinel 采用“**OpenSergo-compatible, not
+OpenSergo-defined**”原则：当应用选择 OpenSergo 控制面时，扩展负责订阅、解析和映射；
+Engine 始终只消费本地、不可变的 `RuleSnapshot`。
+
+~~~text
+OpenSergo Control Plane / CRD
+              |
+              v
+OpenSergoRuleSource + OpenSergoCodec       # 可选 extension
+              |
+              v
+canonical RuleSnapshot                     # Sentinel owned
+              |
+              v
+SentinelEngine / SlotChain                  # 不认识 OpenSergo 类型
+~~~
+
+因此：
+
+- 主 wheel 不导入 OpenSergo、Kubernetes client、CRD 模型或控制面传输 SDK；未安装该
+  extension 时，Engine、File Source、Nacos Source、ASGI、HTTPX 的依赖图和行为不变。
+- `atlas-richie-sentinel-source-opensergo` 是 `RuleSource` 的 Adapter，仅拥有其连接、
+  凭证、订阅和关闭生命周期；它不能直接修改 `RuleRepository`、Slot、Token Server 或
+  Reporter。
+- 当前基线以 OpenSergo Control Plane 的版本化规则资源为输入；不得假定某个 Java/Go
+  SDK 是 Python 的必需依赖，也不得把 Kubernetes 以外的传输猜测为已支持能力。
+- Nacos 与 OpenSergo 是两个可并存的规则来源，不相互替换、不共享 client 或凭证。
+  控制面迁移必须显式配置 source priority、切换窗口和回退策略，不能由最后到达的通知
+  隐式决定。
+- Cluster Token Server/Client 与 Agent Reporting 是 Atlas Richie 的独立网络协议；本
+  阶段不把它们伪装为 OpenSergo 协议，也不因安装 OpenSergo extension 改变它们的 wire
+  contract。
+
+#### 10.7.1 语义映射与能力声明
+
+OpenSergo DTO 只停留在 codec 边界。codec 必须为每个规则和字段给出一个固定能力状态，
+写入 `OpenSergoCompatibilityReport`，供启动诊断、Dashboard 和审计读取：
+
+| 状态 | 含义 | 应用规则的行为 |
+|---|---|---|
+| `NATIVE` | 语义与本地 Rule 完全一致 | 允许发布快照 |
+| `TRANSLATED` | 已定义、经测试的等价转换 | 允许发布，并记录转换版本 |
+| `UNSUPPORTED` | 当前版本没有安全的等价语义 | 拒绝整个候选快照，保留 last-known-good |
+| `EXTENSION_REQUIRED` | 需要 Atlas Richie 显式扩展才能表达 | 拒绝，直到扩展 schema 和 ADR 获批准 |
+
+基础限流、并发限制和熔断只能在逐字段证明语义一致后标为 `NATIVE` 或
+`TRANSLATED`。参数热点、调用来源授权、Python-aware adaptive capacity、异步取消和
+HTTPX 流式响应释放等本地语义，**不得**仅因名称相近而自动映射。未知 OpenSergo
+major、未知必需字段、未知枚举值、损失性转换或多条规则间冲突都属于 `UNSUPPORTED`；
+禁止忽略字段、降级成宽松规则或部分发布。
+
+本地 `RuleSnapshot` 默认也不反向序列化为 OpenSergo 资源。只有经 codec 证明完全无损、
+由调用方显式请求且不覆盖控制面权威版本时，才可提供导出；它不是规则写回、双向同步或
+控制面所有权转移功能。
+
+#### 10.7.2 一致性、故障与安全边界
+
+`OpenSergoRuleSource` 必须复用 §10.2 与 §10.5 的完整快照语义：先读取控制面权威正文，
+再解析、映射、校验、编译并由 Supervisor 选择后原子交换。watch / event 只用于触发刷新，
+不能作为可直接应用的规则增量。codec 拒绝候选快照时**不得**调用
+`RuleRepository.apply_snapshot`，也不维护独立 last-known-good；Repository 保持已经应用的
+快照，Supervisor 保留各 ready Source 的最近成功快照。脱敏失败分类写入
+`OpenSergoCompatibilityReport`。任何订阅中断、鉴权失败、CRD 不可读、版本不兼容、codec
+失败或规则校验失败都保留现有有效快照，并公开 `stale`、最后成功时间和经过脱敏的失败分类。
+
+extension 必须使用最小权限的只读身份；默认禁止创建、更新或删除 OpenSergo 资源。日志、
+指标和兼容报告不得包含 bearer token、kubeconfig、完整规则正文或租户敏感标签。真实
+验收必须覆盖一个实际兼容控制面及规则资源的首次加载、合法更新、非法更新、断线恢复、
+版本不兼容和 `aclose()`；mock DTO 或本地 dict 只能覆盖 codec 单元测试，不能作为
+控制面兼容证据。
 
 ## 11. ASGI Adapter
 
@@ -1184,38 +1347,133 @@ Circuit Breaker 是否把某个 HTTP 状态视为失败由 OutcomeClassifier Str
 - 所有更新记录 principal、source、old_version、new_version、checksum 和结果。
 - 不记录规则中的敏感扩展字段。
 - 浏览器模式需要明确 CORS 和 CSRF 策略。
-- 健康检查不泄露文件路径、Redis/Nacos 地址或凭证。
+- 健康检查不泄露文件路径、Nacos 地址或凭证。
 
-### 13.3 聚合模式
+### 13.3 聚合模式与 Agent Reporting Protocol
 
-独立聚合 Dashboard 需要 Agent Reporting Protocol 或 Cluster，不能直接读取其他进程内存。
-该协议必须定义：
+独立聚合 Dashboard 不能读取其他进程内存；它消费由 Sentinel Agent 主动发送的
+**Sentinel 遥测协议**。这里的 Agent 是嵌入 Python、Java 或其他应用进程中的 Sentinel
+集成，不是业务应用向平台上传任意业务数据。
 
-- instance_id 和启动纪元。
-- 指标增量或快照序号。
-- 重复、乱序和离线处理。
-- 上报频率、背压和最大缓存。
-- mTLS/OAuth 或等价的实例认证。
+Reporting 是异步事实流，不是准入请求：上报失败、限速或 collector 不可达时，绝不能
+阻塞、拒绝或延迟正在执行的业务请求。全局 Flow 准入属于第 14 节 Token 协议。
 
-未实现该协议前，产品只宣称 embedded per-process Dashboard。
+#### 13.3.1 协议边界和数据最小化
 
-## 14. Cluster
+每个批次至少包含 protocol version、instance_id、启动 epoch、递增 sequence、采集时间、
+当前 active Source 的 `source_id` 与规则快照 version，以及受控的 Sentinel 指标 / 事件。
+不活跃或已禁用 Source 的 version 不进入协议；Source 切换必须作为可观测的
+事件上报（具体事件名由 M6.5.7 冻结的 `event_kind` 枚举定义，M6.1 阶段
+不预设字符串常量；详见 `docs/rule_source_activation.md` 与 §M6.5.7）。
+允许的数据仅包括通过、拒绝、RT、异常分类、熔断状态、规则切换和 Reporter
+自身丢弃计数；禁止业务请求体、响应体、用户身份、认证凭证、完整规则正文
+和任意业务日志进入该协议。错误事件只能包含稳定 error class 和不超过 64 bytes
+的脱敏 reason；禁止原始异常消息、traceback、stack frame、frame locals 或任意 SDK 错误正文。
 
-Cluster 是 1.0 后独立里程碑，但核心必须预留 TokenService Port，避免未来重写 FlowSlot。
+资源名和标签必须受 cardinality 上限保护；超限时按明确的 overflow policy 聚合或丢弃，
+并在下一可发送批次中报告丢弃数量，不能无限缓存。
 
-集群模式必须明确：
+#### 13.3.2 传输、顺序与失败语义
 
-- Token Server 与 embedded server 两种部署模式。
-- 请求 ID、规则版本和资源键。
-- 网络超时、重试和幂等。
-- fail-open、fail-closed 或 local-fallback 策略。
-- 服务器不可用时的容量风险。
-- 多节点时间和窗口语义。
-- stale owner fencing。
-- 指标聚合与规则发布关系。
+- 协议语义、字段类型、枚举和版本协商必须独立于 Python 类型；M6.5 先发布版本化
+  schema，再选择基线传输实现。跨语言 client/server 必须使用同一 schema。
+- schema major 不匹配是协议错误：Collector 返回稳定错误码，Client 记录可观测拒绝；
+  双方不得静默忽略字段、猜测降级格式或尝试部分解析。兼容的 minor 变更必须在 schema
+  中显式声明默认值和字段可选性。
+- Collector 按 `(instance_id, startup_epoch, sequence)` 去重；同一序号重传必须幂等。
+  新 epoch 视为实例重启，旧 epoch 的迟到数据不得覆盖新 epoch 状态。
+- Collector 明确确认已接受的最大连续 sequence；遇到缺口、乱序或过期批次时返回稳定
+  结果码，不能默默双计数。
+- Reporter 使用有界内存队列和批量发送。达到上限时按配置合并计数或丢弃最旧批次，
+  不在请求协程中等待网络恢复；关闭时只在预设 deadline 内 best-effort flush。
+- 生产部署必须使用 mTLS、OAuth client credentials 或等价的实例身份认证，并将
+  instance identity 与租户 / 环境隔离绑定；仅本地开发可显式启用 loopback insecure 模式。
+- mTLS 证书重载和 OAuth credential renewal 由 transport 使用的 credential provider
+  负责；Reporter 不实现私有 renewal 状态机。rotation 期间若 transport 暂不可用，按
+  普通网络中断处理：有界退避、既定 overflow policy 与 dropped 计数，绝不阻塞请求路径。
 
-集群验收必须至少使用两个活动实例，并覆盖 server crash、网络分区、超时、
-恢复、重复请求和规则版本切换。单进程 mock 不能证明集群能力。
+未实现该协议前，产品只宣称 embedded per-process Dashboard。即使协议先完成，也不
+自动等同于已经交付独立聚合 Dashboard 或 Web UI。
+
+## 14. Cluster：全局准入控制面
+
+Cluster 是 1.0 后的独立能力。它解决的是跨进程的**全局 Flow 准入**：多个应用实例
+对同一 resource 申请共享额度或并发许可。它不把 Circuit Breaker、Degrade、Authority、
+SystemRule、规则分发或指标聚合伪装成全局一致状态。
+
+核心只拥有 `TokenService` Port 和其稳定值对象；`sentinel-cluster` 提供远程
+`TokenService` 实现。FlowSlot 只依赖该 Port，不知道网络、序列化、Token Server 或
+具体传输库。
+
+### 14.1 两种部署模式
+
+- **Token Server**：独立服务进程是某个资源的分配权威。多个 Sentinel Agent 的
+  `TokenClient` 向它同步申请和归还许可。
+- **Embedded Server**：Token Server 由一个经过显式配置的应用进程托管，但其他 Agent
+  仍通过同一远程协议访问它。它不是“每个 worker 都启动一个独立 Server”，也不允许
+  通过隐式服务发现猜测 owner。
+
+Embedded Server 的宿主由部署拓扑显式指定：要么是单 worker 的指定应用进程，要么是独立
+sidecar / Pod / service 进程。多 worker ASGI 进程中的 worker ordinal 不是可依赖的公开
+身份，初版**不**依据 `uvicorn --workers` 的“第 N 个 worker”选主，也不实现 leader election。
+当应用使用多个 worker 时，所有 worker 均是 Client，并连接到部署配置提供的唯一 endpoint；
+该 endpoint 必须对全部 Client 网络可达，`localhost` 只允许它们共享同一 network namespace
+时使用。Client 按正常 Token 协议的 deadline、认证与 `ClusterFailurePolicy` 感知健康，
+不经服务发现猜测或切换 owner。部署方必须保证同一资源只有一个 Server 权威；错误拓扑是
+配置错误，不由运行时隐式修复。
+
+两种模式共享同一 wire contract、认证、错误语义和验收套件；部署形态不能改变额度
+正确性。初版不把 Redis 作为 Cluster 的强制依赖。若未来使用 Redis 实现 Token Server
+的高可用状态，必须新增独立 ADR、backend Port、故障模型和真实 Redis 兼容性验收。
+
+### 14.2 Token 协议与所有权
+
+`Token` 是额度许可 / lease，不是 OAuth access token，也不是终端用户身份。业务代码
+只调用 Engine；只有 FlowSlot 通过 TokenService 申请许可。
+
+一次 acquire 的 wire request 至少含：协议版本、client request id、instance_id、
+startup epoch、resource key、permits、规则 version 和 deadline。response 至少含：
+grant / deny 决策、稳定拒绝原因、建议等待时间，以及放行时由 Server 生成的 opaque
+lease identity 与过期语义。release 必须带回原 lease identity、owner identity 和请求
+id；重复 acquire 或 release 必须幂等。
+
+因此 M6.3 实现前必须评审 1.0 预留 `Token` 值对象是否能承载 opaque lease identity。
+若不能，先按 ADR-SEN-017 以**可选 additive field + 安全默认值**扩展稳定 Port 和其契约
+测试，再实现任何远程 Client；不得删除或重命名既有字段、改变已有构造路径的语义，不能用
+进程内 map 或隐式全局变量补齐远程 release 所需的身份。
+
+Token Server 是租约有效期的时间权威。Client 不以本机墙上时钟判定远程额度，也不得
+因本机时钟漂移自行续约。owner restart 时 startup epoch 变化；Server 以 lease identity
+和 epoch fencing 拒绝来自过期 owner 的 release / renew，避免旧进程影响新进程额度。
+
+### 14.3 故障策略与可观测性
+
+集群配置必须使用公开 Enum 表示一种明确策略：`FAIL_CLOSED`、`FAIL_OPEN` 或
+`LOCAL_FALLBACK`。每个 resource / rule 在启用 Cluster 前必须选择其策略；没有默认的
+“悄悄放行”。
+
+- `FAIL_CLOSED`：Token Server 不可达时以 `REMOTE_UNAVAILABLE` 拒绝，保障不超发。
+- `FAIL_OPEN`：允许本地放行，但每次放行必须产生 `FAIL_OPEN` 决策和降级指标；此模式
+  不承诺全局额度不超发。
+- `LOCAL_FALLBACK`：使用显式配置的本地限额策略；它是可用性折中，不等同于共享全局
+  配额。
+
+Client 的重试受请求 deadline 约束，重试必须复用同一 request id；取消、超时、网络
+错误和 Server 拒绝必须映射为不同的稳定结果。不得把 Token Server 故障吞掉或改写为
+Authority / Circuit Block。
+
+### 14.4 Cluster 与其他控制面隔离
+
+- Nacos RuleSource 只改变未来规则快照，不直接修改已发出的 lease；规则版本
+  切换的旧 lease 如何耗尽或提前回收必须由 Token Server 明确处理并记录。
+- Agent Reporting 只报告事实，不能决定 token grant，也不能成为 Token Server 的依赖。
+- Dashboard 只能展示 Server 与 Reporter 已确认的数据；不把单实例内存或未确认上报
+  描述成全局真实状态。
+
+集群验收必须至少使用两个独立应用进程和真实网络路径，覆盖 Server crash、网络分区、
+客户端超时、恢复、重复请求、规则版本切换和 stale-owner fencing。严格“不超发”断言
+仅适用于 `FAIL_CLOSED`；`FAIL_OPEN` 场景必须断言降级事件完整可见，而非错误地断言
+全局容量不变。单进程 mock 不能证明集群能力。
 
 ## 15. 配置与兼容
 
@@ -1277,6 +1535,15 @@ Java 配置兼容不意味着：
 - Python 内部继续使用 thread 命名。
 - 两端在不同 worker/进程模型下拥有相同吞吐量。
 - 未实现的 Cluster/Dashboard 协议被视为兼容。
+
+### 15.4 Extension 协议版本策略
+
+Cluster Token、Agent Reporting 和 OpenSergo 控制面分别拥有独立 schema major/minor 版本线；
+它们不从 Python 主包的公开 API 版本推断兼容性。V1 major 一经发布不可破坏性修改；兼容
+修复或新增可选字段使用同一 major，并声明默认值、可选性和双方兼容矩阵。major 不匹配
+必须返回稳定协议错误并拒绝处理，不做猜测性降级。任何 V2+ 或双向规则写回等改变都必须
+先有独立 ADR、迁移说明和跨语言兼容验证；主包 1.0 API 锁定不替代 extension 的 schema
+治理。
 
 ## 16. 异常与拒绝契约
 
@@ -1413,9 +1680,9 @@ emit 不执行网络 I/O。需要远程发送的 Adapter 将事件放入自己�
 - ASGI 使用真实协议消息序列，不只依赖框架 TestClient。
 - HTTPX 使用受控下游服务验证流式响应和连接错误。
 - Dashboard 使用真实 ASGI 进程验证认证、更新和审计。
-- Nacos、Redis、Cluster 必须在对应真实或协议兼容服务上验证。
+- Nacos、Cluster 必须在对应真实或协议兼容服务上验证。
 
-Mock 只能证明本层编排，不能作为真实 Redis/Nacos、多进程或网络行为的验收证据。
+Mock 只能证明本层编排，不能作为真实 Nacos、多进程或网络行为的验收证据。
 
 ### 19.5 性能与容量
 
@@ -1535,19 +1802,37 @@ M1 建立基线，后续里程碑只能在批准阈值内回归。首次基线�
 - [ ] 完成中英文 Quick Start、规则手册、扩展开发和运维边界文档。
 - [ ] 完成 Python/OS matrix、isolated wheel、性能和 soak 门禁。
 - [ ] 完成 API review、CHANGELOG、迁移说明和 SBOM。
-- [ ] 发布 1.0.0。
+- [延后] PyPI 发布不属于 M5 或 M6 的退出条件；仅在所有已批准、未取消的后续
+  roadmap 任务和真实验收闭环后，才进入显式发布评审。
 
 退出条件：主包和已实现扩展达到公开 API 稳定承诺，所有未验证边界明确列出。
 
 ### M6+：集群与聚合控制面
 
-- [ ] Nacos Source。
-- [ ] Redis 可恢复 Source。
-- [ ] Token Server/Client。
-- [ ] 双实例故障和恢复验收。
-- [ ] Agent Reporting Protocol。
-- [ ] 聚合 Dashboard 和 Web UI。
-- [ ] WSGI/同步阻塞引擎可行性评估。
+- [ ] Nacos RuleSource（只接入配置管理，不做服务注册发现）。
+- [取消] Redis RuleSource（Redis 不是规则的持久化事实来源）。
+- [ ] Token Server / Client（全局 Flow 准入）。
+- [ ] 双实例真实网络故障和恢复验收。
+- [ ] Sentinel Agent Reporting Protocol（异步遥测，不参与准入）。
+- [ ] 聚合 Dashboard 和 Web UI（独立范围，需单独 ADR）。
+- [ ] WSGI / 同步阻塞引擎可行性评估。
+
+### M7：OpenSergo 可选控制面兼容
+
+- [ ] 交付独立 `atlas-richie-sentinel-source-opensergo` wheel；核心运行时不依赖
+  OpenSergo、Kubernetes 或控制面 SDK。
+- [ ] 实现 OpenSergo Control Plane / CRD 到本地完整 `RuleSnapshot` 的单向
+  `OpenSergoRuleSource` 和 codec；不做双向同步或规则写回。
+- [ ] 为每项规则语义发布 `NATIVE`、`TRANSLATED`、`UNSUPPORTED` 或
+  `EXTENSION_REQUIRED` 能力矩阵；不安全或损失性的映射拒绝整个候选快照并保持
+  last-known-good。
+- [ ] 使用最小权限只读身份完成实际控制面订阅、更新、故障恢复和关闭验收；主包与
+  M6 的 Token / Reporting 协议保持独立。
+- [ ] 全部已批准、未取消的 M0–M7 工程与真实验收任务完成后，进行 1.0.0 发布资格评审；
+  评审通过不等于自动执行 PyPI 发布，实际发布必须由维护者显式触发。
+
+退出条件：OpenSergo 兼容性有可复现的真实控制面证据、版本矩阵和拒绝行为证据，且未使
+核心模型、依赖图或既有 RuleSource 生命周期依赖 OpenSergo。
 
 ## 22. 版本与发布策略
 
@@ -1617,6 +1902,9 @@ M1 建立基线，后续里程碑只能在批准阈值内回归。首次基线�
 | ADR-SEN-013 | 嵌套资源使用 contextvars 维护调用路径，并提供后台任务 detach | Accepted |
 | ADR-SEN-014 | SystemRule 区分硬阈值与 Python-aware adaptive capacity | Accepted |
 | ADR-SEN-015 | SystemRule 是 Engine 入口级规则，不伪装成 ResourceRule | Accepted |
+| ADR-SEN-016 | OpenSergo 仅作为可选控制面兼容层；核心采用本地 canonical RuleSnapshot 和 Engine 语义 | Accepted |
+| ADR-SEN-017 | Token 值对象若需远程 lease 字段，只能以可选 additive field 和安全默认值向后兼容扩展 | Accepted |
+| ADR-SEN-018 | 聚合 Dashboard 是独立产品范围；只有用户批准后才可进入实施和发行计划 | Proposed |
 
 后续实现如果需要改变 Accepted 决策，必须先更新本表、说明原因、迁移影响和验证计划，
 不能在代码中静默偏离设计。
@@ -1631,6 +1919,9 @@ M1 建立基线，后续里程碑只能在批准阈值内回归。首次基线�
 - Alibaba Sentinel 系统自适应保护：https://sentinelguard.io/zh-cn/docs/system-adaptive-protection.html
 - Alibaba Sentinel 热点参数：https://sentinelguard.io/zh-cn/docs/parameter-flow-control.html
 - ASGI specification：https://asgi.readthedocs.io/en/latest/specs/main.html
+- OpenSergo 简介：https://opensergo.io/zh-cn/docs/what-is-opensergo/intro/
+- OpenSergo FAQ：https://opensergo.io/zh-cn/docs/what-is-opensergo/faq/
+- OpenSergo Control Plane：https://opensergo.io/docs/quick-start/opensergo-control-plane/
 - HTTPX custom transports：https://www.python-httpx.org/advanced/transports/
 - Python contextvars：https://docs.python.org/3/library/contextvars.html
 

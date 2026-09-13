@@ -1,4 +1,4 @@
-# R-SENTINEL Implementation Plan — M0..M6+ 详细分解
+# R-SENTINEL Implementation Plan — M0..M7 详细分解
 
 > **Status**: Working planning doc — 严格对位 `DESIGN.md` §21 顺序。
 > **Purpose**: 把 §21 的 checkbox 展开到 actionable 粒度(Deliverable / Exit Criteria / Test ID / ADR / Deps),不引入新子项,不改顺序。
@@ -707,11 +707,12 @@
     基类 + `__test__ = False` 不被自动 collect)
   - 覆盖:首次迭代成功/失败、迭代结束 / 监听退出 / 重连、指数退避 + jitter、消费速度慢于更新速度的合并/背压、stale 状态、aclose 幂等、凭证脱敏
   - **M3 阶段只跑 File Source 接入同一套 contract**(M3.2 交付)
-  - **Nacos / Redis 在 M6+ 才加入**同一套 contract suite(M6.1 / M6.2 任务里跑)
+  - **Nacos 在 M6+ 才加入**同一套 contract suite(M6.1 任务里跑);Redis RuleSource
+    已在 M6.2 取消,因为 Redis 不是规则的持久化事实来源
 - **Exit Criteria**:
   - Contract test 包含「协议满足性」「错误恢复」「资源清理」三组 — ✅ 25/25 通过
   - File Source(M3.2)通过 contract test — ✅ 18/18 通过(含额外 7 个)
-  - M3 退出时 Nacos / Redis Source 还未实现
+  - M3 退出时 Nacos Source 还未实现;Redis RuleSource 已取消
 - **Test ID**: SEN-RULE-001
 - **ADR**: ADR-SEN-007
 - **Deps**: M1.6
@@ -984,7 +985,7 @@
   - 写操作要求显式配置认证 + 授权(mTLS / OAuth / API key,任一)
   - 所有 PUT 请求记录 principal / source / old_version / new_version / checksum / 结果
   - 不记录规则中敏感扩展字段
-  - 健康检查不泄露文件路径 / Redis/Nacos 地址 / 凭证
+  - 健康检查不泄露文件路径 / Nacos 地址 / 凭证
 - **Exit Criteria**:
   - 无认证 → 401(写操作)
   - 错误认证 → 403
@@ -1009,7 +1010,7 @@
 - **Exit Criteria**:
   - 4 个文档文件 / 总 1.0 万+ 行 / 中英双语 — ✅
   - 全部 M0-M5 已实现功能覆盖 — ✅
-  - 明确列出未实现边界(Cluster 1.x / Nacos 1.x / Redis 1.x / observability 1.x) — ✅
+  - 明确列出未实现边界(Cluster 1.x / Nacos 1.x / observability 1.x) — ✅
   - 4 文档每篇 ≥ 3 页(实际平均 250+ 行) — ✅
 - **Test ID**: —
 - **ADR**: 全部
@@ -1026,7 +1027,8 @@
 - **Test ID**: SEN-MATRIX-001
   - CI matrix:Python 3.12 / 3.13 / 3.14 × Linux / macOS
   - **1.0 只发布 5 个 wheel**:main + asgi + httpx + source-file + dashboard
-    - Nacos / Redis / Cluster / observability **不参与 1.0**,留 1.x 评估
+    - Nacos / Cluster / observability **不参与 1.0**,留 1.x 评估；Redis RuleSource
+      已取消,不作为候选扩展
   - 5 个 wheel 干净 venv install + import + smoke test
   - 性能基线报告(p50/p95/p99/CPU/RSS/alloc/GC,5 种场景)
   - 10 分钟 load + spike + 1 小时 soak 数据
@@ -1061,22 +1063,23 @@
 - **Test ID**: SEN-API-001
 - **Deps**: M5.4
 
-### M5.6 → 移到 M6.8(M6 末位,见 M6.8)
+### M5.6 → 发布资格评审移到 M7.6（不自动发布）
 
-> **变更**(2026-09-13 user 决定):1.0 PyPI publish **不**在 M5 闭环
-> 触发。改为:**M6 所有任务全部闭环 + 实际使用验证过以后**再发布。
+> **变更**(2026-09-13 user 决定):1.0 PyPI publish **不**在 M5 闭环触发。此前曾
+> 移到 M6.8；现进一步延后为：**所有已批准、未取消的 M0–M7 任务全部闭环 +
+> 真实使用验证完成后**，才允许进入发布资格评审。
 > 原因:5 个 wheel 已就绪但**没在真实业务里跑过**就发 1.0,违反
-> DESIGN.md §1.0 release gate 的 "实际使用" 约束。M5.6 重命名为
-> M6.8,作为 M6 最后一个任务。
+> DESIGN.md §1.0 release gate 的 "实际使用" 约束。评审通过也**不等于自动执行**
+> `uv publish`；实际外部发布仍需维护者显式触发。
 >
-> 见 `M6.8 发布 1.0.0(5 个 wheel,M5 已闭环)`。
+> 见 `M7.6 评审是否发布 1.0.0（M0–M7 闭环后）`。
 
 ### M5 Exit [x] (M5.5 退出标准)
 - **Exit Criteria**(§21 + §24,以 M5.5 为 gate):
   - 主包和已实现扩展达到公开 API 稳定承诺 — ✅ M5.5 API review 通过
   - 所有未验证边界明确列出 — ✅ 5 wheel matrix 报告 + API review 锁定 11 项不变量
   - §24 1.0 Definition of Done 全部满足 — ✅
-  - **不**要求 M5.6 publish 完成(M5.6 已挪到 M6.8,见上)
+  - **不**要求 M5.6 publish 完成(M5.6 已挪到 M7.6 发布资格评审,见上)
   - **不**要求 M6+ 任何任务完成(M6+ 是 1.x 路线,见 M6+ 章节)
 - **背景**:M5 内部的"实现 / 测试 / 文档 / 验收 / 锁定"已完整;
   真正的"发版"决策放到 M6 之后。1.0 release gate 不只看代码,还看
@@ -1086,103 +1089,450 @@
 
 ## M6+：集群与聚合控制面
 
-### M6.1 [ ] Nacos Source
-- **Deliverable**: `components/sentinel/sentinel-source-nacos/` 实际实现
-- **Exit Criteria**: 跑 M3.1 contract test + 真实 Nacos 服务器
-- **Test ID**: SEN-RULE-001(part:nacos)
-- **ADR**: ADR-SEN-007
-- **Deps**: M3.1
+> **M6 统一边界**：本阶段有三条互不替代的链路。Nacos 是异步的**规则快照来源**；
+> Token Client / Server 是同步的**全局 Flow 准入**；Agent Reporting 是异步的
+> **遥测事实流**。任何任务都不得让主包导入 Nacos 或网络 SDK，也不得混合三条链路的
+> 凭证、连接或后台任务。
+>
+> **模式与依赖门禁**：远程 Source 是 `RuleSource` 的 Adapter；Token Client 是
+> `TokenService` 的远程 Proxy，故障模式是显式 Strategy；Reporting 是可丢失、可重传的
+> Observer 事实流。不得用模块级 singleton、服务定位器或跨包具体实现绕过这些边界。
 
-### M6.2 [ ] Redis 可恢复 Source
-- **Deliverable**: `components/sentinel/sentinel-source-redis/` 实际实现 + key 存储 + pub/sub 通知
-- **Exit Criteria**: pub/sub 不能保证消息补偿,选 key+stream 二选一
-- **Test ID**: SEN-RULE-001(part:redis)
-- **ADR**: ADR-SEN-007
-- **Deps**: M3.1
+### M6.1 [ ] Nacos RuleSource（只使用配置管理）
+- **目标**：交付 `components/sentinel/sentinel-source-nacos/`，让已有 Nacos
+  用户能够把规范规则快照动态下发给 Sentinel；不把 Nacos 变成 Sentinel 的必需基础设施。
+- **明确不做**：不使用 Naming / Service Discovery API，不自动注册应用实例，不发现或
+  调用业务服务，不替主包管理 Nacos client。
+- **子任务**：
+  - [ ] M6.1.0 补齐主包私有 `source._supervisor.RuleSourceSupervisor` 的多来源仲裁：只由
+    Supervisor 持有私有 `_RuleSourceBinding(source_id, priority, failover_after)`，并将最高
+    优先级的 ready `SnapshotRuleSource` 作为唯一 active Source。每个 SnapshotRuleSource
+    只缓存一个最近验证成功的完整快照；active Source stale 后才按显式 failover window
+    切换，并在内部产生 `RuleSourceActivation`(私有 C 层 frozen dataclass)。
+    Engine / Repository / Source 不得理解 priority，也不得按规则拼接多个 Source；
+    M6.1 阶段**不**冻结跨语言事件名，跨扩展可观测事件名与 wire schema 由 M6.5.7
+    任务（Agent Reporting 事件 envelope）冻结后确定。
+  - [ ] M6.1.0a **不迁移** 1.0 形态: `LegacyRuleSource` 路径保持原行为,
+    **不**经 Supervisor, **不**做 shim 包装。`SnapshotRuleSource` 是新契约,
+    `assemble_sources` 只接受它; `install_legacy_source` 接受 `LegacyRuleSource`
+    (含 `FileRuleSource` 1.0 实现), 等同 1.0 行为, 走 `repository.apply_snapshot`
+    直连。两入口互斥,违反抛 `SentinelConfigurationError("multimode_conflict")`。
+    `RuleSource` 1.0 公共符号保留为 `LegacyRuleSource` 的 alias (1.x 全程
+    保留可用, 不删)。Nacos / OpenSergo 等新 extension 必须按 `SnapshotRuleSource`
+    实现; 任何 1.0 形态 Source 都不允许绕过 Supervisor 直接写入 Repository
+    (此约束只针对**新** extension, 不针对 1.0 已有 `LegacyRuleSource` 实现)。
+  - [ ] M6.1.0b 先冻结五项 API 决定并写入
+    `docs/R-SENTINEL-M6.1.0b-api-delta.md`：(1) Supervisor、binding 与 Python
+    activation event (`RuleSourceActivation`) 均为私有, extension 不允许 import;
+    (2) 跨扩展可观测事件名由 M6.5.7 冻结后经 Agent Reporting 通道消费, M6.1 阶段
+    **不**预设任何字符串常量, 也**不**冻结任何跨语言 wire schema;
+    (3) 多来源只有一个经审查的 Engine 级装配入口, 入口接收公开 immutable
+    assembly DTO (`RuleSourceAssembly`), 不能接收私有 `_RuleSourceBinding`;
+    (4) `RuleRepository` 的创建、注入和关闭所有权必须明确, 禁止 `repository=None`
+    与 `Optional[RuleRepository]`; (5) 任何"为用户方便"的可选参数必须由 ADR
+    显式签字, 默认拒绝行为不明的可选参数 (default-deny 原则, 范围收窄为影响
+    所有权 / 权限 / 故障策略 / 资源上限 / 跨进程语义)。随后在同文档列出
+    新增 / 修改 / 废弃 / 删除的所有公开符号、兼容 shim、错误语义和语义化版本影响,
+    并附签字栏 (用户 / B 契约 / C 实现 / 测试 / 文档 5 个 owner 全部勾上才可
+    进入 M6.1.0c)。
+  - [ ] M6.1.0c 在 API delta 获批准后编写 `docs/MIGRATION-M6.md`：记录单 Source 旧
+    `start(repository)` 到新装配路径的迁移、弃用期限、兼容 shim 边界和不可自动迁移的
+    场景；未完成该文档不得实现或公布新的 Engine 装配入口。
+  - [ ] M6.1.0d 实现顺序固定为：先完成私有 Supervisor + Source 迁移及其 contract /
+    migration tests；再以 `tests/test_sen_assemble_sources.py` 实现已批准的公开装配入口
+    契约测试和代码；最后更新 `R-SENTINEL-API-REVIEW.md` 的 M6.1.0b delta。不得先写一个
+    依赖未冻结签名的 failing public test，或让私有实现名称进入公开 API。
+  - [ ] M6.1.1 建立独立 wheel 与 `atlas_richie.sentinel.sources.nacos` package；仅该
+    wheel 声明 Nacos SDK 依赖，主包、ASGI、HTTPX 和 Dashboard 的依赖图不变。
+  - [ ] M6.1.2 定义不可变 `NacosRuleSourceConfig`：namespace、group、data identifier、
+    认证 / TLS、连接超时、重连退避与 source_id。配置字段、状态和错误使用 Enum /
+    值对象，不向调用方泄漏 SDK client 或 callback 类型。
+  - [ ] M6.1.3 实现“首次读取完整配置 → codec / schema / 业务校验 → 发布完整
+    RuleSnapshot → 订阅变更”的生命周期。首次同步未成功时 Source 不得宣称 ready。
+  - [ ] M6.1.4 实现断线、鉴权失败、配置删除、空配置、重复回调、乱序回调和坏规则的
+    区分处理；保持 last-known-good，报告 stale / last-success / failure reason，并按
+    有界指数退避重连。
+  - [ ] M6.1.5 显式管理订阅和 `aclose()`：关闭必须取消 listener、停止重连任务、关闭
+    SDK 连接且保持幂等；日志 / 指标不得暴露 endpoint、用户名、token 或规则敏感字段。
+  - [ ] M6.1.6 为该实现接入 M3.1 `RuleSource` contract suite，并补 Nacos 专有的
+    lifecycle / security tests。
+- **真实验收**：使用真实或协议兼容 Nacos 服务完成首次加载、一次合法更新、一次无效
+  更新、连接中断并恢复、Source 关闭五种场景。无效更新和断线期间旧规则仍生效；不能用
+  mock callback 或 SDK fake 宣称完成。
+- **Exit Criteria**：contract test 全绿；真实服务五场景有留档；`rg` 证明主包未导入
+  Nacos；被动检查 wheel 的干净环境安装与卸载不影响主包；M6.1.0a 的迁移与
+  single-source 兼容证据、M6.1.0b 的 API review delta 均归档。
+- **Test ID**: SEN-RULE-001(part:nacos), SEN-EXTENSION-ISOLATION-001
+- **ADR**: ADR-SEN-007, ADR-SEN-011
+- **Deps**: M3.1, M5.5
 
-### M6.3 [ ] Token Server/Client
-- **Deliverable**:
-  - `components/sentinel/sentinel-cluster/` 实际实现
-  - 1.0 预留的 `TokenService` Port 填入实现
-  - 两种模式:Token Server + Embedded Server
-- **Exit Criteria**: 单进程启动后,FlowSlot 走 token service 路径
-- **Test ID**: SEN-CLUSTER-001
-- **ADR**: ADR-SEN-011
-- **Deps**: M5.6(主包先稳定)
+### M6.2 [取消] Redis RuleSource
+- **取消决定**：Redis 不是 Sentinel 规则的持久化事实来源，不能作为独立
+  `RuleSource` 发布，也不创建 `sentinel-source-redis` wheel。
+- **原因**：Redis 允许关闭持久化；RDB 是时间点快照；即使采用 AOF 和复制，故障切换
+  仍存在已确认写入丢失窗口。规则被回退、丢失或以旧主数据覆盖时，last-known-good
+  只能保护已运行的进程，无法让新实例可靠地恢复应生效的规则版本。
+- **后续边界**：若未来有“Redis 通知加速 / 规则缓存”需求，Redis 只能消费来自 Nacos
+  或其他持久化 Source 的版本化快照，启动与故障恢复必须回到该权威 Source 校验；它
+  不是 RuleSource，也不进入 M3.1 contract suite。任何 Redis Cluster backend 同样
+  需要独立 ADR，不能借本任务恢复。
+- **Exit Criteria**：设计、发行包表、依赖图和 1.0 发布清单均不再声明 Redis RuleSource；
+  目录中不得新增 `sentinel-source-redis` 实现或 Redis 规则源依赖。
 
-### M6.4 [ ] 双实例故障和恢复验收
-- **Deliverable**:
-  - 2 个真实进程互发 token 同步
-  - 覆盖:crash / 网络分区 / 超时 / 恢复 / 重复请求 / 规则版本切换
-  - stale owner fencing 测试
-- **Exit Criteria**:
-  - 6 种场景全过
-  - 容量不超发 / 不欠发
-- **Test ID**: SEN-CLUSTER-001
+### M6.3 [ ] Token Server / Client（全局 Flow 准入）
+- **目标**：实现 `components/sentinel/sentinel-cluster/` 的分布式 `TokenService`，使
+  多个 SentinelEngine 能为同一 resource 申请共享额度或并发 lease。普通业务代码仍只
+  调用 Engine；它不直接调用 Token Server，也不处理网络协议。
+- **范围边界**：只协调全局 Flow 准入；不使 Circuit Breaker、Degrade、Authority、
+  SystemRule、规则源和指标聚合变成全局一致对象。Cluster wheel 不强依赖 Redis，
+  不从 RuleSource 取得其连接或凭证。
+- **子任务**：
+  - [ ] M6.3.1 先完成 `docs/protocols/CLUSTER_TOKEN_PROTOCOL.md`：冻结 V1 的消息
+    schema、基线传输、枚举、版本协商、认证、deadline、错误码、幂等、取消、超时和
+    兼容规则。schema 使用跨语言字段和稳定值，而不是 Python 对象序列化。
+  - [ ] M6.3.2 评审 `ports/token.py` 的预留 API。远程 release 必须携带 Server 生成的
+    opaque lease identity 与 owner identity；若现有 `Token` 无法表达，先按
+    ADR-SEN-017 补齐 1.0 兼容路径：仅增加有安全默认值的 optional field，不删除 / 改名
+    既有字段，不改变既有构造和 LocalTokenService 语义，并补公开 API 与契约测试，随后
+    才可实现 Client。禁止使用进程内 map 偷渡 remote lease 状态。
+  - [ ] M6.3.3 实现 Token Server 的资源分配状态机和唯一时间权威：acquire / release /
+    lease expiry / owner epoch fencing / 规则版本切换均有状态表。Server 决定 lease
+    是否有效，Client 不能按本机墙上时钟自行续约或回收远程配额。
+  - [ ] M6.3.4 实现 `RemoteTokenService`：它是 `TokenService` 的远程 Proxy，负责
+    协议映射、deadline、取消、认证和错误翻译；FlowSlot 及主包永不导入传输类型。
+  - [ ] M6.3.5 实现独立 Token Server 与 Embedded Server 两种启动形态。两者必须使用
+    同一 wire contract；Embedded Server 只能由部署显式指定的单 worker 宿主或独立
+    sidecar / service 进程持有。多 worker 应用的所有 worker 都是 Client，使用配置的、
+    对全部 Client 可达的 endpoint；不得按 Uvicorn worker ordinal 选主、隐式自举、
+    leader election 或服务发现猜测 owner。
+  - [ ] M6.3.6 定义 `ClusterFailurePolicy` Enum：`FAIL_CLOSED`、`FAIL_OPEN`、
+    `LOCAL_FALLBACK`。每个集群资源必须显式选择一项；重试受 deadline 约束且重用
+    request id。禁止默认静默放行。
+  - [ ] M6.3.7 建立本地 / 远程 TokenService 共用 contract suite，覆盖 grant、deny、
+    重复 acquire、重复 release、取消、过期 lease、fencing、各故障策略与资源释放。
+- **验收不变量**：
+  - `FAIL_CLOSED` 的实际 grant 总量不得超出 Server 认定的配额。
+  - `FAIL_OPEN` 不承诺不超发，但每次放行都必须产生可查询的 `FAIL_OPEN` 决策与指标。
+  - `LOCAL_FALLBACK` 的本地策略、上限和恢复切换必须由配置显式给出，不能伪装为
+    共享配额。
+- **Exit Criteria**：两种部署形态通过同一 contract suite；单进程真实网络 smoke 可由
+  FlowSlot 走到 RemoteTokenService；wire schema 与 Python API 分别有版本兼容测试；
+  主包零 Cluster / Redis 依赖。
+- **Test ID**: SEN-CLUSTER-001(part:protocol), SEN-TOKEN-001
+- **ADR**: ADR-SEN-011, ADR-SEN-017；Redis HA backend 另起 ADR，不能在本任务中隐式引入
+- **Deps**: M5.5
+
+### M6.4 [ ] 双实例真实网络故障与恢复验收
+- **目标**：证明 M6.3 的全局准入在真实进程、真实网络和受控故障下符合声明，而不是
+  验证同进程对象调用。
+- **拓扑**：至少一个 Token Server、两个独立应用进程（不同 instance_id 与 startup
+  epoch）、受控规则源和可注入网络故障的测试环境。测试过程必须保留协议日志、Server
+  指标、两侧决策及最终 lease 状态，但不能记录凭证。
+- **子任务**：
+  - [ ] M6.4.1 建立可重复启动 / 停止的双 Agent 验收夹具；每个 Agent 以真实
+    RemoteTokenService 请求同一 resource。
+  - [ ] M6.4.2 `FAIL_CLOSED` 下并发争抢固定额度：验证跨两个进程的累计 grant 不超出
+    Server 额度，release / expiry 后额度只恢复一次。
+  - [ ] M6.4.3 Server crash 与恢复：验证既有 lease 的 TTL 语义、客户端故障策略、
+    Server 恢复后重连和幂等请求恢复。
+  - [ ] M6.4.4 网络分区与客户端 deadline：分别验证请求未送达、送达但响应丢失、
+    cancel、超时后的同 request id 重试；不能双重扣减或双重归还。
+  - [ ] M6.4.5 owner restart / stale-owner fencing：旧 epoch 的迟到 release 或 renew
+    不能影响新 epoch 已持有的 lease。
+  - [ ] M6.4.6 规则 version 切换：明确旧 lease 继续、提前回收或拒绝续约的策略，并
+    验证 Server / Client 一致执行且有审计事件。
+  - [ ] M6.4.7 `FAIL_OPEN` 与 `LOCAL_FALLBACK`：验证其降级指标、恢复切换、审计和
+    风险说明；不得错误断言此类模式仍有严格全局不超发保证。
+- **Exit Criteria**：以上七类场景均通过；`FAIL_CLOSED` 有容量不超发证据；两种可用性
+  策略有预期降级证据；不会将“容量不欠发”作为未定义的指标，改为以每种策略的明确
+  lease / 恢复语义验收。
+- **Test ID**: SEN-CLUSTER-001(part:multi-process)
 - **ADR**: ADR-SEN-011
 - **Deps**: M6.3
 
-### M6.5 [ ] Agent Reporting Protocol
-- **Deliverable**:
-  - 协议:instance_id + 启动纪元 + 指标序号 + 重复/乱序/离线处理 + 频率 + 背压 + mTLS
-  - client(报告方)+ server(聚合方)SDK
-- **Exit Criteria**:
-  - 协议 spec 文档化
-  - 跨进程指标聚合 demo
-- **Test ID**: SEN-CLUSTER-001
-- **ADR**: —
-- **Deps**: M6.3
+### M6.5 [ ] Sentinel Agent Reporting Protocol（异步遥测）
+- **目标**：定义并实现跨语言、版本化的 Sentinel 遥测上报协议和最小 client / collector
+  SDK，使后续聚合控制面能获得多进程指标；它不依赖 Token Server 正常工作，也不参与
+  每次请求的准入决策。
+- **数据边界**：只允许 Sentinel 运行态指标与事件：pass / block / RT / failure
+  classification / circuit state / active `source_id` + rule version / reporter dropped count。
+  严禁业务请求和响应内容、用户身份、认证材料、任意日志或完整规则正文；错误事件仅允许
+  stable error class + 脱敏 reason(≤64 bytes)，禁止原始异常消息、traceback 和 frame locals。
+- **子任务**：
+  - [ ] M6.5.1 先完成 `docs/protocols/AGENT_REPORTING_PROTOCOL.md`：冻结 V1 schema、
+    transport 基线、版本协商、实例身份、批次确认、错误码、认证和跨语言兼容策略；major
+    mismatch 返回稳定协议错误，禁止静默忽略字段或猜测降级解析。Python `Protocol`
+    不是该网络协议的替代物。
+  - [ ] M6.5.2 定义 Reporter 批次：protocol version、instance_id、startup epoch、
+    连续 sequence、capture time、当前 active `source_id` + rule snapshot version、受限
+    指标点、事件和 dropped count；Source 切换必须上报稳定事件，inactive Source version
+    不进入协议。定义 Collector ack 的最大连续 sequence / 缺口 / 过期语义。
+  - [ ] M6.5.3 实现 Reporter：有界队列、批量、deadline、backoff、断线重连、显式
+    overflow policy、关闭时限内 best-effort flush。网络缓慢或 collector 不可达不得
+    阻塞 Engine / ASGI / HTTPX 请求路径。
+  - [ ] M6.5.4 实现 Collector：以 `(instance_id, startup_epoch, sequence)` 去重；旧
+    epoch 的迟到数据不得覆盖新实例状态；重复批次必须幂等，乱序和缺口返回稳定结果。
+  - [ ] M6.5.5 实现实例认证：生产使用 mTLS、OAuth client credentials 或等价机制，
+    并校验 tenant / environment / instance identity 绑定；insecure 仅限显式 loopback
+    开发配置。凭证绝不进入事件、日志或 Dashboard 响应。credential provider / transport
+    负责 token renewal 与证书重载；rotation 不可用时按网络中断走有界退避和 overflow policy，
+    Reporter 不实现私有 renewal 状态机。
+  - [ ] M6.5.6 实施 resource / label cardinality 配额与 dropped 统计；验证高基数输入、
+    queue 满、collector 失败、重传、乱序、实例重启和 graceful shutdown。
+- **真实验收**：两个独立 Agent 进程向真实 Collector 上报；注入重复、乱序、断线和
+  重启后，聚合结果不双计数，Reporter 也未阻塞受保护请求。验收 demo 只证明协议和
+  collector，不宣称已交付聚合 Dashboard / Web UI。
+- **Exit Criteria**：协议 spec、schema 兼容测试、client / collector contract suite 与
+  跨进程 demo 全部归档；无业务敏感字段与无界缓存；Token Server 关闭时 Reporting
+  仍能按自身合同工作，反之亦然。
+- **Test ID**: SEN-REPORTING-001
+- **ADR**: ADR-SEN-011；聚合 Dashboard 另行 ADR
+- **Deps**: M5.5（不依赖 M6.3；二者仅共享实例身份约定）
+
+### M6.5.7 [ ] 冻结 Agent Reporting 事件 envelope 与子协议挂载
+- **目标**：冻结 Reporter 通道的**事件 envelope** schema, 使 M6.1 内部
+  `RuleSourceActivation` fact 与 M6.5 健康 / 指标事件能够在同一父协议下
+  表达；M6.1 阶段**不**冻结 envelope, 推迟到本任务。
+- **明确范围**：
+  - 事件 envelope schema: `protocol_version` / `event_kind` (字符串常量) /
+    `event_payload` (per-kind schema) / `instance_id` / `startup_epoch` /
+    `sequence` / **`captured_at`** (Reporter 本地 UTC, 仅诊断) /
+    **`received_at`** (Collector 写入, 服务端权威聚合时间)
+  - **两个时间字段必须分开**：`captured_at` 由 Reporter 进程本地
+    clock 写入 (用于诊断乱序 / 缺口), **不**做服务端权威; `received_at`
+    由 Collector 写入, 是聚合 / 排序 / 跨进程比较的唯一权威字段。
+    二者**不**能合成单一 `capture_time` 字段 (server-authoritative 与
+    本地 UTC 互相矛盾, 跨语言无法解释)。
+  - `event_kind` 枚举: **M6.5.7 签字前**可通过 ADR 调整草案; **签字后**
+    V1 冻结, 新增枚举值必须走 V2+ 独立 ADR, 不得在 1.x 末擅自增项。
+    - `RULE_SOURCE_ACTIVATED` — 来自 M6.1 内部 fact
+    - `RULE_SOURCE_STALE` — health event
+    - `RULE_SOURCE_DEGRADED` — health event
+    - `RULE_APPLIED` / `RULE_BLOCKED` / `RULE_FAILED` — 业务执行事件
+  - **`event_kind` 枚举: M6.5.7 签字前**可由 ADR 调整草案, **签字后** V1
+    冻结, 新增枚举值必须走 V2+ 独立 ADR, 不得在 1.x 末擅自增项。**禁止**
+    子任务 (M6.5.1 / M6.5.2 / M6.5.3 / M6.5.6) 在 M6.5.7 签字后直接向
+    V1 枚举塞项。
+  - health event 与 source-switch event **不**混用同一 kind: 切源
+    走 `RULE_SOURCE_ACTIVATED`, 不切源但状态变化走 health 类
+  - **时间字段只保留 `captured_at` + `received_at`** (M6.5.7 v3 决策):
+    - `captured_at` 由 Reporter 端**进程本地 UTC** 写入, 仅供诊断
+      (乱序 / 缺口), **不**做服务端权威
+    - `received_at` 由 Collector 写入, 是聚合 / 排序 / 跨进程比较的
+      **唯一**权威字段
+    - **不**存在单一 `capture_time` 字段 (server-authoritative 与
+      本地 UTC 互相矛盾, 跨语言无法解释)
+  - `event_payload` 必须是 per-kind frozen dataclass, **不**用宽
+    `dict[str, Any]`
+  - V1 不可破坏性修改: 修复或加 optional field 走同 major + 兼容性矩阵;
+    V2+ 独立 ADR
+- **明确不做**：
+  - 不定义 transport (gRPC / HTTP / 自定义) — M6.5.1 / M6.5.2 决定
+  - 不做"通用事件总线"抽象, 只挂 Reporter 自己的格式
+  - 不在 Python 内部 `dataclass` 里硬塞跨语言 wire 字段
+- **依赖**：M6.1.0b 签字 (冻结内部 fact shape) + M6.5.1 父协议 envelope
+  路径; M6.5.3 / M6.5.4 / M6.5.6 子任务**必须**在 envelope 冻结后才能
+  把本地事件转到 Reporter。
+- **Test ID**: SEN-REPORTING-001(part:envelope)
+- **ADR**: ADR-SEN-011 (M6.5 父协议) + 新独立 ADR (M6.5.7 envelope 冻结)
+- **Deps**: M5.5, M6.1.0b (签字)
 
 ### M6.6 [ ] 聚合 Dashboard 和 Web UI(1.x 评估,不在 M6 默认范围)
 - **背景**: `sentinel-dashboard-aggregator` 是新发行包,DESIGN.md 没批准。**从 M6 默认范围中删除**。若要纳入 M6,必须先:
-  - 补 ADR(M6 范围内需要用户签字)
+  - 将 ADR-SEN-018 从 Proposed 变为 Accepted（需要用户签字）
   - 更新 DESIGN.md §3.1 发行包表加一行
-  - 在 §25 决策记录中加 ADR-016
+  - 在 §25 决策记录中新增独立 ADR（不得复用 OpenSergo 的 ADR-SEN-016）
 - **Deliverable**:**默认无**(M6 退出不要求)
 - **推迟到 1.x**(`M5.4.1` 候选任务,需用户单独批准)
 - **Test ID**: —
-- **ADR**: 待用户签字才存在
+- **ADR**: ADR-SEN-018（Proposed；用户签字后才可实施）
 - **Deps**: M6.5(协议)
 
 ### M6.7 [ ] WSGI/同步阻塞引擎可行性评估
 - **Deliverable**:
-  - 调研报告(同步 API、asyncio.run、threading 风险)
-  - 决策:1.x 是否做?2.0 怎么做?
+  - 调研报告：同步 API、已有 event loop 中 `asyncio.run()` 的非法性、线程 / contextvars
+    传播、取消、连接资源释放、fork / worker 模型和性能风险
+  - 对 Django / Flask / WSGI、同步 HTTP 客户端、ASGI bridge 三种部署方式分别给出
+    “支持 / 不支持 / 需新引擎”的结论
+  - 决策：1.x 是否做；若做，是独立同步 Engine 还是有限 Adapter；2.0 是否存在
+    破坏性 API 影响
+- **硬约束**：不得以在请求路径中反复 `asyncio.run()`、隐藏线程池或复用 asyncio
+  Engine 的未定义跨线程行为来伪造同步支持。若不能满足 EntryLease、规则状态、
+  contextvars 和取消合同，结论必须是暂不支持。
 - **Exit Criteria**:
-  - 报告归档
-  - 明确决策 + 后续 milestone
+  - 报告归档并列出可复现的最小实验
+  - 明确决策 + 后续 milestone；没有实现时不得创建空的 WSGI wheel
+  - 决策矩阵：只有 EntryLease / 状态 / contextvars / 取消 / 资源释放全部满足且相对
+    asyncio 基线的受保护路径 p99 开销 ≤5% 时，才可标记“支持”；任一合同违反或开销
+    >20% 时标记“不支持”；其余情形标记“需新引擎 / 后续 ADR”，不得借模糊结论发布
+    同步 Adapter。
 - **Test ID**: —
 - **ADR**: —
-- **Deps**: M5.6
+- **Deps**: M5.5
 
-### M6.8 [ ] 发布 1.0.0(原 M5.6,5 个 wheel,实际使用验证后)
-- **变更原因**(2026-09-13 user 决定):
-  原 M5.6 是"实现完成后立即 publish"。User 决定改成"**M6 所有任务
-  闭环 + 实际使用验证**后再 publish"。原因:DESIGN.md §1.0 release
-  gate 的"实际使用"约束 — 5 个 wheel 实现完成不等于"经过真实业务
-  验证过",过早发版风险高。
-- **Deliverable**:
-  - 5 个 wheel 发到 PyPI:
-    - `atlas-richie-sentinel`(主)
-    - `atlas-richie-sentinel-adapter-asgi`
-    - `atlas-richie-sentinel-adapter-httpx`
-    - `atlas-richie-sentinel-source-file`
-    - `atlas-richie-sentinel-dashboard`
-  - **不**发 `sentinel-{source-nacos,source-redis,cluster,observability}`(还没实现,符合 DESIGN.md "不发布空 wheel" 约束)
-  - **前置**:M6.1-M6.7 全部 [x] + 真实业务使用验证报告
-  - GitHub release tag
-  - release notes 链接 CHANGELOG
+### M6.8 [延后] PyPI 发布资格评审移至 M7.6
+- **状态**：M6 不再包含任何 PyPI 发布或发布资格评审。该任务保留仅为追踪原 M5.6 /
+  M6.8 的迁移历史，不能标记完成，也不是 M6 退出条件。
+- **迁移后边界**：M7.6 在 M0–M7 所有已批准、未取消任务及真实使用验证闭环后，才可
+  审核发布资格。即使审核通过，执行 `uv publish`、创建 tag 或向 PyPI 写入产物也必须
+  由维护者显式触发。
+
+### M6+ Exit [ ] (M6.1、M6.3-M6.5、M6.7 全部完成;M6.2 已取消;M6.6 默认不在范围;M6.8 已移至 M7.6)
 - **Exit Criteria**:
-  - M6.1 / M6.2 / M6.3 / M6.4 / M6.5 / M6.7 全部 [x]
-  - 实际使用验证报告归档(至少 1 个真实业务接入 + 跑通 1 周)
-  - `pip install atlas-richie-sentinel` 在干净环境成功
-  - 1.0.0 不可变(后续 1.0.x 修复 bug,1.x 加 feature,2.0 破坏性)
-- **Test ID**: —
-- **ADR**: —
-- **Deps**: M6.1, M6.2, M6.3, M6.4, M6.5, M6.7, 实际使用验证
+  - M6.1 的 Nacos 规则来源独立通过真实服务验收，且不是主包运行前提；M6.2 的 Redis
+    RuleSource 取消决定保持可追溯，未被替换为未定义的 Redis 依赖。
+  - M6.3 / M6.4 的全局准入协议、双进程故障模型和 `FAIL_CLOSED` 容量保证闭环；
+    `FAIL_OPEN` / `LOCAL_FALLBACK` 的风险以可观测证据闭环。
+  - M6.5 的 Reporting 协议在断线、重传、乱序、重启和高基数下通过跨进程验收，且
+    未成为请求关键路径。
+  - M6.7 给出同步运行时的明确边界；M6.6 聚合 Dashboard 默认仍不在范围。
+  - 不执行 PyPI 发布，也不因 M6 完成而暗示任何未发布 extension 已在 PyPI 可用；发布
+    资格统一由 M7.6 审核。
 
-### M6+ Exit [ ] (M6.1-M6.5 + M6.7 + M6.8 全部完成;M6.6 默认不在范围)
-- **Exit Criteria**(隐含):M6.1-M6.5 + M6.7 完成 + 双实例 + 跨进程验收;M6.6 聚合 dashboard 默认不在范围;M6.8 publish 1.0.0 成功
+---
+
+## M7：OpenSergo 可选控制面兼容
+
+> **M7 边界**：采用“OpenSergo-compatible, not OpenSergo-defined”。OpenSergo 是外部
+> 控制面与规则规范；Atlas Richie Sentinel 仍拥有 canonical `RuleSnapshot`、Engine、
+> Slot、异步生命周期和五类规则的本地语义。M7 不把 OpenSergo 类型、Kubernetes client
+> 或传输 SDK 引入主 wheel，也不重定义 M6 的 Token 或 Reporting wire protocol。
+>
+> **模式与依赖门禁**：`OpenSergoRuleSource` 是 `RuleSource` 的 Adapter，
+> `OpenSergoCodec` 是 anti-corruption layer。所有外部 DTO 必须在边界转换为本地不可变
+> 值对象；不得由 Slot/Engine 读取 OpenSergo 字段，不能使用模块级 client、服务定位器或
+> “最后一次回调获胜”的隐式规则优先级。
+
+### M7.1 [ ] 冻结兼容范围、控制面版本与能力矩阵
+- **目标**：在编写 SDK / transport 代码前，建立 `docs/OPEN_SERGO_COMPATIBILITY.md`，
+  冻结支持的 OpenSergo Control Plane / CRD 版本、资源种类、版本协商路径和逐字段语义
+  矩阵。
+- **子任务**：
+  - [ ] M7.1.1 以 OpenSergo 官方 schema / Control Plane 文档为唯一输入，记录具体
+    resource kind、apiVersion、必需字段、规则版本来源、watch 语义和认证方式；不把
+    Java/Go SDK 对象或第三方博客当成规范。
+  - [ ] M7.1.2 为每个候选规则与字段标注 `NATIVE`、`TRANSLATED`、`UNSUPPORTED` 或
+    `EXTENSION_REQUIRED`，同时写清 Python 本地目标、转换条件、拒绝原因和测试 fixture。
+  - [ ] M7.1.3 明确基础限流、并发限制、熔断是否可逐字段映射；参数热点、Authority、
+    SystemRule adaptive capacity、async cancellation、HTTPX 响应流 lease 等无法证明
+    等价的语义一律从 `UNSUPPORTED` 起步。
+  - [ ] M7.1.4 冻结所有权：控制面是规则唯一写入权威；本 extension 默认只读，不支持
+    双向同步、规则写回或从本地 `RuleSnapshot` 自动生成 CRD。若未来需要无损导出，单独
+    提 ADR、schema 与权限模型。
+- **Exit Criteria**：矩阵逐项可追溯到官方 schema，明确“不支持”而非模糊声称兼容；所有
+  映射都能定位到本地 Rule / 字段与预期测试。
+- **Test ID**: SEN-OPENSERGO-001(part:matrix)
+- **ADR**: ADR-SEN-016
+- **Deps**: M6+ Exit
+
+### M7.2 [ ] 建立独立 OpenSergo Source wheel 与最小依赖图
+- **目标**：创建 `components/sentinel/sentinel-source-opensergo/`，公开
+  `atlas_richie.sentinel.sources.opensergo`，使安装该 wheel 是唯一引入控制面 transport
+  依赖的方式。
+- **子任务**：
+  - [ ] M7.2.1 在 pyproject 中仅声明主包与已批准的控制面 transport 依赖；主包、
+    ASGI、HTTPX、Nacos、Cluster、Reporting wheel 的依赖闭包不变。
+  - [ ] M7.2.2 定义冻结的 `OpenSergoRuleSourceConfig` 值对象：endpoint / cluster
+    scope、resource selector、认证引用、TLS、超时、重连、source_id 与显式 priority。
+    不接受裸 `dict`、SDK client 或 magic string。
+  - [ ] M7.2.3 定义只读 `OpenSergoControlPlanePort` 和 transport Adapter；Source 只依赖
+    Port，具体 Kubernetes / 其他受支持 transport 只在 extension 内实现。
+  - [ ] M7.2.4 实现显式 `aclose()` 所有权：取消 watch、停止重连、关闭 transport，
+    并保证重复关闭安全、异常可分类且凭证脱敏。
+- **Exit Criteria**：独立虚拟环境分别安装 / 卸载 extension 均不改变主包 import；wheel
+  文件清单不覆盖主包文件；主包无 OpenSergo / Kubernetes import。
+- **Test ID**: SEN-EXTENSION-ISOLATION-001, SEN-OPENSERGO-001(part:packaging)
+- **ADR**: ADR-SEN-016
+- **Deps**: M7.1
+
+### M7.3 [ ] 实现 OpenSergo codec 与拒绝安全的快照映射
+- **目标**：把外部控制面资源完整解析为候选 `RuleSnapshot`，通过能力矩阵、schema 与
+  业务校验后一次性交给既有 RuleRepository。
+- **子任务**：
+  - [ ] M7.3.1 为外部 DTO、解析错误、能力状态和 `OpenSergoCompatibilityReport` 建立
+    私有边界模型；公开报告只暴露稳定枚举、资源版本、字段路径和脱敏原因。
+  - [ ] M7.3.2 实现“外部完整资源 → DTO → codec → 本地 Rule → RuleSnapshot”的纯函数
+    映射；codec 不做网络 I/O、不读全局状态，也不直接调用 Engine。
+  - [ ] M7.3.3 对未知 major、未知必需字段 / 枚举、损失性转换、冲突规则和
+    `UNSUPPORTED` / `EXTENSION_REQUIRED` 规则拒绝**整个**候选快照；绝不静默忽略字段、
+    部分应用或将规则转换为更宽松策略。拒绝时 codec 不调用 `RuleRepository.apply_snapshot`
+    且不维护独立 last-known-good；Repository 保持已应用快照，Supervisor 保存各 ready
+    Source 的单份最近成功快照，失败分类写入 `OpenSergoCompatibilityReport`。
+  - [ ] M7.3.4 定义 source version、epoch、revision、checksum 与 OpenSergo resource
+    version 的映射；无法证明单调性时，触发完整重读和显式接纳，不能按字符串比较猜测
+    新旧。
+- **Exit Criteria**：每个矩阵条目至少有正向或拒绝 fixture；codec 的输出不可变；失败
+  绝不改变 Repository 当前生效快照。
+- **Test ID**: SEN-OPENSERGO-001(part:codec), SEN-RULE-001(part:atomicity)
+- **ADR**: ADR-SEN-007, ADR-SEN-016
+- **Deps**: M7.1, M7.2
+
+### M7.4 [ ] 实现订阅生命周期与 last-known-good 行为
+- **目标**：实现“初始完整读取 → 校验发布 → watch 触发完整刷新”的
+  `OpenSergoRuleSource`，完全遵循 M3.1 RuleSource contract。
+- **子任务**：
+  - [ ] M7.4.1 首次读取、codec、schema、业务校验和 Repository 接纳均成功后才报告
+    ready；任何失败均不得用空快照替代旧规则。
+  - [ ] M7.4.2 watch 事件仅触发从权威控制面完整重读；处理重复、乱序、版本跳跃、删除、
+    空规则、连接中断、鉴权失败、权限拒绝与不可解析资源。
+  - [ ] M7.4.3 实现有界指数退避与 jitter、stale 状态、last-success、failure class 和
+    last-known-good；消费慢于更新时合并刷新请求，不能积累无界任务或并发应用快照。
+  - [ ] M7.4.4 与 Nacos 并存时，要求调用方在 Engine 装配入口显式配置唯一
+    priority 和迁移 / 回退窗口；只应用 active Source 的完整快照，切换以
+    **M6.5.7 冻结的跨语言事件 envelope** 投影可观测（M6.1 阶段不预设
+    任何事件名），不能由两者的回调到达顺序决定有效规则。
+- **Exit Criteria**：通过完整 M3.1 contract suite；断线和不合法更新期间保留旧规则；
+  关闭后没有 listener、重连任务或 transport 泄漏。
+- **Test ID**: SEN-RULE-001(part:opensergo), SEN-OPENSERGO-001(part:lifecycle)
+- **ADR**: ADR-SEN-007, ADR-SEN-016
+- **Deps**: M7.3
+
+### M7.5 [ ] 真实控制面兼容与安全验收
+- **目标**：在一个实际兼容的 OpenSergo Control Plane / CRD 环境中验证 M7，不将 mock
+  DTO、fake watch 或 unit test 称为协议兼容。
+- **子任务**：
+  - [ ] M7.5.1 建立可重复的最小真实环境和最小权限只读身份；仅授予所需 namespace /
+    resource 的 get / list / watch，不授予 create / update / delete。
+  - [ ] M7.5.2 验收首次加载、合法完整更新、含不支持字段的更新、非法规则、watch
+    断开重连、权限撤销、控制面重启、Source `aclose()` 八个场景。
+  - [ ] M7.5.3 对每次拒绝保留控制面 resource version、能力报告和脱敏失败分类；证明
+    last-known-good 未被清空，恢复后仅成功的新完整快照生效。
+  - [ ] M7.5.4 做跨 Source 迁移演练：Nacos 与 OpenSergo 双来源的明确 priority、
+    切换、回退和审计符合配置；不共享 credential、连接或后台任务。
+- **Exit Criteria**：真实环境证据完整；未发现权限提升、凭证泄漏或部分更新；`FAIL_CLOSED`
+  等 Cluster 行为与 Reporting 行为均不因控制面不可用而改变。
+- **Test ID**: SEN-OPENSERGO-002, SEN-EXTENSION-ISOLATION-001
+- **ADR**: ADR-SEN-016
+- **Deps**: M7.4, M6+ Exit
+
+### M7.6 [ ] 评审是否发布 1.0.0（M0–M7 全部闭环后，不自动发布）
+- **目标**：在所有已批准、未取消的 M0–M7 任务及真实使用验证完成后，汇总发布证据，
+  由维护者决定是否启动首次 PyPI 发布；本任务本身不执行外部发布。
+- **前置**：M6.1、M6.3–M6.5、M6.7、M7.1–M7.5 全部 `[x]`；M6.2 保持取消；M6.6
+  若仍是“默认不在范围”则不构成阻塞，若已被批准纳入范围则必须先完成。
+- **Deliverable**：
+  - 汇总真实业务使用报告（至少一个接入在约定观察期内稳定运行）、M6 网络验收、M7
+    控制面验收、性能 / soak 报告、SBOM、CHANGELOG 与已知限制。
+  - 冻结候选 distribution 清单。每个候选 wheel 必须分别完成 PyPI 元数据、独立干净
+    环境安装矩阵、依赖闭包、版本一致性与 release checklist；未达到标准的 extension
+    不得随主包“捆绑发布”。
+  - 输出“可发布 / 不可发布 / 需维护者决策”的书面结论及证据链接；不得把该结论误写为
+    已执行 `uv publish`、已创建 tag 或已对外发布。
+- **Exit Criteria**：所有前置任务和发布证据齐全，候选包逐个通过隔离验证，且维护者已
+  明确决定是否执行实际发布。只有在维护者随后显式授权时，才可按 `RELEASE.md` 的专用
+  输出目录、版本一致门禁和文件路径清单执行发布。
+- **Test ID**: SEN-RELEASE-001
+- **ADR**: ADR-SEN-011, ADR-SEN-016
+- **Deps**: M6+ Exit, M7.5, 真实业务使用验证
+
+### M7 Exit [ ]
+- **Exit Criteria**:
+  - OpenSergo 规则兼容矩阵、版本边界与所有权边界公开可查，未支持能力明确拒绝。
+  - 独立 wheel、codec、RuleSource lifecycle、隔离安装和真实控制面验收均有可复现证据。
+  - 核心 Engine / Slot / RuleSnapshot 未引入 OpenSergo 分支、依赖或外部 DTO；M6 的
+    Token 与 Reporting 协议仍独立且 contract 不变。
+  - M7.6 已完成发布资格评审；评审通过不等于已发布。没有维护者的显式发布授权时，
+    不得执行 `uv publish` 或宣称任何 wheel 已在 PyPI 可用。
 
 ---
 
@@ -1200,16 +1550,23 @@ M3 (File Source + ASGI)  ──需要 M2 完整退出──
 M4 (HTTPX 出站)  ──需要 M1 退出(用 Engine) + M2 CB 规则──
   ↓
 M5 Exit @ M5.5 (实现 / 测试 / 文档 / 验收 / API 锁定)
-  ── M5.6 publish 已在 2026-09-13 决定挪到 M6.8 ──
+  ── 发布资格评审已延后到 M7.6；不自动发布 ──
   ↓
 M6+ (集群 / 聚合)
-  M6.1 Nacos Source
-  M6.2 Redis Source
-  M6.3 Token Server/Client
+  M6.1 Nacos RuleSource（配置管理）
+  M6.2 Redis RuleSource（已取消：非持久化事实来源）
+  M6.3 Token Server / Client（全局 Flow）
   M6.4 双实例故障 / 恢复
-  M6.5 Agent Reporting
+  M6.5 Sentinel Agent Reporting（异步遥测）
   M6.7 WSGI 可行性评估
-  M6.8 (原 M5.6) 实际使用验证后 publish 1.0.0
+  ↓
+M7（OpenSergo 可选控制面兼容）
+  M7.1 官方 schema / 能力矩阵
+  M7.2 独立 Source wheel / Port
+  M7.3 codec + 原子快照映射
+  M7.4 RuleSource 生命周期
+  M7.5 真实控制面 / 最小权限验收
+  M7.6 全部任务闭环后评审是否发布 1.0.0（不自动发布）
 ```
 
 ---

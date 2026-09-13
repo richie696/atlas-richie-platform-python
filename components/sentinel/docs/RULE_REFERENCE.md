@@ -103,6 +103,64 @@ idx = repo.current_index                   # 当前 RuleIndex
 7. 清理 stale state
 8. 返回 True / False
 
+### 1.5 双 Port Source 契约 (M6.1.0b, 双轨)
+
+M6.1 阶段规则源拆为**双 Port** (API delta v3 决策 3, 见
+`R-SENTINEL-M6.1.0b-api-delta.md`):
+
+```python
+from atlas_richie.sentinel.source.rule_source import (
+    RuleSource,           # 1.0 公共符号, 1.x 是 LegacyRuleSource 的 type alias
+    LegacyRuleSource,     # 1.0 旧契约 Protocol (start/stop/latest)
+    SnapshotRuleSource,   # 新契约 Protocol (snapshots/aclose + source_id)
+    RuleSourceAssembly,   # 公开 immutable assembly DTO
+    FileRuleSource,       # 1.0 实现, 1.x 仍为 LegacyRuleSource
+)
+from datetime import timedelta
+```
+
+**1.0 路径 (1.x 仍可用, 零代码改动)**:
+```python
+source = FileRuleSource(path="/etc/sentinel/rules.json", poll_interval_sec=5.0)
+source.start(repository)  # 1.0 形态, 直连 repository, 不经 Supervisor
+```
+
+**1.x 新路径 (多源 + failover + 内部 activation fact)**:
+```python
+await engine.assemble_sources(
+    [
+        RuleSourceAssembly(
+            source=NacosRuleSource(source_id="nacos-prod", ...),
+            priority=100,
+            failover_after=timedelta(seconds=5),
+        ),
+        RuleSourceAssembly(
+            source=FileRuleSource(source_id="local-fallback", path=...),
+            priority=10,
+            failover_after=timedelta(seconds=2),
+        ),
+    ],
+    repository=repository,
+)
+```
+
+**双入口互斥**: `assemble_sources` 与 `install_legacy_source` 在同一 `SentinelEngine`
+实例上互斥;违反抛 `SentinelConfigurationError("multimode_conflict")`。
+详见 `MIGRATION-M6.md` §1.A / §1.B / §3。
+
+**Repository 所有权 (P1 #2)**: `RuleRepository` **没有** `close()` /
+`aclose()`; 关闭责任在 Supervisor + 各 Source, `SentinelEngine.aclose()` 等它们。
+**default-deny (P1 #5)**: `repository=None` / `Optional[RuleRepository]` 拒绝
+(default-deny 收窄 5 类: 所有权 / 权限 / 故障策略 / 资源上限 / 跨进程语义)。
+
+**弃用时钟**: `RuleSource.start(stop/latest)` 形态弃用, 1.x 全程保留,
+1.x 阶段**不**发 deprecation warning; 弃用版本 = 1.x 末 (≥ 2 minor 或 6 个月,
+以较晚者为准), **不得早于 2.0 删除**且需未来 ADR。
+
+**新 extension 写 `SnapshotRuleSource`**: 见 `EXTENSION_GUIDE.md` §3.3;
+**禁止 shim 包装 1.0 旧 `RuleSource` 为 `SnapshotRuleSource`** (违反 1.0
+行为锁定, 改变 `start(repository)` 直连路径)。
+
 ---
 
 ## 2. FlowRule(限流)
@@ -291,7 +349,24 @@ SentinelBlockedError:` 统一捕获;`except FlowBlocked:` 单独捕获。
 | DegradeRule | ✅ | 增 SLOW_REQUEST_RATIO + 滑动窗口精度 |
 | SystemRule | ✅ | 增 `psutil` 精确值 |
 | ParamFlowRule | ✅ | 增 top-N 热点统计 |
-| AuthorityRule | ✅ | 增动态配置源(Nacos / Redis) |
+| AuthorityRule | ✅ | 增动态配置源(Nacos / 经 ADR 批准的持久化 Source) |
+
+### 8.1 1.0 → 1.x Source 路径 (M6.1.0b 双 Port)
+
+| 维度 | 1.0 (1.x 仍可用, 零代码改动) | 1.x 新路径 (M6.1.0b) |
+| ---- | ---------------------------- | -------------------- |
+| Protocol | `RuleSource` (= `LegacyRuleSource` alias) | `SnapshotRuleSource` (新契约) |
+| 方法 | `start(repository)` / `stop()` / `latest()` | `snapshots() -> AsyncIterator[RuleSnapshot]` / `aclose()` |
+| 引擎入口 | `source.start(repository)` 直连 | `await engine.assemble_sources([RuleSourceAssembly(...)], repository=...)` |
+| 多源 / failover | ❌ | ✅ Supervisor 仲裁 priority / failover_after |
+| 内部 fact | ❌ | ✅ `RuleSourceActivation` (C 层私有, observer 异常隔离) |
+| 跨语言 wire | n/a | 推迟到 M6.5.7 envelope |
+| 1.0 行为锁定 | ✅ | 1.x 全程保留 `RuleSource` alias + `FileRuleSource` 公共 API |
+| 弃用时钟 | n/a | ≥ 2 minor 或 6 个月 (以较晚者为准), 不得早于 2.0, 需未来 ADR |
+| Deprecation warning | n/a | 1.x 阶段**不**发 (避免 1.0 用户 noise) |
+| 互斥约束 | n/a | `multimode_conflict` 防止 1.0 路径绕过 Supervisor |
+
+详见 `MIGRATION-M6.md` (三类用户迁移路径 + 不可自动迁移场景 + 验证清单)。
 
 ---
 

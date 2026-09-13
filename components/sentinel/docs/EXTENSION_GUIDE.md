@@ -19,7 +19,7 @@ Atlas Richie Sentinel 的可扩展点分 3 类,**每一类都有独立 wheel**,
 | 维度 | 协议 | 1.0 内置 | 1.x 计划 |
 | ---- | ---- | -------- | -------- |
 | **Adapter**(集成面) | `SentinelEngine` / `FlowSlot` 暴露给 web / 客户端 | `adapter-asgi` / `adapter-httpx` | `adapter-grpc` / `adapter-faststream` |
-| **Source**(数据源) | `RuleSource` Protocol(主包) | `source-file`(JSON / YAML) | `source-nacos` / `source-redis` / `source-consul` |
+| **Source**(数据源) | `RuleSource` Protocol(主包) | `source-file`(JSON / YAML) | `source-nacos` / 经 ADR 批准的持久化 Source |
 | **Dashboard**(控制面) | REST + admin token | `sentinel-dashboard`(loopback) | `dashboard-cluster` / `dashboard-prometheus` |
 
 每一类扩展**只引入一个独立 wheel**,主包不受影响。
@@ -32,7 +32,7 @@ each axis ships in its own wheel, free of cross-contamination:
 | Axis | Protocol | 1.0 built-in | 1.x planned |
 | ---- | -------- | ------------ | ----------- |
 | **Adapter** (integration) | `SentinelEngine` / `FlowSlot` exposed to web / clients | `adapter-asgi` / `adapter-httpx` | `adapter-grpc` / `adapter-faststream` |
-| **Source** (data source) | `RuleSource` Protocol (in main package) | `source-file` (JSON / YAML) | `source-nacos` / `source-redis` / `source-consul` |
+| **Source** (data source) | `RuleSource` Protocol (in main package) | `source-file` (JSON / YAML) | `source-nacos` / ADR-approved durable Sources |
 | **Dashboard** (control plane) | REST + admin token | `sentinel-dashboard` (loopback) | `dashboard-cluster` / `dashboard-prometheus` |
 
 Each axis extension ships as a single new wheel; the main package is
@@ -139,24 +139,45 @@ class SentinelWsgiMiddleware:
 
 ## 3. Source 扩展(中文)
 
-**目标**:把规则从 **任意数据源**(Nacos / Redis / Consul / K8s ConfigMap)
-推到 `RuleRepository`。
+**目标**:把规则从具备持久化、恢复和审计边界的数据源（例如 Nacos）推到
+`RuleRepository`。缓存、纯 pub/sub 和仅内存数据不是 RuleSource 的事实来源。
 
-### 3.1 `RuleSource` Protocol(主包定义)
+### 3.1 双 Port: `LegacyRuleSource` + `SnapshotRuleSource` (M6.1.0b)
+
+1.0 阶段 `RuleSource` 是单契约 Protocol;M6.1 阶段拆为**双 Port** (API delta v3
+决策 3, 见 `R-SENTINEL-M6.1.0b-api-delta.md`):
 
 ```python
 # atlas_richie/sentinel/source/rule_source.py
-class RuleSource(Protocol):
+class LegacyRuleSource(Protocol):
+    """1.0 旧契约; 1.x 全程保留 (alias: RuleSource = LegacyRuleSource)。"""
     def latest(self) -> RuleSnapshot | None: ...
     def start(self, repository: RuleRepository) -> None: ...
     def stop(self) -> None: ...
+
+class SnapshotRuleSource(Protocol):
+    """新契约; SentinelEngine.assemble_sources() 仅接受本类型。"""
+    source_id: str  # 稳定字符串, 配置时声明 (rule_source_activation.md §7)
+    def snapshots(self) -> AsyncIterator[RuleSnapshot]: ...
+    async def aclose(self) -> None: ...
+
+class RuleSourceAssembly:
+    """公开 immutable assembly DTO; __post_init__ 校验 priority≥0 / failover_after≥0。"""
+    source: SnapshotRuleSource
+    priority: int
+    failover_after: timedelta
 ```
+
+**`RuleSource` 是 `LegacyRuleSource` 的 type alias** — 1.0 用户零代码改动。
+1.x 全程不发出 deprecation warning; 弃用时钟 ≥ 2 minor 或 6 个月 (以较晚者
+为准), 不得早于 2.0 删除。
 
 ### 3.2 `FileRuleSource` 已有,见 `source-file` wheel
 
 ```python
 from atlas_richie.sentinel_source_file import FileRuleSource
 
+# 1.0 路径 (LegacyRuleSource 实现, 1.x 仍可用)
 source = FileRuleSource(
     path="/etc/sentinel/rules.json",
     poll_interval_sec=5.0,
@@ -164,46 +185,53 @@ source = FileRuleSource(
 source.start(repository)  # 立即推一次 + 后台轮询
 ```
 
-### 3.3 写一个新的 Source(以 Redis pub/sub 为例)
+**1.0 路径 (1.x 仍可用, 零代码改动)**: 调 `engine.install_legacy_source(source, repository=repo)`。
+**新路径 (M6.1+)**: 调 `engine.assemble_sources([RuleSourceAssembly(source, priority, failover_after), ...], repository=repo)`。
+
+两入口**互斥**: 调用任一入口后再调另一入口抛 `SentinelConfigurationError("multimode_conflict")`。
+详见 `MIGRATION-M6.md`。
+
+### 3.3 写一个新的 Source (SnapshotRuleSource, M6.1+ 推荐)
+
+先证明候选系统是规则的持久化事实来源：新实例必须能在通知丢失、客户端离线、服务
+重启和故障切换后恢复到同一个已审计快照。通过该前提后，扩展才可实现 `SnapshotRuleSource`
+Protocol (M6.1+ 推荐) 或 `LegacyRuleSource` (1.0 兼容, 不推荐新写)。
 
 ```python
-# atlas_richie_sentinel_source_redis.py
-import json
-import redis.asyncio as redis
-from atlas_richie.sentinel.rules.snapshot import RuleSnapshot, RuleVersion
-from atlas_richie.sentinel.rules.repository import RuleRepository
-from atlas_richie.sentinel.source.rule_source import RuleSource
+# 路径: components/sentinel/sentinel-source-nacos/src/atlas_richie/sentinel_source_nacos/
+# 主包**不**导入 Nacos SDK, 全部走 Port
+from typing import AsyncIterator
+from atlas_richie.sentinel.source.rule_source import SnapshotRuleSource
+from atlas_richie.sentinel.rules.snapshot import RuleSnapshot
 
-class RedisRuleSource:
-    def __init__(self, url: str, channel: str = "sentinel:rules"):
-        self.url = url
-        self.channel = channel
-        self._client = None
-        self._task = None
-        self._latest = None
+class NacosRuleSource(SnapshotRuleSource):
+    source_id: str  # 配置时声明, e.g. "nacos-prod"
 
-    def latest(self) -> RuleSnapshot | None:
-        return self._latest
+    async def snapshots(self) -> AsyncIterator[RuleSnapshot]:
+        """Yield complete validated RuleSnapshot; 失败不 yield, 保留 last-known-good."""
+        async for snap in self._nacos_listener():
+            yield snap  # 已校验; 失败 → 不 yield (Supervisor 标 stale)
 
-    async def start(self, repository: RuleRepository) -> None:
-        self._client = redis.from_url(self.url)
-        pubsub = self._client.pubsub()
-        await pubsub.subscribe(self.channel)
-        self._task = asyncio.create_task(self._consume(pubsub, repository))
-
-    async def _consume(self, pubsub, repository: RuleRepository) -> None:
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            data = json.loads(message["data"])
-            # deserialize into RuleSnapshot, push to repository
-            snap = _decode_snapshot(data)
-            repository.apply_snapshot(snap)
-
-    def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
+    async def aclose(self) -> None:
+        """幂等关闭: 取消 listener, 停止重连, 关闭 SDK。"""
+        ...
 ```
+
+使用:
+```python
+await engine.assemble_sources(
+    [RuleSourceAssembly(
+        source=NacosRuleSource(source_id="nacos-prod", ...),
+        priority=100,
+        failover_after=timedelta(seconds=5),
+    )],
+    repository=repo,
+)
+```
+
+**禁止 shim**: 不要把 1.0 旧 `RuleSource` 实现包装成 `SnapshotRuleSource` (旧
+`start(repository)` 没有 Engine / Supervisor 引用, 没法挂载"经 Supervisor
+仲裁"路径; shim 包装必然改变 1.0 行为)。
 
 ### 3.4 Source 边界规则(硬约束)
 
@@ -211,32 +239,166 @@ class RedisRuleSource:
 - **不**做 schema 转换(M2 schema registry 在主包,见 PLANNING §M2.5)
 - **不**缓存过期规则(每条消息立即推 Repository)
 - **不**重试网络错误(Dashboard / 上游负责)
+- **不**直接调 `RuleRepository.apply_snapshot` (新路径下, 由 Supervisor 仲裁;
+  老路径下, `start(repository)` 内调, 等同 1.0 行为)
+- **不**在 `RuleSource` 自己声明 priority / failover_after (新契约下, 由
+  `RuleSourceAssembly` 显式声明, 防止 Source 决定自己的优先级)
+- **不**跨进程订阅 / 写 `event_name` 字符串 (跨语言 wire 推迟到 M6.5.7 envelope)
 
 ### 3.5 Source contract test
 
-每个 Source 都要跑 `tests/test_sen_rule_source.py` 的 5 个契约:
+每个 Source 都要跑 `tests/test_sen_rule_source.py` 的契约 (M6.1.0d-1 扩展为
+26 LegacyRuleSource + 21 SnapshotRuleSource):
 
-- `isinstance(source, RuleSource)` (Protocol runtime_checkable)
-- `start` / `stop` 幂等
-- `latest` 返回 `None` 或 `RuleSnapshot`
-- 推 Repository 后 `last_version` 更新
-- 文件不存在 / 解析失败 不抛(返回 `None`)
+- `isinstance(source, RuleSource)` (Protocol runtime_checkable, 1.0 兼容)
+- `start` / `stop` 幂等 (1.0)
+- `latest` 返回 `None` 或 `RuleSnapshot` (1.0)
+- 推 Repository 后 `last_version` 更新 (1.0)
+- 文件不存在 / 解析失败 不抛(返回 `None`) (1.0)
+- `isinstance(source, SnapshotRuleSource)` + `source_id` 字段非空 (新契约)
+- `snapshots()` 异步迭代 yield 完整 `RuleSnapshot`, 不持有 Repository 引用 (新)
+- `aclose()` 幂等 (新)
+- 优先级全局唯一, `duplicate_priority` 抛 `SentinelConfigurationError` (新)
+- Repository 不可 None, 拒绝 `Optional[RuleRepository]` (default-deny)
 
 ## 3. Source Extension (English)
 
-(See code above.)
+**Goal**: push rules from a source of truth (durable, recoverable,
+auditable) such as Nacos into `RuleRepository`. Caches, pure pub/sub, and
+in-memory-only data are not sources of truth for `RuleSource`.
 
-**Source boundary rules**:
+### 3.1 Two Ports: `LegacyRuleSource` + `SnapshotRuleSource` (M6.1.0b)
+
+The 1.0 single `RuleSource` Protocol is split into **two Ports** in M6.1
+(API delta v3 decision 3, see `R-SENTINEL-M6.1.0b-api-delta.md`):
+
+```python
+# atlas_richie/sentinel/source/rule_source.py
+class LegacyRuleSource(Protocol):
+    """1.0 old contract; preserved for the entire 1.x phase
+    (alias: RuleSource = LegacyRuleSource)."""
+    def latest(self) -> RuleSnapshot | None: ...
+    def start(self, repository: RuleRepository) -> None: ...
+    def stop(self) -> None: ...
+
+class SnapshotRuleSource(Protocol):
+    """New contract; SentinelEngine.assemble_sources() accepts only this type."""
+    source_id: str  # stable string, declared at config time
+    def snapshots(self) -> AsyncIterator[RuleSnapshot]: ...
+    async def aclose(self) -> None: ...
+
+class RuleSourceAssembly:
+    """Public immutable assembly DTO; __post_init__ validates priority≥0 /
+    failover_after≥0."""
+    source: SnapshotRuleSource
+    priority: int
+    failover_after: timedelta
+```
+
+**`RuleSource` is a type alias of `LegacyRuleSource`** — 1.0 users see zero
+code changes. 1.x never emits a deprecation warning; deprecation clock is
+≥ 2 minor or 6 months (whichever is later), cannot be removed before 2.0.
+
+### 3.2 `FileRuleSource` (existing, see `source-file` wheel)
+
+```python
+from atlas_richie.sentinel_source_file import FileRuleSource
+
+# 1.0 path (LegacyRuleSource impl, still works in 1.x)
+source = FileRuleSource(
+    path="/etc/sentinel/rules.json",
+    poll_interval_sec=5.0,
+)
+source.start(repository)  # one-shot push + background polling
+```
+
+**1.0 path (still works in 1.x, zero code change)**: call
+`engine.install_legacy_source(source, repository=repo)`.
+**New path (M6.1+)**: call
+`engine.assemble_sources([RuleSourceAssembly(source, priority, failover_after), ...], repository=repo)`.
+
+The two entries are **mutually exclusive**: after calling one, calling the
+other raises `SentinelConfigurationError("multimode_conflict")`. See
+`MIGRATION-M6.md`.
+
+### 3.3 Write a new Source (SnapshotRuleSource, M6.1+ recommended)
+
+First prove the candidate system is a durable source of truth: a new
+instance must recover the same audited snapshot after notification loss,
+client offline, service restart, or failover. Once that premise holds,
+implement the `SnapshotRuleSource` Protocol (M6.1+ recommended) or
+`LegacyRuleSource` (1.0 compat, not recommended for new code).
+
+```python
+# path: components/sentinel/sentinel-source-nacos/src/atlas_richie/sentinel_source_nacos/
+# the main package does NOT import the Nacos SDK — only via the Port
+from typing import AsyncIterator
+from atlas_richie.sentinel.source.rule_source import SnapshotRuleSource
+from atlas_richie.sentinel.rules.snapshot import RuleSnapshot
+
+class NacosRuleSource(SnapshotRuleSource):
+    source_id: str  # declared at config time, e.g. "nacos-prod"
+
+    async def snapshots(self) -> AsyncIterator[RuleSnapshot]:
+        """Yield complete validated RuleSnapshot; failures do not yield
+        (Supervisor marks the source stale and emits health event)."""
+        async for snap in self._nacos_listener():
+            yield snap  # already validated
+
+    async def aclose(self) -> None:
+        """Idempotent close: cancel listener, stop reconnect, close SDK."""
+        ...
+```
+
+Usage:
+```python
+await engine.assemble_sources(
+    [RuleSourceAssembly(
+        source=NacosRuleSource(source_id="nacos-prod", ...),
+        priority=100,
+        failover_after=timedelta(seconds=5),
+    )],
+    repository=repo,
+)
+```
+
+**No shim allowed**: do not wrap a 1.0 `RuleSource` as a `SnapshotRuleSource`
+(the old `start(repository)` has no Engine / Supervisor reference, so it
+cannot mount the "supervised arbitration" path; a shim would silently
+change 1.0 behavior).
+
+### 3.4 Source boundary rules (hard constraints)
+
 - Do not block the caller (`start` returns immediately; the subscription
   loop runs as a background task).
 - Do not do schema conversion (M2 schema registry lives in the main
   package).
 - Do not cache stale rules.
 - Do not retry on network errors (upstream / Dashboard's job).
+- Do not call `RuleRepository.apply_snapshot` directly (new path: via
+  Supervisor arbitration; old path: inside `start(repository)`, equals
+  1.0 behavior).
+- Do not declare your own priority / failover_after (new contract: the
+  caller declares them via `RuleSourceAssembly`).
+- No cross-process subscription / `event_name` string (cross-language
+  wire is deferred to M6.5.7 envelope).
 
 ### 3.5 Source contract test
 
-Each Source must pass `tests/test_sen_rule_source.py` (5 contracts).
+Each Source must pass `tests/test_sen_rule_source.py` contracts (M6.1.0d-1
+extends to 26 LegacyRuleSource + 21 SnapshotRuleSource):
+
+- `isinstance(source, RuleSource)` (Protocol runtime_checkable, 1.0 compat)
+- `start` / `stop` idempotent (1.0)
+- `latest` returns `None` or `RuleSnapshot` (1.0)
+- After push, Repository `last_version` updates (1.0)
+- File missing / parse failure does not raise (returns `None`) (1.0)
+- `isinstance(source, SnapshotRuleSource)` + `source_id` non-empty (new)
+- `snapshots()` async-iterates complete `RuleSnapshot`, no Repository ref (new)
+- `aclose()` idempotent (new)
+- Priority globally unique, `duplicate_priority` raises
+  `SentinelConfigurationError` (new)
+- Repository cannot be None, reject `Optional[RuleRepository]` (default-deny)
 
 ---
 
