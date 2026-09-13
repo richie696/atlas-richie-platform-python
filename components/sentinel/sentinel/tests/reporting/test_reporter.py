@@ -87,13 +87,13 @@ def _make_config(
     )
 
 
-def _make_event(kind: str = "rule_applied", **overrides: object) -> ReportingEvent:
+def _make_event(kind: str = ReportingEventKind.RULE_APPLIED.value, **overrides: object) -> ReportingEvent:
     defaults: dict[str, object] = {
         "kind": kind,
-        "source_id": None,
+        "source_id": "src-test",
         "resource": "test-resource",
         "rule_id": "rule-1",
-        "exec_result": "applied",
+        "exec_result": "APPLIED",
         "failure_class": None,
         "reason": None,
         "previous_source_id": None,
@@ -214,7 +214,8 @@ class EmitSequenceTest(unittest.IsolatedAsyncioTestCase):
         await reporter.start()
         try:
             seqs = [reporter.emit(_make_event()) for _ in range(50)]
-            self.assertEqual(seqs, list(range(50)))
+            # outbox 序列从 1 开始 (1-based, 协议 §8.3 严格递增)
+            self.assertEqual(seqs, list(range(1, 51)))
         finally:
             await reporter.aclose()
 
@@ -236,28 +237,32 @@ class EmitSequenceTest(unittest.IsolatedAsyncioTestCase):
         try:
             seqs: list[int] = []
             seqs.append(reporter.emit(_make_event(
-                kind="rule_source_activated",
-                source_id="src-A", reason="initial", previous_source_id=None, priority=10,
+                kind=ReportingEventKind.RULE_SOURCE_ACTIVATED.value,
+                source_id="src-A", reason="initial", previous_source_id=None, priority=None,
             )))
             seqs.append(reporter.emit(_make_event(
-                kind="rule_source_stale",
-                source_id="src-A", health_class="stale", reason_message="timeout",
+                kind=ReportingEventKind.RULE_SOURCE_STALE.value,
+                source_id="src-A", health_class="STALE", reason_message="timeout",
             )))
             seqs.append(reporter.emit(_make_event(
-                kind="rule_source_degraded",
-                source_id="src-A", health_class="degraded", reason_message="partial",
+                kind=ReportingEventKind.RULE_SOURCE_DEGRADED.value,
+                source_id="src-A", health_class="DEGRADED", reason_message="partial",
             )))
             seqs.append(reporter.emit(_make_event(
-                kind="rule_applied", resource="r", rule_id="rule", exec_result="applied",
+                kind=ReportingEventKind.RULE_APPLIED.value,
+                source_id="src-A", resource="r", rule_id="rule", exec_result="APPLIED",
             )))
             seqs.append(reporter.emit(_make_event(
-                kind="rule_blocked", resource="r", rule_id="rule", exec_result="blocked",
+                kind=ReportingEventKind.RULE_BLOCKED.value,
+                source_id="src-A", resource="r", rule_id="rule", exec_result="BLOCKED",
             )))
             seqs.append(reporter.emit(_make_event(
-                kind="rule_failed", resource="r", rule_id="rule", exec_result="failed",
-                failure_class="timeout",
+                kind=ReportingEventKind.RULE_FAILED.value,
+                source_id="src-A", resource="r", rule_id="rule", exec_result="FAILED",
+                failure_class="NETWORK_TIMEOUT",
             )))
-            self.assertEqual(seqs, list(range(6)))
+            # 1-based 严格递增
+            self.assertEqual(seqs, list(range(1, 7)))
         finally:
             await reporter.aclose()
 
@@ -367,7 +372,7 @@ class OverflowTest(unittest.IsolatedAsyncioTestCase):
         try:
             # emit 5 个, max=2, 静默淘汰 3 个
             seqs = [reporter.emit(_make_event()) for _ in range(5)]
-            self.assertEqual(seqs, [0, 1, 2, 3, 4])
+            self.assertEqual(seqs, [1, 2, 3, 4, 5])
         finally:
             await reporter.aclose()
 

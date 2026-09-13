@@ -55,6 +55,7 @@ from ...model.outcome import Outcome, OutcomeKind
 from ...rules.snapshot import RuleSnapshot
 from .._identity import ReporterIdentity
 from ..reporter import AgentReporter, ReportingEvent
+from atlas_richie.contracts.reporting.v1 import ReportingEventKind, ExecResult, ReasonClass
 
 
 # ReasonClass 7 值 (协议 §5.3 frozen)
@@ -114,15 +115,22 @@ class SlotExecResult:
 
 
 def _build_exec_event(result: SlotExecResult) -> ReportingEvent | None:
-    """``SlotExecResult`` → ``ReportingEvent`` 或 None (未映射)."""
+    """``SlotExecResult`` → ``ReportingEvent`` 或 None (未映射).
+
+    中文
+    ----
+    ``source_id`` 用 ``snapshot.source_id`` (来自 M6.1 source,
+    1.0 简化: Resource.name 也作为辅助; wire §5.3 必填 source_id).
+    """
     snap = result.snapshot
+    source_id = snap.source_id or result.resource
     if result.outcome_kind == OutcomeKind.SUCCEEDED.value:
         return ReportingEvent(
-            kind="rule_applied",
-            source_id=None,
+            kind=ReportingEventKind.RULE_APPLIED.value,
+            source_id=source_id,
             resource=result.resource,
             rule_id=result.rule_id,
-            exec_result="applied",
+            exec_result=ExecResult.APPLIED.value,
             failure_class=None,
             reason=None,
             previous_source_id=None,
@@ -135,11 +143,11 @@ def _build_exec_event(result: SlotExecResult) -> ReportingEvent | None:
         )
     if result.outcome_kind == OutcomeKind.BLOCKED.value:
         return ReportingEvent(
-            kind="rule_blocked",
-            source_id=None,
+            kind=ReportingEventKind.RULE_BLOCKED.value,
+            source_id=source_id,
             resource=result.resource,
             rule_id=result.rule_id,
-            exec_result="blocked",
+            exec_result=ExecResult.BLOCKED.value,
             failure_class=None,
             reason=result.block_reason,
             previous_source_id=None,
@@ -152,11 +160,11 @@ def _build_exec_event(result: SlotExecResult) -> ReportingEvent | None:
         )
     if result.outcome_kind == OutcomeKind.FAILED.value:
         return ReportingEvent(
-            kind="rule_failed",
-            source_id=None,
+            kind=ReportingEventKind.RULE_FAILED.value,
+            source_id=source_id,
             resource=result.resource,
             rule_id=result.rule_id,
-            exec_result="failed",
+            exec_result=ExecResult.FAILED.value,
             failure_class=_classify_failure(result),
             reason=None,
             previous_source_id=None,
@@ -172,23 +180,29 @@ def _build_exec_event(result: SlotExecResult) -> ReportingEvent | None:
 
 
 def _classify_failure(result: SlotExecResult) -> str:
-    """失败分类 → ReasonClass (7 值)."""
+    """失败分类 → ReasonClass (7 冻结值, 协议 §5.4).
+
+    中文
+    ----
+    1.0 简化: 关键字启发式匹配 error_message 推断 ReasonClass.
+    ReasonClass 冻结枚举 (7 值, V1 不可扩展).
+    """
     if result.error_message:
         # 简单启发式: 关键字匹配
         msg = result.error_message.lower()
         if "timeout" in msg:
-            return "timeout"
+            return ReasonClass.NETWORK_TIMEOUT.value
         if "auth" in msg or "permission" in msg:
-            return "auth"
+            return ReasonClass.AUTH_FAILED.value
         if "resource" in msg or "pool" in msg:
-            return "resource"
+            return ReasonClass.STATE_INVALID.value
         if "degrade" in msg or "circuit" in msg:
-            return "degraded"
+            return ReasonClass.STATE_INVALID.value
         if "dependency" in msg or "downstream" in msg:
-            return "dependency"
+            return ReasonClass.NETWORK_UNAVAILABLE.value
         if "rule" in msg:
-            return "rule_error"
-    return "unknown"
+            return ReasonClass.DECODE_FAILED.value
+    return ReasonClass.UNKNOWN.value
 
 
 def outcome_to_event(outcome: Outcome, snapshot: RuleSnapshot) -> ReportingEvent | None:
@@ -208,6 +222,9 @@ def outcome_to_event(outcome: Outcome, snapshot: RuleSnapshot) -> ReportingEvent
     """
     # 简化: resource / rule_id 1.0 暂未在 Outcome 暴露, 用
     # "unknown" 占位 (DRAFT 阶段, frozen 后 V2 考虑扩展 Outcome)
+    error = getattr(outcome, "error", None)
+    error_args = getattr(error, "args", None) or ("",)
+    error_message = error_args[0] if error is not None and error_args else None
     result = SlotExecResult(
         resource=str(getattr(outcome, "resource", None) or "unknown"),
         rule_id="unknown",  # 1.0 简化: Outcome 没暴露 rule_id
@@ -215,9 +232,7 @@ def outcome_to_event(outcome: Outcome, snapshot: RuleSnapshot) -> ReportingEvent
         block_reason=str(
             getattr(getattr(outcome, "error", None), "block_reason", None) or ""
         ) or None,
-        error_message=str(
-            getattr(getattr(outcome, "error", None), "args", None) or [""]
-        )[0] if getattr(outcome, "error", None) is not None else None,
+        error_message=error_message,
         snapshot=snapshot,
     )
     return _build_exec_event(result)

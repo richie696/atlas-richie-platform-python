@@ -54,7 +54,7 @@ from atlas_richie.contracts.reporting.v1 import ErrorEnvelope, ErrorDetails
 from atlas_richie.sentinel.reporting.auth import (
     X_ATLAS_REPORTING_TOKEN_HEADER,
 )
-from atlas_richie.sentinel.reporting.config import AgentReporterConfig
+from atlas_richie.sentinel.reporting.config import AgentReporterConfig, OverflowPolicy
 from atlas_richie.sentinel.reporting.errors import (
     ReporterAuthError,
     ReporterConnectionError,
@@ -75,7 +75,7 @@ def _make_config(port: int) -> AgentReporterConfig:
         auth_token=TEST_TOKEN,
         instance_id_persistence_path=None,
         outbox_max_size=100,
-        outbox_overflow_policy="block_with_timeout",
+        outbox_overflow_policy=OverflowPolicy.BLOCK_WITH_TIMEOUT,
         batch_max_events=256,
         batch_max_bytes=64 * 1024,
         batch_send_interval_ns=100_000_000,
@@ -199,8 +199,10 @@ class _FakeServer:
             ) + b"\r\n\r\n" + body
             self.last_request = request
             self.request_count += 1
-            # 调 handler
+            # 调 handler (支持同步 + 异步)
             response = self._handler(status_line, headers, body)
+            if asyncio.iscoroutine(response):
+                response = await response
             writer.write(response)
             await writer.drain()
         finally:

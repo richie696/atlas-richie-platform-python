@@ -40,6 +40,7 @@ from typing import Any
 
 from .._identity import ReporterIdentity
 from ..reporter import AgentReporter, ReportingEvent
+from atlas_richie.contracts.reporting.v1 import ReportingEventKind
 
 
 @dataclass(slots=True, frozen=True)
@@ -71,14 +72,14 @@ def _kind_from_health_class(health_class: str) -> str:
 
     中文
     ----
-    - ``stale`` → ``rule_source_stale``
-    - ``degraded`` → ``rule_source_degraded``
+    - ``stale`` → ``RULE_SOURCE_STALE``
+    - ``degraded`` → ``RULE_SOURCE_DEGRADED``
     - ``healthy`` → 不发 (健康状态是默认, 不发 event, 减少 noise)
     """
     if health_class == "stale":
-        return "rule_source_stale"
+        return ReportingEventKind.RULE_SOURCE_STALE.value
     if health_class == "degraded":
-        return "rule_source_degraded"
+        return ReportingEventKind.RULE_SOURCE_DEGRADED.value
     if health_class == "healthy":
         raise ValueError(
             "healthy is default state; no event to emit (避免 noise)"

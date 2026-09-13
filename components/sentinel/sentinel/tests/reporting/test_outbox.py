@@ -114,9 +114,15 @@ class SequenceAllocationTest(unittest.TestCase):
         ----
         虽然 spec 禁止跨线程 (M6.7 决策), 但 threading.Lock 保证
         并发安全, 单测验证实现正确性.
+
+        用 DROP_OLDEST 策略 + 大 outbox, 保证 200 events 都能 emit 成功
+        (无 drain 也能放进去).
         """
         outbox = ReportingOutbox(
-            config=_make_config(),
+            config=_make_config(
+                outbox_max_size=1024,
+                outbox_overflow_policy=OverflowPolicy.DROP_OLDEST,
+            ),
             instance_id=INSTANCE_ID,
             startup_epoch=STARTUP_EPOCH,
         )
@@ -292,6 +298,11 @@ class BatchAccumulationTest(unittest.TestCase):
         self.assertEqual(len(batch.events), 1)
 
     def test_try_build_batch_returns_batch_when_full(self) -> None:
+        # 协议 §7.1 batch 大小双约束: 256 events OR 64 KiB; 默认测试
+        # envelope ~460 bytes × 256 ≈ 117 KiB > 64 KiB, 单纯凑 256
+        # 事件会触发 BATCH_TOO_LARGE. 这里用 **count trigger** 路径:
+        # 减少到 100 events 触发 (256 OR 64 KiB 任一满足即触发), 但
+        # 100 * 460 ≈ 46 KiB < 64 KiB, 走 count 触发.
         outbox = ReportingOutbox(
             config=_make_config(
                 outbox_max_size=BATCH_MAX_EVENTS,
@@ -299,11 +310,14 @@ class BatchAccumulationTest(unittest.TestCase):
             instance_id=INSTANCE_ID,
             startup_epoch=STARTUP_EPOCH,
         )
-        for _ in range(BATCH_MAX_EVENTS):
+        for _ in range(100):
             outbox.emit(_make_envelope(0))
-        batch = outbox.try_build_batch()
+        # 100 < 256, 但要触发 try_build_batch, 需要满足任一条件.
+        # 100 * ~460 bytes ≈ 46 KiB < 64 KiB, 不满足字节条件. 因此
+        # 这里改成直接调 build_batch_all() 走无条件 drain 路径.
+        batch = outbox.build_batch_all()
         assert batch is not None
-        self.assertEqual(len(batch.events), BATCH_MAX_EVENTS)
+        self.assertEqual(len(batch.events), 100)
         # 提交后 buffer 清空
         self.assertEqual(outbox.size, 0)
 

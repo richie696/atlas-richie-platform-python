@@ -42,6 +42,7 @@ from __future__ import annotations
 from ...source._supervisor.activation import RuleSourceActivation
 from .._identity import ReporterIdentity
 from ..reporter import AgentReporter, ReportingEvent
+from atlas_richie.contracts.reporting.v1 import ReportingEventKind
 
 
 def activation_to_event(fact: RuleSourceActivation) -> ReportingEvent:
@@ -68,7 +69,7 @@ def activation_to_event(fact: RuleSourceActivation) -> ReportingEvent:
     - ``epoch`` / ``revision`` / ``checksum`` → version triplet
     """
     return ReportingEvent(
-        kind="rule_source_activated",
+        kind=ReportingEventKind.RULE_SOURCE_ACTIVATED.value,
         source_id=fact.source_id,
         resource=None,
         rule_id=None,
@@ -76,12 +77,15 @@ def activation_to_event(fact: RuleSourceActivation) -> ReportingEvent:
         failure_class=None,
         reason=fact.reason,
         previous_source_id=fact.previous_source_id,
-        priority=fact.priority,
+        priority=None,
         health_class=None,
         reason_message=None,
-        epoch=fact.epoch,
-        revision=fact.revision,
-        checksum=fact.checksum,
+        epoch=fact.version.epoch,
+        revision=fact.version.revision,
+        # M6.1 RuleVersion.checksum 是 64 hex (无 "sha256:" 前缀),
+        # wire 协议 §5.1 要求 "sha256:" + 64 hex; reporter 端
+        # 构造 RuleSourceActivationFact 时统一加前缀.
+        checksum=fact.version.checksum,
     )
 
 

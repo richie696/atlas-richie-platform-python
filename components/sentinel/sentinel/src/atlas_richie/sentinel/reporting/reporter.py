@@ -87,6 +87,9 @@ from typing import Any
 
 from atlas_richie.contracts.reporting.v1 import (
     PROTOCOL_VERSION,
+    ExecResult,
+    HealthClass,
+    ReasonClass,
     ReportingEnvelope,
     ReportingEventKind,
 )
@@ -496,12 +499,9 @@ def _build_envelope_template(
     if kind is ReportingEventKind.RULE_SOURCE_ACTIVATED:
         fact = RuleSourceActivationFact(
             source_id=event.source_id or "",
-            reason=event.reason or "initial",
-            previous_source_id=event.previous_source_id,
-            priority=event.priority if event.priority is not None else 0,
             epoch=event.epoch if event.epoch is not None else 0,
             revision=event.revision if event.revision is not None else 0,
-            checksum=event.checksum or "sha256:" + "0" * 64,
+            checksum=_normalize_checksum(event.checksum),
         )
         return build_rule_source_activated(
             identity=identity, sequence=0, fact=fact
@@ -509,58 +509,78 @@ def _build_envelope_template(
     if kind is ReportingEventKind.RULE_SOURCE_STALE:
         fact = SourceHealthFact(
             source_id=event.source_id or "",
-            health_class=event.health_class or "stale",
+            health_class=(event.health_class or HealthClass.STALE.value).upper(),
+            reason_class=(event.failure_class or ReasonClass.UNKNOWN.value).upper(),
             epoch=event.epoch,
             revision=event.revision,
-            checksum=event.checksum,
+            checksum=_normalize_checksum_optional(event.checksum),
             reason_message=event.reason_message or "",
         )
         return build_source_stale(identity=identity, sequence=0, fact=fact)
     if kind is ReportingEventKind.RULE_SOURCE_DEGRADED:
         fact = SourceHealthFact(
             source_id=event.source_id or "",
-            health_class=event.health_class or "degraded",
+            health_class=(event.health_class or HealthClass.DEGRADED.value).upper(),
+            reason_class=(event.failure_class or ReasonClass.UNKNOWN.value).upper(),
             epoch=event.epoch,
             revision=event.revision,
-            checksum=event.checksum,
+            checksum=_normalize_checksum_optional(event.checksum),
             reason_message=event.reason_message or "",
         )
         return build_source_degraded(identity=identity, sequence=0, fact=fact)
     if kind is ReportingEventKind.RULE_APPLIED:
         fact = SlotExecFact(
-            resource=event.resource or "",
+            source_id=event.source_id or "",
             rule_id=event.rule_id or "",
-            exec_result=event.exec_result or "applied",
+            exec_result=event.exec_result or ExecResult.APPLIED.value,
             failure_class=None,
             epoch=event.epoch if event.epoch is not None else 0,
             revision=event.revision if event.revision is not None else 0,
-            checksum=event.checksum or "sha256:" + "0" * 64,
+            checksum=_normalize_checksum(event.checksum),
         )
         return build_rule_applied(identity=identity, sequence=0, fact=fact)
     if kind is ReportingEventKind.RULE_BLOCKED:
         fact = SlotExecFact(
-            resource=event.resource or "",
+            source_id=event.source_id or "",
             rule_id=event.rule_id or "",
-            exec_result=event.exec_result or "blocked",
+            exec_result=event.exec_result or ExecResult.BLOCKED.value,
             failure_class=None,
             epoch=event.epoch if event.epoch is not None else 0,
             revision=event.revision if event.revision is not None else 0,
-            checksum=event.checksum or "sha256:" + "0" * 64,
+            checksum=_normalize_checksum(event.checksum),
         )
         return build_rule_blocked(identity=identity, sequence=0, fact=fact)
     if kind is ReportingEventKind.RULE_FAILED:
         fact = SlotExecFact(
-            resource=event.resource or "",
+            source_id=event.source_id or "",
             rule_id=event.rule_id or "",
-            exec_result=event.exec_result or "failed",
+            exec_result=event.exec_result or ExecResult.FAILED.value,
             failure_class=event.failure_class,
             epoch=event.epoch if event.epoch is not None else 0,
             revision=event.revision if event.revision is not None else 0,
-            checksum=event.checksum or "sha256:" + "0" * 64,
+            checksum=_normalize_checksum(event.checksum),
         )
         return build_rule_failed(identity=identity, sequence=0, fact=fact)
     # pragma: no cover (StrEnum exhaustive)
     raise ValueError(f"unsupported event kind: {kind!r}")
+
+
+def _normalize_checksum(checksum: str | None) -> str:
+    """归一化 checksum 为 wire 格式 ``sha256:`` + 64 hex (协议 §5.1)."""
+    if not checksum:
+        return "sha256:" + "0" * 64
+    if checksum.startswith("sha256:"):
+        return checksum
+    return "sha256:" + checksum
+
+
+def _normalize_checksum_optional(checksum: str | None) -> str | None:
+    """归一化 checksum 为 wire 格式; None / 空 → None (成组可选, 协议 §5.2)."""
+    if not checksum:
+        return None
+    if checksum.startswith("sha256:"):
+        return checksum
+    return "sha256:" + checksum
 
 
 __all__ = [

@@ -221,6 +221,9 @@ class ReportingTransport:
 
     async def _submit_once(self, body: bytes, *, attempts: int) -> TransportResult:
         """单次 HTTP POST (含 TCP 连接 + 请求 + 响应解析)."""
+        # 0. 渲染 auth header (含 control char 拒绝, header injection 防护)
+        #    必须在 connect 前, 避免 bad token 浪费一次 TCP 握手
+        auth_value = render_auth_header_value(self._auth_token)
         # 1. 建 TCP 连接 (loopback only, 协议 §3.5)
         try:
             reader, writer = await asyncio.wait_for(
@@ -232,8 +235,7 @@ class ReportingTransport:
                 f"connect to {self._host}:{self._port} failed: {e}"
             ) from e
         try:
-            # 2. 拼 HTTP request
-            auth_value = render_auth_header_value(self._auth_token)
+            # 2. 拼 HTTP request (auth_value 已在 §0 渲染过)
             request: bytes = (
                 b"POST " + _REPORTING_PATH + b" " + _HTTP_VERSION + b"\r\n"
                 b"Host: " + self._host.encode("ascii") + b":" + str(self._port).encode("ascii") + b"\r\n"
