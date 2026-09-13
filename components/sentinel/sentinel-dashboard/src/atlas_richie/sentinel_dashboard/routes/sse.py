@@ -70,22 +70,55 @@ async def sse_metrics(request: Request) -> StreamingResponse:
     - 第一次立即推 (避免客户端等 5s)
     - 后续每 5s 推
     - 客户端断开 (asyncio.CancelledError) 优雅退出
+    - 支持 ``?max=N`` query param 限制最大推送次数 (默认无限制)
+    - 支持 ``?interval=Xs`` query param 覆盖推送间隔 (默认 5s, 测试
+      用 ``?interval=0.01s`` 加速验证多 event 流式)
 
     English
     --------
     Implementation: first push immediate, then every 5s. Client
-    disconnect via asyncio.CancelledError.
+    disconnect via asyncio.CancelledError. Supports ``?max=N`` and
+    ``?interval=Xs`` query params for testability.
     """
     state: DashboardState = request.app.state.dashboard
 
+    # 解析 ?max=N
+    max_events: int | None = None
+    raw_max = request.query_params.get("max")
+    if raw_max is not None:
+        try:
+            max_events = max(1, int(raw_max))
+        except ValueError:
+            max_events = None
+
+    # 解析 ?interval=Xs (默认 SSE_INTERVAL_S)
+    interval_s: float = SSE_INTERVAL_S
+    raw_interval = request.query_params.get("interval")
+    if raw_interval is not None:
+        try:
+            # 兼容 "0.01s" / "0.01" 格式
+            cleaned = raw_interval.rstrip("s").strip()
+            parsed = float(cleaned)
+            if parsed > 0:
+                interval_s = parsed
+        except (ValueError, AttributeError):
+            interval_s = SSE_INTERVAL_S
+
     async def event_stream():
         try:
+            count = 0
             # 第一次立即推
             yield _format_metrics_event(state, asyncio.get_event_loop().time())
-            # 后续每 5s 推
+            count += 1
+            if max_events is not None and count >= max_events:
+                return
+            # 后续每 interval_s 推
             while True:
-                await asyncio.sleep(SSE_INTERVAL_S)
+                await asyncio.sleep(interval_s)
                 yield _format_metrics_event(state, asyncio.get_event_loop().time())
+                count += 1
+                if max_events is not None and count >= max_events:
+                    return
         except asyncio.CancelledError:
             return
 

@@ -353,22 +353,100 @@ class HtmlPageTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("--bg", r.text)
 
 
-class SseTest(unittest.IsolatedAsyncioTestCase):
-    """SSE 实时推送 (1.0 跳过, 因为 ASGITransport + 异步生成器 + pytest-asyncio
-    组合 hang; 端点实现 + content-type 在生产环境浏览器 EventSource 验证).
+class SseTest(unittest.TestCase):
+    """SSE 实时推送 (用 Starlette TestClient 同步流式读取).
 
-    1.0 简化: SSE endpoint 保留在 app.py 路由表, 但 unit test 跳过.
-    端点真实行为 (streaming, reconnect) 留 1.x 跨语言 SDK 阶段 + 浏览器
-    EventSource E2E 验证.
+    中文
+    ----
+    ``starlette.testclient.TestClient`` 用 ``requests`` 同步库, 通过
+    WSGI/ASGI 桥接调用, 跟 ASGITransport + 异步生成器 + pytest-asyncio
+    组合不同, 可以稳定读取流式响应. 验证:
+    - 200 + content-type: text/event-stream
+    - 立即推 1 条 event (第 1 个 yield 在 sleep 之前)
+    - event 格式: ``event: metrics\\ndata: <json>\\n\\n``
+    - data 字段含 snaps + ts
+    - ``?max=N`` query 限制最大推送次数 (1 条验证 immediate push,
+      2 条验证后续 push)
+
+    English
+    --------
+    Uses Starlette TestClient (sync via ``requests``) instead of
+    ASGITransport (async) to avoid pytest-asyncio hang. Verifies:
+    endpoint, content-type, immediate 1st event, format, JSON content,
+    ``?max=N`` cap.
     """
 
-    def test_sse_endpoint_skipped_1_0(self) -> None:
-        """SSE endpoint 1.0 跳过 (见类 docstring)."""
-        self.skipTest(
-            "SSE endpoint 1.0 unit test 跳过: ASGITransport + async generator "
-            "+ pytest-asyncio 组合 hang; 端点保留在 app.py 路由, 真实行为 "
-            "由浏览器 EventSource 验证."
-        )
+    def test_sse_endpoint_immediate_push(self) -> None:
+        """GET /sse/metrics?max=1 — 立即推 1 条 event."""
+        from starlette.testclient import TestClient
+        import json as _json
+        dashboard = _make_dashboard()
+        app = _build_asgi(dashboard)
+        with TestClient(app) as client:
+            with client.stream("GET", "/sse/metrics?max=1") as r:
+                self.assertEqual(r.status_code, 200)
+                self.assertIn("text/event-stream", r.headers["content-type"])
+                # TestClient 同步读取, max=1 立即终止
+                collected = ""
+                for line in r.iter_lines():
+                    collected += line + "\n"
+                # 验证 event + data 格式
+                self.assertIn("event: metrics", collected)
+                self.assertIn("data: ", collected)
+                # 解析 data 行 JSON
+                for line in collected.split("\n"):
+                    if line.startswith("data: "):
+                        data = _json.loads(line[len("data: "):])
+                        self.assertIn("snaps", data)
+                        self.assertIn("ts", data)
+                        self.assertEqual(len(data["snaps"]), 1)
+                        self.assertEqual(data["snaps"][0]["admitted"], 10)
+                        return
+                self.fail(f"no data: line found in collected: {collected!r}")
+
+    def test_sse_endpoint_max_events(self) -> None:
+        """GET /sse/metrics?max=3&interval=0.01s — 验证 max=N + interval 限制."""
+        from starlette.testclient import TestClient
+        import json as _json
+        dashboard = _make_dashboard()
+        app = _build_asgi(dashboard)
+        with TestClient(app) as client:
+            # interval=0.01s 加速, max=3 限制 (1 immediate + 2 follow-up)
+            with client.stream("GET", "/sse/metrics?max=3&interval=0.01s") as r:
+                self.assertEqual(r.status_code, 200)
+                collected = ""
+                for line in r.iter_lines():
+                    collected += line + "\n"
+                # 计数 event 出现次数
+                event_count = collected.count("event: metrics")
+                self.assertEqual(event_count, 3, f"expected 3 events, got {event_count}: {collected!r}")
+                # 验证每条 event 都有 data
+                data_count = collected.count("data: ")
+                self.assertEqual(data_count, 3)
+
+    def test_sse_endpoint_max_invalid(self) -> None:
+        """GET /sse/metrics?max=invalid — 降级为无限制 (不抛错, 立即 push 1 条).
+
+        中文
+        ----
+        用 ``?max=1&interval=invalid`` 验证 interval 降级 + max=1 立即终止.
+        max=invalid 不能测 (会无限循环, 任何客户端 cap 都受 transport
+        buffer 限制).
+        """
+        from starlette.testclient import TestClient
+        dashboard = _make_dashboard()
+        app = _build_asgi(dashboard)
+        with TestClient(app) as client:
+            # interval=invalid 降级为默认 5s, 但 max=1 立即终止 (1 条 event)
+            with client.stream(
+                "GET", "/sse/metrics?max=1&interval=invalid"
+            ) as r:
+                self.assertEqual(r.status_code, 200)
+                collected = ""
+                for line in r.iter_lines():
+                    collected += line + "\n"
+                # 1 条 event (max=1 立即终止)
+                self.assertEqual(collected.count("event: metrics"), 1)
 
 
 if __name__ == "__main__":
