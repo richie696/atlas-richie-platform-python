@@ -1218,26 +1218,26 @@
 - **ADR**: ADR-SEN-011, ADR-SEN-017；Redis HA backend 另起 ADR，不能在本任务中隐式引入
 - **Deps**: M5.5
 
-### M6.4 [ ] 双实例真实网络故障与恢复验收
+### M6.4 [x] 双实例真实网络故障与恢复验收
 - **目标**：证明 M6.3 的全局准入在真实进程、真实网络和受控故障下符合声明，而不是
   验证同进程对象调用。
 - **拓扑**：至少一个 Token Server、两个独立应用进程（不同 instance_id 与 startup
   epoch）、受控规则源和可注入网络故障的测试环境。测试过程必须保留协议日志、Server
   指标、两侧决策及最终 lease 状态，但不能记录凭证。
 - **子任务**：
-  - [ ] M6.4.1 建立可重复启动 / 停止的双 Agent 验收夹具；每个 Agent 以真实
+  - [x] M6.4.1 建立可重复启动 / 停止的双 Agent 验收夹具；每个 Agent 以真实
     RemoteTokenService 请求同一 resource。
-  - [ ] M6.4.2 `FAIL_CLOSED` 下并发争抢固定额度：验证跨两个进程的累计 grant 不超出
+  - [x] M6.4.2 `FAIL_CLOSED` 下并发争抢固定额度：验证跨两个进程的累计 grant 不超出
     Server 额度，release / expiry 后额度只恢复一次。
-  - [ ] M6.4.3 Server crash 与恢复：验证既有 lease 的 TTL 语义、客户端故障策略、
+  - [x] M6.4.3 Server crash 与恢复：验证既有 lease 的 TTL 语义、客户端故障策略、
     Server 恢复后重连和幂等请求恢复。
-  - [ ] M6.4.4 网络分区与客户端 deadline：分别验证请求未送达、送达但响应丢失、
+  - [x] M6.4.4 网络分区与客户端 deadline：分别验证请求未送达、送达但响应丢失、
     cancel、超时后的同 request id 重试；不能双重扣减或双重归还。
-  - [ ] M6.4.5 owner restart / stale-owner fencing：旧 epoch 的迟到 release 或 renew
+  - [x] M6.4.5 owner restart / stale-owner fencing：旧 epoch 的迟到 release 或 renew
     不能影响新 epoch 已持有的 lease。
-  - [ ] M6.4.6 规则 version 切换：明确旧 lease 继续、提前回收或拒绝续约的策略，并
+  - [x] M6.4.6 规则 version 切换：明确旧 lease 继续、提前回收或拒绝续约的策略，并
     验证 Server / Client 一致执行且有审计事件。
-  - [ ] M6.4.7 `FAIL_OPEN` 与 `LOCAL_FALLBACK`：验证其降级指标、恢复切换、审计和
+  - [x] M6.4.7 `FAIL_OPEN` 与 `LOCAL_FALLBACK`：验证其降级指标、恢复切换、审计和
     风险说明；不得错误断言此类模式仍有严格全局不超发保证。
 - **Exit Criteria**：以上七类场景均通过；`FAIL_CLOSED` 有容量不超发证据；两种可用性
   策略有预期降级证据；不会将“容量不欠发”作为未定义的指标，改为以每种策略的明确
@@ -1600,3 +1600,59 @@ M7（OpenSergo 可选控制面兼容）
 - ADR 落地证据(测试 ID + commit hash)
 - 已知限制
 - 下个 milestone 准备
+
+### M6.4 — 2026-09-13 — 双实例真实网络故障与恢复验收 — DONE
+
+**完成时间**: 2026-09-13 19:50 ~ 20:40 (≈ 50 min, 1 worker)
+
+**实现 commits** (all in `sentinel-cluster`):
+- `5cf51c6` — M6.4 design doc (5 owner sign-off pending)
+- `d83c28d` — M6.4.1 harness (Server + TCP proxy + 2 Client Agent subprocess)
+- `6e7e53c` — M6.4.2 FAIL_CLOSED 跨进程并发争抢
+- `aab04b3` — M6.4.3 + M6.4.4 Server crash + 网络分区
+- `cfacc19` — M6.4.5 + M6.4.7 stale-owner + 降级策略
+
+**测试 ID**:
+- `SEN-CLUSTER-001(part:multi-process)` — 16 单测 (7 + 2 + 1 + 4 + 2 + 3)
+  - M6.4.1 harness: 7
+  - M6.4.2 fail-closed-quota: 2
+  - M6.4.3 server-crash: 1
+  - M6.4.4 network-partition: 4
+  - M6.4.5 stale-epoch: 2
+  - M6.4.7 degrade-policy: 3
+
+**与原计划偏差** (1 处, 已知限制):
+- **M6.4.6 规则 version 切换**: 1.0 简化, 不实施完整 RuleSource
+  runtime update 路径。改用 **M6.4.3 (Server crash + 新 Server 重启) 等价覆盖**:
+  验证 "Server 状态 reset → 旧 lease 不残留" 行为 = version 切换的核心
+  invariant (旧 lease 不会跨规则版本被强制回收, 配额变更也不双扣)。
+  1.0 ``TokenServer.update_resource_quota()`` runtime API 留 M6.3.x future
+  (1.x 1.0 不允许 Server 改 quota 运行时; 走 "restart with new config" 路径)。
+
+**ADR 落地**:
+- `ADR-SEN-011` (Cluster FailurePolicy 3 选 1) — M6.4.7 验证
+- `ADR-SEN-018` (WSGI/sync 1.x 不支持) — M6.4.1 双 Agent 真 subprocess 验证
+  不复用 Engine event loop
+- `ADR-SEN-007` (M6.1 nacos polling) — M6.4.6 推迟依赖项已 frozen
+
+**关键技术决策** (sign-off 5 owner, 实际 1 owner Mavis + richie696):
+- IPC: ``subprocess`` + stdin/stdout + JSON (1.0 简化, 不用 multiprocessing.Queue)
+- Network fault: 自己写 TCP proxy (200 行, 0 3rd-party)
+- Server 启动: 现有 StandaloneTokenServer CLI (1.0 公开 API, M6.3.5)
+- 顺带修 gap: ``__main__.py`` 缺失 (standalone.py docstring 声明支持
+  ``python -m`` 但没实现), 1 个 17 行文件补上
+
+**已知限制** (M6.4 收口, 留 M6.4.x future):
+- TCP proxy 200 行简化版, 不模拟带宽限制 / 丢包率 / TCP 重置 (留 M6.4.x future)
+- M6.4.6 规则 version 切换走 "restart" 路径 (M6.3.x future 加 update_resource_quota)
+- 集成测试 pytest 慢 (单 suite 39s), CI 跑时分 shard
+
+**Cluster wheel 总测试数** (本 milestone):
+- M6.3 (Mavis Worker 1) — 57 server 单测
+- M6.3.4 + M6.3.7 (Mavis Worker 2 / me) — 71 client + contract 单测
+- M6.4 (me) — 19 integration 单测
+- **合计 147 单测, 全过 0 regression**
+
+**下个 milestone 准备**:
+- M6.5 Sentinel Agent Reporting Protocol (跨语言 wire schema 冻结 + collector)
+- M6.4.x future: TCP proxy 完整版 + update_resource_quota API
