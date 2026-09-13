@@ -197,19 +197,28 @@ source.start(repository)  # 立即推一次 + 后台轮询
 重启和故障切换后恢复到同一个已审计快照。通过该前提后，扩展才可实现 `SnapshotRuleSource`
 Protocol (M6.1+ 推荐) 或 `LegacyRuleSource` (1.0 兼容, 不推荐新写)。
 
+**已有生产级实现**: `sentinel-source-nacos` wheel 已是完整
+`SnapshotRuleSource` 实现, 含 5 类 rule data-id 解码 + 5 类错误分类
++ 状态机 + 退避 + 脱敏 + 幂等 aclose。新 Source 应该**优先参考此
+实现**, 而不是从零开始 (PLANNING M6.1.1-1.6 落地 1:1 Java
+`sentinel-datasource-nacos` 行为)。详见 §3.6。
+
+下面给出一个**最小骨架** (仅作 template, 真实 Nacos 行为已在
+`sentinel-source-nacos` wheel 完整实现):
+
 ```python
-# 路径: components/sentinel/sentinel-source-nacos/src/atlas_richie/sentinel_source_nacos/
-# 主包**不**导入 Nacos SDK, 全部走 Port
+# 路径: 你的 extension/src/atlas_richie/sentinel_source_<name>/
+# 主包**不**导入你的 SDK, 全部走 Port
 from typing import AsyncIterator
 from atlas_richie.sentinel.source.rule_source import SnapshotRuleSource
 from atlas_richie.sentinel.rules.snapshot import RuleSnapshot
 
-class NacosRuleSource(SnapshotRuleSource):
-    source_id: str  # 配置时声明, e.g. "nacos-prod"
+class MyRuleSource(SnapshotRuleSource):
+    source_id: str  # 配置时声明, e.g. "my-prod"
 
     async def snapshots(self) -> AsyncIterator[RuleSnapshot]:
         """Yield complete validated RuleSnapshot; 失败不 yield, 保留 last-known-good."""
-        async for snap in self._nacos_listener():
+        async for snap in self._listener():
             yield snap  # 已校验; 失败 → 不 yield (Supervisor 标 stale)
 
     async def aclose(self) -> None:
@@ -329,20 +338,31 @@ client offline, service restart, or failover. Once that premise holds,
 implement the `SnapshotRuleSource` Protocol (M6.1+ recommended) or
 `LegacyRuleSource` (1.0 compat, not recommended for new code).
 
+**Production reference**: the `sentinel-source-nacos` wheel is a
+complete `SnapshotRuleSource` implementation with 5-way rule data-id
+decoding, 5-way error classification, state machine, bounded backoff,
+log redaction, and idempotent `aclose()`. New sources should **read
+this wheel first** rather than starting from scratch (PLANNING M6.1.1
+-1.6 deliver a 1:1 mirror of Java `sentinel-datasource-nacos`).
+See §3.6.
+
+The minimum skeleton below is a **template only**; the real Nacos
+behavior is fully implemented in the `sentinel-source-nacos` wheel:
+
 ```python
-# path: components/sentinel/sentinel-source-nacos/src/atlas_richie/sentinel_source_nacos/
-# the main package does NOT import the Nacos SDK — only via the Port
+# path: your-extension/src/atlas_richie/sentinel_source_<name>/
+# the main package does NOT import your SDK — only via the Port
 from typing import AsyncIterator
 from atlas_richie.sentinel.source.rule_source import SnapshotRuleSource
 from atlas_richie.sentinel.rules.snapshot import RuleSnapshot
 
-class NacosRuleSource(SnapshotRuleSource):
-    source_id: str  # declared at config time, e.g. "nacos-prod"
+class MyRuleSource(SnapshotRuleSource):
+    source_id: str  # declared at config time, e.g. "my-prod"
 
     async def snapshots(self) -> AsyncIterator[RuleSnapshot]:
         """Yield complete validated RuleSnapshot; failures do not yield
         (Supervisor marks the source stale and emits health event)."""
-        async for snap in self._nacos_listener():
+        async for snap in self._listener():
             yield snap  # already validated
 
     async def aclose(self) -> None:
@@ -366,6 +386,98 @@ await engine.assemble_sources(
 (the old `start(repository)` has no Engine / Supervisor reference, so it
 cannot mount the "supervised arbitration" path; a shim would silently
 change 1.0 behavior).
+
+### 3.6 `sentinel-source-nacos` wheel (production `SnapshotRuleSource` reference)
+
+This is the **first production extension** that consumes the new
+`SnapshotRuleSource` contract end-to-end. New Source implementations
+should read this wheel before writing their own.
+
+**Path**: `components/sentinel/sentinel-source-nacos/src/atlas_richie/sentinel_source_nacos/`
+
+**Public API** (5 + 1 symbols):
+
+| Symbol | Purpose |
+| ------ | ------- |
+| `NacosAuth` | Username + password value object (password redacted in `__repr__`) |
+| `NacosTLS` | CA + optional mTLS `cert`/`key` (PEM redacted in `__repr__`) |
+| `NacosRuleSourceConfig` | Frozen DTO: `source_id` / `server_addresses` / `namespace` / `group` / `data_id_prefix` / `auth` / `tls` / 4 `timedelta` timing fields |
+| `NacosSourceState` (StrEnum) | `CONNECTING` / `READY` / `STALE` / `DISCONNECTED` / `CLOSED` |
+| `NacosSourceError` (StrEnum) | `AUTH` / `NOT_FOUND` / `EMPTY` / `DECODE` / `NETWORK` |
+| `NacosRuleSource` | The `SnapshotRuleSource` implementation |
+
+**5 data-id convention** (Java sentinel-datasource-nacos 1:1):
+
+| Rule type | data-id (derived from `data_id_prefix`) |
+| --------- | --------------------------------------- |
+| `flow` | `{prefix}-flow-rules.json` |
+| `degrade` | `{prefix}-degrade-rules.json` |
+| `param_flow` | `{prefix}-param-flow-rules.json` |
+| `system` | `{prefix}-system-rules.json` |
+| `authority` | `{prefix}-authority-rules.json` |
+
+Use `config.data_id_for(rule_type)` to get the exact data-id string.
+
+**Lifecycle** (M6.1.3):
+
+1. `__init__` validates config; state = `CONNECTING`; SDK client is
+   **lazy** (not yet constructed).
+2. First `__anext__` on `snapshots()`: pull 5 data-ids → decode → yield
+   first `RuleSnapshot` → state = `READY` (or `STALE` on partial
+   success).
+3. Register 5 Nacos long-poll watchers; SDK callback marshals into
+   the asyncio event loop.
+4. On Nacos push: re-pull → re-decode → yield new `RuleSnapshot` with
+   updated `RuleVersion`.
+5. `aclose()` cancels the listener task, stops the SDK subscription,
+   closes the client, transitions to `CLOSED`. **Idempotent**.
+
+**Error classification** (M6.1.4):
+
+| Error | Trigger | Recovery | State |
+| ----- | ------- | -------- | ----- |
+| `AUTH` | 401/403 / SDK `NacosException` | **No auto-retry**; await human | `DISCONNECTED` |
+| `NOT_FOUND` | `get_config` returns `None` (404) | last-known-good preserved | `STALE` |
+| `EMPTY` | `""` / `b""` / `"[]"` / `"null"` content | last-known-good preserved | `STALE` |
+| `DECODE` | JSON parse / field missing / type wrong | last-known-good preserved | `STALE` |
+| `NETWORK` | connection refused / timeout / DNS failure | bounded exponential backoff | `DISCONNECTED` |
+
+Errors **do not** yield a new `RuleSnapshot` (last-known-good is
+preserved in the caller-side `RuleRepository`).
+
+**Redaction** (M6.1.5):
+
+`last_error_message` and all `logger.warning(...)` calls go through the
+`_redact` helper, which masks:
+
+- `server_addresses` (entire tuple not exposed; `host:port` →
+  `***:***`)
+- `namespace`, `username`, `password`, `token`, `accessKey`,
+  `secretKey`, `cert`, `key` (key=value / key:value → `***`)
+
+**Operator observability**:
+
+```python
+source.state                    # current NacosSourceState
+source.last_success_version     # RuleVersion | None
+source.last_error               # NacosSourceError | None
+source.last_error_message       # redacted str | None
+source.error_count(NacosSourceError.NETWORK)  # per-type cumulative count
+```
+
+**Test count**: 112 passed + 1 skipped (real-Nacos placeholder);
+main package 243 passed + 3 skipped unchanged (no regression).
+
+**Hard isolation contracts** (verified by tests):
+
+- `rg "_supervisor" components/sentinel/sentinel-source-nacos/src/`
+  returns only docstring text (no real import of the main package's
+  C layer).
+- `NacosClient` / `NacosException` / `ConfigResponse` appear **only**
+  in the internal `_NacosAdapter` (not in `__init__.py` or `codec.py`).
+- Only the `sentinel-source-nacos` wheel declares
+  `nacos-sdk-python>=2.0,<3.0`; main package dependency graph
+  unchanged.
 
 ### 3.4 Source boundary rules (hard constraints)
 

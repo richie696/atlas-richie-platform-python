@@ -161,6 +161,20 @@ await engine.assemble_sources(
 **禁止 shim 包装 1.0 旧 `RuleSource` 为 `SnapshotRuleSource`** (违反 1.0
 行为锁定, 改变 `start(repository)` 直连路径)。
 
+**生产级 `SnapshotRuleSource` 实现**: `sentinel-source-nacos` wheel
+是 M6.1.1-1.6 落地的完整参考实现, 含:
+
+- `NacosAuth` / `NacosTLS` (脱敏值对象)
+- `NacosRuleSourceConfig` (frozen DTO, 必填字段, 5 类 default-deny)
+- `NacosSourceState` (StrEnum) + `NacosSourceError` (StrEnum)
+- `NacosRuleSource` (完整 lifecycle + 5 类错误分类 + 退避 + 幂等 aclose + 脱敏)
+
+详见 `EXTENSION_GUIDE.md` §3.6。安装:
+
+```bash
+uv add atlas-richie-sentinel-source-nacos
+```
+
 ---
 
 ## 2. FlowRule(限流)

@@ -141,6 +141,18 @@ Engine 内部维护:
 | `RuleSourceActivation` observer 异常频率 | 持续 1 分钟 > 0 | observer 抛异常被隔离,主链路不挂;**激增**需查 observer 实现 |
 | `aclose()` 等待 Supervisor 超时 | 持续 > 30s | Source 任务未在 30s 内关闭,可能是 Source `aclose()` 没正确实现 |
 
+**`sentinel-source-nacos` (M6.1.1-1.6) 路径**:
+| 指标 | 告警阈值(参考) | 含义 |
+| ---- | -------------- | ---- |
+| `source.state == DISCONNECTED` (AUTH) | 立即 | Nacos 鉴权失败 (用户名/密码/Token 错);**不**自动重试,等人工 |
+| `source.state == STALE` 持续 > 5 分钟 | 持续 | last-known-good 过期;可能是 NOT_FOUND/EMPTY/DECODE 持续 |
+| `source.state == DISCONNECTED` (NETWORK) | 持续 > 1 分钟 | Nacos 集群不可达;触发有界指数退避 (`initial` → `max`) |
+| `source.error_count(NacosSourceError.AUTH)` 累计 > 0 | 立即 | 检查 Nacos 用户名/密码 / namespace 权限 |
+| `source.error_count(NacosSourceError.DECODE)` 持续 > 0 | 立即 | Nacos data_id 内容有坏 JSON / 字段缺失 / 类型错,last-known-good 保留 |
+| `source.error_count(NacosSourceError.NOT_FOUND)` 持续 > 0 | 1 分钟 | data_id 不存在 (拼写错 / 部署遗漏) |
+| `source.error_count(NacosSourceError.EMPTY)` 持续 > 0 | 1 分钟 | Nacos 配置被删除 (e.g. 运营误操作) |
+| `source.last_success_version` 长时间未变 | 持续 > 1 小时 (依业务) | Nacos 推送链路可能断了,需查 SDK 订阅 + 网络 |
+
 ## 2. Monitoring (English)
 
 ### 2.1 Built-in (main package, no 3rd-party)
@@ -163,6 +175,18 @@ exporter in 1.x) or wrap `engine.last_outcome` yourself.
 ### 2.3 Alerting
 
 (See table above.)
+
+**`sentinel-source-nacos` (M6.1.1-1.6) extension**:
+| Metric | Threshold (reference) | Meaning |
+| ------ | --------------------- | ------- |
+| `source.state == DISCONNECTED` (AUTH) | immediate | Nacos auth failure (username/password/Token); **no** auto-retry; await human |
+| `source.state == STALE` sustained > 5 min | sustained | last-known-good expired; may be NOT_FOUND/EMPTY/DECODE persisting |
+| `source.state == DISCONNECTED` (NETWORK) | sustained > 1 min | Nacos cluster unreachable; bounded exponential backoff fires |
+| `source.error_count(NacosSourceError.AUTH)` cumulative > 0 | immediate | check Nacos username/password / namespace permission |
+| `source.error_count(NacosSourceError.DECODE)` sustained > 0 | immediate | Nacos data-id has bad JSON / missing field / type wrong; last-known-good preserved |
+| `source.error_count(NacosSourceError.NOT_FOUND)` sustained > 0 | 1 min | data-id does not exist (typo / deployment miss) |
+| `source.error_count(NacosSourceError.EMPTY)` sustained > 0 | 1 min | Nacos config deleted (e.g. ops mis-operation) |
+| `source.last_success_version` unchanged for long | sustained > 1 h (business-dependent) | Nacos push link may be broken; check SDK subscription + network |
 
 ---
 
