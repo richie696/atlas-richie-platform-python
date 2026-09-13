@@ -19,7 +19,7 @@ V1 7 字段 envelope + per-kind payload.
 仅 FAILED 必填) 严格走 ``foundation/contracts/reporting/v1/codec.py``
 的 ``validate_payload`` 校验, **不**重复实现 wire schema.
 
-Wire 字段值 (DRAFT, frozen 后不变):
+Wire 字段值 (FROZEN 2026-09-13, 5-owner 签收完成, 不变):
 
 - ``event_kind``: 大写 (跟 V1 6 个 ReportingEventKind value 一致)
 - ``health_class``: 大写 STALE / DEGRADED / DISCONNECTED
@@ -47,7 +47,7 @@ All per-kind payload fields (3 ``rule_version_*`` group optional /
 ``foundation/contracts/reporting/v1/codec.py``'s ``validate_payload``;
 **no** duplicate wire-schema implementation.
 
-Wire field values (DRAFT, unchanged after freeze):
+Wire field values (FROZEN 2026-09-13, 5-owner signed off, immutable):
 
 - ``event_kind``: uppercase (matches V1 6 ReportingEventKind values)
 - ``health_class``: uppercase STALE / DEGRADED / DISCONNECTED

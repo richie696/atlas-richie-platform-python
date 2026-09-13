@@ -155,7 +155,7 @@ class ReportingOutbox:
 
     1. **emit() 串行化**: ``threading.Lock`` 保护 ``_next_sequence``
        严格递增 + 跟 protocol §8.3 "严格递增且连续" 一致.
-    2. **overflow 3 选 1 策略** (DRAFT frozen 后不变, 跟 Mavis 治理
+    2. **overflow 3 选 1 策略** (FROZEN 2026-09-13, 跟 Mavis 治理
        一致): DROP_OLDEST 静默淘汰, DROP_NEWEST 抛 OutboxFull,
        BLOCK_WITH_TIMEOUT 阻塞直到有空间或 ``batch_send_interval_ns``
        超时.
@@ -178,7 +178,7 @@ class ReportingOutbox:
     1. **emit() serialization**: ``threading.Lock`` guards
        ``_next_sequence`` strictly increasing; matches protocol §8.3
        "strictly increasing and contiguous".
-    2. **3-of-3 overflow policy** (DRAFT after freeze, per Mavis
+    2. **3-of-3 overflow policy** (FROZEN 2026-09-13, per Mavis
        governance): DROP_OLDEST silently evicts, DROP_NEWEST raises
        OutboxFull, BLOCK_WITH_TIMEOUT blocks until space or
        ``batch_send_interval_ns`` elapses.

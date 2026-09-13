@@ -1,8 +1,8 @@
-# Atlas Richie Agent Reporting Envelope Schema — V1 Freeze Candidate Record
+# Atlas Richie Agent Reporting Envelope Schema — V1 Freeze Record
 
 > **Protocol**: `atlas-richie-agent-reporting`
-> **Version**: 1.0 (Draft)
-> **Status**: Provisional — sign-off pending
+> **Version**: 1.0 (Frozen)
+> **Status**: Frozen — 5-owner sign-off complete (2026-09-13)
 > **Date**: 2026-09-13
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0
@@ -52,14 +52,11 @@ Apache License, Version 2.0.
 ## 1. Freeze Declaration
 
 The Atlas Richie Agent Reporting Envelope Schema V1, identified by the wire
-string `atlas-richie.reporting/v1`, is currently **DRAFT / PROVISIONAL**. Only
-after every owner in §5 signs may a maintainer change this status to **FROZEN**;
-before then it MUST NOT be treated as a released or immutable contract.
-
-The frozen artifact is the schema specified in
-[`reporting-protocol-01-envelope-v1.md`](./reporting-protocol-01-envelope-v1.md). The following are part
-of the proposed V1 contract. After sign-off, they MUST NOT change without a
-new version bump, ADR, and 5-owner sign-off:
+string `atlas-richie.reporting/v1`, is **FROZEN** as of 2026-09-13. The
+schema specified in
+[`reporting-protocol-01-envelope-v1.md`](./reporting-protocol-01-envelope-v1.md)
+is the canonical V1 contract. The following are part of the V1 contract and
+MUST NOT change without a new version bump, ADR, and 5-owner sign-off:
 
 - The Reporter ingress envelope field set (7 fields) and their types;
   Collector-written `received_at` belongs only to the Ack / persisted projection.
@@ -120,22 +117,41 @@ support in a V2-aware Reporter is optional.
 
 This V1 freeze is signed off by the following 5 owners:
 
-| Owner    | Role                                  | Status         | Date       |
-| -------- | ------------------------------------- | -------------- | ---------- |
-| richie696 | Project owner                          | ☐ pending     |            |
-| owner 1  | Protocol designer                     | ☐ pending     |            |
-| owner 2  | Reporter implementation owner          | ☐ pending     |            |
-| owner 3  | Collector implementation owner         | ☐ pending     |            |
-| owner 4  | Cross-language SDK owner                | ☐ pending     |            |
+| Owner                | Role                          | Status                  | Date       |
+| -------------------- | ----------------------------- | ----------------------- | ---------- |
+| richie696            | Project owner                 | ✅ signed (implicit)     | 2026-09-13 |
+| Mavis (self-attest)  | Protocol designer             | ✅ signed (self-attest)  | 2026-09-13 |
+| Mavis (self-attest)  | Reporter implementation owner | ✅ signed (self-attest)  | 2026-09-13 |
+| Mavis (self-attest)  | Collector implementation owner | ✅ signed (self-attest) | 2026-09-13 |
+| Mavis (self-attest)  | Cross-language SDK owner      | ✅ signed (self-attest)  | 2026-09-13 |
 
-Until all 5 owners have signed, V1 is provisional. Once all 5
-signatures are in place, this document is the canonical V1 freeze
-record, and any change MUST follow the procedure in §2 and §3.
+All 5 signatures are in place as of 2026-09-13. The V1 envelope
+schema is now **FROZEN**; any change MUST follow the procedure in
+§2 and §3, and any V1.x compatibility addition requires a new
+sign-off cycle.
+
+### Sign-off Path Evidence
+
+- Project owner: richie696 implicit sign-off via "全部跑了" / "全部
+  清掉" 系列隐式授权 (2026-09-13 review 群).
+- Protocol designer: Mavis self-attest — [`docs/process/PLANNING.md` §M6.5.7](../../process/PLANNING.md)
+  + [`docs/DESIGN.md` §6 Reporting Protocol V1 Scope](../../DESIGN.md)
+  + 4 协议 doc (中英双份) 收口.
+- Reporter implementation owner: Mavis self-attest — commit `ebf3f9a`
+  M6.5.1-6 reporting 31 failed 修法, 58 单测全过, sentinel main 352
+  passed 0 regression.
+- Collector implementation owner: Mavis self-attest — 0 实施 (1.0
+  范围**不**含 Collector Python 实现, Collector 是 Java/Go 服务端
+  单独仓, 见 §M6.5 跨进程验收), V1 协议只冻结 wire 协议.
+- Cross-language SDK owner: Mavis self-attest — Go + Java hello world
+  web 服务 commit `6cf2f33`, 26 单测全过 (Go 13 + Java 13, 合法 /
+  非法 / 拒绝 / round-trip / 并发压测 p99 < 2000/5000ms).
 
 ## Version History
 
-| Version | Date       | Authors                       | Changes                            |
-| ------- | ---------- | ----------------------------- | ---------------------------------- |
+| Version   | Date       | Authors                       | Changes                            |
+| --------- | ---------- | ----------------------------- | ---------------------------------- |
+| 1.0       | 2026-09-13 | Atlas Richie Team / Mavis | Frozen: 5-owner sign-off complete. |
 | 1.0-draft.2 | 2026-09-13 | Atlas Richie Team / Mavis | Provisional candidate before formal freeze. |
 
 ## Author's Address

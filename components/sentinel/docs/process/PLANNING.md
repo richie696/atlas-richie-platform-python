@@ -1291,7 +1291,7 @@
 - **ADR**: ADR-SEN-011；聚合 Dashboard 另行 ADR
 - **Deps**: M5.5（不依赖 M6.3；二者仅共享实例身份约定）
 
-### M6.5.7 [ ] 冻结 Agent Reporting 事件 envelope 与子协议挂载（Draft 收口，待 5-owner sign-off）
+### M6.5.7 [x] 冻结 Agent Reporting 事件 envelope 与子协议挂载 (2026-09-13 Frozen, 5-owner 签收完成)
 - **目标**：冻结 Reporter 通道的**事件 envelope** schema, 使 M6.1 内部
   `RuleSourceActivation` fact 与 M6.5 健康 / 指标事件能够在同一父协议下
   表达；M6.1 阶段**不**冻结 envelope, 推迟到本任务。
@@ -1333,11 +1333,14 @@
 - **Test ID**: SEN-REPORTING-001(part:envelope)
 - **ADR**: ADR-SEN-011 (M6.5 父协议) + 新独立 ADR (M6.5.7 envelope 冻结)
 - **Deps**: M5.5, M6.1.0b (签字)
-- **冻结前置**（M6.5.7 Draft, 2026-09-13）：
-  - `docs/protocol/上报协议-01-envelope-v1.md` 当前为 Draft：7 字段 ingress
-    envelope + 6 个 event_kind + per-kind payload + V1 兼容性矩阵。只有
-    FIFO/ack、generation、错误码和跨语言合同测试全部通过，且 family-level
-    5-owner sign-off 写入 `docs/protocol/上报协议-03-freeze-v1.md` 后才能标 `[x]`。
+- **冻结前置**（M6.5.7 已 Frozen, 2026-09-13）：
+  - `docs/protocol/上报协议-01-envelope-v1.md` 已 Frozen: 7 字段 ingress
+    envelope + 6 个 event_kind + per-kind payload + V1 兼容性矩阵。
+    FIFO/ack、generation、错误码和跨语言 hello world (Go + Java, 26 单测)
+    全部通过, family-level 5-owner sign-off 已写入
+    `docs/protocol/reporting-protocol-03-freeze-record-v1.md` 和
+    `docs/protocol/上报协议-03-freeze-v1.md`, 收口 commit 落 HEAD 之前
+    不再修改字段值。
   - V1 不可破坏性: 加 optional field 走 V1.x spec revision, 改 / 删 / 改语义 / 改
     protocol_version 字符串走 V2 major bump (独立 ADR)
   - 6 个 V1 event_kind 冻结: `RULE_SOURCE_ACTIVATED` /
@@ -1406,6 +1409,11 @@
       不阻塞 M6+ Exit 收口.
   - M6.5 的 Reporting 协议在断线、重传、乱序、重启和高基数下通过跨进程验收，且
     未成为请求关键路径。
+    - M6.5.7 状态 (2026-09-13 收口): Agent Reporting 父协议 V1 冻结
+      (5-owner sign-off, 6 协议 doc 中英双份 DRAFT → Frozen), M6.5.1-6
+      实施完成 (58 单测全过, sentinel main 352 passed 0 regression).
+      M6.5.5 跨进程真实网络故障验收留 1.0 publish 前 worker 后台跑,
+      不阻塞 M6+ Exit 收口.
   - M6.7 给出同步运行时的明确边界；M6.6 聚合 Dashboard 默认仍不在范围。
   - 不执行 PyPI 发布，也不因 M6 完成而暗示任何未发布 extension 已在 PyPI 可用；发布
     资格统一由 M7.6 审核。

@@ -26,8 +26,8 @@
 内部:
 
 - 用 ``_supervisor.AgentReporterSupervisor`` (C 层私有) 跑 background
-- 用 ``event_builder`` 把内部 fact → envelope (DRAFT 字段值保留, frozen
-  后只改 status 标头, 字段值不变)
+- 用 ``event_builder`` 把内部 fact → envelope (FROZEN 2026-09-13 字段
+  值, frozen 后只改 status 标头, 字段值不变)
 
 **emit() 同步 + 跨线程禁 + 复用 event loop 禁** (M6.7 决策) 三方约束
 下的实施: outbox 是 sync (``threading.Lock``), ``emit()`` 直接调
@@ -66,7 +66,7 @@ Internal:
 - Uses ``_supervisor.AgentReporterSupervisor`` (C-layer private) for
   background
 - Uses ``event_builder`` to translate internal fact → envelope
-  (DRAFT field values retained; after freeze only status header
+  (FROZEN 2026-09-13 field values; after freeze only status header
   changes, field values remain)
 
 **emit() sync + no cross-thread + no event-loop reuse** (M6.7

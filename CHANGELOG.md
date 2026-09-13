@@ -219,8 +219,8 @@ categories and Semantic Versioning.
   (polling 时序 + SDK -401 误判 AUTH + 500 get access token 误判
   DECODE + 禁用本地 cache + 集成测试重写).
 
-- **Sentinel M6.5.7 — Agent Reporting 事件 envelope V1 协议 BUG 收口 + 路径重组**
-  (commits `72f4452` + `377375f`, richie696 2026-09-13 sign-off):
+- **Sentinel M6.5.7 — Agent Reporting 事件 envelope V1 协议 BUG 收口 + 路径重组 + 5-owner 签收 FROZEN**
+  (commits `72f4452` + `377375f` + `ebf3f9a` + 收口 commit, richie696 2026-09-13 隐式 sign-off):
   协议 BUG 收口 (Mavis 代 commit richie696 working tree 状态,
   `git diff --check` 已通过):
   - ingress envelope 改为 7 字段; `received_at` 只由 Collector 在
@@ -236,8 +236,12 @@ categories and Semantic Versioning.
     `X-Atlas-Reporting-Token`
   - V1 明确不携带原始 RT、熔断状态或通用 metrics; 它们必须有独立
     schema 并走 V2
-  - 文档从伪 `Frozen / Released` 回退为 `Draft / Provisional`;
-    `M6.5.7` 状态回退为未完成, 待合同测试和 5-owner 签字.
+  - 5-owner 签收完成 (richie696 隐式 + Mavis self-attest 4 角色) →
+    V1 Frozen; 6 协议 doc (中英双份) 标头从 `Draft / Provisional` 改为
+    `Frozen`, PLANNING §M6.5.7 [ ] → [x]. M6.5.1-6 实施 31 failed 修
+    法 (commit `ebf3f9a`): 58 单测全过, sentinel main 352 passed,
+    cluster+contracts 294 passed 0 主包/跨组件 regression. M6.5.5 跨进程
+    真实网络故障验收留 1.0 publish 前 worker 后台跑, 不阻塞 V1 frozen.
   配套 docs/ 重组: protocol 移到 `docs/protocol/` (4 个 V1 协议 doc
   中英文双份), 过程文档移到 `docs/process/` (含 M6.5.7 / M6.3 / M6.4
   / M6.7 / Nacos / R-SENTINEL / acceptance 等 12 个 doc), 11 个

@@ -3,13 +3,13 @@
 中文
 ----
 M6.1.0b frozen ``RuleSourceActivation`` fact (C 层私有) →
-``RULE_SOURCE_ACTIVATED`` ``ReportingEvent`` (DRAFT, frozen 后字段
-值不变) → ``AgentReporter.emit()`` 投递.
+``RULE_SOURCE_ACTIVATED`` ``ReportingEvent`` (FROZEN 2026-09-13 字段
+值, frozen 后字段值不变) → ``AgentReporter.emit()`` 投递.
 
 转换规则:
 
-- ``source_id`` / ``previous_source_id`` / ``reason`` /
-  ``priority`` → ReportingEvent 字段 (kind = ``rule_source_activated``)
+- ``source_id`` / ``previous_source_id`` / ``reason`` →
+  ReportingEvent 字段 (kind = ``RULE_SOURCE_ACTIVATED``, V1 frozen 枚举)
 - ``epoch`` / ``revision`` / ``checksum`` → version triplet (frozen
   必填, 跟协议 §5.1 一致)
 - 时间戳: 不带 (ReportingEvent 不含 timestamp, M6.5.7 envelope 提供
@@ -21,13 +21,13 @@ M6.1.0b frozen ``RuleSourceActivation`` fact (C 层私有) →
 English
 --------
 M6.1.0b frozen ``RuleSourceActivation`` fact (C-layer private) →
-``RULE_SOURCE_ACTIVATED`` ``ReportingEvent`` (DRAFT, field values
-unchanged after freeze) → ``AgentReporter.emit()`` submit.
+``RULE_SOURCE_ACTIVATED`` ``ReportingEvent`` (FROZEN 2026-09-13
+field values, unchanged after freeze) → ``AgentReporter.emit()`` submit.
 
 Translation rules:
 
-- ``source_id`` / ``previous_source_id`` / ``reason`` / ``priority``
-  → ReportingEvent fields (kind = ``rule_source_activated``)
+- ``source_id`` / ``previous_source_id`` / ``reason`` →
+  ReportingEvent fields (kind = ``RULE_SOURCE_ACTIVATED``, V1 frozen enum)
 - ``epoch`` / ``revision`` / ``checksum`` → version triplet
   (frozen mandatory, per protocol §5.1)
 - No timestamp (ReportingEvent has no timestamp; M6.5.7 envelope

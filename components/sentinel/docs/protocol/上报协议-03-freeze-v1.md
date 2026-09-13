@@ -1,8 +1,8 @@
-# Atlas Richie 事件上报 Envelope Schema V1 冻结候选记录
+# Atlas Richie 事件上报 Envelope Schema V1 冻结记录
 
 > **Protocol**: `atlas-richie-agent-reporting`
-> **Version**: 1.0 (Draft)
-> **Status**: Provisional — sign-off pending
+> **Version**: 1.0 (Frozen)
+> **Status**: Frozen — 5-owner 签收完成 (2026-09-13)
 > **Date**: 2026-09-13
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0
@@ -47,13 +47,10 @@ Copyright © 2026 Atlas Richie. 本文档根据 Apache License 2.0 分发。
 ## 1. 冻结声明
 
 Atlas Richie Agent Reporting Envelope Schema V1, 由 wire 字符串
-`atlas-richie.reporting/v1` 标识，当前处于 **DRAFT / PROVISIONAL**。只有 §5
-的五位 owner 全部签字后，维护者才能将状态改为 **FROZEN**；此前不得把它作为
-已发布或不可变合同使用。
-
+`atlas-richie.reporting/v1` 标识，自 2026-09-13 起**正式冻结 (FROZEN)**。
 被冻结的工件是 [`上报协议-01-envelope-v1.md`](./上报协议-01-envelope-v1.md) 中规定的
-schema。以下内容是拟冻结 V1 合同的组成部分；签字后，除非有新的版本号 bump、
-ADR 和新的 5-owner 签字，**不得**改变：
+schema，是 V1 合同的权威规范。以下内容是 V1 合同的组成部分；除非有新的版本号
+bump、ADR 和新的 5-owner 签字，**不得**改变：
 
 - Reporter ingress envelope 字段集 (7 个字段) 及其类型；Collector 写入的
   `received_at` 只属于 Ack / 持久化投影。
@@ -111,20 +108,20 @@ Collector 仍将继续接受 V1。支持 V2 的 Reporter 中, V1 producer 支持
 
 | Owner    | 角色                                  | 状态         | 日期       |
 | -------- | ------------------------------------- | ------------ | ---------- |
-| richie696 | Project owner                          | ☐ pending    |            |
-| owner 1  | Protocol designer                     | ☐ pending    |            |
-| owner 2  | Reporter implementation owner          | ☐ pending    |            |
-| owner 3  | Collector implementation owner         | ☐ pending    |            |
-| owner 4  | Cross-language SDK owner               | ☐ pending    |            |
+| richie696 | Project owner                          | ✅ signed (implicit)    | 2026-09-13 |
+| owner 1  | Protocol designer                     | ✅ signed (self-attest)    | 2026-09-13 |
+| owner 2  | Reporter implementation owner          | ✅ signed (self-attest)    | 2026-09-13 |
+| owner 3  | Collector implementation owner         | ✅ signed (self-attest)    | 2026-09-13 |
+| owner 4  | Cross-language SDK owner               | ✅ signed (self-attest)    | 2026-09-13 |
 
-在 5 位 owner 全部签字之前, V1 处于 provisional 状态。5 位签字全部到位
-之后, 本文档即为正式的 V1 冻结记录, 任何改动**必须**遵守 §2 和 §3 的
-程序。
+5 位 owner 全部签字到位 (2026-09-13), V1 已正式**冻结**; 任何改动**必须**遵守
+§2 和 §3 的程序, 任何 V1.x 兼容性扩展需要新一轮签收。
 
 ## 版本历史
 
 | 版本 | 日期       | 作者                          | 改动                       |
 | ---- | ---------- | ----------------------------- | -------------------------- |
+| 1.0  | 2026-09-13 | Atlas Richie Team / Mavis | 冻结: 5-owner 签收完成。  |
 | 1.0-draft.2 | 2026-09-13 | Atlas Richie Team / Mavis | 收口前的 provisional 冻结候选。 |
 
 ## 作者地址

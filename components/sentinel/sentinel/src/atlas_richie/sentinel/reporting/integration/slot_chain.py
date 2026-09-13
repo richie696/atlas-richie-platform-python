@@ -221,7 +221,7 @@ def outcome_to_event(outcome: Outcome, snapshot: RuleSnapshot) -> ReportingEvent
     event (ADMITTED / CANCELLED).
     """
     # 简化: resource / rule_id 1.0 暂未在 Outcome 暴露, 用
-    # "unknown" 占位 (DRAFT 阶段, frozen 后 V2 考虑扩展 Outcome)
+    # "unknown" 占位 (1.0 frozen: Outcome 没暴露 rule_id, 2.x 考虑扩展)
     error = getattr(outcome, "error", None)
     error_args = getattr(error, "args", None) or ("",)
     error_message = error_args[0] if error is not None and error_args else None
