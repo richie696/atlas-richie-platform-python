@@ -387,11 +387,21 @@ of this schema:
 
 ## Appendix B. Sign-off
 
-This V1 schema was frozen under 5-owner sign-off. The sign-off
-record is maintained at
-[`docs/protocol/envelope-schema-freeze-record-v1.md`](./envelope-schema-freeze-record-v1.md).
-Subsequent revisions require a new sign-off cycle and the changes
-listed in §9.
+This V1 schema was frozen under 5-owner sign-off. Subsequent
+revisions require a new sign-off cycle and the changes listed in
+§9.
+
+| Owner     | Role                              | Status         | Date       |
+| --------- | --------------------------------- | -------------- | ---------- |
+| richie696 | Project owner                     | ☐ pending      |            |
+| owner 1   | Protocol designer                 | ☐ pending      |            |
+| owner 2   | Reporter implementation owner     | ☐ pending      |            |
+| owner 3   | Collector implementation owner    | ☐ pending      |            |
+| owner 4   | Cross-language SDK owner          | ☐ pending      |            |
+
+Until all 5 owners have signed, V1 is provisional. Once all 5
+signatures are in place, this appendix is the canonical V1 freeze
+sign-off, and any change MUST follow the procedure in §9.
 
 ## Version History
 

@@ -1337,8 +1337,8 @@
 - **Deps**: M5.5, M6.1.0b (签字)
 - **V1 冻结** (M6.5.7 envelope freeze, 2026-09-13):
   - `docs/protocol/事件上报协议-v1.md` V1 schema 冻结 (8 字段
-    envelope + 6 个 event_kind + per-kind frozen payload + V1 兼容性矩阵)
-  - `docs/protocol/事件包冻结-v1.md` design + 5 owner sign-off doc
+    envelope + 6 个 event_kind + per-kind frozen payload + V1 兼容性矩阵);
+    5-owner sign-off 记录在该 doc 附录 B
   - V1 不可破坏性: 加 optional field 走 V1.1 minor, 改 / 删 / 改语义 / 改
     protocol_version 字符串走 V2 major bump (独立 ADR)
   - 6 个 V1 event_kind 冻结: `RULE_SOURCE_ACTIVATED` /

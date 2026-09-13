@@ -85,8 +85,10 @@ schema. The inner schema is specified in
 | -------------------------------------------------- | ---------------------------------------------------- |
 | `agent-reporting-protocol-v1.md` (this family)     | Inner envelope schema (8 fields, 6 event kinds).     |
 | `reporting-protocol-v1.md` (this document)        | Outer transport, auth, version, error codes, batch.   |
-| `envelope-schema-freeze-record-v1.md` (sign-off)   | Formal V1 freeze record.                              |
 | `cluster-token-protocol-v1.md` (sibling)          | The Atlas Richie Cluster Token Protocol (admission).  |
+
+The envelope schema 5-owner sign-off record is maintained in
+[`agent-reporting-protocol-v1.md` Appendix B](./agent-reporting-protocol-v1.md#appendix-b-sign-off).
 
 ## 2. Data Boundary
 
@@ -608,8 +610,9 @@ Connection: close
 ## Appendix B. Sign-off
 
 This V1 specification was frozen under 5-owner sign-off. The
-sign-off record is maintained at
-[`docs/protocol/envelope-schema-freeze-record-v1.md`](./envelope-schema-freeze-record-v1.md).
+envelope schema 5-owner sign-off record is maintained in
+[`agent-reporting-protocol-v1.md` Appendix B](./agent-reporting-protocol-v1.md#appendix-b-sign-off);
+the 5-owner sign-off table for this spec is to be added.
 Subsequent revisions require a new sign-off cycle and the changes
 listed in §15.
 

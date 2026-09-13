@@ -558,12 +558,13 @@ Connection: close
 ## Appendix B. Sign-off
 
 This V1 specification was frozen under 5-owner sign-off. The
-sign-off record is maintained at
-[`docs/protocol/envelope-schema-freeze-record-v1.md`](./envelope-schema-freeze-record-v1.md)
-(for the envelope schema) and at
-[`docs/process/M6.3-CLUSTER-TOKEN-DESIGN.md`](../process/M6.3-CLUSTER-TOKEN-DESIGN.md)
-(for the cluster-token design discussion). Subsequent revisions
-require a new sign-off cycle and the changes listed in §10.
+envelope schema 5-owner sign-off record is maintained in
+[`agent-reporting-protocol-v1.md` Appendix B](./agent-reporting-protocol-v1.md#appendix-b-sign-off);
+the 5-owner sign-off table for this spec is to be added. The
+cluster-token design discussion is at
+[`docs/process/M6.3-CLUSTER-TOKEN-DESIGN.md`](../process/M6.3-CLUSTER-TOKEN-DESIGN.md).
+Subsequent revisions require a new sign-off cycle and the changes
+listed in §10.
 
 ## Version History
 
