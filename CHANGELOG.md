@@ -206,6 +206,55 @@ categories and Semantic Versioning.
   no-negative-on-real-value / TTL expiry / stampede funnel still
   applies.
 
+### Added (sentinel M6+ — `atlas-richie-sentinel` series)
+
+- **Sentinel M6.1.7 — Nacos SDK 升级 + polling 改造**
+  (commits `1048d2e` + `386d428` + `fa5d97e`): `nacos-sdk-python`
+  `0.1.16 → 3.2.0`, 模块路径 `nacos → v2.nacos`. NacosRuleSource
+  从 push 模式改成后台 polling task, 新增 `poll_interval` (默认 1s,
+  下限 100ms, ADR-SEN-007 资源上限追加). 5 类错误分类适配 SDK 3.2.0
+  (EMPTY 走 `""` / `[]` / `null`, NOT_FOUND 走 NacosException(404)).
+  5 真实验收场景 (FirstLoad / LegalUpdate / InvalidUpdate /
+  DisconnectRecover / AcloseIdempotent) 全过. 5 真实 bug fix
+  (polling 时序 + SDK -401 误判 AUTH + 500 get access token 误判
+  DECODE + 禁用本地 cache + 集成测试重写).
+
+- **Sentinel M6.5.7 — Agent Reporting 事件 envelope V1 frozen**
+  (commit `cfe25a0`): `docs/protocols/AGENT_REPORTING_PROTOCOL.md`
+  V1 schema (8 字段 envelope + 6 event_kind + 3 per-kind payload
+  + 9 错误码). 时间字段强制分离: `captured_at` (Reporter 本地 UTC,
+  诊断) + `received_at` (Collector 权威). V1 兼容性矩阵: 加
+  optional field 走 V1.1 minor, 破坏 V1 走 V2 major + 独立 ADR.
+
+- **Sentinel M6.3 design 阶段 + Python 投影**
+  (commits `29f45fe` + `8f18070` + `495834c` + `bc15d4a`):
+  Cluster Token Server / Client design + 5 owner sign-off, V1 wire
+  schema 冻结 (`docs/protocols/CLUSTER_TOKEN_PROTOCOL.md` 6 message_kind
+  + 8+1 envelope + opaque lease identity + owner epoch fencing +
+  idempotency request_id). 主包 `ports/token.py` 加 3 个 optional field
+  (`Token.lease_id` / `Token.owner_epoch` / `TokenResponse.retry_after_ns`,
+  1.0 兼容, 17 合同测试全过, 主包 260 passed → 272 passed, 0 regression)
+  + `ClusterFailurePolicy` enum (3 选 1, 禁止 default / auto / silent
+  之类禁用值) + 2 个新 `TokenDenyReason` 值
+  (`RESOURCE_NOT_CONFIGURED` / `SERVER_OVERLOADED`, 12 单测覆盖 1.0
+  兼容). Python 投影 `atlas_richie.contracts.cluster.v1` (cluster wire)
+  + `atlas_richie.contracts.reporting.v1` (reporting wire) 88 单测全过
+  (严格 JSON codec, 拒绝未知 field / 缺必填 / 类型错 / 枚举不合法 /
+  超 size). `sentinel-cluster` wheel 移除 `redis` 依赖 (违反 M6.3
+  design "Cluster wheel 不强依赖 Redis") + 加 `atlas-richie-contracts`
+  依赖. 实施阶段 (M6.3.3/4/5/7) 留 worker 后台跑 (bc15d4a
+  `M6.3-IMPLEMENTATION-PLAN.md`).
+
+- **Sentinel M6.7 — WSGI / 同步阻塞引擎可行性评估**
+  (commit `c8d03ed`, ADR-SEN-018): 1.x **不支持** 同步阻塞引擎, 不
+  创建 `atlas-richie-sentinel-wsgi` / `atlas-richie-sentinel-sync` wheel,
+  不引入 `asgiref` / `greenlet` 到主包. 文档明确 "ASGI 是 1.x 唯一支持
+  部署". 三种部署场景结论: Django / Flask / 传统 WSGI = 不支持
+  (5/5 合同违反 + p99 > 20%); 同步 HTTP 客户端 (requests / httpx
+  同步模式) = 不支持 (跨线程 + 取消 + 资源三违反); ASGI bridge =
+  支持 (1.x 现状, 无需新增). 4 个可复现最小实验归档
+  (`M6.7-WSGI-SYNC-EVAL.md` §7).
+
 ### Added (R-M6 — `RedisCacheProperties`, commit `02f8ec8`)
 
 - **`RedisCacheProperties` dataclass** (R-M6): pydantic-settings
