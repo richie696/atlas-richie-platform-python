@@ -1156,12 +1156,23 @@
     SDK 连接且保持幂等；日志 / 指标不得暴露 endpoint、用户名、token 或规则敏感字段。
   - [ ] M6.1.6 为该实现接入 M3.1 `RuleSource` contract suite，并补 Nacos 专有的
     lifecycle / security tests。
+  - [x] M6.1.7 (P0 修复) 升级 `nacos-sdk-python` 0.1.16 → 3.2.0 + 改 push → polling
+    架构：Nacos 3.x 干掉了 V1 config API, SDK 3.2.0 gRPC listener 跟 Nacos 3.2.3
+    server 协议 drift, 唯一兼容路径是 polling 模式。详细设计见
+    `docs/M6.1.7-SDK-UPGRADE-POLLING.md`。公开 API surface 净增 1 个字段
+    (`NacosRuleSourceConfig.poll_interval` 默认 1s, 下限 100ms), 删除 1 个内部
+    type (`NacosCallbackParams` push 路径用), 1.x 1.0 兼容。
+  - [x] M6.1.7d 真实验收 5 场景: 写 `tests/integration/` (env var + socket probe
+    + namespace 隔离 + 真 SDK publish/get), 跑真 Nacos 3.2.3 全 5 场景。
 - **真实验收**：使用真实或协议兼容 Nacos 服务完成首次加载、一次合法更新、一次无效
   更新、连接中断并恢复、Source 关闭五种场景。无效更新和断线期间旧规则仍生效；不能用
-  mock callback 或 SDK fake 宣称完成。
-- **Exit Criteria**：contract test 全绿；真实服务五场景有留档；`rg` 证明主包未导入
-  Nacos；被动检查 wheel 的干净环境安装与卸载不影响主包；M6.1.0a 的迁移与
-  single-source 兼容证据、M6.1.0b 的 API review delta 均归档。
+  mock callback 或 SDK fake 宣称完成。M6.1.7 后, 走 polling 架构, 5 场景中"合法
+  更新 / 断网恢复" 改为 polling 触发 (≤ poll_interval 秒), 集成测试相应调整。
+- **Exit Criteria**：contract test 全绿；真实服务五场景有留档 (M6.1.7d 通过真
+  Nacos 3.2.3 验证, 文档化在 M6.1.7 sign-off); `rg` 证明主包未导入 Nacos; 被动
+  检查 wheel 的干净环境安装与卸载不影响主包；M6.1.0a 的迁移与 single-source 兼容
+  证据、M6.1.0b 的 API review delta、M6.1.7 的 SDK 升级 + polling 改造 sign-off
+  均归档。
 - **Test ID**: SEN-RULE-001(part:nacos), SEN-EXTENSION-ISOLATION-001
 - **ADR**: ADR-SEN-007, ADR-SEN-011
 - **Deps**: M3.1, M5.5

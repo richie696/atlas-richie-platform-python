@@ -204,6 +204,8 @@ class NacosRuleSourceConfig:
     read_timeout: timedelta = field(default=timedelta(seconds=10))
     reconnect_initial: timedelta = field(default=timedelta(seconds=1))
     reconnect_max: timedelta = field(default=timedelta(seconds=30))
+    # polling 间隔 (M6.1.7 改造: 1.0 SDK 3.2.0 改 polling 模式)
+    poll_interval: timedelta = field(default=timedelta(seconds=1))
 
     def __post_init__(self) -> None:
         # identity 校验
@@ -250,6 +252,14 @@ class NacosRuleSourceConfig:
             raise ValueError(
                 "NacosRuleSourceConfig.reconnect_max must be >= reconnect_initial"
             )
+        # M6.1.7: polling 间隔下限 100ms (防 hot loop 误用, 资源上限 ADR-SEN-007 追加)
+        poll_ms = self.poll_interval.total_seconds() * 1000
+        if poll_ms < 100:
+            raise ValueError(
+                f"NacosRuleSourceConfig.poll_interval must be >= 100ms "
+                f"(got {poll_ms:.0f}ms); lower limit is a resource-cap "
+                f"guard against hot-loop misuse (ADR-SEN-007 追加)"
+            )
 
     def data_id_for(self, rule_type: str) -> str:
         """按 PLANNING M6.1 约定生成完整 data_id。
@@ -284,5 +294,6 @@ class NacosRuleSourceConfig:
             f" connect_timeout={self.connect_timeout!s},"
             f" read_timeout={self.read_timeout!s},"
             f" reconnect_initial={self.reconnect_initial!s},"
-            f" reconnect_max={self.reconnect_max!s})"
+            f" reconnect_max={self.reconnect_max!s},"
+            f" poll_interval={self.poll_interval!s})"
         )

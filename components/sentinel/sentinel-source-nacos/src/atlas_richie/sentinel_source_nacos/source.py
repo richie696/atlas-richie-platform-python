@@ -1,40 +1,60 @@
-"""Nacos :class:`RuleSource` 实现 (M6.1.3 + M6.1.4 + M6.1.5)。
+"""Nacos :class:`RuleSource` 实现 (M6.1.7 — SDK 3.2.0 + polling 架构)。
 
 中文
 ----
 **职责**: 把 :class:`NacosRuleSourceConfig` 配置 + Nacos 5 个 data-id
 包装成主包 :class:`SnapshotRuleSource` Protocol。
 
-**3 个子任务**:
+**架构 (M6.1.7 改造, 替代 M6.1.0-1.6 push 路径)**:
+
+- **SDK 升级**: ``nacos-sdk-python`` 0.1.16 → 3.2.0 (模块 ``v2.nacos``,
+  async + gRPC)
+- **长轮询 push 不可用**: SDK 3.2.0 gRPC listener 跟 Nacos 3.2.3 server
+  协议 drift, 30 秒等待仍 0 events。改 polling 模式: 后台
+  ``asyncio.create_task`` 每 ``poll_interval`` 秒拉一次 5 个 data_id,
+  checksum 比对, 变化则 yield snapshot
+- **SDK 端取消**: 不再调 ``add_listener`` / ``add_config_watcher``; 适配层
+  只暴露 ``fetch_all`` + ``aclose`` 两个公开方法
+
+**3 个子任务 (M6.1.0 时代命名沿用, 实质已重写)**:
 
 - **M6.1.3 生命周期**: 启动 → 首次全量拉取 → 解码 → yield
-  → 进入 :class:`NacosSourceState.READY` → 订阅 long-poll
-  → 推送到达 → 重读 5 个 data_id → 解码 → yield
+  → 状态 ``READY`` → 启动 ``_poll_loop`` background task
+  → 每次 tick: 重新拉 5 个 data_id → 跟上次 checksum 比对 → 变化 yield
 - **M6.1.4 错误分类**: 5 类 (:class:`NacosSourceError`):
   AUTH / NOT_FOUND / EMPTY / DECODE / NETWORK, 不同恢复策略
-- **M6.1.5 关闭管理**: ``aclose()`` 幂等, 取消 listener task, 停 SDK 订阅
+- **M6.1.5 关闭管理**: ``aclose()`` 幂等, 取消 ``_poll_task``, 停 SDK 客户端
 
 **不**做的事:
 
 - **不** import 主包 C 层 ``_supervisor.*`` (C 层物理隔离)
 - **不** 泄漏 nacos SDK 类型到公开 API
-- **不** 阻塞事件循环: 同步 SDK 调用经
-  ``loop.run_in_executor`` 包装
+- **不** 在公开 API 暴露 push 路径的 callback type (``NacosCallbackParams``
+  在 M6.1.7 中删除, 不在 ``__all__``)
 - **不** 缓存凭据到 ``last_error_message`` (脱敏)
 - **不** 在错误时 yield 新 snapshot (last-known-good 由 caller 侧
   Repository 保留)
 
 English
 --------
-Nacos-backed implementation of :class:`SnapshotRuleSource`.
+Nacos-backed implementation of :class:`SnapshotRuleSource` (M6.1.7).
 
 Wraps :class:`NacosRuleSourceConfig` + 5 Nacos data-ids into the
-main-package ``SnapshotRuleSource`` Protocol. Covers M6.1.3 lifecycle,
-M6.1.4 5-way error classification, M6.1.5 idempotent aclose.
+main-package ``SnapshotRuleSource`` Protocol. Covers M6.1.3 polling
+lifecycle, M6.1.4 5-way error classification, M6.1.5 idempotent aclose.
+
+**M6.1.7 architecture (replaces M6.1.0-1.6 push path)**:
+
+- ``nacos-sdk-python`` upgraded to 3.2.0 (``v2.nacos`` module, async + gRPC).
+- Long-poll push is **not** used: SDK 3.2.0 gRPC listener is incompatible
+  with Nacos 3.2.3 server (0 events / 30s). A background
+  ``asyncio.create_task`` polls 5 data-ids every ``poll_interval`` seconds,
+  compares checksums, yields a new :class:`RuleSnapshot` on change.
+- SDK ``add_listener`` / ``add_config_watcher`` are **not** called. Adapter
+  exposes only ``fetch_all`` and ``aclose``.
 
 **Does not**: import main-package C-layer ``_supervisor.*``; leak
-nacos SDK types into public API; block the event loop (sync SDK
-calls go through ``loop.run_in_executor``); cache credentials in
+nacos SDK types into public API; cache credentials in
 ``last_error_message`` (redacted); yield a new snapshot on error
 (last-known-good preserved by the caller's ``RuleRepository``).
 """
@@ -59,7 +79,7 @@ _logger = logging.getLogger("atlas_richie.sentinel_source_nacos")
 
 
 # ---------------------------------------------------------------------------
-# 脱敏 (M6.1.5 前置要求)
+# 脱敏 (M6.1.5 前置要求, M6.1.7 沿用)
 # ---------------------------------------------------------------------------
 
 # 敏感字段名 / 关键字: 出现在消息中应替换为 "***"
@@ -156,23 +176,29 @@ def _all_data_ids(config: NacosRuleSourceConfig) -> list[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Nacos SDK 适配层
+# Nacos SDK 适配层 (M6.1.7: v2.nacos async API)
 # ---------------------------------------------------------------------------
-
-# SDK 回调签名 (从 nacos-sdk-python 源码确认):
-#   cb({"data_id", "group", "namespace", "raw_content", "content"})
-NacosCallbackParams = dict[str, Any]
 
 
 class _NacosAdapter:
-    """``NacosClient`` 的薄包装; 屏蔽同步 / 异常细节。
+    """``NacosConfigService`` (SDK 3.2.0) 的薄包装; 屏蔽 async / 异常细节。
 
     中文
     ----
-    把 nacos-sdk-python 的同步 API 包装成 ``await`` 形式, 把 HTTPError
-    转换成 5 类 :class:`NacosSourceError` 分类。
+    把 nacos-sdk-python 3.2.0 的 async API 包装成内部 async 接口, 把 SDK
+    抛的 ``NacosException`` / 网络错误转换成 5 类 :class:`NacosSourceError`
+    分类。**不**在公开 API 暴露, 只在本模块内部使用。
 
-    **不**在公开 API 暴露, 只在本模块内部使用。
+    M6.1.7 改造点 (vs M6.1.0-1.6):
+    - 删 ``register_watchers`` (push 路径); 仅保留 ``fetch_all`` / ``aclose``
+    - 删 SDK 同步 ``NacosClient`` 调用, 改 async ``NacosConfigService`` 调用
+    - 用 ``ClientConfigBuilder`` + ``GRPCConfig`` 构造客户端
+
+    English
+    --------
+    Thin wrapper around ``NacosConfigService`` (SDK 3.2.0 async).
+    Exposes ``fetch_all`` + ``aclose``; converts SDK exceptions into
+    5-way :class:`NacosSourceError` taxonomy.
     """
 
     def __init__(
@@ -182,68 +208,47 @@ class _NacosAdapter:
         client_factory: Callable[..., Any] | None = None,
     ) -> None:
         self._config = config
-        # 注入点: 测试用 fake client
+        # 注入点: 测试用 fake service
         if client_factory is None:
-            from nacos import NacosClient  # 同步 import; 在 IO 边界外
-            client_factory = NacosClient
+            from v2.nacos import NacosConfigService  # 顶层 lazy import
+            client_factory = NacosConfigService.create_config_service
         self._client_factory = client_factory
         self._client: Any | None = None
-        # 缓存已注册的 watcher 回调
-        self._registered_callbacks: list[tuple[str, str, Callable[..., None]]] = []
 
     async def _ensure_client(self) -> Any:
-        """懒构造 NacosClient (IO 边界用 run_in_executor)。"""
+        """懒构造 NacosConfigService (async)。"""
         if self._client is not None:
             return self._client
         cfg = self._config
-        loop = asyncio.get_running_loop()
+        # M6.1.7: SDK 3.2.0 用 ClientConfigBuilder 构造
+        from v2.nacos import ClientConfigBuilder, GRPCConfig
 
-        def _build() -> Any:
-            # nacos-sdk-python 2.x 的 server_addresses 接受 str / tuple[str]
-            # 内部会做 round-robin; 多个地址直接传 tuple
-            auth = cfg.auth
-            return self._client_factory(
-                server_addresses=list(cfg.server_addresses)
-                or [str(cfg.server_addresses[0])],
-                namespace=cfg.namespace,
-                username=auth.username if auth else None,
-                password=auth.password if auth else None,
-            )
-
-        self._client = await loop.run_in_executor(None, _build)
+        grpc_cfg = GRPCConfig(
+            port_offset=1000,  # Nacos 2.x+ gRPC 端口 = HTTP 端口 + 1000
+            grpc_timeout=int(cfg.read_timeout.total_seconds() * 1000),
+        )
+        client_config = (
+            ClientConfigBuilder()
+            .server_address(",".join(cfg.server_addresses))
+            .namespace_id(cfg.namespace)
+            .username(cfg.auth.username if cfg.auth else None)
+            .password(cfg.auth.password if cfg.auth else None)
+            .grpc_config(grpc_cfg)
+            .timeout_ms(int(cfg.read_timeout.total_seconds() * 1000))
+            .build()
+        )
+        self._client = await self._client_factory(client_config)
         return self._client
 
     async def aclose(self) -> None:
-        """停止订阅 + 清理 client。SDK 失败只 log warn。"""
+        """停 SDK 客户端。SDK 失败只 log warn。"""
         if self._client is None:
             return
-        loop = asyncio.get_running_loop()
-
-        def _stop() -> None:
-            try:
-                self._client.stop_subscribe()
-            except Exception as e:
-                _logger.warning(
-                    "nacos client stop_subscribe failed: %s",
-                    _redact(str(e), self._config),
-                )
-            # 取消所有注册的 watcher
-            for data_id, group, cb in self._registered_callbacks:
-                try:
-                    self._client.remove_config_watcher(data_id, group, cb)
-                except Exception as e:
-                    _logger.warning(
-                        "nacos remove watcher failed for %s: %s",
-                        data_id,
-                        _redact(str(e), self._config),
-                    )
-            self._registered_callbacks.clear()
-
         try:
-            await loop.run_in_executor(None, _stop)
+            await self._client.shutdown()
         except Exception as e:
             _logger.warning(
-                "nacos adapter aclose failed: %s",
+                "nacos service shutdown failed: %s",
                 _redact(str(e), self._config),
             )
         finally:
@@ -260,23 +265,41 @@ class _NacosAdapter:
         """
         client = await self._ensure_client()
         cfg = self._config
-        loop = asyncio.get_running_loop()
 
         result: dict[str, str] = {}
         errors: list[tuple[str, NacosSourceError, str]] = []
 
+        # M6.1.7: SDK 3.2.0 用 ConfigParam + async get_config
+        from v2.nacos.config.model.config_param import ConfigParam
+        from v2.nacos import NacosException
+
         for rule_type, data_id in _all_data_ids(cfg):
             try:
-                content = await loop.run_in_executor(
-                    None, client.get_config, data_id, cfg.group,
+                content = await client.get_config(
+                    ConfigParam(data_id=data_id, group=cfg.group)
                 )
+            except NacosException as e:
+                # SDK 抛 NacosException(error_code, message);
+                # 401/403 → AUTH; 400/404 → NOT_FOUND; 其它 → DECODE
+                msg = str(e)
+                code = getattr(e, "error_code", None)
+                if code in (401, 403) or "401" in msg or "403" in msg or "Insufficient privilege" in msg:
+                    errors.append((data_id, NacosSourceError.AUTH, msg))
+                elif code in (400, 404) or "404" in msg or "not found" in msg.lower():
+                    errors.append((data_id, NacosSourceError.NOT_FOUND, msg))
+                else:
+                    # SDK V3 protocol 错 (5xx / 其它 4xx 业务错); 视为 DECODE
+                    errors.append((data_id, NacosSourceError.DECODE, msg))
+                continue
+            except (URLError, TimeoutError, ConnectionError, OSError) as e:
+                errors.append(
+                    (data_id, NacosSourceError.NETWORK, f"nacos network error: {e!r}")
+                )
+                continue
             except HTTPError as e:
-                # SDK 在 no_snapshot=False 时不会 raise, 但 no_snapshot=True
-                # 时会 raise; 我们走 no_snapshot=False (默认) 走"静默
-                # 失败 + 返回 None"路径, 这里仅是防御
-                if e.code == 403:
+                if e.code in (401, 403):
                     errors.append(
-                        (data_id, NacosSourceError.AUTH, "nacos 403 forbidden")
+                        (data_id, NacosSourceError.AUTH, f"nacos {e.code}")
                     )
                 elif e.code == 404:
                     errors.append(
@@ -287,64 +310,39 @@ class _NacosAdapter:
                         (data_id, NacosSourceError.NETWORK, f"nacos http {e.code}")
                     )
                 continue
-            except (URLError, TimeoutError, ConnectionError, OSError) as e:
-                errors.append(
-                    (data_id, NacosSourceError.NETWORK, f"nacos network error: {e!r}")
-                )
-                continue
             except Exception as e:
-                # SDK NacosException (其他) — 大概率是 auth / config 错误
-                msg = str(e)
-                if "Insufficient privilege" in msg or "401" in msg or "403" in msg:
-                    errors.append((data_id, NacosSourceError.AUTH, msg))
-                else:
-                    errors.append(
-                        (data_id, NacosSourceError.NETWORK, f"nacos error: {msg}")
-                    )
+                # 其它 (例如 SDK 内部 gRPC 失败) → NETWORK
+                errors.append(
+                    (data_id, NacosSourceError.NETWORK, f"nacos error: {e!r}")
+                )
                 continue
 
+            # SDK 3.2.0 行为: data_id 不存在 或 内容为空 → 返回空字符串 ''
+            # (旧 SDK 0.1.16 缺失返回 None, Nacos 3.x 删 V1 endpoint 后 SDK 3.2.0
+            # 走 V3 protocol, 不区分 "不存在" vs "空内容")。
+            # 按 PLANNING M6.1.4 语义:
+            #   - NOT_FOUND: 服务端 404 (NacosException error_code 400/404)
+            #   - EMPTY:    服务端有这条配置但内容是空 ("" / "[]" / "null")
             if content is None:
-                # 404: Nacos SDK 把 404 → None (官方 no_snapshot=False 行为)
                 errors.append(
-                    (data_id, NacosSourceError.NOT_FOUND, "nacos 404 (None content)")
+                    (data_id, NacosSourceError.NOT_FOUND, "nacos missing (None content)")
                 )
                 continue
-            if not content.strip():
-                # 真正空: 视为 EMPTY (last-known-good 保留)
+            if content == "" or content.strip() in ("[]", "null"):
+                # "" 或 "[]" / "null" → EMPTY (PLANNING: "[]" 也算 EMPTY, 保留 last-known-good)
                 errors.append(
                     (data_id, NacosSourceError.EMPTY, "nacos empty content")
                 )
-                # **不**进入 result, 由 codec 跳过
                 continue
-            if content.strip() in ("[]", "null"):
-                # PLANNING: "[]" 也算 EMPTY, 保留 last-known-good
+            if not content.strip():
+                # 纯空白
                 errors.append(
-                    (data_id, NacosSourceError.EMPTY, "nacos '[]' or 'null' content")
+                    (data_id, NacosSourceError.EMPTY, "nacos empty (whitespace) content")
                 )
                 continue
             result[data_id] = content
 
         return result, errors
-
-    async def register_watchers(
-        self,
-        callback: Callable[[NacosCallbackParams], None],
-    ) -> None:
-        """注册 5 个 data_id 的 watcher。SDK long-poll 推送触发 callback。"""
-        client = await self._ensure_client()
-        cfg = self._config
-        loop = asyncio.get_running_loop()
-
-        def _register() -> None:
-            for rule_type, data_id in _all_data_ids(cfg):
-                self._registered_callbacks.append(
-                    (data_id, cfg.group, callback)
-                )
-                client.add_config_watcher(
-                    data_id, cfg.group, callback,
-                )
-
-        await loop.run_in_executor(None, _register)
 
 
 # ---------------------------------------------------------------------------
@@ -353,33 +351,33 @@ class _NacosAdapter:
 
 
 class NacosRuleSource(SnapshotRuleSource):
-    """Nacos 配置中心驱动的 :class:`SnapshotRuleSource`。
+    """Nacos 配置中心驱动的 :class:`SnapshotRuleSource` (M6.1.7 polling 模式)。
 
     中文
     ----
-    实现主包 :class:`SnapshotRuleSource` Protocol; 通过 SDK long-poll
-    订阅 + 全量重读策略实现"近实时"规则同步。
+    实现主包 :class:`SnapshotRuleSource` Protocol; 通过后台 polling task
+    (每 ``poll_interval`` 秒一次) 拉 5 个 Nacos data-id, 跟上次
+    checksum 比对, 变化则 yield 新 :class:`RuleSnapshot`。
 
-    **生命周期** (M6.1.3):
+    **生命周期** (M6.1.7 polling, 替代 M6.1.0-1.6 push):
 
     1. ``__init__``: 校验 config (由 :class:`NacosRuleSourceConfig` 自身
        做, 这里只存字段)
     2. ``snapshots()`` 第一次 ``__anext__`` 触发: 状态 ``CONNECTING``
        → 拉 5 个 data_id → 全部成功 → 解码 → yield
-       → 状态 ``READY`` → 注册 5 个 watcher
-    3. SDK 回调触发: 把回调 marshal 到 asyncio 事件循环
-       → 重新拉 5 个 data_id → 解码 → yield
+       → 状态 ``READY`` → 启动 ``_poll_loop`` 后台 task
+    3. Poll tick: 重新拉 5 个 data_id → 解码 → 跟上次 yield 的
+       snapshot.checksum 比对 → 变化则 yield 新 snapshot
     4. 任何错误 → 状态转移 (``STALE`` / ``DISCONNECTED``); **不**yield
        新 snapshot (last-known-good 由 caller 侧 Repository 保留)
-    5. ``aclose()``: 取消 SDK 回调注册 + 状态 ``CLOSED``;
+    5. ``aclose()``: 取消 ``_poll_task`` + 停 SDK 客户端; 状态 ``CLOSED``;
        后续 ``snapshots()`` 迭代立即结束
 
     **错误分类** (M6.1.4): 详见 :class:`NacosSourceError` 枚举 docstring
     + :class:`NacosRuleSourceConfig` 错误恢复策略表。
 
     **关闭语义** (M6.1.5): ``aclose()`` 幂等, **不**抛错; 即使 SDK
-    内部 ``stop_subscribe`` / ``remove_config_watcher`` 失败, 也只
-    log warn, 不影响状态机转移。
+    内部 ``shutdown`` 失败, 也只 log warn, 不影响状态机转移。
     """
 
     source_id: str
@@ -411,10 +409,10 @@ class NacosRuleSource(SnapshotRuleSource):
         self._reconnect_initial_sec: float = config.reconnect_initial.total_seconds()
         self._reconnect_max_sec: float = config.reconnect_max.total_seconds()
 
-        # SDK 回调 marshal 用
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._change_event: asyncio.Event | None = None
-        self._change_pending: bool = False
+        # M6.1.7 polling: 后台 task
+        self._poll_task: asyncio.Task[None] | None = None
+        self._poll_event: asyncio.Event | None = None
+        self._poll_interval_sec: float = config.poll_interval.total_seconds()
 
         # 关闭
         self._closed: bool = False
@@ -478,25 +476,6 @@ class NacosRuleSource(SnapshotRuleSource):
         if delay > self._reconnect_max_sec:
             delay = self._reconnect_max_sec
         return float(delay)
-
-    # --- SDK 回调 marshal ---
-
-    def _on_sdk_change(self, params: NacosCallbackParams) -> None:
-        """Nacos SDK 线程池回调; marshal 到 asyncio loop。
-
-        中文
-        ----
-        ``add_config_watcher`` 回调在 SDK 自己的 thread pool 触发
-        (``self.callback_tread_pool.apply``); 我们**不**在 callback 内
-        做任何阻塞 IO, 只把"有变化"信号扔到 asyncio loop。
-        """
-        loop = self._loop
-        if loop is None or loop.is_closed():
-            return
-        # 同一 data_id 多次变化 → 只触发一次重读
-        self._change_pending = True
-        if self._change_event is not None:
-            loop.call_soon_threadsafe(self._change_event.set)
 
     # --- 拉取 + 解码 + 错误分类 ---
 
@@ -566,23 +545,24 @@ class NacosRuleSource(SnapshotRuleSource):
 
         return snapshot, warnings
 
-    # --- 公开: snapshots() 异步迭代器 ---
+    # --- 公开: snapshots() 异步迭代器 (M6.1.7 polling 模式) ---
 
     async def snapshots(self) -> AsyncIterator[RuleSnapshot]:
-        """异步迭代器: 持续 yield :class:`RuleSnapshot`。
+        """异步迭代器: 持续 yield :class:`RuleSnapshot` (M6.1.7 polling)。
 
         中文
         ----
-        1. 首次 ``__anext__`` 触发: 拉 5 个 data_id → yield 首个
-           snapshot → 注册 5 个 watcher
-        2. 后续: 等 SDK 回调 (marshal 到 asyncio.Event) → 拉 → yield
-        3. 错误: **不**yield; 等待下次推送 / 退避
-        4. ``aclose()`` 后: 立即 ``StopAsyncIteration``
+        1. 首次 ``__anext__`` 触发: 拉 5 个 data_id → yield 首个 snapshot
+           → 启动 ``_poll_loop`` 后台 task
+        2. 后续 yield: 由 ``_poll_loop`` 推入 ``_poll_queue``,
+           snapshots() 循环 await ``_poll_queue.get()``
+        3. Poll tick (后台): 每 ``poll_interval`` 秒拉一次,
+           跟上次 checksum 比对, 变化则 put 新 snapshot 到 ``_poll_queue``
+        4. 错误: **不**yield; 状态转移, 退避后继续 poll
+        5. ``aclose()`` 后: 取消 ``_poll_task``, 立即 ``StopAsyncIteration``
         """
         if self._closed:
             return
-        self._loop = asyncio.get_running_loop()
-        self._change_event = asyncio.Event()
 
         # 1) 首次拉取 — 失败进入退避循环; 成功才 yield
         snapshot, _warnings = await self._initial_load_with_backoff()
@@ -591,41 +571,74 @@ class NacosRuleSource(SnapshotRuleSource):
         if self._closed:
             return
 
-        # 2) 注册 5 个 watcher (SDK long-poll)
-        try:
-            await self._adapter.register_watchers(self._on_sdk_change)
-        except Exception as e:
-            self._set_error(NacosSourceError.AUTH, repr(e))
-            self._set_state(NacosSourceState.DISCONNECTED)
-            return
+        # 2) 启动 polling 后台 task
+        self._poll_event = asyncio.Event()
+        self._poll_task = asyncio.create_task(
+            self._poll_loop(),
+            name=f"nacos-source-{self.source_id}-poll",
+        )
 
-        # 3) 主循环
+        # 3) 主循环: 等 poll task 推入新 snapshot
         while not self._closed:
-            # 等 SDK 推送或 aclose
-            assert self._change_event is not None
             try:
-                await self._change_event.wait()
+                next_snapshot = await self._wait_for_next_snapshot()
             except asyncio.CancelledError:
                 return
-            self._change_event.clear()
+            if next_snapshot is None or self._closed:
+                return
+            yield next_snapshot
+
+    async def _wait_for_next_snapshot(self) -> RuleSnapshot | None:
+        """等待 poll loop 推入下一个 snapshot; aclose 立即返回 None。"""
+        assert self._poll_event is not None
+        await self._poll_event.wait()
+        if self._closed:
+            return None
+        self._poll_event.clear()
+        return self._pending_snapshot
+
+    async def _poll_loop(self) -> None:
+        """M6.1.7 polling 后台 task。
+
+        中文
+        ----
+        每 ``poll_interval`` 秒:
+        1. ``_load_snapshot()`` 拉 5 个 data_id
+        2. 错误: 状态转移 + 退避; 不 yield
+        3. 成功: 跟上次 yield 的 snapshot.checksum 比对
+        4. 变化: 写 ``_pending_snapshot`` + ``_poll_event.set()``
+        5. 无变化: skip
+        """
+        while not self._closed:
+            try:
+                await asyncio.sleep(self._poll_interval_sec)
+            except asyncio.CancelledError:
+                return
             if self._closed:
                 return
-            self._change_pending = False
 
-            # 重新拉取 + 解码
             snapshot, _warnings = await self._load_snapshot()
             if snapshot is None:
-                # 错误分类已经处理; 退避后继续等下次 change_event
-                await self._sleep_with_cancel(
-                    self._backoff_seconds(),
-                )
+                # 错误: 已设置 _last_error + state; 退避后继续
+                err = self._last_error
+                if err is NacosSourceError.AUTH:
+                    # AUTH 不自动重试, 等人工干预
+                    continue
                 self._reconnect_attempt += 1
+                await self._sleep_with_cancel(self._backoff_seconds())
                 continue
 
-            # 成功 yield
+            # 成功: 跟上次 yield 的 snapshot 比对
             self._reconnect_attempt = 0
-            if not self._closed:
-                yield snapshot
+            if (
+                self._last_success_version is None
+                or snapshot.version.checksum != self._last_success_version.checksum
+            ):
+                self._last_success_version = snapshot.version
+                self._pending_snapshot = snapshot
+                if self._poll_event is not None:
+                    self._poll_event.set()
+            # else: 内容未变, skip
 
     async def _initial_load_with_backoff(
         self,
@@ -663,7 +676,7 @@ class NacosRuleSource(SnapshotRuleSource):
     # --- 公开: aclose ---
 
     async def aclose(self) -> None:
-        """幂等关闭: 取消监听, 停 SDK 订阅, 状态 → CLOSED。
+        """幂等关闭: 取消 polling task, 停 SDK 客户端, 状态 → CLOSED。
 
         中文
         ----
@@ -678,11 +691,18 @@ class NacosRuleSource(SnapshotRuleSource):
             if self._closed:
                 return
             self._closed = True
-            # 唤醒可能在等的 change_event
-            if self._change_event is not None:
+            # 唤醒可能在等的 _poll_event
+            if self._poll_event is not None:
                 try:
-                    self._change_event.set()
+                    self._poll_event.set()
                 except Exception:
+                    pass
+            # 取消 polling task
+            if self._poll_task is not None and not self._poll_task.done():
+                self._poll_task.cancel()
+                try:
+                    await self._poll_task
+                except (asyncio.CancelledError, Exception):
                     pass
             await self._adapter.aclose()
             self._set_state(NacosSourceState.CLOSED)

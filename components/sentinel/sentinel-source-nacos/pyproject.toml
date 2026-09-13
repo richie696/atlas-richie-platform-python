@@ -18,7 +18,7 @@ dependencies = [
   "atlas-richie-contracts>=0.2.0,<0.3.0",
   "atlas-richie-sentinel>=0.2.0,<0.3.0",
   "atlas-richie-sentinel>=0.2.0,<0.3.0",
-  "nacos-sdk-python>=2.0,<3.0",
+  "nacos-sdk-python>=3.0,<4.0",
 ]
 
 [project.optional-dependencies]

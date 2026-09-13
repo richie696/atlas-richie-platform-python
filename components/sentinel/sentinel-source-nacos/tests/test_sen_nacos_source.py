@@ -61,17 +61,19 @@ from atlas_richie.sentinel_source_nacos.source import (
 
 
 class _FakeNacosClient:
-    """Mock Nacos SDK client for unit tests.
+    """Mock Nacos SDK 3.2.0 ``NacosConfigService`` for unit tests.
 
     中文
     ----
-    只实现本模块**用到的** API 表面; 不替代完整 SDK 行为。
+    只实现本模块**用到的** v2.nacos async API 表面; 不替代完整 SDK 行为。
+    M6.1.7 改造: 适配 async + ConfigParam 接口; 不再模拟 add_listener /
+    add_config_watcher (polling 模式不需要 push 触发)。
     """
 
     def __init__(
         self,
         *,
-        server_addresses: list[str] | None = None,
+        server_addresses: Any = None,
         namespace: str | None = None,
         username: str | None = None,
         password: str | None = None,
@@ -82,13 +84,13 @@ class _FakeNacosClient:
         self.password = password
         # data_id → content (test 直接 set)
         self._config_data: dict[str, str] = {}
-        # watchers: data_id → list[cb]
-        self._watchers: dict[str, list[Callable[..., None]]] = {}
-        # 触发变化的方法 (test 直接调)
+        # 关闭标志
         self._stopped: bool = False
         # record calls
-        self.stop_subscribe_calls: int = 0
-        self.remove_watcher_calls: list[tuple[str, str]] = []
+        self.shutdown_calls: int = 0
+        self.get_config_calls: list[tuple[str, str]] = []
+        # error injection: set of data_id to raise on get_config
+        self._raise_on_get: dict[str, Exception] = {}
 
     def set_config(self, data_id: str, content: str | None) -> None:
         if content is None:
@@ -96,74 +98,63 @@ class _FakeNacosClient:
         else:
             self._config_data[data_id] = content
 
-    def trigger_change(self, data_id: str) -> None:
-        """模拟 Nacos 推送; 调所有已注册的 callback。"""
-        params = {
-            "data_id": data_id,
-            "group": "DEFAULT_GROUP",
-            "namespace": self.namespace,
-            "raw_content": self._config_data.get(data_id),
-            "content": self._config_data.get(data_id),
-        }
-        for cb in self._watchers.get(data_id, []):
-            cb(params)
+    def raise_on_get(self, data_id: str, exc: Exception) -> None:
+        """测试用: 让 get_config 抛指定异常 (模拟 NETWORK/AUTH/DECODE 错误)。"""
+        self._raise_on_get[data_id] = exc
 
-    # --- SDK API ---
+    # --- SDK 3.2.0 async API surface (NacosConfigService) ---
 
-    def get_config(self, data_id: str, group: str, timeout: float | None = None) -> str | None:
-        return self._config_data.get(data_id)
+    async def get_config(self, param: Any) -> str:
+        """M6.1.7: SDK 3.2.0 get_config 接受 ConfigParam, 返回 str (空字符串表示 404)。"""
+        data_id = param.data_id
+        group = param.group
+        self.get_config_calls.append((data_id, group))
+        if data_id in self._raise_on_get:
+            raise self._raise_on_get[data_id]
+        # 模拟 SDK 3.2.0 行为: 缺失返回空字符串
+        return self._config_data.get(data_id, "")
 
-    def add_config_watcher(
-        self,
-        data_id: str,
-        group: str,
-        cb: Callable[..., None],
-        content: str | None = None,
-    ) -> None:
-        self._watchers.setdefault(data_id, []).append(cb)
-        # SDK 实际会 init content
-        if content is None and data_id in self._config_data:
-            content = self._config_data[data_id]
-        # 简单起见直接 push initial content
-        if content is not None:
-            params = {
-                "data_id": data_id,
-                "group": group,
-                "namespace": self.namespace,
-                "raw_content": content,
-                "content": content,
-            }
-            try:
-                cb(params)
-            except Exception:
-                pass
+    async def publish_config(self, param: Any) -> bool:
+        """M6.1.7: SDK 3.2.0 publish_config 接受 ConfigParam。"""
+        self._config_data[param.data_id] = param.content
+        return True
 
-    def remove_config_watcher(
-        self,
-        data_id: str,
-        group: str,
-        cb: Callable[..., None],
-        remove_all: bool = False,
-    ) -> None:
-        self.remove_watcher_calls.append((data_id, group))
-        if data_id in self._watchers:
-            self._watchers[data_id] = [
-                w for w in self._watchers[data_id] if w != cb
-            ]
+    async def remove_config(self, param: Any) -> bool:
+        self._config_data.pop(param.data_id, None)
+        return True
 
-    def stop_subscribe(self) -> None:
-        self.stop_subscribe_calls += 1
+    async def server_health(self) -> bool:
+        return not self._stopped
+
+    async def shutdown(self) -> None:
+        self.shutdown_calls += 1
         self._stopped = True
 
 
 def _make_fake_factory() -> tuple[
-    Callable[..., _FakeNacosClient], list[_FakeNacosClient]
+    Callable[..., Any], list[_FakeNacosClient]
 ]:
-    """返回 (factory, clients); factory 每次被调追加到 clients 列表。"""
+    """返回 (factory, clients); factory 是 async (M6.1.7 SDK 3.2.0 改造)。
+
+    中文
+    ----
+    M6.1.7: SDK 3.2.0 的 ``NacosConfigService.create_config_service(client_config)``
+    是 async coroutine factory, 返回 ``NacosConfigService`` 实例。适配层
+    ``_NacosAdapter._ensure_client`` 调 ``await self._client_factory(client_config)``。
+
+    旧 0.1.16 sync factory ``factory(**kwargs) -> NacosClient`` 改成
+    ``async def factory(client_config) -> _FakeNacosClient``; 接收 1 个
+    positional 参数 (SDK 3.2.0 形式) 而不是 kwargs。
+    """
     clients: list[_FakeNacosClient] = []
 
-    def factory(**kwargs: Any) -> _FakeNacosClient:
-        c = _FakeNacosClient(**kwargs)
+    async def factory(client_config: Any) -> _FakeNacosClient:
+        c = _FakeNacosClient(
+            server_addresses=getattr(client_config, "server_address", None),
+            namespace=getattr(client_config, "namespace_id", None),
+            username=getattr(client_config, "username", None),
+            password=getattr(client_config, "password", None),
+        )
         clients.append(c)
         return c
 
@@ -190,7 +181,7 @@ def config() -> NacosRuleSourceConfig:
 
 @pytest.fixture
 def factory_and_clients() -> tuple[
-    Callable[..., _FakeNacosClient], list[_FakeNacosClient]
+    Callable[..., Any], list[_FakeNacosClient]
 ]:
     return _make_fake_factory()
 
@@ -198,7 +189,7 @@ def factory_and_clients() -> tuple[
 @pytest.fixture
 def source(
     config: NacosRuleSourceConfig,
-    factory_and_clients: tuple[Callable[..., _FakeNacosClient], list[_FakeNacosClient]],
+    factory_and_clients: tuple[Callable[..., Any], list[_FakeNacosClient]],
 ) -> Iterator[tuple[NacosRuleSource, _FakeNacosClient, list[_FakeNacosClient]]]:
     factory, clients = factory_and_clients
     src = NacosRuleSource(config, client_factory=factory)
@@ -351,16 +342,17 @@ class TestAcloseIdempotency:
     async def test_aclose_even_when_sdk_raises(
         self, config: NacosRuleSourceConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """即使 SDK stop_subscribe 抛错, aclose 仍 OK。"""
+        """即使 SDK shutdown 抛错, aclose 仍 OK。"""
 
         class _BadClient(_FakeNacosClient):
-            def stop_subscribe(self) -> None:
-                raise RuntimeError("simulated SDK panic")
-            def remove_config_watcher(self, *a: Any, **kw: Any) -> None:
+            async def shutdown(self) -> None:
                 raise RuntimeError("simulated SDK panic")
 
-        def factory(**kw: Any) -> _BadClient:
-            return _BadClient(**kw)
+        async def factory(client_config: Any) -> _BadClient:
+            return _BadClient(
+                server_addresses=getattr(client_config, "server_address", None),
+                namespace=getattr(client_config, "namespace_id", None),
+            )
 
         src = NacosRuleSource(config, client_factory=factory)
         # 触发 client 构造
@@ -380,7 +372,6 @@ class TestAcloseIdempotency:
         # 状态 CLOSED, 即使 SDK 抛错
         assert src.state is NacosSourceState.CLOSED
         # 日志有 warn (但不含敏感字段)
-        # 至少 1 条 warn 关于 stop_subscribe / remove
         assert any("failed" in r.message.lower() for r in caplog.records)
 
     @pytest.mark.asyncio
@@ -423,16 +414,26 @@ class TestErrorClassification:
     async def test_not_found_error(
         self, config: NacosRuleSourceConfig
     ) -> None:
-        """某 data_id get_config 返回 None (404) → NOT_FOUND, 状态 STALE, snapshot 中不含该 data_id。"""
-        # 模拟 get_config: 5 个里 flow 有内容, 其它 4 个 None
-        def factory_with_partial(**kw: Any) -> _FakeNacosClient:
-            client = _FakeNacosClient(**kw)
+        """某 data_id 服务端 404 (NacosException) → NOT_FOUND, 状态 STALE, snapshot 中不含该 data_id。"""
+        from v2.nacos import NacosException
+
+        # 模拟 get_config: 5 个里 flow 有内容, 其它 4 个抛 NacosException(404)
+        async def factory_with_partial(client_config: Any) -> _FakeNacosClient:
+            client = _FakeNacosClient(
+                server_addresses=getattr(client_config, "server_address", None),
+                namespace=getattr(client_config, "namespace_id", None),
+            )
             # flow 有内容 (合法 rule)
             client.set_config(
                 config.data_id_for("flow"),
                 '[{"resource":"/x","grade":1,"count":10}]',
             )
-            # degrade / param_flow / system / authority 都不 set (None = NOT_FOUND)
+            # degrade / param_flow / system / authority 都 404
+            for rt in ("degrade", "param_flow", "system", "authority"):
+                client.raise_on_get(
+                    config.data_id_for(rt),
+                    NacosException(404, f"dataId {rt} not found"),
+                )
             return client
 
         src = NacosRuleSource(config, client_factory=factory_with_partial)
@@ -459,8 +460,11 @@ class TestErrorClassification:
         self, config: NacosRuleSourceConfig
     ) -> None:
         """某 data_id 内容为空 → EMPTY, 状态 STALE, snapshot 不含该 data_id。"""
-        def factory(**kw: Any) -> _FakeNacosClient:
-            client = _FakeNacosClient(**kw)
+        async def factory(client_config: Any) -> _FakeNacosClient:
+            client = _FakeNacosClient(
+                server_addresses=getattr(client_config, "server_address", None),
+                namespace=getattr(client_config, "namespace_id", None),
+            )
             client.set_config(
                 config.data_id_for("flow"),
                 '[{"resource":"/x","grade":1,"count":10}]',
@@ -480,10 +484,13 @@ class TestErrorClassification:
         assert snap is not None
         # 状态 STALE
         assert src.state is NacosSourceState.STALE
-        # 至少 3 次 EMPTY (degrade='', param_flow='[]', system='null')
+        # 至少 3 次 EMPTY (degrade='', param_flow='[]', system='null', authority 没 set 也算空)
+        # M6.1.7 SDK 3.2.0 行为: 没 set 的 data_id get_config 返回 "", 走 EMPTY 路径
+        # (PLANNING "空内容" 语义, 包括不存在的配置; 真实 server 404 走 NacosException 路径
+        # 由 test_not_found_error 覆盖)
         assert src.error_count(NacosSourceError.EMPTY) >= 3
-        # NOT_FOUND 1 次 (authority)
-        assert src.error_count(NacosSourceError.NOT_FOUND) >= 1
+        # state 应是 STALE (因为有 EMPTY 警告)
+        assert src.state is NacosSourceState.STALE
         await src.aclose()
 
     @pytest.mark.asyncio
@@ -491,8 +498,11 @@ class TestErrorClassification:
         self, config: NacosRuleSourceConfig
     ) -> None:
         """某 data_id 内容坏 JSON → DECODE, 状态 STALE, 不 yield。"""
-        def factory(**kw: Any) -> _FakeNacosClient:
-            client = _FakeNacosClient(**kw)
+        async def factory(client_config: Any) -> _FakeNacosClient:
+            client = _FakeNacosClient(
+                server_addresses=getattr(client_config, "server_address", None),
+                namespace=getattr(client_config, "namespace_id", None),
+            )
             # 故意给一个非 JSON
             client.set_config(config.data_id_for("flow"), "this is not json {")
             return client
@@ -528,8 +538,11 @@ class TestErrorClassification:
         self, config: NacosRuleSourceConfig
     ) -> None:
         """SDK get_config 抛连接异常 → NETWORK, 状态 DISCONNECTED, 退避重试。"""
-        def factory(**kw: Any) -> _FakeNacosClient:
-            client = _FakeNacosClient(**kw)
+        async def factory(client_config: Any) -> _FakeNacosClient:
+            client = _FakeNacosClient(
+                server_addresses=getattr(client_config, "server_address", None),
+                namespace=getattr(client_config, "namespace_id", None),
+            )
             # 覆盖 get_config 抛网络异常
             original = client.get_config
 
@@ -565,12 +578,17 @@ class TestErrorClassification:
         self, config: NacosRuleSourceConfig
     ) -> None:
         """SDK 抛 NacosException("Insufficient privilege") → AUTH, 不自动重试。"""
-        from nacos import NacosException
+        from v2.nacos import NacosException
 
-        def factory(**kw: Any) -> _FakeNacosClient:
-            client = _FakeNacosClient(**kw)
-            def boom(*a: Any, **kw2: Any) -> Any:
-                raise NacosException("Insufficient privilege.")
+        async def factory(client_config: Any) -> _FakeNacosClient:
+            client = _FakeNacosClient(
+                server_addresses=getattr(client_config, "server_address", None),
+                namespace=getattr(client_config, "namespace_id", None),
+            )
+
+            async def boom(*a: Any, **kw2: Any) -> Any:
+                raise NacosException(401, "Insufficient privilege.")
+
             client.get_config = boom  # type: ignore[method-assign]
             return client
 
@@ -709,8 +727,11 @@ class TestRedaction:
         self, config: NacosRuleSourceConfig
     ) -> None:
         """last_error_message 不应含敏感字段。"""
-        def factory(**kw: Any) -> _FakeNacosClient:
-            client = _FakeNacosClient(**kw)
+        async def factory(client_config: Any) -> _FakeNacosClient:
+            client = _FakeNacosClient(
+                server_addresses=getattr(client_config, "server_address", None),
+                namespace=getattr(client_config, "namespace_id", None),
+            )
             def boom(*a: Any, **kw2: Any) -> Any:
                 raise ConnectionError(
                     "Connection refused to nacos-1:8848"
@@ -741,8 +762,11 @@ class TestRedaction:
         self, config: NacosRuleSourceConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
         """捕获的 log 应不含敏感字段。"""
-        def factory(**kw: Any) -> _FakeNacosClient:
-            client = _FakeNacosClient(**kw)
+        async def factory(client_config: Any) -> _FakeNacosClient:
+            client = _FakeNacosClient(
+                server_addresses=getattr(client_config, "server_address", None),
+                namespace=getattr(client_config, "namespace_id", None),
+            )
             def boom(*a: Any, **kw2: Any) -> Any:
                 raise ConnectionError(
                     "Connection refused to nacos-1:8848 username=admin"
@@ -878,8 +902,11 @@ class TestSnapshotsEndToEnd:
         self, config: NacosRuleSourceConfig
     ) -> None:
         """首次加载 5 个 data_id → 至少 yield 1 个 snapshot。"""
-        def factory(**kw: Any) -> _FakeNacosClient:
-            client = _FakeNacosClient(**kw)
+        async def factory(client_config: Any) -> _FakeNacosClient:
+            client = _FakeNacosClient(
+                server_addresses=getattr(client_config, "server_address", None),
+                namespace=getattr(client_config, "namespace_id", None),
+            )
             for rt in ("flow", "degrade", "param_flow", "system", "authority"):
                 client.set_config(config.data_id_for(rt), "[]")
             return client
@@ -911,12 +938,15 @@ class TestSnapshotsEndToEnd:
     async def test_change_triggers_new_snapshot(
         self, config: NacosRuleSourceConfig
     ) -> None:
-        """Nacos 推送变化 → 重新拉 5 个 data_id → yield 新 snapshot。"""
-        # 用 list 捕获构造的 fake client (在 executor 里创建, 但 list 是引用)
+        """M6.1.7 polling 模式: 改 data_id content → poll tick 拉新 → yield 新 snapshot。"""
+        # 用 list 捕获构造的 fake client
         captured: list[_FakeNacosClient] = []
 
-        def factory(**kw: Any) -> _FakeNacosClient:
-            client = _FakeNacosClient(**kw)
+        async def factory(client_config: Any) -> _FakeNacosClient:
+            client = _FakeNacosClient(
+                server_addresses=getattr(client_config, "server_address", None),
+                namespace=getattr(client_config, "namespace_id", None),
+            )
             for rt in ("flow", "degrade", "param_flow", "system", "authority"):
                 client.set_config(config.data_id_for(rt), "[]")
             captured.append(client)
@@ -928,33 +958,32 @@ class TestSnapshotsEndToEnd:
         async def _drive() -> None:
             async for s in src.snapshots():
                 snapshots.append(s)
-                # 收到 1 个 snapshot 后就退出 (后续 trigger_change 测试)
                 if len(snapshots) >= 1:
                     return
 
         task = asyncio.create_task(_drive())
         # 等 client 构造 + 首次 yield
-        for _ in range(20):
+        for _ in range(40):
             if captured and snapshots:
                 break
             await asyncio.sleep(0.05)
-        assert captured, "fake client was not created within 1s"
-        assert snapshots, "no initial snapshot within 1s"
+        assert captured, "fake client was not created within 2s"
+        assert snapshots, "no initial snapshot within 2s"
         client = captured[0]
-        # 触发变化: 改 flow 配置 + 推送
+        # 触发变化: 改 flow 配置 (polling 模式不需要 trigger_change)
         client.set_config(
             config.data_id_for("flow"),
             '[{"resource":"/x","grade":1,"count":10}]',
         )
-        client.trigger_change(config.data_id_for("flow"))
-        # 重启消费 task, 收取新 snapshot
+        # 继续消费: 等 polling 触发新 snapshot
         async def _drive_2() -> None:
             async for s in src.snapshots():
                 snapshots.append(s)
 
         task2 = asyncio.create_task(_drive_2())
+        # 等最多 5s (默认 poll_interval=1s, 给 5 个 tick 富裕)
         try:
-            await asyncio.wait_for(task2, timeout=3.0)
+            await asyncio.wait_for(task2, timeout=5.0)
         except asyncio.TimeoutError:
             pass
         await src.aclose()
