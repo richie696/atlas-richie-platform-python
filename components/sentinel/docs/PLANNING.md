@@ -1148,22 +1148,22 @@
     认证 / TLS、连接超时、重连退避与 source_id。配置字段、状态和错误使用 Enum /
     值对象，不向调用方泄漏 SDK client 或 callback 类型。
   - [x] M6.1.3 实现“首次读取完整配置 → codec / schema / 业务校验 → 发布完整
-    RuleSnapshot → 订阅变更”的生命周期。首次同步未成功时 Source 不得宣称 ready。
+    RuleSnapshot → polling 检测变更”的生命周期。首次同步未成功时 Source 不得宣称 ready。
   - [x] M6.1.4 实现断线、鉴权失败、配置删除、空配置、重复回调、乱序回调和坏规则的
     区分处理；保持 last-known-good，报告 stale / last-success / failure reason，并按
     有界指数退避重连。
-  - [x] M6.1.5 显式管理订阅和 `aclose()`：关闭必须取消 listener、停止重连任务、关闭
+  - [x] M6.1.5 显式管理 polling 和 `aclose()`：关闭必须取消 poll task、停止重连任务、关闭
     SDK 连接且保持幂等；日志 / 指标不得暴露 endpoint、用户名、token 或规则敏感字段。
   - [x] M6.1.6 为该实现接入 M3.1 `RuleSource` contract suite，并补 Nacos 专有的
     lifecycle / security tests。
   - [x] M6.1.7 (P0 修复) 升级 `nacos-sdk-python` 0.1.16 → 3.2.0 + 改 push → polling
-    架构：Nacos 3.x 干掉了 V1 config API, SDK 3.2.0 gRPC listener 跟 Nacos 3.2.3
-    server 协议 drift, 唯一兼容路径是 polling 模式。详细设计见
+    架构：Nacos 3.2.3 上的 SDK 3.2.0 config query / publish 已真实验证；listener
+    回调未作为正确性依赖，故以 polling 作为确定性刷新路径。详细设计见
     `docs/M6.1.7-SDK-UPGRADE-POLLING.md`。公开 API surface 净增 1 个字段
     (`NacosRuleSourceConfig.poll_interval` 默认 1s, 下限 100ms), 删除 1 个内部
     type (`NacosCallbackParams` push 路径用), 1.x 1.0 兼容。
-  - [x] M6.1.7d 真实验收 5 场景: 写 `tests/integration/` (env var + socket probe
-    + namespace 隔离 + 真 SDK publish/get), 跑真 Nacos 3.2.3 全 5 场景。
+  - [x] M6.1.7d 真实验收 5 场景: 写 `tests/integration/` (环境变量、认证 config-read
+    readiness、namespace 隔离、真 SDK publish/get)，真 Nacos 3.2.3 五场景全通过。
 - **真实验收**：使用真实或协议兼容 Nacos 服务完成首次加载、一次合法更新、一次无效
   更新、连接中断并恢复、Source 关闭五种场景。无效更新和断线期间旧规则仍生效；不能用
   mock callback 或 SDK fake 宣称完成。M6.1.7 后, 走 polling 架构, 5 场景中"合法

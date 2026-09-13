@@ -427,8 +427,8 @@ Use `config.data_id_for(rule_type)` to get the exact data-id string.
    success).
 3. **M6.1.7 polling** (替代 M6.1.0-1.6 push): 启动 `_poll_loop` 后台 task,
    每 `config.poll_interval` 秒拉 5 个 data-id, 跟上次 checksum 比对,
-   变化 yield 新 snapshot。**不**用 SDK listener (SDK 3.2.0 gRPC listener
-   跟 Nacos 3.2.3 server 协议 drift; polling 是唯一兼容路径)。
+   变化 yield 新 snapshot。**不**把 SDK listener 作为正确性依赖；当前部署中
+   未完成其可靠回调验证，因此 polling 是该扩展的确定性刷新路径。
 4. `poll_interval` 默认 `1s`, 下限 `100ms` (default-deny 资源上限,
    ADR-SEN-007 追加); 用户可调
 5. `aclose()` cancels the poll task, stops the SDK client, transitions
