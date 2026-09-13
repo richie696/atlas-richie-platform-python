@@ -32,7 +32,6 @@ members = [
   "components/sentinel/sentinel",
   "components/sentinel/sentinel-source-file",
   "components/sentinel/sentinel-source-nacos",
-  "components/sentinel/sentinel-source-redis",
   "components/sentinel/sentinel-adapter-asgi",
   "components/sentinel/sentinel-adapter-httpx",
   "components/sentinel/sentinel-dashboard",
@@ -67,7 +66,6 @@ atlas-richie-cache-redis = { workspace = true }
 atlas-richie-sentinel = { workspace = true }
 atlas-richie-sentinel-source-file = { workspace = true }
 atlas-richie-sentinel-source-nacos = { workspace = true }
-atlas-richie-sentinel-source-redis = { workspace = true }
 atlas-richie-sentinel-adapter-asgi = { workspace = true }
 atlas-richie-sentinel-adapter-httpx = { workspace = true }
 atlas-richie-sentinel-dashboard = { workspace = true }

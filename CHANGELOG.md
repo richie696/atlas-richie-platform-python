@@ -305,6 +305,33 @@ categories and Semantic Versioning.
   保留 (跟 M6.3 实施一致, 0 偏差). 1.0 publish 前 Mavis 重做
   reporting.v1 投影 (7 字段 + 上述新概念), 留 worker / Mavis.
 
+- **Sentinel 收口清理 (5 项长期 deferred 项目定论)** (commit `tbd`,
+  richie696 2026-09-14):
+  1. **跨进程聚合 Dashboard (sentinel-dashboard-aggregator) 留 M5.4.1 候选**:
+     PLANNING §M5.4.1 新增 task entry (`[延后]`), 1.x 触发条件 (用户业务
+     强需求 + 单独批准 + 新独立 ADR + DESIGN §3.1 修订). 1.0 范围**不**出.
+  2. **Collector Python 留 Java/Go 服务端独立仓**: 1.0 范围**不**实现
+     Collector Python, V1 协议 (commit `2c97b3d` 5-owner 签收) 只冻结
+     wire contract. 跨语言 hello world (commit `6cf2f33`) 验证互操作.
+  3. **6 协议 doc 字段值 (1.0 immutable)**: 新增 immutability contract test
+     (`foundation/contracts/tests/reporting/v1/test_immutability.py`,
+     18 tests 全过), 锁定 7 字段 ingress envelope / 6 event_kind /
+     7 ReasonClass / 3 HealthClass / 3 ExecResult / 11 error code /
+     大小限制 (16 KB / 256 events / 64 KiB) / 序列化规则
+     (UTF-8 / ISO 8601 μs / lowercase UUID) / wire 标识符
+     `atlas-richie.reporting/v1`. 修改任何 frozen 值 → V2 major + ADR
+     + 新 5-owner sign-off.
+  4. **主包 0 3rd-party 约束**: `tools/dependency-check/check_core_imports.py`
+     验证通过, DEPENDENCY_POLICY.md §3 维持 (主包 0 3rd-party, extension
+     wheel 允许合理 3rd-party, 已在 sentinel-dashboard 实施 starlette/
+     jinja2/uvicorn 验证).
+  5. **R-240 时代遗留 M 文件清理**: 删除 `components/sentinel/sentinel-source-redis/`
+     (M6.2 取消的 skeleton 目录, README / pyproject / src / tests 4 文件),
+     同步从根 `pyproject.toml` workspace members + USAGE.md pip install
+     命令移除. `token.py` (主包 ports/, M6.3 cluster 17 tests 用) **保留**
+     (active code, 不是遗留). `R-SENTINEL-1.0-handoff.md` + `HANDOFF-M6.1.7.md`
+     **保留** (历史 handoff 记录, 1.0 release 状态文档).
+
 - **Sentinel M6.3 design 阶段 + cluster Python 投影**
   (commits `29f45fe` + `495834c` + `bc15d4a` + `9de57c7` 撤回 reporting.v1
   部分后保留 cluster.v1 投影 + `377375f`):

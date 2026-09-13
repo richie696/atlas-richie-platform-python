@@ -1074,6 +1074,27 @@
 >
 > 见 `M7.6 评审是否发布 1.0.0（M0–M7 闭环后）`。
 
+### M5.4.1 [延后] 跨进程聚合 Dashboard (sentinel-dashboard-aggregator) 候选
+- **背景**: M6.6 v2 (commit `b48f2e8`) 实施 per-process Web 管理页面
+  (`atlas-richie-sentinel-dashboard`), 但**跨进程聚合** Dashboard 仍留
+  候选, 1.0 范围**不**实施. 用户聚合需求 (多进程规则 / metrics 聚合)
+  通过现有 M5.4 metric hook + OTel / Prometheus / 业务自建满足.
+- **范围 (1.x 候选, 需用户单独批准)**:
+  - 接收 M6.5.1 wire protocol envelopes (Java/Go 端 Collector 已实现)
+  - 持久化 (in-memory cache 1.0 → TSDB V2 留)
+  - Web UI 复用 M6.6 v2 模板 (rule / metric / aggregate / alert 视图)
+  - 鉴权 (OAuth client credentials / mTLS, 1.x 才做, M6.7 loopback 仅限 1.0)
+  - 租户隔离 (multi-tenant 视图)
+- **不做**:
+  - 1.0 范围**不**出 `sentinel-dashboard-aggregator` 包
+  - 1.0 不实现跨进程聚合
+  - 1.0 范围**不**出 Collector Python (Java/Go 服务端独立仓)
+- **Test ID**: SEN-DASHBOARD-AGG-001 (候选)
+- **ADR**: 待用户触发时新建 (不得复用 OpenSergo ADR-SEN-016)
+- **Deps**: M6.5.7 V1 frozen + M6.6 v2 per-process dashboard 模板
+- **触发条件**: 用户业务场景出现 dashboard 强需求 (多服务聚合 / 历史
+  查询 / 告警), 单独批准 + 新独立 ADR + DESIGN.md §3.1 修订
+
 ### M5 Exit [x] (M5.5 退出标准)
 - **Exit Criteria**(§21 + §24,以 M5.5 为 gate):
   - 主包和已实现扩展达到公开 API 稳定承诺 — ✅ M5.5 API review 通过

@@ -48,7 +48,7 @@ pip install atlas-richie-sentinel-adapter-httpx
 # 规则源 (按需装, 不影响主包)
 pip install atlas-richie-sentinel-source-file      # 文件规则源
 pip install atlas-richie-sentinel-source-nacos     # Nacos 规则源 (polling 1.0)
-pip install atlas-richie-sentinel-source-redis     # (保留, M6.2 取消, 不在 1.0)
+# sentinel-source-redis 已删除 (M6.2 取消, 不在 1.0)
 
 # Cluster (M6.3 实施后, 1.0 publish)
 pip install atlas-richie-sentinel-cluster          # 多进程 token quota 协调
