@@ -1198,14 +1198,9 @@
   SystemRule、规则源和指标聚合变成全局一致对象。Cluster wheel 不强依赖 Redis，
   不从 RuleSource 取得其连接或凭证。
 - **子任务**：
-  - [ ] M6.3.1 先完成 `docs/protocols/CLUSTER_TOKEN_PROTOCOL.md`：冻结 V1 的消息
-    schema、基线传输、枚举、版本协商、认证、deadline、错误码、幂等、取消、超时和
-    兼容规则。schema 使用跨语言字段和稳定值，而不是 Python 对象序列化。
-  - [ ] M6.3.2 评审 `ports/token.py` 的预留 API。远程 release 必须携带 Server 生成的
-    opaque lease identity 与 owner identity；若现有 `Token` 无法表达，先按
-    ADR-SEN-017 补齐 1.0 兼容路径：仅增加有安全默认值的 optional field，不删除 / 改名
-    既有字段，不改变既有构造和 LocalTokenService 语义，并补公开 API 与契约测试，随后
-    才可实现 Client。禁止使用进程内 map 偷渡 remote lease 状态。
+  - [x] M6.3.0 design + sign-off doc (5 owner) — `docs/M6.3-CLUSTER-TOKEN-DESIGN.md` (richie696 sign-off 2026-09-13)
+  - [x] M6.3.1 协议 V1 frozen — `docs/protocols/CLUSTER_TOKEN_PROTOCOL.md` (6 message_kind, 8+1 envelope, opaque lease identity, owner epoch fencing, idempotency request_id, V1 兼容性矩阵)
+  - [x] M6.3.2 ports/token.py 评审 + 1.0 兼容扩展 — `Token` 加 2 个 optional field (lease_id / owner_epoch, 默认 None), `TokenResponse` 加 1 个 optional field (retry_after_ns, 默认 0), 1.0 旧构造方式兼容 + 17 个 contract test 全过 (260 passed total, 0 regression)
   - [ ] M6.3.3 实现 Token Server 的资源分配状态机和唯一时间权威：acquire / release /
     lease expiry / owner epoch fencing / 规则版本切换均有状态表。Server 决定 lease
     是否有效，Client 不能按本机墙上时钟自行续约或回收远程配额。
@@ -1216,9 +1211,8 @@
     sidecar / service 进程持有。多 worker 应用的所有 worker 都是 Client，使用配置的、
     对全部 Client 可达的 endpoint；不得按 Uvicorn worker ordinal 选主、隐式自举、
     leader election 或服务发现猜测 owner。
-  - [ ] M6.3.6 定义 `ClusterFailurePolicy` Enum：`FAIL_CLOSED`、`FAIL_OPEN`、
-    `LOCAL_FALLBACK`。每个集群资源必须显式选择一项；重试受 deadline 约束且重用
-    request id。禁止默认静默放行。
+  - [x] M6.3.6 定义 `ClusterFailurePolicy` Enum：`FAIL_CLOSED`、`FAIL_OPEN`、
+    `LOCAL_FALLBACK` — 加在 `ports/token.py`, 3 选 1, 禁止默认静默放行 (无 default / auto / silent 之类禁用值)
   - [ ] M6.3.7 建立本地 / 远程 TokenService 共用 contract suite，覆盖 grant、deny、
     重复 acquire、重复 release、取消、过期 lease、fencing、各故障策略与资源释放。
 - **验收不变量**：

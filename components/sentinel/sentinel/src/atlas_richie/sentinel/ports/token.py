@@ -20,6 +20,15 @@ acquire 永远 grant(单进程不需要 token 协调)。
 - **None 的合法用法**:``deny_reason=None`` 表示"无拒绝原因",不是
   "原因未知";``UNKNOWN`` 是真存在但不可分类
 
+**M6.3.2 兼容扩展** (1.0 兼容, 仅加 optional field):
+
+- ``Token`` 加 ``lease_id`` (Server opaque identity) + ``owner_epoch``
+  (fencing), 默认 ``None``, ``LocalTokenService`` 永远不填, 旧构造方式
+  兼容
+- ``TokenResponse`` 加 ``retry_after_ns`` (Server 建议重试延迟), 默认 0
+- ``ClusterFailurePolicy`` 3 选 1 enum (FAIL_CLOSED / FAIL_OPEN /
+  LOCAL_FALLBACK), 每个集群资源显式选 1 项, 禁止默认静默放行
+
 English
 --------
 Sentinel TokenService Port + value objects (M2.7).
@@ -44,7 +53,19 @@ Design points (PLANNING §M2.7 + user P1 lock-in):
   ``LocalTokenService.acquire()`` goes ``LOCAL_GRANTED`` (observable);
   cluster fallback uses ``FAIL_OPEN`` (labeled as degradation event).
 - **None semantics**: ``deny_reason=None`` = "no reject reason", not
-  "reason unknown"; ``UNKNOWN`` = real but uncategorized."""
+  "reason unknown"; ``UNKNOWN`` = real but uncategorized.
+
+**M6.3.2 backward-compatible extension** (1.0 compat, optional field only):
+
+- ``Token`` adds ``lease_id`` (Server opaque identity) + ``owner_epoch``
+  (fencing); default ``None``; ``LocalTokenService`` never sets them;
+  old construction form stays valid
+- ``TokenResponse`` adds ``retry_after_ns`` (Server-suggested retry delay);
+  default 0
+- ``ClusterFailurePolicy`` 3-way enum (FAIL_CLOSED / FAIL_OPEN /
+  LOCAL_FALLBACK); each cluster resource explicitly chooses 1; default
+  silent pass is forbidden
+"""
 
 from __future__ import annotations
 
@@ -92,6 +113,50 @@ class TokenDenyReason(StrEnum):
     UNKNOWN = "unknown"
 
 
+class ClusterFailurePolicy(StrEnum):
+    """中文
+    ----
+    Cluster 资源 acquire 失败时的策略 (M6.3.6)。
+
+    每个集群资源**必须**显式选择 1 项;**禁止**默认静默放行
+    (PLANNING §M6.3 验收不变量)。
+
+    三选一:
+
+    - ``FAIL_CLOSED``: 实际 grant 总量不得超出 Server 认定的配额
+      (强保证)。**真**deny, 业务受影响。
+    - ``FAIL_OPEN``: 不承诺不超发, 但每次放行都必须产生可查询
+      ``FAIL_OPEN`` 决策 + 指标。可能超发。
+    - ``LOCAL_FALLBACK``: 显式配置本地策略 + 上限 + 恢复切换;
+      **不**伪装为共享配额, 多实例不一致。
+
+    详细语义见 ``docs/M6.3-CLUSTER-TOKEN-DESIGN.md`` §4 + §5.
+
+    English
+    --------
+    Cluster resource acquire-failure policy (M6.3.6).
+
+    Each cluster resource **must** explicitly choose 1;
+    **forbidden** to default to silent pass (PLANNING §M6.3 invariants).
+
+    Three options:
+
+    - ``FAIL_CLOSED``: actual grant total never exceeds Server-admitted
+      quota (strong guarantee). Real deny; business affected.
+    - ``FAIL_OPEN``: no over-grant promise, but every pass produces
+      a queryable ``FAIL_OPEN`` decision + metric. May over-grant.
+    - ``LOCAL_FALLBACK``: explicitly configured local policy + cap +
+      recovery switch; **not** disguised as shared quota; multi-instance
+      inconsistent.
+
+    Full semantics: ``docs/M6.3-CLUSTER-TOKEN-DESIGN.md`` §4 + §5.
+    """
+
+    FAIL_CLOSED = "fail_closed"
+    FAIL_OPEN = "fail_open"
+    LOCAL_FALLBACK = "local_fallback"
+
+
 @dataclass(frozen=True, slots=True)
 class Token:
     """中文
@@ -99,16 +164,46 @@ class Token:
     Token 句柄(frozen slots)。FlowSlot 在 release 时归还给
     TokenService;LocalTokenService.noop 即可。
 
+    M6.3.2 加 2 个 optional field (1.0 兼容, 安全默认值):
+
+    - ``lease_id``: Server 生成的 opaque lease identity (UUID); Client
+      不能伪造, 仅 Server 知道 mapping。**1.0 主包 LocalTokenService
+      永远不填** (默认 ``None``)。
+    - ``owner_epoch``: owner 进程的 startup_epoch, 用于 fencing (旧
+      epoch 迟到 release / renew 不影响新 epoch)。**1.0 主包
+      LocalTokenService 永远不填** (默认 ``None``)。
+
+    旧构造方式 ``Token(resource=..., permits=..., issued_at_ns=..., ttl_ns=...)``
+    仍 work (新字段用默认值, **不**破坏 1.0 兼容)。
+
     English
     --------
     Token handle (frozen slots). FlowSlot returns the token on
     release; ``LocalTokenService`` no-ops.
+
+    M6.3.2 adds 2 optional fields (1.0 compat, safe defaults):
+
+    - ``lease_id``: Server-generated opaque lease identity (UUID);
+      Client cannot forge, only Server knows the mapping. **1.0
+      main-wheel ``LocalTokenService`` never sets it** (default
+      ``None``).
+    - ``owner_epoch``: owner's startup_epoch, for fencing (stale
+      release / renew from old epoch cannot affect new epoch). **1.0
+      main-wheel ``LocalTokenService`` never sets it** (default
+      ``None``).
+
+    Old construction form ``Token(resource=..., permits=..., issued_at_ns=..., ttl_ns=...)``
+    still works (new fields use defaults, **no** 1.0 compat break).
     """
 
     resource: str
     permits: float
     issued_at_ns: int
     ttl_ns: int
+    # M6.3.2: opaque lease identity (Server 端 UUID, 1.0 主包永远 None)
+    lease_id: Optional[str] = None
+    # M6.3.2: owner epoch (fencing, 1.0 主包永远 None)
+    owner_epoch: Optional[int] = None
 
     def is_expired(self, now_ns: int) -> bool:
         """中文
@@ -154,6 +249,9 @@ class TokenResponse:
     token: Optional[Token] = None
     deny_reason: Optional[TokenDenyReason] = None
     wait_ns: int = 0
+    # M6.3.2: Server 建议重试延迟 (区分 client-side vs server-side wait);
+    # 默认 0 (立即), 1.0 主包 LocalTokenService 永远不填
+    retry_after_ns: int = 0
 
     def __post_init__(self) -> None:
         if self.decision is TokenDecision.DENIED:
@@ -226,7 +324,7 @@ class LocalTokenService:
 
     行为:``acquire()`` 永远返回 ``LOCAL_GRANTED`` + 新 ``Token``;
     ``release()`` no-op。单进程不需要 token 协调;Cluster M6+ 替换
-    成 ``RemoteTokenService``(Redis 集群限流)。
+    成通过选定 Cluster 传输实现的 ``RemoteTokenService``。
 
     English
     --------
@@ -235,7 +333,7 @@ class LocalTokenService:
     Behavior: ``acquire()`` always returns ``LOCAL_GRANTED`` + new
     ``Token``; ``release()`` no-op. Single-process doesn't need
     token coordination; Cluster M6+ replaces with
-    ``RemoteTokenService`` (Redis cluster limiting).
+    ``RemoteTokenService`` over the selected Cluster transport.
     """
 
     def acquire(self, resource: str, permits: float) -> TokenResponse:
@@ -276,6 +374,7 @@ class LocalTokenService:
 __all__ = [
     "TokenDecision",
     "TokenDenyReason",
+    "ClusterFailurePolicy",  # M6.3.6
     "Token",
     "TokenResponse",
     "TokenService",
