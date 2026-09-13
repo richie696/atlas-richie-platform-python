@@ -381,7 +381,7 @@ M6.1.0b 是 1.0 → 1.x 第一批 API delta, 5 owner 已签字 (`maintainer` /
 - **`docs/R-SENTINEL-M6.1.0b-api-delta.md` v3** (22KB, 5 decision, 5 owner 签字栏)
 - **`docs/rule_source_activation.md` v3** (C 层 `RuleSourceActivation` fact 完整 spec)
 - **`docs/MIGRATION-M6.md`** (三类用户迁移路径 + 互斥约束 + Repository 所有权)
-- **`docs/PLANNING.md` §M6.1.0 / §M6.1.0a / §M6.5.7**
+- **`docs/process/PLANNING.md` §M6.1.0 / §M6.1.0a / §M6.5.7**
 - **`docs/DESIGN.md` §10.3 L1040-1089** (Supervisor 设计) / §13.3.1 (Agent Reporting 边界)
 
 ### 9.1 5 项决策摘要

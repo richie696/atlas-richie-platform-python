@@ -279,7 +279,7 @@
     - `versions.toml`
     - `tools/release/verify_isolated_wheels.py`
     - `components/sentinel/docs/DESIGN.md`
-    - `components/sentinel/docs/PLANNING.md`
+    - `components/sentinel/docs/process/PLANNING.md`
   - 根目录 `HANDOFF.md` 验收用**确定性 sentinel 标记**(M0.9 实施时在 `## 2. 总体架构决策` 段的开头/结尾插入明确注释,避免"假绿"):
     - M0.9 实施时在 `HANDOFF.md` 写入:
       ```markdown
@@ -1198,8 +1198,8 @@
   SystemRule、规则源和指标聚合变成全局一致对象。Cluster wheel 不强依赖 Redis，
   不从 RuleSource 取得其连接或凭证。
 - **子任务**：
-  - [x] M6.3.0 design + sign-off doc (5 owner) — `docs/M6.3-CLUSTER-TOKEN-DESIGN.md` (richie696 sign-off 2026-09-13)
-  - [x] M6.3.1 协议 V1 frozen — `docs/protocols/CLUSTER_TOKEN_PROTOCOL.md` (6 message_kind, 8+1 envelope, opaque lease identity, owner epoch fencing, idempotency request_id, V1 兼容性矩阵)
+  - [x] M6.3.0 design + sign-off doc (5 owner) — `docs/process/M6.3-CLUSTER-TOKEN-DESIGN.md` (richie696 sign-off 2026-09-13)
+  - [x] M6.3.1 协议 V1 frozen — `docs/CLUSTER_TOKEN_PROTOCOL.md` (6 message_kind, 8+1 envelope, opaque lease identity, owner epoch fencing, idempotency request_id, V1 兼容性矩阵)
   - [x] M6.3.2 ports/token.py 评审 + 1.0 兼容扩展 — `Token` 加 2 个 optional field (lease_id / owner_epoch, 默认 None), `TokenResponse` 加 1 个 optional field (retry_after_ns, 默认 0), 1.0 旧构造方式兼容 + 17 个 contract test 全过 (260 passed total, 0 regression)
   - [x] M6.3.3 实现 Token Server 的资源分配状态机和唯一时间权威 — `components/sentinel/sentinel-cluster/src/atlas_richie/sentinel_cluster/server/` (commit `d7c077b`, Worker 1, 57 单测全过, acquire / release / lease expiry / owner epoch fencing / 规则版本切换均有状态表; Server 决定 lease 有效性, Client 不能按本机墙上时钟续约/回收)
   - [x] M6.3.4 实现 `RemoteTokenService` — `components/sentinel/sentinel-cluster/src/atlas_richie/sentinel_cluster/client/` (commit `57f84f5`, Worker 2, 20 单测全过; TokenService Protocol 远程 Proxy, 协议映射 + deadline + 取消 + 鉴权 + 错误翻译; 同步 facade 用 `asyncio.new_event_loop()` 一次, 跟 M6.7 决策一致, 不复用 Engine event loop)
@@ -1235,13 +1235,16 @@
     cancel、超时后的同 request id 重试；不能双重扣减或双重归还。
   - [x] M6.4.5 owner restart / stale-owner fencing：旧 epoch 的迟到 release 或 renew
     不能影响新 epoch 已持有的 lease。
-  - [x] M6.4.6 规则 version 切换：明确旧 lease 继续、提前回收或拒绝续约的策略，并
-    验证 Server / Client 一致执行且有审计事件。
+  - [x] M6.4.6 规则 version 切换（**1.0 简化边界**）：不实施完整
+    `RuleSource` runtime update 路径，也不提供 `TokenServer.update_resource_quota()`。
+    配额变更必须以新配置重启 Token Server；M6.4.3 已等价验证新 Server 状态 reset
+    后旧 lease 不残留。运行时配额更新与其 wire / audit 语义留给 M6.3.x future。
   - [x] M6.4.7 `FAIL_OPEN` 与 `LOCAL_FALLBACK`：验证其降级指标、恢复切换、审计和
     风险说明；不得错误断言此类模式仍有严格全局不超发保证。
-- **Exit Criteria**：以上七类场景均通过；`FAIL_CLOSED` 有容量不超发证据；两种可用性
-  策略有预期降级证据；不会将“容量不欠发”作为未定义的指标，改为以每种策略的明确
-  lease / 恢复语义验收。
+- **Exit Criteria**：M6.4.1–M6.4.5、M6.4.7 场景通过；M6.4.6 以“新配置重启 →
+  Server 状态 reset → 旧 lease 不残留”的 M6.4.3 证据收口，**不**宣称已经验证运行时
+  quota 更新。`FAIL_CLOSED` 有容量不超发证据；两种可用性策略有预期降级证据；不会将
+  “容量不欠发”作为未定义的指标，改为以每种策略的明确 lease / 恢复语义验收。
 - **Test ID**: SEN-CLUSTER-001(part:multi-process)
 - **ADR**: ADR-SEN-011
 - **Deps**: M6.3
@@ -1255,7 +1258,7 @@
   严禁业务请求和响应内容、用户身份、认证材料、任意日志或完整规则正文；错误事件仅允许
   stable error class + 脱敏 reason(≤64 bytes)，禁止原始异常消息、traceback 和 frame locals。
 - **子任务**：
-  - [ ] M6.5.1 先完成 `docs/protocols/AGENT_REPORTING_PROTOCOL.md`：冻结 V1 schema、
+  - [ ] M6.5.1 先完成 `docs/AGENT_REPORTING_PROTOCOL.md`：冻结 V1 schema、
     transport 基线、版本协商、实例身份、批次确认、错误码、认证和跨语言兼容策略；major
     mismatch 返回稳定协议错误，禁止静默忽略字段或猜测降级解析。Python `Protocol`
     不是该网络协议的替代物。
@@ -1333,9 +1336,9 @@
 - **ADR**: ADR-SEN-011 (M6.5 父协议) + 新独立 ADR (M6.5.7 envelope 冻结)
 - **Deps**: M5.5, M6.1.0b (签字)
 - **V1 冻结** (M6.5.7 envelope freeze, 2026-09-13):
-  - `docs/protocols/AGENT_REPORTING_PROTOCOL.md` V1 schema 冻结 (8 字段
+  - `docs/AGENT_REPORTING_PROTOCOL.md` V1 schema 冻结 (8 字段
     envelope + 6 个 event_kind + per-kind frozen payload + V1 兼容性矩阵)
-  - `docs/M6.5.7-ENVELOPE-FREEZE.md` design + 5 owner sign-off doc
+  - `docs/ENVELOPE-SCHEMA-FREEZE.md` design + 5 owner sign-off doc
   - V1 不可破坏性: 加 optional field 走 V1.1 minor, 改 / 删 / 改语义 / 改
     protocol_version 字符串走 V2 major bump (独立 ADR)
   - 6 个 V1 event_kind 冻结: `RULE_SOURCE_ACTIVATED` /
@@ -1363,7 +1366,7 @@
 - **ADR**: ADR-SEN-018（Proposed；用户签字后才可实施）
 - **Deps**: M6.5(协议)
 
-### M6.7 [x] WSGI/同步阻塞引擎可行性评估 (评估完成, 决策: 1.x 不支持, 详见 `docs/M6.7-WSGI-SYNC-EVAL.md`, ADR-SEN-018)
+### M6.7 [x] WSGI/同步阻塞引擎可行性评估 (评估完成, 决策: 1.x 不支持, 详见 `docs/process/M6.7-WSGI-SYNC-EVAL.md`, ADR-SEN-018)
 - **Deliverable**:
   - 调研报告：同步 API、已有 event loop 中 `asyncio.run()` 的非法性、线程 / contextvars
     传播、取消、连接资源释放、fork / worker 模型和性能风险

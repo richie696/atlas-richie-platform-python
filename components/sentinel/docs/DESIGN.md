@@ -1464,8 +1464,12 @@ Authority / Circuit Block。
 
 ### 14.4 Cluster 与其他控制面隔离
 
-- Nacos RuleSource 只改变未来规则快照，不直接修改已发出的 lease；规则版本
-  切换的旧 lease 如何耗尽或提前回收必须由 Token Server 明确处理并记录。
+- Nacos RuleSource 只改变未来规则快照，不直接修改已发出的 lease。**1.0 不提供**
+  RuleSource 到 Token Server 的 runtime quota update 路径，也不暴露
+  `TokenServer.update_resource_quota()`；配额变更通过以新配置重启 Token Server 完成。
+  新 Server 的状态 reset 后旧 lease 不残留，此不变量由 M6.4.3 验证。运行时切换时
+  旧 lease 的耗尽、提前回收、续约及审计语义必须在 M6.3.x 通过独立 ADR、wire 版本和
+  双实例验收后才可加入。
 - Agent Reporting 只报告事实，不能决定 token grant，也不能成为 Token Server 的依赖。
 - Dashboard 只能展示 Server 与 Reporter 已确认的数据；不把单实例内存或未确认上报
   描述成全局真实状态。

@@ -270,7 +270,7 @@ endpoint URL / path / token 构造 source_id。
 - `docs/R-SENTINEL-M6.1.0b-api-delta.md` (decision 4 / decision 5)
 - `docs/DESIGN.md` §10.3 L1040-1069 (Supervisor 设计)
 - `docs/DESIGN.md` §13.3 (Agent Reporting Protocol — 父协议占位)
-- `docs/PLANNING.md` §M6.5.1 (父协议) / §M6.5.7 (envelope 与子协议挂载点)
+- `docs/process/PLANNING.md` §M6.5.1 (父协议) / §M6.5.7 (envelope 与子协议挂载点)
 
 ---
 

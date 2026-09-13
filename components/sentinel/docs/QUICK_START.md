@@ -267,7 +267,7 @@ async with httpx.AsyncClient(transport=transport) as client:
 - 扩展开发指南 → `docs/EXTENSION_GUIDE.md`
 - 运维边界 → `docs/OPERATIONS.md`
 - 设计总览 → `docs/DESIGN.md`
-- 实施路线 → `docs/PLANNING.md`
+- 实施路线 → `docs/process/PLANNING.md`
 - **1.0 → 1.x 迁移指南** → `docs/MIGRATION-M6.md` (M6.1.0b 双 Port / 多源 / 互斥约束)
 - **1.x API delta** → `docs/R-SENTINEL-M6.1.0b-api-delta.md` (5 owner 签字)
 - **C 层内部 fact 契约** → `docs/rule_source_activation.md` (C 层私有, extension 不可 import)
@@ -278,8 +278,8 @@ async with httpx.AsyncClient(transport=transport) as client:
 - Extension guide → `docs/EXTENSION_GUIDE.md`
 - Operations guide → `docs/OPERATIONS.md`
 - Design overview → `docs/DESIGN.md`
-- Roadmap → `docs/PLANNING.md`
+- Roadmap → `docs/process/PLANNING.md`
 - **1.0 → 1.x migration guide** → `docs/MIGRATION-M6.md` (M6.1.0b dual Port / multi-source / mutex)
 - **1.x API delta** → `docs/R-SENTINEL-M6.1.0b-api-delta.md` (5 owner signed)
 - **C-layer internal fact contract** → `docs/rule_source_activation.md` (C-layer private, no extension import)
-- Roadmap → `docs/PLANNING.md`
+- Roadmap → `docs/process/PLANNING.md`

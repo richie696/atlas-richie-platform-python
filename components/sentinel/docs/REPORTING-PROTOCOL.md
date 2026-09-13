@@ -33,10 +33,10 @@
 
 ### 0.3 配套文档
 
-- [`AGENT_REPORTING_PROTOCOL.md`](protocols/AGENT_REPORTING_PROTOCOL.md) —
+- [`AGENT_REPORTING_PROTOCOL.md`](AGENT_REPORTING_PROTOCOL.md) —
   **M6.5.7 envelope schema 已 frozen**：8 字段 envelope + 6 个 event_kind + per-kind
   payload schema + V1 兼容性矩阵 + 跨语言 contract test 列表
-- [`M6.5.7-ENVELOPE-FREEZE.md`](M6.5.7-ENVELOPE-FREEZE.md) — M6.5.7 5 owner
+- [`ENVELOPE-SCHEMA-FREEZE.md`](ENVELOPE-SCHEMA-FREEZE.md) — M6.5.7 5 owner
   sign-off 文档
 
 本 spec 不重复 M6.5.7 envelope 内容, 通过 cross-reference 引用。
@@ -295,7 +295,7 @@ X-Atlas-Cluster-Reporting-Token: <shared_secret>
 
 ### 6.4 单 envelope 必填字段 (引用 M6.5.7)
 
-详见 [`AGENT_REPORTING_PROTOCOL.md` §2.2](protocols/AGENT_REPORTING_PROTOCOL.md#22-字段定义)。
+详见 [`AGENT_REPORTING_PROTOCOL.md` §2.2](AGENT_REPORTING_PROTOCOL.md#22-字段定义)。
 
 ---
 
@@ -492,7 +492,7 @@ def is_stale(ev):
 
 ### 12.1 V1 兼容性矩阵 (引用 M6.5.7 §6)
 
-详见 [`AGENT_REPORTING_PROTOCOL.md` §6](protocols/AGENT_REPORTING_PROTOCOL.md#6-v1-兼容性矩阵)。
+详见 [`AGENT_REPORTING_PROTOCOL.md` §6](AGENT_REPORTING_PROTOCOL.md#6-v1-兼容性矩阵)。
 
 ### 12.2 M6.5.1 关键决策
 
@@ -585,14 +585,14 @@ def is_stale(ev):
 
 ## 16. 引用与配套文档
 
-- [`AGENT_REPORTING_PROTOCOL.md`](protocols/AGENT_REPORTING_PROTOCOL.md) —
+- [`AGENT_REPORTING_PROTOCOL.md`](AGENT_REPORTING_PROTOCOL.md) —
   M6.5.7 envelope schema V1 frozen
-- [`M6.5.7-ENVELOPE-FREEZE.md`](M6.5.7-ENVELOPE-FREEZE.md) — M6.5.7 5 owner
+- [`ENVELOPE-SCHEMA-FREEZE.md`](ENVELOPE-SCHEMA-FREEZE.md) — M6.5.7 5 owner
   sign-off 文档
 - [`PLANNING.md`](PLANNING.md) §M6.5 — milestone 范围
 - [`M6.3-CLUSTER-TOKEN-DESIGN.md`](M6.3-CLUSTER-TOKEN-DESIGN.md) — M6.3
   cluster wire 模式参考 (transport / auth / error 决策对齐)
-- [`CLUSTER_TOKEN_PROTOCOL.md`](protocols/CLUSTER_TOKEN_PROTOCOL.md) — M6.3
+- [`CLUSTER_TOKEN_PROTOCOL.md`](CLUSTER_TOKEN_PROTOCOL.md) — M6.3
   V1 wire schema (transport / codec / ack 模式参考)
 
 ---

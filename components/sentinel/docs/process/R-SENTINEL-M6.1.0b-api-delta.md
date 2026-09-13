@@ -472,7 +472,7 @@ M6.1.0c (写 MIGRATION-M6.md)；M6.1.0d 仍必须遵循既定实现、契约测�
 - `docs/rule_source_activation.md` (M6.1 内部 fact 完整 spec, 替代原 protocol 草稿)
 - `docs/DESIGN.md` §10.3 L1040-1069 (Supervisor 设计)
 - `docs/DESIGN.md` §13.3 (Agent Reporting Protocol 父协议占位)
-- `docs/PLANNING.md` §M6.1.0 / M6.1.0a / M6.1.0b / M6.1.0c / M6.1.0d
+- `docs/process/PLANNING.md` §M6.1.0 / M6.1.0a / M6.1.0b / M6.1.0c / M6.1.0d
 - `docs/MIGRATION-M6.md` (M6.1.0c 待写)
 
 ---

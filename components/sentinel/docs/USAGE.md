@@ -1,9 +1,9 @@
 # Atlas Richie Sentinel — 1.0 使用手册 (USAGE)
 
 > **状态**: 1.0 publish 准备中 (M6+ 收口阶段)
-> **配套 design**: `docs/M6.3-CLUSTER-TOKEN-DESIGN.md` / `docs/M6.5.7-ENVELOPE-FREEZE.md` / `docs/M6.7-WSGI-SYNC-EVAL.md`
-> **配套 plan**: `docs/PLANNING.md`
-> **配套 wire protocol**: `docs/protocols/CLUSTER_TOKEN_PROTOCOL.md` (M6.3.1) / `docs/protocols/AGENT_REPORTING_PROTOCOL.md` (M6.5.7)
+> **配套 design**: `docs/process/M6.3-CLUSTER-TOKEN-DESIGN.md` / `docs/ENVELOPE-SCHEMA-FREEZE.md` / `docs/process/M6.7-WSGI-SYNC-EVAL.md`
+> **配套 plan**: `docs/process/PLANNING.md`
+> **配套 wire protocol**: `docs/CLUSTER_TOKEN_PROTOCOL.md` (M6.3.1) / `docs/AGENT_REPORTING_PROTOCOL.md` (M6.5.7)
 
 ---
 
@@ -16,7 +16,7 @@
 | **同步 HTTP 客户端** (`requests` / `httpx.Client()` 同步) | ❌ **不支持** |
 | **WSGI bridge 强行包** (asgiref / greenlet / nest_asyncio) | ❌ **不支持** (不引入主包) |
 
-**理由** (详见 `docs/M6.7-WSGI-SYNC-EVAL.md`):
+**理由** (详见 `docs/process/M6.7-WSGI-SYNC-EVAL.md`):
 
 - `SentinelEngine` 状态机锁是 `asyncio.Lock` (engine/sentinel_engine.py:203), 同步线程无法 await
 - `RuleSourceSupervisor` 后台 task 启动依赖 event loop (supervisor.py:238, 335)
@@ -213,10 +213,10 @@ token_cluster = Token(
 ## 7. 进一步阅读
 
 - 快速开始: `components/sentinel/sentinel/README.md`
-- 设计阶段: `docs/M6.3-CLUSTER-TOKEN-DESIGN.md` / `docs/M6.5.7-ENVELOPE-FREEZE.md` / `docs/M6.7-WSGI-SYNC-EVAL.md`
+- 设计阶段: `docs/process/M6.3-CLUSTER-TOKEN-DESIGN.md` / `docs/ENVELOPE-SCHEMA-FREEZE.md` / `docs/process/M6.7-WSGI-SYNC-EVAL.md`
 - 实施计划: `docs/M6.3-IMPLEMENTATION-PLAN.md`
-- 协议: `docs/protocols/CLUSTER_TOKEN_PROTOCOL.md` / `docs/protocols/AGENT_REPORTING_PROTOCOL.md`
-- 总规划: `docs/PLANNING.md`
+- 协议: `docs/CLUSTER_TOKEN_PROTOCOL.md` / `docs/AGENT_REPORTING_PROTOCOL.md`
+- 总规划: `docs/process/PLANNING.md`
 
 ---
 

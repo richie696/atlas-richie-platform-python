@@ -3,7 +3,7 @@
 > **V1 冻结** (M6.5.7 sign-off, 1.0 publish 前冻结).
 > V1 不可破坏性: 加 optional field 走 V1.1 minor; 改 / 删 / 改语义 / 改
 > protocol_version 字符串走 V2 major bump (独立 ADR).
-> 配套 design / sign-off 文档: [`docs/M6.5.7-ENVELOPE-FREEZE.md`](../M6.5.7-ENVELOPE-FREEZE.md).
+> 配套 design / sign-off 文档: [`docs/ENVELOPE-SCHEMA-FREEZE.md`](../ENVELOPE-SCHEMA-FREEZE.md).
 
 | Field | Value |
 | ----- | ----- |
@@ -284,7 +284,7 @@ dataclass); M6.5.3 Reporter 序列化为本 payload (M6.5.7 envelope 路径),
 
 ## 9. sign-off
 
-本 V1 spec 签字栏见 [`docs/M6.5.7-ENVELOPE-FREEZE.md` §9](../M6.5.7-ENVELOPE-FREEZE.md#9-sign-off-%E6%A0%8F-5-owner)。
+本 V1 spec 签字栏见 [`docs/ENVELOPE-SCHEMA-FREEZE.md` §9](../ENVELOPE-SCHEMA-FREEZE.md#9-sign-off-%E6%A0%8F-5-owner)。
 5 owner 全部签字后, V1 冻结; 任何变更走 §6 兼容性矩阵。
 
 ---

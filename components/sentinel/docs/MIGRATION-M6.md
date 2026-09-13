@@ -359,7 +359,7 @@ MIGRATION-M6.md 完成 (M6.1.0c) 的退出条件:
 
 - `R-SENTINEL-M6.1.0b-api-delta.md` v3 (决策 1-5, 5 owner 签字)
 - `docs/rule_source_activation.md` v3 (C 层 `RuleSourceActivation` fact + observer 异常隔离)
-- `docs/PLANNING.md` §M6.1.0a (双 Port + 互斥) / §M6.5.7 (envelope 冻结)
+- `docs/process/PLANNING.md` §M6.1.0a (双 Port + 互斥) / §M6.5.7 (envelope 冻结)
 - `docs/DESIGN.md` §10.3 L1040-1089 (Supervisor 设计) / §13.3.1 (Agent Reporting 边界)
 - `docs/EXTENSION_GUIDE.md` (新 extension 写 `SnapshotRuleSource` 指引, 待更新)
 - `docs/CHANGELOG.md` 1.0+ 段 (待 M6.1.0d-3 补充)
