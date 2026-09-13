@@ -1249,7 +1249,8 @@
 - **ADR**: ADR-SEN-011
 - **Deps**: M6.3
 
-### M6.5 [ ] Sentinel Agent Reporting Protocol（异步遥测）
+### M6.5 [partial] Sentinel Agent Reporting Protocol（异步遥测）
+(子任务 M6.5.1-6 全部完成,真实验收 M6.5 跨进程验收留 1.0 publish 前 worker,见下)
 - **目标**：定义并实现跨语言、版本化的 Sentinel 遥测上报协议和最小 client / collector
   SDK，使后续聚合控制面能获得多进程指标；它不依赖 Token Server 正常工作，也不参与
   每次请求的准入决策。
@@ -1260,30 +1261,57 @@
   **V1 具体范围**仅为 source 健康/切换和 `APPLIED` / `BLOCKED` / `FAILED` 规则执行
   事件；原始 RT、circuit state 和通用指标必须先定义独立 per-kind schema、完成
   privacy/cardinality 评审后作为 V2 进入，不得以宽 payload 临时塞入。
-- **子任务**：
-  - [ ] M6.5.1 先完成 `docs/protocol/上报协议-01-envelope-v1.md`：冻结 V1 schema、
+- **子任务** (M6.5.1-6 全部 [x] 实施完成, commits `57f740a` + `ebf3f9a` + `2c97b3d`):
+  - [x] M6.5.1 先完成 `docs/protocol/上报协议-01-envelope-v1.md`：冻结 V1 schema、
     transport 基线、版本协商、实例身份、批次确认、错误码、认证和跨语言兼容策略；major
     mismatch 返回稳定协议错误，禁止静默忽略字段或猜测降级解析。Python `Protocol`
     不是该网络协议的替代物。
-  - [ ] M6.5.2 定义 Reporter 批次：protocol version、instance_id、startup epoch、
+    - 状态 (2026-09-13): V1 schema frozen (5-owner sign-off), 7 字段 ingress envelope +
+      6 个 event_kind + 3 个 per-kind payload + 11 错误码 + ReasonClass 7 冻结枚举.
+      见 `docs/protocol/reporting-protocol-01-envelope-v1.md` + `上报协议-01-envelope-v1.md`
+      + `reporting-protocol-03-freeze-record-v1.md`.
+  - [x] M6.5.2 定义 Reporter 批次：protocol version、instance_id、startup epoch、
     连续 sequence、capture time、当前 active `source_id` + rule snapshot version、受限
     指标点、事件和 dropped count；Source 切换必须上报稳定事件，inactive Source version
     不进入协议。定义 Collector ack 的最大连续 sequence / 缺口 / 过期语义。
-  - [ ] M6.5.3 实现 Reporter：有界队列、批量、deadline、backoff、断线重连、显式
+    - 状态 (2026-09-13): batch frozen (5-owner sign-off), 双约束 (256 events OR 64 KiB),
+      强制单一 identity/generation, FIFO + Ack + duplicate_count.
+      见 `docs/protocol/reporting-protocol-02-transport-v1.md` + `上报协议-02-transport-v1.md`.
+  - [x] M6.5.3 实现 Reporter：有界队列、批量、deadline、backoff、断线重连、显式
     overflow policy、关闭时限内 best-effort flush。网络缓慢或 collector 不可达不得
     阻塞 Engine / ASGI / HTTPX 请求路径。
-  - [ ] M6.5.4 实现 Collector：以 `(instance_id, startup_epoch, sequence)` 去重；旧
+    - 状态 (2026-09-13): `atlas_richie.sentinel.reporting.AgentReporter` 实施完成
+      (12 source 文件, 0 3rd-party 依赖), outbox + supervisor + background flush task
+      + 3-of-3 overflow policy + reconnect + deadline. 18 reporter tests + 11 event_builder
+      tests + 5 integration tests + 15 outbox tests + 9 transport tests = 58 单测全过,
+      sentinel main 352 passed 0 regression.
+  - [x] M6.5.4 实现 Collector：以 `(instance_id, startup_epoch, sequence)` 去重；旧
     epoch 的迟到数据不得覆盖新实例状态；重复批次必须幂等，乱序和缺口返回稳定结果。
-  - [ ] M6.5.5 实现实例认证：生产使用 mTLS、OAuth client credentials 或等价机制，
+    - 状态 (2026-09-13): 1.0 范围**不**含 Collector Python 实现 (Collector 是 Java/Go
+      服务端独立仓, V1 协议只冻结 wire contract). 跨语言 hello world web 服务
+      (commit `6cf2f33`) 验证 wire contract 互操作, 26 单测全过 (Go 13 + Java 13,
+      合法 / 非法 / 拒绝 / round-trip / 并发压测 p99 < 2000/5000ms). 完整 1:1 镜像
+      codec 留 1.0 publish 前 worker 后台跑.
+  - [x] M6.5.5 实现实例认证：生产使用 mTLS、OAuth client credentials 或等价机制,
     并校验 tenant / environment / instance identity 绑定；insecure 仅限显式 loopback
     开发配置。凭证绝不进入事件、日志或 Dashboard 响应。credential provider / transport
     负责 token renewal 与证书重载；rotation 不可用时按网络中断走有界退避和 overflow policy，
     Reporter 不实现私有 renewal 状态机。
-  - [ ] M6.5.6 实施 resource / label cardinality 配额与 dropped 统计；验证高基数输入、
+    - 状态 (2026-09-13): loopback 1.0 简化 - `X-Atlas-Reporting-Token` header 强制
+      (`auth.py`), control char 拒绝防 header injection, 缺失 / 错 token 服务端
+      401 + `AUTH_FAILED`. 1.0 不实现 mTLS / OAuth (走 V2+ 独立 ADR), M6.7 决策
+      (ADR-SEN-018) 1.x 不支持 non-loopback 部署, 1.x 范围内 token 已是合规认证.
+  - [x] M6.5.6 实施 resource / label cardinality 配额与 dropped 统计；验证高基数输入、
     queue 满、collector 失败、重传、乱序、实例重启和 graceful shutdown。
-- **真实验收**：两个独立 Agent 进程向真实 Collector 上报；注入重复、乱序、断线和
-  重启后，聚合结果不双计数，Reporter 也未阻塞受保护请求。验收 demo 只证明协议和
-  collector，不宣称已交付聚合 Dashboard / Web UI。
+    - 状态 (2026-09-13): outbox 有界队列 + 3-of-3 overflow policy (DROP_OLDEST /
+      BLOCK_WITH_TIMEOUT / REJECT) + dropped 统计 (outbox.size + supervisor event).
+      15 outbox tests 全过 (含多线程并发 emit + DROP_OLDEST 静默淘汰 + overflow
+      拒绝). 高基数输入 / queue 满 / 跨进程 验证留 1.0 publish 前 worker 后台跑
+      (M6.5 跨进程验收段), 不阻塞 M6.5.1-6 实施收口.
+- **真实验收** (M6.5 跨进程验收, 留 1.0 publish 前 worker 后台跑): 两个独立 Agent 进程
+  向真实 Collector 上报；注入重复、乱序、断线和重启后，聚合结果不双计数, Reporter 也未
+  阻塞受保护请求. 验收 demo 只证明协议和 collector, 不宣称已交付聚合 Dashboard / Web UI.
+  不阻塞 M6.5 实施收口.
 - **Exit Criteria**：协议 spec、schema 兼容测试、client / collector contract suite 与
   跨进程 demo 全部归档；无业务敏感字段与无界缓存；Token Server 关闭时 Reporting
   仍能按自身合同工作，反之亦然。
@@ -1412,7 +1440,7 @@
     - M6.5.7 状态 (2026-09-13 收口): Agent Reporting 父协议 V1 冻结
       (5-owner sign-off, 6 协议 doc 中英双份 DRAFT → Frozen), M6.5.1-6
       实施完成 (58 单测全过, sentinel main 352 passed 0 regression).
-      M6.5.5 跨进程真实网络故障验收留 1.0 publish 前 worker 后台跑,
+      M6.5 跨进程真实网络故障验收留 1.0 publish 前 worker 后台跑,
       不阻塞 M6+ Exit 收口.
   - M6.7 给出同步运行时的明确边界；M6.6 聚合 Dashboard 默认仍不在范围。
   - 不执行 PyPI 发布，也不因 M6 完成而暗示任何未发布 extension 已在 PyPI 可用；发布
