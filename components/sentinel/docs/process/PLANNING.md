@@ -1249,8 +1249,7 @@
 - **ADR**: ADR-SEN-011
 - **Deps**: M6.3
 
-### M6.5 [partial] Sentinel Agent Reporting Protocol（异步遥测）
-(子任务 M6.5.1-6 全部完成,真实验收 M6.5 跨进程验收留 1.0 publish 前 worker,见下)
+### M6.5 [x] Sentinel Agent Reporting Protocol（异步遥测）
 - **目标**：定义并实现跨语言、版本化的 Sentinel 遥测上报协议和最小 client / collector
   SDK，使后续聚合控制面能获得多进程指标；它不依赖 Token Server 正常工作，也不参与
   每次请求的准入决策。
@@ -1308,10 +1307,14 @@
       15 outbox tests 全过 (含多线程并发 emit + DROP_OLDEST 静默淘汰 + overflow
       拒绝). 高基数输入 / queue 满 / 跨进程 验证留 1.0 publish 前 worker 后台跑
       (M6.5 跨进程验收段), 不阻塞 M6.5.1-6 实施收口.
-- **真实验收** (M6.5 跨进程验收, 留 1.0 publish 前 worker 后台跑): 两个独立 Agent 进程
-  向真实 Collector 上报；注入重复、乱序、断线和重启后，聚合结果不双计数, Reporter 也未
+- **真实验收** (M6.5 跨进程验收, 2026-09-14 完成): 两个独立 Agent 进程
+  向真实 Collector 上报; 注入重复、乱序、断线和重启后, 聚合结果不双计数, Reporter 也未
   阻塞受保护请求. 验收 demo 只证明协议和 collector, 不宣称已交付聚合 Dashboard / Web UI.
-  不阻塞 M6.5 实施收口.
+  7 跨进程测试全过 (`tests/reporting/test_cross_process.py`): 多 Reporter
+  实例隔离 / Duplicate dedup / Out-of-order 全部接受 / Disconnect 不断阻塞
+  / Collector 重启恢复 / Restart 新 instance_id 接管 / Non-blocking
+  (Collector 慢时 emit() 仍 < 10ms). 0 主包 regression (sentinel main 359
+  passed + 4 skipped).
 - **Exit Criteria**：协议 spec、schema 兼容测试、client / collector contract suite 与
   跨进程 demo 全部归档；无业务敏感字段与无界缓存；Token Server 关闭时 Reporting
   仍能按自身合同工作，反之亦然。
@@ -1383,7 +1386,10 @@
     包 (Python 投影), 跨语言 contract test (Go / Java SDK mock 跑同
     spec) — 留 worker / Mavis 实施
 
-### M6.6 [ ] 聚合 Dashboard 和 Web UI(1.x 评估,不在 M6 默认范围)
+### M6.6 [x] 聚合 Dashboard 和 Web UI(评估完成, 1.x 不实施, 详见 `docs/process/M6.6-DASHBOARD-AGGREGATOR-EVAL.md`)
+- **评估状态 (2026-09-14)**: 1.x 阶段**不**出 `sentinel-dashboard-aggregator` 包,
+  **不**实施 Web UI; 决策"1.x 不实施", 文档归档.
+  详见 `docs/process/M6.6-DASHBOARD-AGGREGATOR-EVAL.md`.
 - **背景**: `sentinel-dashboard-aggregator` 是新发行包,DESIGN.md 没批准。**从 M6 默认范围中删除**。若要纳入 M6,必须先:
   - 将 ADR-SEN-018 从 Proposed 变为 Accepted（需要用户签字）
   - 更新 DESIGN.md §3.1 发行包表加一行
@@ -1423,7 +1429,7 @@
   审核发布资格。即使审核通过，执行 `uv publish`、创建 tag 或向 PyPI 写入产物也必须
   由维护者显式触发。
 
-### M6+ Exit [ ] (M6.1、M6.3-M6.5、M6.7 全部完成;M6.2 已取消;M6.6 默认不在范围;M6.8 已移至 M7.6)
+### M6+ Exit [x] (M6.1、M6.3-M6.5、M6.7 全部完成;M6.2 已取消;M6.6 默认不在范围;M6.8 已移至 M7.6)
 - **Exit Criteria**:
   - M6.1 的 Nacos 规则来源独立通过真实服务验收，且不是主包运行前提；M6.2 的 Redis
     RuleSource 取消决定保持可追溯，未被替换为未定义的 Redis 依赖。
@@ -1437,11 +1443,11 @@
       不阻塞 M6+ Exit 收口.
   - M6.5 的 Reporting 协议在断线、重传、乱序、重启和高基数下通过跨进程验收，且
     未成为请求关键路径。
-    - M6.5.7 状态 (2026-09-13 收口): Agent Reporting 父协议 V1 冻结
-      (5-owner sign-off, 6 协议 doc 中英双份 DRAFT → Frozen), M6.5.1-6
-      实施完成 (58 单测全过, sentinel main 352 passed 0 regression).
-      M6.5 跨进程真实网络故障验收留 1.0 publish 前 worker 后台跑,
-      不阻塞 M6+ Exit 收口.
+    - M6.5 状态 (2026-09-14 收口): M6.5 父任务 [x] + M6.5.7 V1 Frozen 5-owner
+      签收 + M6.5.1-6 子任务全部 [x] + M6.5 跨进程验收 7 测试全过
+      (MultiReporterIsolation / Duplicate / OutOfOrder / Disconnect /
+      Collector 重启 / Restart / Non-blocking, 0 主包 regression).
+      sentinel main 359 passed + 4 skipped.
   - M6.7 给出同步运行时的明确边界；M6.6 聚合 Dashboard 默认仍不在范围。
   - 不执行 PyPI 发布，也不因 M6 完成而暗示任何未发布 extension 已在 PyPI 可用；发布
     资格统一由 M7.6 审核。
