@@ -93,14 +93,22 @@ class TokenDecision(StrEnum):
 class TokenDenyReason(StrEnum):
     """中文
     ----
-    Token 拒绝原因(5 选 1)。
+    Token 拒绝原因(7 选 1, M6.3.6 加 2 个)。
+
+    1.0 兼容扩展 (M6.3.6): 加 2 个新值 ``RESOURCE_NOT_CONFIGURED`` (Server
+    端启动 fail-fast 校验) + ``SERVER_OVERLOADED`` (Server 资源满, 返回
+    DENIED + 按 ClusterFailurePolicy 决策)。
 
     **不**含 AUTHORITY_DENIED — 授权拒绝由 ``AuthoritySlot`` +
     ``AuthorityDenied`` 表达,不属于 TokenService。
 
     English
     --------
-    Token deny reason (5-way).
+    Token deny reason (7-way, M6.3.6 adds 2).
+
+    1.0-compat extension (M6.3.6): adds ``RESOURCE_NOT_CONFIGURED`` (Server
+    startup fail-fast) + ``SERVER_OVERLOADED`` (Server quota full, DENIED +
+    ClusterFailurePolicy decision).
 
     **Excludes** AUTHORITY_DENIED — authority rejection lives in
     ``AuthoritySlot`` + ``AuthorityDenied``, not TokenService.
@@ -111,6 +119,10 @@ class TokenDenyReason(StrEnum):
     RATE_LIMITED = "rate_limited"
     SHUTTING_DOWN = "shutting_down"
     UNKNOWN = "unknown"
+    # M6.3.6 (1.0 兼容扩展): Server 端启动 fail-fast 校验
+    RESOURCE_NOT_CONFIGURED = "resource_not_configured"
+    # M6.3.6 (1.0 兼容扩展): Server 资源满, 返回 DENIED + deny_reason=SERVER_OVERLOADED
+    SERVER_OVERLOADED = "server_overloaded"
 
 
 class ClusterFailurePolicy(StrEnum):
