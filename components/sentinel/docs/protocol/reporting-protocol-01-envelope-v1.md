@@ -1,8 +1,8 @@
 # Atlas Richie Agent Reporting Envelope Schema (V1)
 
 > **Protocol**: `atlas-richie-agent-reporting`
-> **Version**: 1.0
-> **Status**: Standards Track
+> **Version**: 1.0 (Draft)
+> **Status**: Draft — not frozen
 > **Date**: 2026-09-13
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0
@@ -28,9 +28,9 @@ metrics and audit consumers.
 
 ## Status of This Memo
 
-This document specifies an Atlas Richie Standards Track schema. It
-is intended for cross-language SDK implementation. Distribution of
-this memo is unlimited.
+This document is a cross-language schema draft pending sign-off. It MUST NOT
+be implemented as a released Standards Track contract until its freeze record
+contains all required signatures. Distribution of this memo is unlimited.
 
 ## Copyright Notice
 
@@ -100,7 +100,10 @@ The key words "**MUST**", "**MUST NOT**", "**REQUIRED**", "**SHALL**",
 "**MAY**", and "**OPTIONAL**" in this document are to be interpreted
 as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 
-- `int64` denotes a 64-bit signed integer.
+- `int64` denotes a non-negative integer between `0` and
+  `9007199254740991` (`2^53 - 1`), encoded as a JSON number without a
+  fractional part. The restriction preserves exact representation for
+  JavaScript consumers.
 - `string` denotes a UTF-8 sequence.
 - `UUID` denotes a 128-bit identifier formatted as 8-4-4-4-12 lowercase
   hexadecimal, per [RFC 4122](https://www.rfc-editor.org/rfc/rfc4122).
@@ -126,8 +129,7 @@ as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
   "instance_id": "550e8400-e29b-41d4-a716-446655440000",
   "startup_epoch": 0,
   "sequence": 1,
-  "captured_at": "2026-09-13T10:00:00.123456Z",
-  "received_at": "2026-09-13T10:00:00.456789Z"
+  "captured_at": "2026-09-13T10:00:00.123456Z"
 }
 ```
 
@@ -138,16 +140,21 @@ as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 | `protocol_version` | string | YES      | MUST equal `"atlas-richie.reporting/v1"`.                                              | Reporter   |
 | `event_kind`       | string | YES      | One of six V1 values; see §4.                                                           | Reporter   |
 | `event_payload`    | object | YES      | Per-kind frozen schema; see §5.                                                        | Reporter   |
-| `instance_id`      | string | YES      | UUID. Stable across the lifetime of one Reporter process.                              | Reporter   |
-| `startup_epoch`    | int64  | YES      | Monotonic; resets only at process restart.                                              | Reporter   |
+| `instance_id`      | string | YES      | UUID. Stable across restarts of one installed Reporter.                                 | Reporter   |
+| `startup_epoch`    | int64  | YES      | Persisted and strictly increasing across restarts for one `instance_id`; never reset or reused. | Reporter   |
 | `sequence`         | int64  | YES      | Monotonically increasing per `(instance_id, startup_epoch)`. Starts at 1.               | Reporter   |
 | `captured_at`      | string | YES      | ISO 8601 UTC microsecond. **Diagnostic only**, not authoritative.                       | Reporter   |
-| `received_at`      | string | YES      | ISO 8601 UTC microsecond. The **only** server-authoritative time field.                  | Collector  |
+
+`received_at` is **not** an ingress Reporter → Collector envelope field. After
+accepting an event, the Collector writes it with its own UTC clock and uses it
+only in the Ack and its persisted event projection. It is the only
+server-authoritative time; a Reporter MUST NOT guess, write, or echo it.
 
 ### 3.3. Serialization
 
 - All strings MUST be UTF-8 with no leading or trailing whitespace.
-- Integer fields MUST be JSON numbers without a decimal point.
+- Integer fields MUST be JSON numbers without a decimal point and within the
+  safe-integer range defined above.
 - Floating-point fields MUST NOT appear in V1.
 - Boolean fields use JSON `true` / `false`.
 - Time fields use ISO 8601 UTC with microsecond precision, terminated
@@ -158,7 +165,7 @@ as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 
 ### 3.4. Size Limits
 
-A single envelope MUST NOT exceed **16 KB** serialized. The Collector
+A single envelope MUST NOT exceed **16 KiB** measured as UTF-8 JSON bytes. The Collector
 MUST return an `ENVELOPE_TOO_LARGE` error if an envelope exceeds the
 limit; the Reporter MUST apply its overflow policy and MUST NOT
 retransmit the rejected envelope.
@@ -167,8 +174,8 @@ retransmit the rejected envelope.
 
 ### 4.1. V1 Event Kinds
 
-Six event kinds are defined. The set is frozen for V1; new kinds
-require V1.1 minor release and an ADR (see §9).
+Six event kinds are defined. Once frozen, the V1 set is not extensible; a new
+kind requires V2 major and an independent ADR (see §9).
 
 | `event_kind`              | Category      | Purpose                                                       | Payload schema               |
 | ------------------------- | ------------- | ------------------------------------------------------------- | ---------------------------- |
@@ -186,8 +193,10 @@ require V1.1 minor release and an ADR (see §9).
   include `source_id` and the complete `rule_version_*` triple
   (epoch, revision, checksum).
 - **Health events** (`RULE_SOURCE_STALE`, `RULE_SOURCE_DEGRADED`) are
-  emitted when the source state changes without a source switch. The
-  payload MUST include `source_id` and a `health_class` string.
+  emitted when the source state changes without a source switch. The payload
+  MUST include `source_id` and `health_class`. When a last-known-good snapshot
+  exists, all three `rule_version_*` fields MUST be present; when no valid
+  snapshot exists (for example, initial-load failure), all three MUST be absent.
 - **Business-execution events** (`RULE_APPLIED`, `RULE_BLOCKED`,
   `RULE_FAILED`) are emitted on each rule application. The payload
   MUST include `source_id`, `rule_id`, and the execution result.
@@ -232,11 +241,11 @@ Source switches always go through `RULE_SOURCE_ACTIVATED`.
 | Field                   | Type   | Required | Constraint                                                                                                       |
 | ----------------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------- |
 | `source_id`             | string | YES      | As §5.1.                                                                                                          |
-| `rule_version_epoch`    | int64  | YES      | As §5.1.                                                                                                          |
-| `rule_version_revision` | int64  | YES      | As §5.1.                                                                                                          |
-| `rule_version_checksum` | string | YES      | As §5.1.                                                                                                          |
+| `rule_version_epoch`    | int64  | Group-optional | Present with both other version fields, or absent with both; when present, as §5.1.                         |
+| `rule_version_revision` | int64  | Group-optional | As above.                                                                                                    |
+| `rule_version_checksum` | string | Group-optional | As above.                                                                                                    |
 | `health_class`         | string | YES      | One of: `STALE`, `DEGRADED`, `DISCONNECTED`.                                                                      |
-| `reason_class`         | string | YES      | A stable error class, e.g. `EMPTY_DATA_ID`, `NETWORK_TIMEOUT`, `AUTH_FAILED`, `DECODE_FAILED`.                  |
+| `reason_class`         | string | YES      | One of the `ReasonClass` enumeration below.                                                                       |
 | `reason_message`       | string | NO       | Sanitized reason, ≤ 64 bytes. MUST NOT contain raw exceptions, stack traces, frame locals, or user data.        |
 
 ### 5.3. `RuleExecPayload`
@@ -261,11 +270,18 @@ Source switches always go through `RULE_SOURCE_ACTIVATED`.
 | `rule_version_revision` | int64  | YES                    | As §5.1.                                                                                                |
 | `rule_version_checksum` | string | YES                    | As §5.1.                                                                                                |
 | `exec_result`           | string | YES                    | One of: `APPLIED`, `BLOCKED`, `FAILED`.                                                                 |
-| `failure_class`         | string | YES if `exec_result=FAILED` | Stable error class. MUST NOT contain raw exceptions.                                                |
+| `failure_class`         | string or `null` | YES | A `ReasonClass` only if `exec_result=FAILED`; MUST be `null` for every other result. Raw exceptions are forbidden. |
+
+### 5.4. `ReasonClass` Enumeration
+
+V1 permits only these stable classifications: `EMPTY_DATA_ID`,
+`NETWORK_TIMEOUT`, `NETWORK_UNAVAILABLE`, `AUTH_FAILED`, `DECODE_FAILED`,
+`STATE_INVALID`, and `UNKNOWN`. Raw exception types, messages, and vendor error
+codes MUST NOT appear here. A new value requires V2 major and an independent ADR.
 
 ## 6. Error Codes
 
-Nine error codes are defined. The behavior of each is specified
+Eleven error codes are defined. The behavior of each is specified
 fully in [`reporting-protocol-02-transport-v1.md` §5](./reporting-protocol-02-transport-v1.md#5-error-codes);
 this section merely lists them for completeness.
 
@@ -277,6 +293,7 @@ this section merely lists them for completeness.
 - `SEQUENCE_NOT_MONOTONIC`
 - `SEQUENCE_GAP`
 - `STALE_EPOCH`
+- `ENVELOPE_TOO_LARGE`
 - `BATCH_TOO_LARGE`
 - `AUTH_FAILED`
 
@@ -293,7 +310,7 @@ this section merely lists them for completeness.
 - **Reason message length**: `reason_message` is capped at 64 bytes
   to bound diagnostic leakage.
 - **Authentication**: the outer transport applies
-  `X-Atlas-Cluster-Reporting-Token` (see `reporting-protocol-02-transport-v1.md` §4).
+  `X-Atlas-Reporting-Token` (see `reporting-protocol-02-transport-v1.md` §4).
   This schema does not redefine authentication.
 
 ## 8. IANA Considerations
@@ -304,15 +321,15 @@ This document requests no IANA actions.
 
 | Change Type                                       | V1-breaking? | Path                                | Constraint                                                  |
 | ------------------------------------------------- | ------------ | ----------------------------------- | ----------------------------------------------------------- |
-| Add optional field in envelope                    | NO           | V1.1 minor + ADR                    | Old consumers ignore unknown fields.                        |
-| Add optional field in `event_payload`             | NO           | V1.1 minor + ADR                    | Old consumers ignore unknown fields.                        |
-| Add new `event_kind`                              | NO           | V1.1 minor + ADR                    | Old consumers skip unknown kinds.                           |
+| Add optional field in envelope                    | NO           | V1.x spec revision + ADR            | Old consumers ignore unknown fields.                        |
+| Add optional field in `event_payload`             | NO           | V1.x spec revision + ADR            | Old consumers ignore unknown fields.                        |
+| Add new `event_kind`                              | YES          | V2 major + independent ADR          | Enumeration and handling semantics change together.         |
 | Change `event_kind` string value                  | YES          | V2 major + independent ADR         | Old enum values are not revived.                            |
 | Change `event_payload` field semantics            | YES          | V2 major + independent ADR         | Cross-language SDKs MUST update.                            |
 | Remove an envelope field                          | YES          | V2 major + independent ADR         | Old consumers break immediately.                            |
 | Change time-field semantics                       | YES          | V2 major + independent ADR         | Cross-language timezone serialization.                      |
 | Change `protocol_version` string                  | YES          | V2 major + independent ADR         | Routing layer breaks immediately.                           |
-| Change size limit (> 16 KB)                      | YES          | V2 major + independent ADR         | Cross-language SDKs MUST adjust buffers.                    |
+| Change size limit (> 16 KiB)                     | YES          | V2 major + independent ADR         | Cross-language SDKs MUST adjust buffers.                    |
 
 After V1 freeze, no V1-breaking change MAY be merged silently. All
 such changes require V2, a new ADR, and 5-owner sign-off.
@@ -326,7 +343,7 @@ of this schema:
 | ----------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `python_serialize_roundtrip`             | Python envelope serialize → JSON → deserialize; all field values identical.                |
 | `python_payload_schema_per_kind`         | Each of the six `event_kind` payloads round-trips; field order is irrelevant (key-based).    |
-| `python_time_iso8601_utc`                 | `captured_at`, `received_at` use microsecond precision; cross-language strftime templates agree. |
+| `python_time_iso8601_utc`                 | Ingress `captured_at` and Ack `received_at` use microsecond precision; cross-language templates agree. |
 | `python_protocol_version_constant`        | Any value other than `"atlas-richie.reporting/v1"` raises `PROTOCOL_VERSION_MISMATCH`.        |
 | `python_malformed_envelope`               | Missing / wrong-type fields raise `MALFORMED_ENVELOPE`; the envelope is dropped, not silently accepted. |
 | `go_mock_decode`                          | A Go SDK mock decodes the same spec; field names and types match exactly.                    |
@@ -334,11 +351,10 @@ of this schema:
 
 ## 11. Future Work
 
-- Add `priority` and `tenant` fields (V1.1 candidate).
-- Add per-rule `latency_ns` to `RuleExecPayload` (V1.1 candidate).
-- Add `ENVELOPE_TOO_LARGE` to outer transport error codes
-  (already declared here; documented in
-  [`reporting-protocol-02-transport-v1.md` §5](./reporting-protocol-02-transport-v1.md#5-error-codes)).
+- Add safely ignorable optional `priority` or `tenant` fields through a V1.x
+  compatibility matrix.
+- Add safely ignorable optional per-rule `latency_ns` to `RuleExecPayload`.
+- Define additional event kinds or payload semantics in a new V2 protocol.
 
 ## Appendix A. Examples
 
@@ -357,8 +373,7 @@ of this schema:
   "instance_id": "550e8400-e29b-41d4-a716-446655440000",
   "startup_epoch": 0,
   "sequence": 1,
-  "captured_at": "2026-09-13T10:00:00.123456Z",
-  "received_at": "2026-09-13T10:00:00.124000Z"
+  "captured_at": "2026-09-13T10:00:00.123456Z"
 }
 ```
 
@@ -380,14 +395,13 @@ of this schema:
   "instance_id": "550e8400-e29b-41d4-a716-446655440000",
   "startup_epoch": 0,
   "sequence": 2,
-  "captured_at": "2026-09-13T10:00:01.500000Z",
-  "received_at": "2026-09-13T10:00:01.501000Z"
+  "captured_at": "2026-09-13T10:00:01.500000Z"
 }
 ```
 
 ## Appendix B. Sign-off
 
-This V1 schema was frozen under 5-owner sign-off. The family-level
+This draft may be frozen only after 5-owner sign-off. The family-level
 5-owner sign-off record is maintained in
 [`reporting-protocol-03-freeze-record-v1.md`](./reporting-protocol-03-freeze-record-v1.md).
 Subsequent revisions require a new sign-off cycle and the changes
@@ -397,7 +411,7 @@ listed in §9.
 
 | Version | Date       | Authors                       | Changes        |
 | ------- | ---------- | ----------------------------- | -------------- |
-| 1.0     | 2026-09-13 | Atlas Richie Team / Mavis    | Initial V1.0 frozen release. |
+| 1.0-draft.2 | 2026-09-13 | Atlas Richie Team / Mavis | Reconciled ingress time, generation, enumeration, and error semantics. |
 
 ## Author's Address
 

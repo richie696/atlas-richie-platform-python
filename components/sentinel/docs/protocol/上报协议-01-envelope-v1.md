@@ -1,8 +1,8 @@
 # Atlas Richie Agent 上报事件包 Schema (V1)
 
 > **Protocol**: `atlas-richie-agent-reporting`
-> **Version**: 1.0
-> **Status**: Standards Track
+> **Version**: 1.0 (Draft)
+> **Status**: Draft — not frozen
 > **Date**: 2026-09-13
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0
@@ -26,8 +26,8 @@ Collector 接收事件, 按 `(instance_id, startup_epoch, sequence)` 去重,
 
 ## 本备忘录状态 (Status of This Memo)
 
-本文档规定了一项 Atlas Richie Standards Track schema, 用于跨语言 SDK
-实现。
+本文档是待签字的跨语言 schema 草案；在 freeze record 完成全部签字前，不得
+作为已发布 Standards Track 合同实现。
 
 ## 版权声明 (Copyright Notice)
 
@@ -93,7 +93,9 @@ Collector 可能由不同语言实现, 线协议上的 schema **必须**自描�
 "**MAY**", "**OPTIONAL**" 等关键字按 [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119)
 描述解释。
 
-- `int64` 表示 64 位有符号整数。
+- `int64` 表示介于 `0` 和 `9007199254740991`（`2^53 - 1`）之间的
+  非负整数；它以无小数点的 JSON number 传输。该限制保证 JavaScript
+  consumer 也能精确表示所有 V1 整数。
 - `string` 表示 UTF-8 字符串。
 - `UUID` 表示按 [RFC 4122](https://www.rfc-editor.org/rfc/rfc4122) 格式化为
   8-4-4-4-12 小写十六进制的 128 位标识符。
@@ -118,8 +120,7 @@ Collector 可能由不同语言实现, 线协议上的 schema **必须**自描�
   "instance_id": "550e8400-e29b-41d4-a716-446655440000",
   "startup_epoch": 0,
   "sequence": 1,
-  "captured_at": "2026-09-13T10:00:00.123456Z",
-  "received_at": "2026-09-13T10:00:00.456789Z"
+  "captured_at": "2026-09-13T10:00:00.123456Z"
 }
 ```
 
@@ -130,16 +131,19 @@ Collector 可能由不同语言实现, 线协议上的 schema **必须**自描�
 | `protocol_version` | string | 是 | **必须**等于 `"atlas-richie.reporting/v1"`。 | Reporter |
 | `event_kind` | string | 是 | V1 六个值之一, 见 §4。 | Reporter |
 | `event_payload` | object | 是 | per-kind 冻结 schema, 见 §5。 | Reporter |
-| `instance_id` | string | 是 | UUID, 一个 Reporter 进程生命周期内稳定。 | Reporter |
-| `startup_epoch` | int64 | 是 | 单调; 仅在进程重启时重置。 | Reporter |
+| `instance_id` | string | 是 | UUID；同一已安装 Reporter 跨重启保持不变。 | Reporter |
+| `startup_epoch` | int64 | 是 | 对同一 `instance_id` 跨重启持久化且严格递增；不得重置或复用。 | Reporter |
 | `sequence` | int64 | 是 | 按 `(instance_id, startup_epoch)` 单调递增。从 1 开始。 | Reporter |
 | `captured_at` | string | 是 | ISO 8601 UTC microsecond。**仅诊断**, 非权威。 | Reporter |
-| `received_at` | string | 是 | ISO 8601 UTC microsecond。**唯一** server-authoritative 时间字段。 | Collector |
+
+`received_at` **不是** Reporter → Collector ingress envelope 的字段。Collector
+在接受事件后，以自己的 UTC 时钟写入它，并仅在 Ack 与 Collector 的持久化事件投影中
+使用；它是唯一 server-authoritative 时间字段。Reporter **不得**猜测、写入或回传该值。
 
 ### 3.3. 序列化
 
 - 所有字符串**必须**为 UTF-8, 无前后空白。
-- 整数字段**必须**为无小数点的 JSON 数字。
+- 整数字段**必须**为无小数点的 JSON 数字，且在本节定义的安全整数范围内。
 - V1 中**不得**出现浮点字段。
 - 布尔字段使用 JSON `true` / `false`。
 - 时间字段使用 ISO 8601 UTC, microsecond 精度, 以字面量 `Z` 结尾。
@@ -149,7 +153,7 @@ Collector 可能由不同语言实现, 线协议上的 schema **必须**自描�
 
 ### 3.4. 大小限制
 
-单个 envelope **不得**超过 **16 KB** 序列化。Collector 必须在 envelope
+单个 envelope 的 UTF-8 JSON byte length **不得**超过 **16 KiB**。Collector 必须在 envelope
 超过限制时返回 `ENVELOPE_TOO_LARGE` 错误; Reporter **必须**应用
 overflow 策略, **不得**重传被拒绝的 envelope。
 
@@ -157,8 +161,8 @@ overflow 策略, **不得**重传被拒绝的 envelope。
 
 ### 4.1. V1 事件种类
 
-V1 定义六种事件种类。该集合在 V1 中冻结; 新种类需要 V1.1 minor 发布
-+ ADR (见 §9)。
+V1 定义六种事件种类。冻结后该集合不可扩展；新种类需要 V2 major +
+独立 ADR (见 §9)。
 
 | `event_kind` | 类别 | 用途 | Payload schema |
 | --- | --- | --- | --- |
@@ -176,7 +180,8 @@ V1 定义六种事件种类。该集合在 V1 中冻结; 新种类需要 V1.1 mi
   `rule_version_*` 三元组 (epoch, revision, checksum)。
 - **Health 事件** (`RULE_SOURCE_STALE`, `RULE_SOURCE_DEGRADED`) 在 source
   状态变化但无 source 切换时发出。Payload **必须**包含 `source_id` 和
-  `health_class` 字符串。
+  `health_class`。若存在 last-known-good，则三个 `rule_version_*` 字段必须
+  全部出现；首次加载失败等无有效快照场景中，三个字段必须全部省略。
 - **业务执行事件** (`RULE_APPLIED`, `RULE_BLOCKED`, `RULE_FAILED`) 在每次
   规则应用时发出。Payload **必须**包含 `source_id`, `rule_id` 和执行结果。
 
@@ -220,11 +225,11 @@ Health 事件**不得**替代 source-switch 事件。Source 切换总是走
 | 字段 | 类型 | 必填 | 约束 |
 | --- | --- | --- | --- |
 | `source_id` | string | 是 | 同 §5.1。 |
-| `rule_version_epoch` | int64 | 是 | 同 §5.1。 |
-| `rule_version_revision` | int64 | 是 | 同 §5.1。 |
-| `rule_version_checksum` | string | 是 | 同 §5.1。 |
-| `health_class` | string | 是 | 之一: `STALE`, `DEGRADED`, `DISCONNECTED`。 |
-| `reason_class` | string | 是 | stable error class, 如 `EMPTY_DATA_ID`, `NETWORK_TIMEOUT`, `AUTH_FAILED`, `DECODE_FAILED`。 |
+| `rule_version_epoch` | int64 | 成组可选 | 与另外两个 version 字段同时出现或同时省略；存在时同 §5.1。 |
+| `rule_version_revision` | int64 | 成组可选 | 同上。 |
+| `rule_version_checksum` | string | 成组可选 | 同上。 |
+| `health_class` | string | 是 | 枚举之一: `STALE`, `DEGRADED`, `DISCONNECTED`。 |
+| `reason_class` | string | 是 | `ReasonClass` 枚举之一，见下文。 |
 | `reason_message` | string | 否 | 脱敏原因, ≤ 64 字节。**不得**包含原始异常, stack trace, frame locals 或用户数据。 |
 
 ### 5.3. `RuleExecPayload`
@@ -249,11 +254,18 @@ Health 事件**不得**替代 source-switch 事件。Source 切换总是走
 | `rule_version_revision` | int64 | 是 | 同 §5.1。 |
 | `rule_version_checksum` | string | 是 | 同 §5.1。 |
 | `exec_result` | string | 是 | 之一: `APPLIED`, `BLOCKED`, `FAILED`。 |
-| `failure_class` | string | 是, `exec_result=FAILED` 时 | stable error class。**不得**包含原始异常。 |
+| `failure_class` | string 或 `null` | 是 | 当且仅当 `exec_result=FAILED` 时为 `ReasonClass` 枚举值；其余结果必须为 `null`。不得包含原始异常。 |
+
+### 5.4. `ReasonClass` 枚举
+
+V1 只允许下列稳定分类：`EMPTY_DATA_ID`、`NETWORK_TIMEOUT`、
+`NETWORK_UNAVAILABLE`、`AUTH_FAILED`、`DECODE_FAILED`、`STATE_INVALID`、
+`UNKNOWN`。不得把原始异常类型、消息或供应商错误码写入该字段；新增取值需要
+V2 major + 独立 ADR。
 
 ## 6. 错误码
 
-定义 9 个错误码。每个的完整行为在
+定义 11 个错误码。每个的完整行为在
 [`上报协议-02-transport-v1.md` §5](./上报协议-02-transport-v1.md#5-错误码) 规定; 本节仅列出
 它们以便查阅。
 
@@ -265,6 +277,7 @@ Health 事件**不得**替代 source-switch 事件。Source 切换总是走
 - `SEQUENCE_NOT_MONOTONIC`
 - `SEQUENCE_GAP`
 - `STALE_EPOCH`
+- `ENVELOPE_TOO_LARGE`
 - `BATCH_TOO_LARGE`
 - `AUTH_FAILED`
 
@@ -278,7 +291,7 @@ Health 事件**不得**替代 source-switch 事件。Source 切换总是走
 - **Reason message 长度**: `reason_message` 上限 64 字节, 限制诊断
   泄露。
 - **鉴权**: 外层 transport 应用
-  `X-Atlas-Cluster-Reporting-Token` (见 `上报协议-02-transport-v1.md` §4)。本
+  `X-Atlas-Reporting-Token` (见 `上报协议-02-transport-v1.md` §4)。本
   schema 不重新定义鉴权。
 
 ## 8. IANA 考量
@@ -289,15 +302,15 @@ Health 事件**不得**替代 source-switch 事件。Source 切换总是走
 
 | 变更类型 | 是否破坏 V1 | 路径 | 约束 |
 | --- | --- | --- | --- |
-| 在 envelope 添加可选字段 | 否 | V1.1 minor + ADR | 旧 consumer 忽略未知字段。 |
-| 在 `event_payload` 添加可选字段 | 否 | V1.1 minor + ADR | 旧 consumer 忽略未知字段。 |
-| 添加新 `event_kind` | 否 | V1.1 minor + ADR | 旧 consumer skip 未知 kind。 |
+| 在 envelope 添加可选字段 | 否 | V1.x spec revision + ADR | 旧 consumer 忽略未知字段。 |
+| 在 `event_payload` 添加可选字段 | 否 | V1.x spec revision + ADR | 旧 consumer 忽略未知字段。 |
+| 添加新 `event_kind` | 是 | V2 major + 独立 ADR | 枚举和处理语义同步变更。 |
 | 改 `event_kind` 字符串值 | **是** | V2 major + 独立 ADR | 旧 enum 值不再恢复。 |
 | 改 `event_payload` 字段语义 | **是** | V2 major + 独立 ADR | 跨语言 SDK **必须**更新。 |
 | 删除 envelope 字段 | **是** | V2 major + 独立 ADR | 旧 consumer 立即 break。 |
 | 改时间字段语义 | **是** | V2 major + 独立 ADR | 跨语言时区序列化。 |
 | 改 `protocol_version` 字符串 | **是** | V2 major + 独立 ADR | 路由层立即 break。 |
-| 改大小限制 (> 16 KB) | **是** | V2 major + 独立 ADR | 跨语言 SDK **必须**调整 buffer。 |
+| 改大小限制 (> 16 KiB) | **是** | V2 major + 独立 ADR | 跨语言 SDK **必须**调整 buffer。 |
 
 V1 冻结后, 任何 V1-breaking 变更**不得**静默合入。所有这些变更需要
 V2、新 ADR 和 5 owner 签字。
@@ -310,7 +323,7 @@ V2、新 ADR 和 5 owner 签字。
 | --- | --- |
 | `python_serialize_roundtrip` | Python envelope 序列化 → JSON → 反序列化; 所有字段值完全一致。 |
 | `python_payload_schema_per_kind` | 六种 `event_kind` payload 各自 round-trip; 字段顺序无关 (按 key 解析)。 |
-| `python_time_iso8601_utc` | `captured_at`, `received_at` 使用 microsecond 精度; 跨语言 strftime 模板一致。 |
+| `python_time_iso8601_utc` | ingress 的 `captured_at` 与 Ack 的 `received_at` 使用 microsecond 精度; 跨语言模板一致。 |
 | `python_protocol_version_constant` | 任何不等于 `"atlas-richie.reporting/v1"` 的值抛 `PROTOCOL_VERSION_MISMATCH`。 |
 | `python_malformed_envelope` | 缺失/类型错误字段抛 `MALFORMED_ENVELOPE`; envelope 丢弃, 不静默接受。 |
 | `go_mock_decode` | Go SDK mock 解码同 spec; 字段名 + 类型完全一致。 |
@@ -318,11 +331,10 @@ V2、新 ADR 和 5 owner 签字。
 
 ## 11. 未来工作
 
-- 添加 `priority` 和 `tenant` 字段 (V1.1 候选)。
-- 在 `RuleExecPayload` 添加 per-rule `latency_ns` (V1.1 候选)。
-- 在外层 transport 错误码添加 `ENVELOPE_TOO_LARGE`
-  (已在本 schema 声明; 见
-  [`上报协议-02-transport-v1.md` §5](./上报协议-02-transport-v1.md#5-错误码))。
+- 添加可安全忽略的 `priority` 或 `tenant` optional 字段（需要 V1.x
+  compatibility matrix）。
+- 在 `RuleExecPayload` 添加可安全忽略的 per-rule `latency_ns` optional 字段。
+- 由新的 V2 协议定义额外 event kind 或 payload 语义。
 
 ## 附录 A. 示例
 
@@ -341,8 +353,7 @@ V2、新 ADR 和 5 owner 签字。
   "instance_id": "550e8400-e29b-41d4-a716-446655440000",
   "startup_epoch": 0,
   "sequence": 1,
-  "captured_at": "2026-09-13T10:00:00.123456Z",
-  "received_at": "2026-09-13T10:00:00.124000Z"
+  "captured_at": "2026-09-13T10:00:00.123456Z"
 }
 ```
 
@@ -364,14 +375,13 @@ V2、新 ADR 和 5 owner 签字。
   "instance_id": "550e8400-e29b-41d4-a716-446655440000",
   "startup_epoch": 0,
   "sequence": 2,
-  "captured_at": "2026-09-13T10:00:01.500000Z",
-  "received_at": "2026-09-13T10:00:01.501000Z"
+  "captured_at": "2026-09-13T10:00:01.500000Z"
 }
 ```
 
 ## 附录 B. 签字
 
-本 V1 schema 在 5 owner 签字下冻结。family-level 5-owner 签字记录维护在
+本草案完成 5 owner 签字后方可冻结。family-level 5-owner 签字记录维护在
 [`上报协议-03-freeze-v1.md`](./上报协议-03-freeze-v1.md)。
 后续修订需要新签字周期 + §9 列出的变更。
 
@@ -379,7 +389,7 @@ V2、新 ADR 和 5 owner 签字。
 
 | 版本 | 日期 | 作者 | 变更 |
 | --- | --- | --- | --- |
-| 1.0 | 2026-09-13 | Atlas Richie Team / Mavis | 初始 V1.0 冻结发布。 |
+| 1.0-draft.2 | 2026-09-13 | Atlas Richie Team / Mavis | 收口 ingress 时间、generation、枚举与错误码语义。 |
 
 ## 作者地址
 

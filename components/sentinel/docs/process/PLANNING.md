@@ -1257,6 +1257,9 @@
   classification / circuit state / active `source_id` + rule version / reporter dropped count。
   严禁业务请求和响应内容、用户身份、认证材料、任意日志或完整规则正文；错误事件仅允许
   stable error class + 脱敏 reason(≤64 bytes)，禁止原始异常消息、traceback 和 frame locals。
+  **V1 具体范围**仅为 source 健康/切换和 `APPLIED` / `BLOCKED` / `FAILED` 规则执行
+  事件；原始 RT、circuit state 和通用指标必须先定义独立 per-kind schema、完成
+  privacy/cardinality 评审后作为 V2 进入，不得以宽 payload 临时塞入。
 - **子任务**：
   - [ ] M6.5.1 先完成 `docs/protocol/上报协议-01-envelope-v1.md`：冻结 V1 schema、
     transport 基线、版本协商、实例身份、批次确认、错误码、认证和跨语言兼容策略；major
@@ -1288,39 +1291,34 @@
 - **ADR**: ADR-SEN-011；聚合 Dashboard 另行 ADR
 - **Deps**: M5.5（不依赖 M6.3；二者仅共享实例身份约定）
 
-### M6.5.7 [x] 冻结 Agent Reporting 事件 envelope 与子协议挂载
+### M6.5.7 [ ] 冻结 Agent Reporting 事件 envelope 与子协议挂载（Draft 收口，待 5-owner sign-off）
 - **目标**：冻结 Reporter 通道的**事件 envelope** schema, 使 M6.1 内部
   `RuleSourceActivation` fact 与 M6.5 健康 / 指标事件能够在同一父协议下
   表达；M6.1 阶段**不**冻结 envelope, 推迟到本任务。
 - **明确范围**：
-  - 事件 envelope schema: `protocol_version` / `event_kind` (字符串常量) /
-    `event_payload` (per-kind schema) / `instance_id` / `startup_epoch` /
-    `sequence` / **`captured_at`** (Reporter 本地 UTC, 仅诊断) /
-    **`received_at`** (Collector 写入, 服务端权威聚合时间)
-  - **两个时间字段必须分开**：`captured_at` 由 Reporter 进程本地
-    clock 写入 (用于诊断乱序 / 缺口), **不**做服务端权威; `received_at`
-    由 Collector 写入, 是聚合 / 排序 / 跨进程比较的唯一权威字段。
-    二者**不**能合成单一 `capture_time` 字段 (server-authoritative 与
-    本地 UTC 互相矛盾, 跨语言无法解释)。
+  - Reporter → Collector ingress envelope schema: `protocol_version` /
+    `event_kind` (字符串常量) / `event_payload` (per-kind schema) /
+    `instance_id` / `startup_epoch` / `sequence` / **`captured_at`**
+    (Reporter 本地 UTC, 仅诊断)。Collector 接受后才在 Ack / 持久化投影写入
+    **`received_at`** (服务端权威聚合时间)；它**不**属于 ingress envelope。
+  - **两个时间字段必须分开且归属不同对象**：`captured_at` 由 Reporter
+    进程本地 clock 写入，仅供诊断；`received_at` 由 Collector 写入，是聚合 /
+    排序 / 跨进程比较的唯一权威字段。二者不能合成单一 `capture_time`，也不得
+    让 Reporter 伪造 `received_at`。
   - `event_kind` 枚举: **M6.5.7 签字前**可通过 ADR 调整草案; **签字后**
     V1 冻结, 新增枚举值必须走 V2+ 独立 ADR, 不得在 1.x 末擅自增项。
     - `RULE_SOURCE_ACTIVATED` — 来自 M6.1 内部 fact
     - `RULE_SOURCE_STALE` — health event
     - `RULE_SOURCE_DEGRADED` — health event
     - `RULE_APPLIED` / `RULE_BLOCKED` / `RULE_FAILED` — 业务执行事件
-  - **`event_kind` 枚举: M6.5.7 签字前**可由 ADR 调整草案, **签字后** V1
-    冻结, 新增枚举值必须走 V2+ 独立 ADR, 不得在 1.x 末擅自增项。**禁止**
-    子任务 (M6.5.1 / M6.5.2 / M6.5.3 / M6.5.6) 在 M6.5.7 签字后直接向
-    V1 枚举塞项。
+  - **`event_kind` 枚举**：签字前可由 ADR 调整草案；签字后 V1 冻结，新增
+    枚举值只能走 V2+ 独立 ADR。禁止子任务 (M6.5.1 / M6.5.2 / M6.5.3 /
+    M6.5.6) 在冻结后直接向 V1 枚举塞项。
   - health event 与 source-switch event **不**混用同一 kind: 切源
     走 `RULE_SOURCE_ACTIVATED`, 不切源但状态变化走 health 类
-  - **时间字段只保留 `captured_at` + `received_at`** (M6.5.7 v3 决策):
-    - `captured_at` 由 Reporter 端**进程本地 UTC** 写入, 仅供诊断
-      (乱序 / 缺口), **不**做服务端权威
-    - `received_at` 由 Collector 写入, 是聚合 / 排序 / 跨进程比较的
-      **唯一**权威字段
-    - **不**存在单一 `capture_time` 字段 (server-authoritative 与
-      本地 UTC 互相矛盾, 跨语言无法解释)
+  - **Ingress 只保留 `captured_at`**；Collector projection / Ack 才有
+    `received_at`。不存在单一 `capture_time` 字段；两者的所有权和语义不得
+    混淆。
   - `event_payload` 必须是 per-kind frozen dataclass, **不**用宽
     `dict[str, Any]`
   - V1 不可破坏性修改: 修复或加 optional field 走同 major + 兼容性矩阵;
@@ -1335,23 +1333,21 @@
 - **Test ID**: SEN-REPORTING-001(part:envelope)
 - **ADR**: ADR-SEN-011 (M6.5 父协议) + 新独立 ADR (M6.5.7 envelope 冻结)
 - **Deps**: M5.5, M6.1.0b (签字)
-- **V1 冻结** (M6.5.7 envelope freeze, 2026-09-13):
-  - `docs/protocol/上报协议-01-envelope-v1.md` V1 schema 冻结 (8 字段
-    envelope + 6 个 event_kind + per-kind frozen payload + V1 兼容性矩阵);
-    family-level 5-owner sign-off 记录在
-    `docs/protocol/上报协议-03-freeze-v1.md`
-  - V1 不可破坏性: 加 optional field 走 V1.1 minor, 改 / 删 / 改语义 / 改
+- **冻结前置**（M6.5.7 Draft, 2026-09-13）：
+  - `docs/protocol/上报协议-01-envelope-v1.md` 当前为 Draft：7 字段 ingress
+    envelope + 6 个 event_kind + per-kind payload + V1 兼容性矩阵。只有
+    FIFO/ack、generation、错误码和跨语言合同测试全部通过，且 family-level
+    5-owner sign-off 写入 `docs/protocol/上报协议-03-freeze-v1.md` 后才能标 `[x]`。
+  - V1 不可破坏性: 加 optional field 走 V1.x spec revision, 改 / 删 / 改语义 / 改
     protocol_version 字符串走 V2 major bump (独立 ADR)
   - 6 个 V1 event_kind 冻结: `RULE_SOURCE_ACTIVATED` /
     `RULE_SOURCE_STALE` / `RULE_SOURCE_DEGRADED` / `RULE_APPLIED` /
     `RULE_BLOCKED` / `RULE_FAILED`
   - 健康事件与 source-switch 事件**不**混用同一 kind
-  - 时间字段只保留 `captured_at` (Reporter 本地 UTC, 仅诊断) +
-    `received_at` (Collector 写入, 唯一服务端权威); **不存在**单一
-    `capture_time` 字段
-  - **签字后**: M6.5.1 / M6.5.2 / M6.5.3 / M6.5.6 子任务**禁止**直接向 V1
-    枚举塞项; 新增 event_kind 走 V1.1 minor + ADR, 破坏 V1 兼容走 V2
-    major + 独立 ADR
+  - ingress 的时间字段是 `captured_at`；`received_at` 由 Collector 的 Ack /
+    持久化投影写入，是唯一服务端权威；不存在单一 `capture_time` 字段
+  - **签字后**: M6.5.1 / M6.5.2 / M6.5.3 / M6.5.6 子任务禁止直接向 V1 枚举
+    塞项；新增 event_kind 走 V2 major + 独立 ADR
   - 1.0 publish 前: `atlas-richie-contracts` 加 `atlas_richie.reporting.v1`
     包 (Python 投影), 跨语言 contract test (Go / Java SDK mock 跑同
     spec) — 留 worker / Mavis 实施

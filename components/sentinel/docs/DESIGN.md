@@ -1365,10 +1365,13 @@ Reporting 是异步事实流，不是准入请求：上报失败、限速或 col
 不活跃或已禁用 Source 的 version 不进入协议；Source 切换必须作为可观测的
 事件上报（具体事件名由 M6.5.7 冻结的 `event_kind` 枚举定义，M6.1 阶段
 不预设字符串常量；详见 `docs/rule_source_activation.md` 与 §M6.5.7）。
-允许的数据仅包括通过、拒绝、RT、异常分类、熔断状态、规则切换和 Reporter
-自身丢弃计数；禁止业务请求体、响应体、用户身份、认证凭证、完整规则正文
-和任意业务日志进入该协议。错误事件只能包含稳定 error class 和不超过 64 bytes
-的脱敏 reason；禁止原始异常消息、traceback、stack frame、frame locals 或任意 SDK 错误正文。
+协议族可以在经评审的 per-kind schema 中表达通过、拒绝、RT、异常分类、熔断状态、
+规则切换和 Reporter 自身丢弃计数；**当前 V1 只冻结** source 健康 / 切换和
+`APPLIED` / `BLOCKED` / `FAILED` 规则执行事件。原始 RT、circuit state 或通用
+metrics 需要独立 schema、privacy/cardinality 评审和 V2，不得通过宽 payload 提前
+塞入。业务请求体、响应体、用户身份、认证凭证、完整规则正文和任意业务日志不得
+进入该协议。错误事件只能包含稳定 error class 和不超过 64 bytes 的脱敏 reason；禁止
+原始异常消息、traceback、stack frame、frame locals 或任意 SDK 错误正文。
 
 资源名和标签必须受 cardinality 上限保护；超限时按明确的 overflow policy 聚合或丢弃，
 并在下一可发送批次中报告丢弃数量，不能无限缓存。

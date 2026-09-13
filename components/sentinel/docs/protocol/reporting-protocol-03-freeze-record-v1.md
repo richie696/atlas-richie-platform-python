@@ -1,8 +1,8 @@
-# Atlas Richie Agent Reporting Envelope Schema — V1 Freeze Record
+# Atlas Richie Agent Reporting Envelope Schema — V1 Freeze Candidate Record
 
 > **Protocol**: `atlas-richie-agent-reporting`
-> **Version**: 1.0 (Frozen)
-> **Status**: Standards Track — V1 Released
+> **Version**: 1.0 (Draft)
+> **Status**: Provisional — sign-off pending
 > **Date**: 2026-09-13
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0
@@ -13,8 +13,8 @@
 
 ## Abstract
 
-This document records the formal V1 freeze of the Atlas Richie
-Agent Reporting Envelope Schema. It is the sign-off record for
+This document records the V1 freeze candidate of the Atlas Richie
+Agent Reporting Envelope Schema. It is the pending sign-off record for
 [`reporting-protocol-01-envelope-v1.md`](./reporting-protocol-01-envelope-v1.md) and the schema-level
 contract that Reporters and Collectors MUST honour.
 
@@ -28,8 +28,9 @@ guarantees that follow from it.
 
 ## Status of This Memo
 
-This document records the V1 freeze of the Atlas Richie Agent
-Reporting Envelope Schema. Distribution of this memo is unlimited.
+This document records a V1 freeze candidate. It is neither a released nor an
+immutable wire contract until every owner signs §5. Distribution of this memo
+is unlimited.
 
 ## Copyright Notice
 
@@ -50,16 +51,18 @@ Apache License, Version 2.0.
 
 ## 1. Freeze Declaration
 
-The Atlas Richie Agent Reporting Envelope Schema V1, identified by
-the wire string `atlas-richie.reporting/v1`, is hereby declared
-**FROZEN** as of 2026-09-13.
+The Atlas Richie Agent Reporting Envelope Schema V1, identified by the wire
+string `atlas-richie.reporting/v1`, is currently **DRAFT / PROVISIONAL**. Only
+after every owner in §5 signs may a maintainer change this status to **FROZEN**;
+before then it MUST NOT be treated as a released or immutable contract.
 
 The frozen artifact is the schema specified in
 [`reporting-protocol-01-envelope-v1.md`](./reporting-protocol-01-envelope-v1.md). The following are part
-of the V1 contract and MUST NOT change without a new version bump
-plus a new ADR and 5-owner sign-off:
+of the proposed V1 contract. After sign-off, they MUST NOT change without a
+new version bump, ADR, and 5-owner sign-off:
 
-- The envelope field set (8 fields) and their types.
+- The Reporter ingress envelope field set (7 fields) and their types;
+  Collector-written `received_at` belongs only to the Ack / persisted projection.
 - The six `event_kind` string values.
 - The three `event_payload` schema types and their field sets.
 - The serialization rules (UTF-8 strings, ISO 8601 microsecond time,
@@ -68,13 +71,13 @@ plus a new ADR and 5-owner sign-off:
 
 ## 2. Immutability Guarantees
 
-After the freeze date:
+After the formal freeze date:
 
-1. The six `event_kind` values are immutable. New values require
-   V1.1 minor release and an ADR.
-2. The three `event_payload` schemas are immutable. New fields in
-   existing schemas require V1.1. New payload types require V1.1
-   minor and an ADR.
+1. The six `event_kind` values are immutable. New values require V2 major and
+   an ADR.
+2. The three `event_payload` schemas are immutable. Safely ignorable optional
+   fields require a V1.x compatibility matrix; a new payload type requires V2
+   major and an ADR.
 3. The envelope size limit (16 KB) is immutable. Increasing it
    requires V2 major and an ADR.
 4. The wire identifier string (`atlas-richie.reporting/v1`) is
@@ -85,16 +88,15 @@ After the freeze date:
 
 ## 3. Compatibility with Subsequent Versions
 
-### 3.1. V1 Consumer Reading V1.1 Producer
+### 3.1. V1 Consumer Reading a V1.x Producer
 
-A V1 consumer receiving a V1.1 envelope with additional optional
-fields MUST ignore the unknown fields. A V1 consumer receiving a V1.1
-`event_kind` not in its V1 enumeration MUST return
-`UNKNOWN_EVENT_KIND` for the offending envelope, not the whole batch.
+A V1 consumer receiving a V1.x envelope with additional optional fields MUST
+ignore the unknown fields. V1.x MUST NOT add an `event_kind`, error code, or
+Ack semantic; each requires V2.
 
-### 3.2. V1.1 Consumer Reading V1 Producer
+### 3.2. V1.x Consumer Reading a V1 Producer
 
-A V1.1 consumer MUST accept V1 envelopes as a subset. It MUST accept
+A V1.x consumer MUST accept V1 envelopes as a subset. It MUST accept
 all six V1 `event_kind` values, all three V1 payload types, and the
 V1 envelope size limit.
 
@@ -134,7 +136,7 @@ record, and any change MUST follow the procedure in §2 and §3.
 
 | Version | Date       | Authors                       | Changes                            |
 | ------- | ---------- | ----------------------------- | ---------------------------------- |
-| 1.0     | 2026-09-13 | Atlas Richie Team / Mavis    | Initial V1 freeze record.          |
+| 1.0-draft.2 | 2026-09-13 | Atlas Richie Team / Mavis | Provisional candidate before formal freeze. |
 
 ## Author's Address
 
