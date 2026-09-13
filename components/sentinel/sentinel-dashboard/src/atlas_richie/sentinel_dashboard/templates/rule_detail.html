@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Rule {{ rule_id }} — Atlas Richie Sentinel{% endblock %}
+{% block content %}
+<section>
+  <h1>Rule: <code>{{ rule_id }}</code></h1>
+  <p><a href="/dashboard/rules">← Back to rules</a></p>
+  {% if error %}
+  <div class="error-card">
+    <strong>Error:</strong> {{ error }}
+  </div>
+  {% else %}
+  <div class="rule-detail">
+    <pre>{{ rule | tojson(indent=2) }}</pre>
+  </div>
+  <div class="actions">
+    <button id="reset-breaker" class="btn btn-admin" data-action="reset-breaker" data-rule-id="{{ rule_id }}">
+      Force Reset Breaker
+    </button>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById("reset-breaker")?.addEventListener("click", async () => {
+  const token = window.prompt("Admin token:");
+  if (!token) return;
+  const rid = document.getElementById("reset-breaker").dataset.ruleId;
+  const btn = document.getElementById("reset-breaker");
+  btn.disabled = true;
+  try {
+    const resp = await fetch(`/admin/breaker/${encodeURIComponent(rid)}/reset`, {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + token },
+    });
+    const data = await resp.json();
+    alert(JSON.stringify(data, null, 2));
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+{% endblock %}

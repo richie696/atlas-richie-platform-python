@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Rules — Atlas Richie Sentinel{% endblock %}
+{% block content %}
+<section>
+  <h1>Rules ({{ rules_count }})</h1>
+  {% if rule_list %}
+  <ul class="rule-list">
+    {% for rid in rule_list %}
+    <li>
+      <a href="/dashboard/rules/{{ rid }}">{{ rid }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">No active rules.</p>
+  {% endif %}
+  <p class="hint"><a href="/dashboard">← Back to dashboard</a></p>
+  <div class="actions">
+    <button id="reload-rules" class="btn btn-admin" data-action="reload-rules">
+      Reload from RuleSource
+    </button>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById("reload-rules")?.addEventListener("click", async () => {
+  const token = window.prompt("Admin token:");
+  if (!token) return;
+  const btn = document.getElementById("reload-rules");
+  btn.disabled = true;
+  try {
+    const resp = await fetch("/admin/rules/reload", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + token },
+    });
+    const data = await resp.json();
+    alert(JSON.stringify(data, null, 2));
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+{% endblock %}

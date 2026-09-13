@@ -1386,19 +1386,35 @@
     包 (Python 投影), 跨语言 contract test (Go / Java SDK mock 跑同
     spec) — 留 worker / Mavis 实施
 
-### M6.6 [x] 聚合 Dashboard 和 Web UI(评估完成, 1.x 不实施, 详见 `docs/process/M6.6-DASHBOARD-AGGREGATOR-EVAL.md`)
-- **评估状态 (2026-09-14)**: 1.x 阶段**不**出 `sentinel-dashboard-aggregator` 包,
-  **不**实施 Web UI; 决策"1.x 不实施", 文档归档.
-  详见 `docs/process/M6.6-DASHBOARD-AGGREGATOR-EVAL.md`.
-- **背景**: `sentinel-dashboard-aggregator` 是新发行包,DESIGN.md 没批准。**从 M6 默认范围中删除**。若要纳入 M6,必须先:
-  - 将 ADR-SEN-018 从 Proposed 变为 Accepted（需要用户签字）
-  - 更新 DESIGN.md §3.1 发行包表加一行
-  - 在 §25 决策记录中新增独立 ADR（不得复用 OpenSergo 的 ADR-SEN-016）
-- **Deliverable**:**默认无**(M6 退出不要求)
-- **推迟到 1.x**(`M5.4.1` 候选任务,需用户单独批准)
-- **Test ID**: —
-- **ADR**: ADR-SEN-018（Proposed；用户签字后才可实施）
-- **Deps**: M6.5(协议)
+### M6.6 [ ] 聚合 Dashboard 和 Web UI(2026-09-14 重新打开: 实施 per-process Web 管理页面, 合理依赖 OK)
+- **重新打开状态 (2026-09-14)**: richie696 显式反馈 "dashboard 应用除外,
+  需要用它做 Web 管理页面, 合理的依赖是需要的". 修正之前"1.x 不实施"
+  评估, 实施 per-process Web 管理页面 (HTML + JSON 双协议), 合理依赖
+  (Starlette + Jinja2 + uvicorn) 允许. 详见
+  `docs/process/M6.6-DASHBOARD-AGGREGATOR-EVAL.md` (v2).
+- **范围**: `sentinel-dashboard` wheel 升级 (替换 stdlib http.server):
+  - 框架: Starlette (轻量 ASGI, 不引入 FastAPI 全套)
+  - 模板: Jinja2 (HTML 页面)
+  - ASGI server: uvicorn (开发) / hypercorn (生产)
+  - 静态文件: Starlette StaticFiles (CSS / JS / favicon)
+  - 实时: SSE (Server-Sent Events) 每 5s 推 metrics
+  - 鉴权: Bearer token (admin) — 跟现有保持一致
+  - 审计: JSON list, capped 1000 (现有保留)
+  - Bind: 127.0.0.1 默认 (loopback, M6.7 决策一致)
+- **API 端点 (保留 6 个 JSON, 新增 HTML 页面)**:
+  - 保留: GET /health, /metrics, /rules, /rules/<id>, /state; POST /admin/rules/reload, /admin/breaker/<id>/reset
+  - 新增: GET / (dashboard overview), /rules (HTML), /metrics (HTML), /settings, /audit
+- **依赖 (extension wheel, 主包 0 3rd-party 不变)**:
+  - starlette >= 0.40, < 1.0
+  - jinja2 >= 3.0, < 4.0
+  - uvicorn >= 0.30, < 1.0 (dev); hypercorn >= 0.16, < 1.0 (prod, optional)
+- **不做**:
+  - 不出 `sentinel-dashboard-aggregator` (跨进程聚合, 1.0 范围不含, 留 V2+)
+  - 不出 Collector Python (Java/Go 服务端独立仓, V1 协议只冻结 wire contract)
+  - 不修改主包 (Sentinel main wheel 0 3rd-party 不变)
+- **Test ID**: SEN-DASHBOARD-001
+- **ADR**: 新独立 ADR (Dashboard v2, M6.6.1 dashboard 框架选型 + M6.6.2 SSE 实时 + M6.6.3 admin 鉴权)
+- **Deps**: M6.1 (SentinelEngine / MetricRegistry / RuleRepository / RuleSource 公共 API)
 
 ### M6.7 [x] WSGI/同步阻塞引擎可行性评估 (评估完成, 决策: 1.x 不支持, 详见 `docs/process/M6.7-WSGI-SYNC-EVAL.md`, ADR-SEN-018)
 - **Deliverable**:
@@ -1429,7 +1445,7 @@
   审核发布资格。即使审核通过，执行 `uv publish`、创建 tag 或向 PyPI 写入产物也必须
   由维护者显式触发。
 
-### M6+ Exit [x] (M6.1、M6.3-M6.5、M6.7 全部完成;M6.2 已取消;M6.6 默认不在范围;M6.8 已移至 M7.6)
+### M6+ Exit [partial] (M6.1、M6.3-M6.5、M6.7 全部完成;M6.2 已取消;M6.6 重新打开实施;M6.8 已移至 M7.6)
 - **Exit Criteria**:
   - M6.1 的 Nacos 规则来源独立通过真实服务验收，且不是主包运行前提；M6.2 的 Redis
     RuleSource 取消决定保持可追溯，未被替换为未定义的 Redis 依赖。

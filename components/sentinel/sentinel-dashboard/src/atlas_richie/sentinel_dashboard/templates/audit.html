@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Audit Log — Atlas Richie Sentinel{% endblock %}
+{% block content %}
+<section>
+  <h1>Audit Log (最近 100 条 / 总计 {{ total }} 条)</h1>
+  {% if entries %}
+  <table class="audit-table">
+    <thead>
+      <tr>
+        <th>Time (UTC)</th>
+        <th>Op</th>
+        <th>Actor</th>
+        <th>Detail</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr class="op-{{ e.op }}">
+        <td>{{ e.at_ns }}</td>
+        <td><span class="badge badge-{{ e.op }}">{{ e.op }}</span></td>
+        <td><code>{{ e.actor }}</code></td>
+        <td><code>{{ e.detail }}</code></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No audit entries yet.</p>
+  {% endif %}
+</section>
+{% endblock %}
