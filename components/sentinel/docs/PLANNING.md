@@ -1104,7 +1104,7 @@
 - **明确不做**：不使用 Naming / Service Discovery API，不自动注册应用实例，不发现或
   调用业务服务，不替主包管理 Nacos client。
 - **子任务**：
-  - [ ] M6.1.0 补齐主包私有 `source._supervisor.RuleSourceSupervisor` 的多来源仲裁：只由
+  - [x] M6.1.0 补齐主包私有 `source._supervisor.RuleSourceSupervisor` 的多来源仲裁：只由
     Supervisor 持有私有 `_RuleSourceBinding(source_id, priority, failover_after)`，并将最高
     优先级的 ready `SnapshotRuleSource` 作为唯一 active Source。每个 SnapshotRuleSource
     只缓存一个最近验证成功的完整快照；active Source stale 后才按显式 failover window
@@ -1112,7 +1112,7 @@
     Engine / Repository / Source 不得理解 priority，也不得按规则拼接多个 Source；
     M6.1 阶段**不**冻结跨语言事件名，跨扩展可观测事件名与 wire schema 由 M6.5.7
     任务（Agent Reporting 事件 envelope）冻结后确定。
-  - [ ] M6.1.0a **不迁移** 1.0 形态: `LegacyRuleSource` 路径保持原行为,
+  - [x] M6.1.0a **不迁移** 1.0 形态: `LegacyRuleSource` 路径保持原行为,
     **不**经 Supervisor, **不**做 shim 包装。`SnapshotRuleSource` 是新契约,
     `assemble_sources` 只接受它; `install_legacy_source` 接受 `LegacyRuleSource`
     (含 `FileRuleSource` 1.0 实现), 等同 1.0 行为, 走 `repository.apply_snapshot`
@@ -1121,7 +1121,7 @@
     保留可用, 不删)。Nacos / OpenSergo 等新 extension 必须按 `SnapshotRuleSource`
     实现; 任何 1.0 形态 Source 都不允许绕过 Supervisor 直接写入 Repository
     (此约束只针对**新** extension, 不针对 1.0 已有 `LegacyRuleSource` 实现)。
-  - [ ] M6.1.0b 先冻结五项 API 决定并写入
+  - [x] M6.1.0b 先冻结五项 API 决定并写入
     `docs/R-SENTINEL-M6.1.0b-api-delta.md`：(1) Supervisor、binding 与 Python
     activation event (`RuleSourceActivation`) 均为私有, extension 不允许 import;
     (2) 跨扩展可观测事件名由 M6.5.7 冻结后经 Agent Reporting 通道消费, M6.1 阶段
@@ -1135,26 +1135,26 @@
     新增 / 修改 / 废弃 / 删除的所有公开符号、兼容 shim、错误语义和语义化版本影响,
     并附签字栏 (用户 / B 契约 / C 实现 / 测试 / 文档 5 个 owner 全部勾上才可
     进入 M6.1.0c)。
-  - [ ] M6.1.0c 在 API delta 获批准后编写 `docs/MIGRATION-M6.md`：记录单 Source 旧
+  - [x] M6.1.0c 在 API delta 获批准后编写 `docs/MIGRATION-M6.md`：记录单 Source 旧
     `start(repository)` 到新装配路径的迁移、弃用期限、兼容 shim 边界和不可自动迁移的
     场景；未完成该文档不得实现或公布新的 Engine 装配入口。
-  - [ ] M6.1.0d 实现顺序固定为：先完成私有 Supervisor + Source 迁移及其 contract /
+  - [x] M6.1.0d 实现顺序固定为：先完成私有 Supervisor + Source 迁移及其 contract /
     migration tests；再以 `tests/test_sen_assemble_sources.py` 实现已批准的公开装配入口
     契约测试和代码；最后更新 `R-SENTINEL-API-REVIEW.md` 的 M6.1.0b delta。不得先写一个
     依赖未冻结签名的 failing public test，或让私有实现名称进入公开 API。
-  - [ ] M6.1.1 建立独立 wheel 与 `atlas_richie.sentinel.sources.nacos` package；仅该
+  - [x] M6.1.1 建立独立 wheel 与 `atlas_richie.sentinel.sources.nacos` package；仅该
     wheel 声明 Nacos SDK 依赖，主包、ASGI、HTTPX 和 Dashboard 的依赖图不变。
-  - [ ] M6.1.2 定义不可变 `NacosRuleSourceConfig`：namespace、group、data identifier、
+  - [x] M6.1.2 定义不可变 `NacosRuleSourceConfig`：namespace、group、data identifier、
     认证 / TLS、连接超时、重连退避与 source_id。配置字段、状态和错误使用 Enum /
     值对象，不向调用方泄漏 SDK client 或 callback 类型。
-  - [ ] M6.1.3 实现“首次读取完整配置 → codec / schema / 业务校验 → 发布完整
+  - [x] M6.1.3 实现“首次读取完整配置 → codec / schema / 业务校验 → 发布完整
     RuleSnapshot → 订阅变更”的生命周期。首次同步未成功时 Source 不得宣称 ready。
-  - [ ] M6.1.4 实现断线、鉴权失败、配置删除、空配置、重复回调、乱序回调和坏规则的
+  - [x] M6.1.4 实现断线、鉴权失败、配置删除、空配置、重复回调、乱序回调和坏规则的
     区分处理；保持 last-known-good，报告 stale / last-success / failure reason，并按
     有界指数退避重连。
-  - [ ] M6.1.5 显式管理订阅和 `aclose()`：关闭必须取消 listener、停止重连任务、关闭
+  - [x] M6.1.5 显式管理订阅和 `aclose()`：关闭必须取消 listener、停止重连任务、关闭
     SDK 连接且保持幂等；日志 / 指标不得暴露 endpoint、用户名、token 或规则敏感字段。
-  - [ ] M6.1.6 为该实现接入 M3.1 `RuleSource` contract suite，并补 Nacos 专有的
+  - [x] M6.1.6 为该实现接入 M3.1 `RuleSource` contract suite，并补 Nacos 专有的
     lifecycle / security tests。
   - [x] M6.1.7 (P0 修复) 升级 `nacos-sdk-python` 0.1.16 → 3.2.0 + 改 push → polling
     架构：Nacos 3.x 干掉了 V1 config API, SDK 3.2.0 gRPC listener 跟 Nacos 3.2.3
