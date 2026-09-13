@@ -87,9 +87,6 @@ schema. The inner schema is specified in
 | `reporting-protocol-v1.md` (this document)        | Outer transport, auth, version, error codes, batch.   |
 | `cluster-token-protocol-v1.md` (sibling)          | The Atlas Richie Cluster Token Protocol (admission).  |
 
-The envelope schema 5-owner sign-off record is maintained in
-[`agent-reporting-protocol-v1.md` Appendix B](./agent-reporting-protocol-v1.md#appendix-b-sign-off).
-
 ## 2. Data Boundary
 
 The protocol MUST NOT carry any of the following:
@@ -609,12 +606,21 @@ Connection: close
 
 ## Appendix B. Sign-off
 
-This V1 specification was frozen under 5-owner sign-off. The
-envelope schema 5-owner sign-off record is maintained in
-[`agent-reporting-protocol-v1.md` Appendix B](./agent-reporting-protocol-v1.md#appendix-b-sign-off);
-the 5-owner sign-off table for this spec is to be added.
+This V1 specification was frozen under 5-owner sign-off.
 Subsequent revisions require a new sign-off cycle and the changes
 listed in §15.
+
+| Owner     | Role                              | Status         | Date       |
+| --------- | --------------------------------- | -------------- | ---------- |
+| richie696 | Project owner                     | ☐ pending      |            |
+| owner 1   | Protocol designer                 | ☐ pending      |            |
+| owner 2   | Reporter implementation owner     | ☐ pending      |            |
+| owner 3   | Collector implementation owner    | ☐ pending      |            |
+| owner 4   | Cross-language SDK owner          | ☐ pending      |            |
+
+Until all 5 owners have signed, V1 is provisional. Once all 5
+signatures are in place, this appendix is the canonical V1 freeze
+sign-off, and any change MUST follow the procedure in §15.
 
 ## Version History
 
