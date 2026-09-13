@@ -7,7 +7,7 @@
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0
 >
-> 🌐 **语言**: [中文 (本文件)](./事件上报协议-v1.md) · [English](./agent-reporting-protocol-v1.md)
+> 🌐 **语言**: [中文 (本文件)](./上报协议-01-envelope-v1.md) · [English](./reporting-protocol-01-envelope-v1.md)
 
 ---
 
@@ -16,7 +16,7 @@
 本文档规定 **Atlas Richie Agent 上报事件包 Schema V1** (wire
 identifier: `atlas-richie.reporting/v1`), 所有 Reporter → Collector
 流量共享的事件包 schema。该 schema 是 Atlas Richie Reporting Protocol
-V1 的内层数据结构 (参见 [`上报父协议-v1.md`](./上报父协议-v1.md) 了解
+V1 的内层数据结构 (参见 [`上报协议-02-transport-v1.md`](./上报协议-02-transport-v1.md) 了解
 外层 transport、鉴权和 batching 细节)。它面向跨语言互操作性, 使用
 JSON over UTF-8。
 
@@ -74,16 +74,16 @@ Collector 可能由不同语言实现, 线协议上的 schema **必须**自描�
 无关。
 
 本文档定义的是内层事件包。外层 transport (HTTP/1.1 + JSON over TCP)、
-鉴权、batching、sequence、去重和 ack 语义在 [`上报父协议-v1.md`](./上报父协议-v1.md)
+鉴权、batching、sequence、去重和 ack 语义在 [`上报协议-02-transport-v1.md`](./上报协议-02-transport-v1.md)
 中单独规定。
 
 ### 1.2. 范围
 
 本文档仅覆盖 V1 事件包 schema。它**不**规定:
 
-- transport 层 (见 `上报父协议-v1.md` §2)。
-- 鉴权机制 (见 `上报父协议-v1.md` §4)。
-- batch 格式 (见 `上报父协议-v1.md` §7)。
+- transport 层 (见 `上报协议-02-transport-v1.md` §2)。
+- 鉴权机制 (见 `上报协议-02-transport-v1.md` §4)。
+- batch 格式 (见 `上报协议-02-transport-v1.md` §7)。
 - Collector 的内部状态模型。
 
 ## 2. 约定
@@ -254,7 +254,7 @@ Health 事件**不得**替代 source-switch 事件。Source 切换总是走
 ## 6. 错误码
 
 定义 9 个错误码。每个的完整行为在
-[`上报父协议-v1.md` §5](./上报父协议-v1.md#5-错误码) 规定; 本节仅列出
+[`上报协议-02-transport-v1.md` §5](./上报协议-02-transport-v1.md#5-错误码) 规定; 本节仅列出
 它们以便查阅。
 
 - `PROTOCOL_VERSION_MISMATCH`
@@ -278,7 +278,7 @@ Health 事件**不得**替代 source-switch 事件。Source 切换总是走
 - **Reason message 长度**: `reason_message` 上限 64 字节, 限制诊断
   泄露。
 - **鉴权**: 外层 transport 应用
-  `X-Atlas-Cluster-Reporting-Token` (见 `上报父协议-v1.md` §4)。本
+  `X-Atlas-Cluster-Reporting-Token` (见 `上报协议-02-transport-v1.md` §4)。本
   schema 不重新定义鉴权。
 
 ## 8. IANA 考量
@@ -322,7 +322,7 @@ V2、新 ADR 和 5 owner 签字。
 - 在 `RuleExecPayload` 添加 per-rule `latency_ns` (V1.1 候选)。
 - 在外层 transport 错误码添加 `ENVELOPE_TOO_LARGE`
   (已在本 schema 声明; 见
-  [`上报父协议-v1.md` §5](./上报父协议-v1.md#5-错误码))。
+  [`上报协议-02-transport-v1.md` §5](./上报协议-02-transport-v1.md#5-错误码))。
 
 ## 附录 A. 示例
 
@@ -371,19 +371,9 @@ V2、新 ADR 和 5 owner 签字。
 
 ## 附录 B. 签字
 
-本 V1 schema 在 5 owner 签字下冻结。后续修订需要新签字周期 + §9 列出的
-变更。
-
-| Owner     | 角色                              | 状态         | 日期       |
-| --------- | --------------------------------- | ------------ | ---------- |
-| richie696 | Project owner                     | ☐ pending    |            |
-| owner 1   | Protocol designer                 | ☐ pending    |            |
-| owner 2   | Reporter implementation owner     | ☐ pending    |            |
-| owner 3   | Collector implementation owner    | ☐ pending    |            |
-| owner 4   | Cross-language SDK owner          | ☐ pending    |            |
-
-在 5 位 owner 全部签字之前, V1 处于 provisional 状态。5 位签字全部到位之后,
-本附录即为正式 V1 冻结 sign-off, 任何改动**必须**遵守 §9 的程序。
+本 V1 schema 在 5 owner 签字下冻结。family-level 5-owner 签字记录维护在
+[`上报协议-03-freeze-v1.md`](./上报协议-03-freeze-v1.md)。
+后续修订需要新签字周期 + §9 列出的变更。
 
 ## 版本历史
 

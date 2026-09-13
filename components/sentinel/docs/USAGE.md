@@ -3,7 +3,7 @@
 > **状态**: 1.0 publish 准备中 (M6+ 收口阶段)
 > **配套 design**: `docs/process/M6.3-CLUSTER-TOKEN-DESIGN.md` / `docs/process/M6.7-WSGI-SYNC-EVAL.md`
 > **配套 plan**: `docs/process/PLANNING.md`
-> **配套 wire protocol**: `docs/protocol/集群令牌协议-v1.md` (M6.3.1) / `docs/protocol/事件上报协议-v1.md` (M6.5.7)
+> **配套 wire protocol**: `docs/protocol/集群令牌协议-v1.md` (M6.3.1) / `docs/protocol/上报协议-01-envelope-v1.md` (M6.5.7)
 
 ---
 
@@ -215,7 +215,7 @@ token_cluster = Token(
 - 快速开始: `components/sentinel/sentinel/README.md`
 - 设计阶段: `docs/process/M6.3-CLUSTER-TOKEN-DESIGN.md` / `docs/process/M6.7-WSGI-SYNC-EVAL.md`
 - 实施计划: `docs/M6.3-IMPLEMENTATION-PLAN.md`
-- 协议: `docs/protocol/集群令牌协议-v1.md` / `docs/protocol/事件上报协议-v1.md`
+- 协议: `docs/protocol/集群令牌协议-v1.md` / `docs/protocol/上报协议-01-envelope-v1.md` (envelope) / `docs/protocol/上报协议-02-transport-v1.md` (transport) / `docs/protocol/上报协议-03-freeze-v1.md` (sign-off)
 - 总规划: `docs/process/PLANNING.md`
 
 ---

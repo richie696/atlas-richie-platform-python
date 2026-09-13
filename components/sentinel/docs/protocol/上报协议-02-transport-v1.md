@@ -7,7 +7,7 @@
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0
 >
-> 🌐 **语言**: [中文 (本文件)](./上报父协议-v1.md) · [English](./reporting-protocol-v1.md)
+> 🌐 **语言**: [中文 (本文件)](./上报协议-02-transport-v1.md) · [English](./reporting-protocol-02-transport-v1.md)
 
 ---
 
@@ -20,7 +20,7 @@
 ack 语义, 旧 generation 行为, 以及 cardinality 限制。
 
 线协议上的 envelope schema 在配套文档
-[`事件上报协议-v1.md`](./事件上报协议-v1.md) 中规定。配套文档是 schema
+[`上报协议-01-envelope-v1.md`](./上报协议-01-envelope-v1.md) 中规定。配套文档是 schema
 本身; 本文档是协议。
 
 ## 本备忘录状态 (Status of This Memo)
@@ -68,14 +68,15 @@ dashboard 展示。由于 Reporter 和 Collector 可能由不同语言实现, �
 部署, 协议**必须**自描述, 与语言无关, 不依赖任何第三方依赖。
 
 本文档规定的是包装内层 envelope schema 的协议。内层 schema 在
-[`事件上报协议-v1.md`](./事件上报协议-v1.md) 中规定。
+[`上报协议-01-envelope-v1.md`](./上报协议-01-envelope-v1.md) 中规定。
 
 ### 1.2. 与配套文档的关系
 
 | 文档 | 范围 |
 | --- | --- |
-| `事件上报协议-v1.md` (本协议族) | 内层 envelope schema (8 字段, 6 个 event_kind)。 |
-| `上报父协议-v1.md` (本文档) | 外层 transport, 鉴权, 版本, 错误码, batch。 |
+| `上报协议-01-envelope-v1.md` (本协议族) | 内层 envelope schema (8 字段, 6 个 event_kind)。 |
+| `上报协议-02-transport-v1.md` (本文档) | 外层 transport, 鉴权, 版本, 错误码, batch。 |
+| `上报协议-03-freeze-v1.md` (sign-off 记录) | family-level 5-owner 签字表。 |
 | `集群令牌协议-v1.md` (兄弟协议) | Atlas Richie 集群令牌协议 (准入)。 |
 
 ## 2. 数据边界
@@ -128,7 +129,7 @@ error envelope (见 §6)。
 
 - 单个 batch **不得**超过 **64 KB** 序列化。
 - 单个 envelope **不得**超过 **16 KB** 序列化
-  (见 [`事件上报协议-v1.md` §3.4](./事件上报协议-v1.md#34-大小限制))。
+  (见 [`上报协议-01-envelope-v1.md` §3.4](./上报协议-01-envelope-v1.md#34-大小限制))。
 - 一个 batch **必须**包含最多 256 个 envelopes。
 - 超出限制返回相应错误码 (§6)。
 
@@ -263,7 +264,7 @@ V1 不引入额外错误码。新错误码需要 V1.1 minor 发布 + ADR。
   "batch_id": "550e8400-e29b-41d4-a716-446655440001",
   "sent_at": "2026-09-13T10:00:00.123456Z",
   "events": [
-    { /* event envelope 1, 见 事件上报协议-v1.md §3 */ },
+    { /* event envelope 1, 见 上报协议-01-envelope-v1.md §3 */ },
     { /* event envelope 2 */ }
   ],
   "dropped_count": 0
@@ -287,7 +288,7 @@ V1 不引入额外错误码。新错误码需要 V1.1 minor 发布 + ADR。
 - `events.length` ≤ 256; 超出切分为多个 batch。
 - 序列化 batch ≤ 64 KB; 超出返回 `BATCH_TOO_LARGE`。
 - 单 envelope ≤ 16 KB (见
-  [`事件上报协议-v1.md` §3.4](./事件上报协议-v1.md#34-大小限制))。
+  [`上报协议-01-envelope-v1.md` §3.4](./上报协议-01-envelope-v1.md#34-大小限制))。
 
 ## 8. Sequence 与去重
 
@@ -566,19 +567,9 @@ Connection: close
 
 ## 附录 B. 签字
 
-本 V1 spec 在 5 owner 签字下冻结。后续修订需要新签字周期 + §15 列出的
-变更。
-
-| Owner     | 角色                              | 状态         | 日期       |
-| --------- | --------------------------------- | ------------ | ---------- |
-| richie696 | Project owner                     | ☐ pending    |            |
-| owner 1   | Protocol designer                 | ☐ pending    |            |
-| owner 2   | Reporter implementation owner     | ☐ pending    |            |
-| owner 3   | Collector implementation owner    | ☐ pending    |            |
-| owner 4   | Cross-language SDK owner          | ☐ pending    |            |
-
-在 5 位 owner 全部签字之前, V1 处于 provisional 状态。5 位签字全部到位之后,
-本附录即为正式 V1 冻结 sign-off, 任何改动**必须**遵守 §15 的程序。
+本 V1 spec 在 5 owner 签字下冻结。family-level 5-owner 签字记录维护在
+[`上报协议-03-freeze-v1.md`](./上报协议-03-freeze-v1.md)。
+后续修订需要新签字周期 + §15 列出的变更。
 
 ## 版本历史
 

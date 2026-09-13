@@ -7,7 +7,7 @@
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0
 >
-> 🌐 **Languages**: [English (this file)](./reporting-protocol-v1.md) · [中文](./上报父协议-v1.md)
+> 🌐 **Languages**: [English (this file)](./reporting-protocol-02-transport-v1.md) · [中文](./上报协议-02-transport-v1.md)
 
 ---
 
@@ -22,7 +22,7 @@ batch format, sequence and deduplication keys, ack semantics, stale
 generation behavior, and cardinality limits.
 
 The on-the-wire envelope schema itself is specified in a companion
-document, [`agent-reporting-protocol-v1.md`](./agent-reporting-protocol-v1.md).
+document, [`reporting-protocol-01-envelope-v1.md`](./reporting-protocol-01-envelope-v1.md).
 The companion document is the schema only; this document is the
 protocol.
 
@@ -77,14 +77,15 @@ third-party dependencies.
 
 This document specifies the protocol that wraps the inner envelope
 schema. The inner schema is specified in
-[`agent-reporting-protocol-v1.md`](./agent-reporting-protocol-v1.md).
+[`reporting-protocol-01-envelope-v1.md`](./reporting-protocol-01-envelope-v1.md).
 
 ### 1.2. Relationship to Companion Documents
 
 | Document                                           | Scope                                                |
 | -------------------------------------------------- | ---------------------------------------------------- |
-| `agent-reporting-protocol-v1.md` (this family)     | Inner envelope schema (8 fields, 6 event kinds).     |
-| `reporting-protocol-v1.md` (this document)        | Outer transport, auth, version, error codes, batch.   |
+| `reporting-protocol-01-envelope-v1.md` (this family) | Inner envelope schema (8 fields, 6 event kinds).     |
+| `reporting-protocol-02-transport-v1.md` (this document) | Outer transport, auth, version, error codes, batch. |
+| `reporting-protocol-03-freeze-record-v1.md` (sign-off) | Family-level 5-owner sign-off record.               |
 | `cluster-token-protocol-v1.md` (sibling)          | The Atlas Richie Cluster Token Protocol (admission).  |
 
 ## 2. Data Boundary
@@ -139,7 +140,7 @@ The Collector returns either `200 OK` plus an ack envelope
 
 - A single batch MUST NOT exceed **64 KB** serialized.
 - A single envelope MUST NOT exceed **16 KB** serialized
-  (see [`agent-reporting-protocol-v1.md` §3.4](./agent-reporting-protocol-v1.md#34-size-limits)).
+  (see [`reporting-protocol-01-envelope-v1.md` §3.4](./reporting-protocol-01-envelope-v1.md#34-size-limits)).
 - A batch MUST contain at most 256 envelopes.
 - Exceeding a limit returns the appropriate error code (§6).
 
@@ -282,7 +283,7 @@ V1.1 minor release and an ADR.
   "batch_id": "550e8400-e29b-41d4-a716-446655440001",
   "sent_at": "2026-09-13T10:00:00.123456Z",
   "events": [
-    { /* event envelope 1, see agent-reporting-protocol-v1.md §3 */ },
+    { /* event envelope 1, see reporting-protocol-01-envelope-v1.md §3 */ },
     { /* event envelope 2 */ }
   ],
   "dropped_count": 0
@@ -306,7 +307,7 @@ V1.1 minor release and an ADR.
 - `events.length` ≤ 256; if exceeded, split into multiple batches.
 - Serialized batch ≤ 64 KB; if exceeded, return `BATCH_TOO_LARGE`.
 - Single envelope ≤ 16 KB (see
-  [`agent-reporting-protocol-v1.md` §3.4](./agent-reporting-protocol-v1.md#34-size-limits)).
+  [`reporting-protocol-01-envelope-v1.md` §3.4](./reporting-protocol-01-envelope-v1.md#34-size-limits)).
 
 ## 8. Sequence and Deduplication
 
@@ -606,21 +607,11 @@ Connection: close
 
 ## Appendix B. Sign-off
 
-This V1 specification was frozen under 5-owner sign-off.
+This V1 specification was frozen under 5-owner sign-off. The
+family-level 5-owner sign-off record is maintained in
+[`reporting-protocol-03-freeze-record-v1.md`](./reporting-protocol-03-freeze-record-v1.md).
 Subsequent revisions require a new sign-off cycle and the changes
 listed in §15.
-
-| Owner     | Role                              | Status         | Date       |
-| --------- | --------------------------------- | -------------- | ---------- |
-| richie696 | Project owner                     | ☐ pending      |            |
-| owner 1   | Protocol designer                 | ☐ pending      |            |
-| owner 2   | Reporter implementation owner     | ☐ pending      |            |
-| owner 3   | Collector implementation owner    | ☐ pending      |            |
-| owner 4   | Cross-language SDK owner          | ☐ pending      |            |
-
-Until all 5 owners have signed, V1 is provisional. Once all 5
-signatures are in place, this appendix is the canonical V1 freeze
-sign-off, and any change MUST follow the procedure in §15.
 
 ## Version History
 

@@ -1258,7 +1258,7 @@
   严禁业务请求和响应内容、用户身份、认证材料、任意日志或完整规则正文；错误事件仅允许
   stable error class + 脱敏 reason(≤64 bytes)，禁止原始异常消息、traceback 和 frame locals。
 - **子任务**：
-  - [ ] M6.5.1 先完成 `docs/protocol/事件上报协议-v1.md`：冻结 V1 schema、
+  - [ ] M6.5.1 先完成 `docs/protocol/上报协议-01-envelope-v1.md`：冻结 V1 schema、
     transport 基线、版本协商、实例身份、批次确认、错误码、认证和跨语言兼容策略；major
     mismatch 返回稳定协议错误，禁止静默忽略字段或猜测降级解析。Python `Protocol`
     不是该网络协议的替代物。
@@ -1336,9 +1336,10 @@
 - **ADR**: ADR-SEN-011 (M6.5 父协议) + 新独立 ADR (M6.5.7 envelope 冻结)
 - **Deps**: M5.5, M6.1.0b (签字)
 - **V1 冻结** (M6.5.7 envelope freeze, 2026-09-13):
-  - `docs/protocol/事件上报协议-v1.md` V1 schema 冻结 (8 字段
+  - `docs/protocol/上报协议-01-envelope-v1.md` V1 schema 冻结 (8 字段
     envelope + 6 个 event_kind + per-kind frozen payload + V1 兼容性矩阵);
-    5-owner sign-off 记录在该 doc 附录 B
+    family-level 5-owner sign-off 记录在
+    `docs/protocol/上报协议-03-freeze-v1.md`
   - V1 不可破坏性: 加 optional field 走 V1.1 minor, 改 / 删 / 改语义 / 改
     protocol_version 字符串走 V2 major bump (独立 ADR)
   - 6 个 V1 event_kind 冻结: `RULE_SOURCE_ACTIVATED` /
