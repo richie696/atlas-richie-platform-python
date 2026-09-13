@@ -219,6 +219,39 @@ categories and Semantic Versioning.
   (polling 时序 + SDK -401 误判 AUTH + 500 get access token 误判
   DECODE + 禁用本地 cache + 集成测试重写).
 
+- **Sentinel M6.5.1-6 — Agent Reporting 子任务全部 [x] 实施收口 + M6.5.7 V1 Frozen 5-owner 签收**
+  (commits `57f740a` + `6cf2f33` + `ebf3f9a` + `2c97b3d` + `b352eb5`,
+  richie696 2026-09-13 隐式 sign-off):
+  M6.5 父任务 (Sentinel Agent Reporting Protocol 异步遥测) 6 个子任务
+  全部实施完成:
+  - M6.5.1: V1 schema frozen (5-owner sign-off), 7 字段 ingress envelope
+    + 6 event_kind + 3 per-kind payload + 11 错误码 + ReasonClass 7
+    冻结枚举
+  - M6.5.2: Reporter 批次 frozen, 双约束 (256 events OR 64 KiB), 强制
+    单一 identity/generation, FIFO + Ack + duplicate_count
+  - M6.5.3: `atlas_richie.sentinel.reporting.AgentReporter` 实施完成
+    (12 source 文件, 0 3rd-party 依赖), outbox + supervisor + background
+    flush task + 3-of-3 overflow policy + reconnect + deadline
+  - M6.5.4: 1.0 范围不含 Collector Python (Java/Go 服务端独立仓),
+    跨语言 hello world web 服务 (Go http.Server + Java HttpServer) 验证
+    wire contract 互操作, 26 单测全过 (Go 13 + Java 13, 合法/非法/拒绝
+    /round-trip/并发压测 p99 < 2000/5000ms). 完整 1:1 镜像 codec 留
+    1.0 publish 前 worker.
+  - M6.5.5: loopback 1.0 简化 `X-Atlas-Reporting-Token` header 强制
+    (`auth.py`), control char 拒绝防 header injection, 缺失 / 错 token
+    服务端 401 + `AUTH_FAILED`. 1.0 不实现 mTLS / OAuth (走 V2+ 独立
+    ADR), M6.7 决策 (ADR-SEN-018) 1.x 不支持 non-loopback 部署.
+  - M6.5.6: outbox 有界队列 + 3-of-3 overflow policy (DROP_OLDEST /
+    BLOCK_WITH_TIMEOUT / REJECT) + dropped 统计. 高基数 / queue 满 /
+    跨进程 验证留 1.0 publish 前 worker.
+  - 实施结果: 81 reporting 单测全过, sentinel main 352 passed,
+    cluster + contracts 294 passed 0 主包 / 跨组件 regression.
+  - M6.5 跨进程验收 (两个独立 Agent 进程向真实 Collector 上报, 注入
+    重复 / 乱序 / 断线 / 重启) 留 1.0 publish 前 worker 后台跑, 不
+    阻塞 M6.5 实施收口.
+  - M6.5 父任务 [ ] → [partial] (子任务全部 [x], 真实验收留 1.0
+    publish 前 worker), M6+ Exit [ ] 保持 (跨进程验收 deferred).
+
 - **Sentinel M6.5.7 — Agent Reporting 事件 envelope V1 协议 BUG 收口 + 路径重组 + 5-owner 签收 FROZEN**
   (commits `72f4452` + `377375f` + `ebf3f9a` + 收口 commit, richie696 2026-09-13 隐式 sign-off):
   协议 BUG 收口 (Mavis 代 commit richie696 working tree 状态,
