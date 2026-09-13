@@ -1,9 +1,9 @@
 # Atlas Richie Sentinel — 1.0 使用手册 (USAGE)
 
 > **状态**: 1.0 publish 准备中 (M6+ 收口阶段)
-> **配套 design**: `docs/process/M6.3-CLUSTER-TOKEN-DESIGN.md` / `docs/ENVELOPE-SCHEMA-FREEZE.md` / `docs/process/M6.7-WSGI-SYNC-EVAL.md`
+> **配套 design**: `docs/process/M6.3-CLUSTER-TOKEN-DESIGN.md` / `docs/protocol/ENVELOPE-SCHEMA-FREEZE.md` / `docs/process/M6.7-WSGI-SYNC-EVAL.md`
 > **配套 plan**: `docs/process/PLANNING.md`
-> **配套 wire protocol**: `docs/CLUSTER_TOKEN_PROTOCOL.md` (M6.3.1) / `docs/AGENT_REPORTING_PROTOCOL.md` (M6.5.7)
+> **配套 wire protocol**: `docs/protocol/CLUSTER_TOKEN_PROTOCOL.md` (M6.3.1) / `docs/protocol/AGENT_REPORTING_PROTOCOL.md` (M6.5.7)
 
 ---
 
@@ -213,9 +213,9 @@ token_cluster = Token(
 ## 7. 进一步阅读
 
 - 快速开始: `components/sentinel/sentinel/README.md`
-- 设计阶段: `docs/process/M6.3-CLUSTER-TOKEN-DESIGN.md` / `docs/ENVELOPE-SCHEMA-FREEZE.md` / `docs/process/M6.7-WSGI-SYNC-EVAL.md`
+- 设计阶段: `docs/process/M6.3-CLUSTER-TOKEN-DESIGN.md` / `docs/protocol/ENVELOPE-SCHEMA-FREEZE.md` / `docs/process/M6.7-WSGI-SYNC-EVAL.md`
 - 实施计划: `docs/M6.3-IMPLEMENTATION-PLAN.md`
-- 协议: `docs/CLUSTER_TOKEN_PROTOCOL.md` / `docs/AGENT_REPORTING_PROTOCOL.md`
+- 协议: `docs/protocol/CLUSTER_TOKEN_PROTOCOL.md` / `docs/protocol/AGENT_REPORTING_PROTOCOL.md`
 - 总规划: `docs/process/PLANNING.md`
 
 ---

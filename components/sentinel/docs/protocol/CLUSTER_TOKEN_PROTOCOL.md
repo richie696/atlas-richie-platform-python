@@ -2,7 +2,7 @@
 
 > **V1 冻结** (M6.3.1 sign-off, 1.0 publish 前冻结).
 > 配套 design / sign-off 文档: [`docs/process/M6.3-CLUSTER-TOKEN-DESIGN.md`](../M6.3-CLUSTER-TOKEN-DESIGN.md).
-> 配套 envelope spec: [`docs/AGENT_REPORTING_PROTOCOL.md`](./AGENT_REPORTING_PROTOCOL.md) (M6.5.7 frozen).
+> 配套 envelope spec: [`docs/protocol/AGENT_REPORTING_PROTOCOL.md`](./AGENT_REPORTING_PROTOCOL.md) (M6.5.7 frozen).
 
 | Field | Value |
 | ----- | ----- |

@@ -9,7 +9,7 @@
 | ----- | ----- |
 | Document | `ENVELOPE-SCHEMA-FREEZE.md` (1.0 收口前, V1 freeze) |
 | Phase | M6.5.7 (新, 1.0 publish 前 P0 冻结) |
-| Protocol | `docs/AGENT_REPORTING_PROTOCOL.md` (V1 冻结 spec) |
+| Protocol | `docs/protocol/AGENT_REPORTING_PROTOCOL.md` (V1 冻结 spec) |
 | 依赖 | M6.1.0b 签字 (冻结内部 `RuleSourceActivation` fact shape) + M6.5.1 父协议 envelope 路径 |
 | ADR | ADR-SEN-011 (M6.5 父协议) + 新 ADR-SEN-019 (M6.5.7 envelope 冻结) |
 | Test ID | SEN-REPORTING-001(part:envelope) |
@@ -52,7 +52,7 @@ envelope, 让:
 
 ### 2.2 业务边界
 
-- **核心契约层** (`docs/AGENT_REPORTING_PROTOCOL.md`): 冻结
+- **核心契约层** (`docs/protocol/AGENT_REPORTING_PROTOCOL.md`): 冻结
   envelope schema + event_kind 枚举 + 兼容性矩阵, **不**定义 transport
   (gRPC / HTTP / 自定义) — transport 由 M6.5.1 / M6.5.2 决定
 - **不**做 "通用事件总线" 抽象, 只挂 Reporter 自己的格式
@@ -106,7 +106,7 @@ Java `Instant.now()` 都用 epoch microseconds, 但格式化和 timezone 序列�
 
 ### 4.1 候选: 稳定契约 (Port / Schema Registry)
 
-- **位置**: `docs/AGENT_REPORTING_PROTOCOL.md` 是跨语言 Port,
+- **位置**: `docs/protocol/AGENT_REPORTING_PROTOCOL.md` 是跨语言 Port,
   Python / Go / Java / Rust 各自实现, 共享 schema
 - **为什么**: 跨语言 wire protocol 不能用 Python `Protocol` (M6.1.0b
   决策 2 明确), 必须用 JSON Schema / Protobuf 等 language-neutral 描述
@@ -146,7 +146,7 @@ Java `Instant.now()` 都用 epoch microseconds, 但格式化和 timezone 序列�
 
 ## 5. V1 schema 冻结内容 (摘要)
 
-完整 schema 见 `docs/AGENT_REPORTING_PROTOCOL.md`. 摘要:
+完整 schema 见 `docs/protocol/AGENT_REPORTING_PROTOCOL.md`. 摘要:
 
 ### 5.1 envelope (8 字段, 全部必填)
 
@@ -201,7 +201,7 @@ V1 枚举塞项**。新增枚举值必须走 V2+ 独立 ADR。
 
 ### 6.1 新增 (本 M6.5.7)
 
-- `docs/AGENT_REPORTING_PROTOCOL.md` — V1 schema 冻结
+- `docs/protocol/AGENT_REPORTING_PROTOCOL.md` — V1 schema 冻结
 - `atlas-richie-contracts` 仓新增: `atlas_richie.reporting.v1` 包
   - `EnvelopeV1` (frozen dataclass, 8 字段)
   - `ProtocolVersion` 常量 `"atlas-richie.reporting/v1"`
@@ -234,7 +234,7 @@ M6.5.3 / M6.5.4 实施时再按 5 owner 签字扩展 (M6.5.7 + M6.5.3/4 联合 s
 
 | 步骤 | 状态 | 内容 |
 | --- | --- | --- |
-| M6.5.7.1 | ⏳ | 写 `docs/AGENT_REPORTING_PROTOCOL.md` V1 schema 冻结 (本会话) |
+| M6.5.7.1 | ⏳ | 写 `docs/protocol/AGENT_REPORTING_PROTOCOL.md` V1 schema 冻结 (本会话) |
 | M6.5.7.2 | ⏳ | PLANNING §M6.5.7 勾上, 标注 M6.5.7 envelope V1 frozen (本会话) |
 | M6.5.7.3 | ⏳ | 写本设计 doc + 5 owner sign-off (本会话) |
 | M6.5.7.4 | ⏳ | (后续, 1.0 publish 前) `atlas-richie-contracts` 加 `atlas_richie.reporting.v1` 包 + 6 个 frozen dataclass + JSON Schema |
