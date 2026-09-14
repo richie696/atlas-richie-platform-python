@@ -307,9 +307,16 @@ categories and Semantic Versioning.
 
 - **Sentinel 收口清理 (5 项长期 deferred 项目定论)** (commit `tbd`,
   richie696 2026-09-14):
-  1. **跨进程聚合 Dashboard (sentinel-dashboard-aggregator) 留 M5.4.1 候选**:
-     PLANNING §M5.4.1 新增 task entry (`[延后]`), 1.x 触发条件 (用户业务
-     强需求 + 单独批准 + 新独立 ADR + DESIGN §3.1 修订). 1.0 范围**不**出.
+  1. **跨进程聚合 dashboard 不在 Sentinel 库职责范围**: 实际部署
+     (K8s pod 1 process 1 socket 1 dashboard, 宿主机 nginx upstream
+     做 L7 LB) 没有"跨进程 dashboard"需求. 多进程数据聚合是运维
+     工具栈职责 (OTel / Prometheus / Grafana), 不是库的事. 1.0 / 1.x /
+     2.0 都不在范围. PLANNING.md 新增 "Sentinel 库职责边界" 章节明确
+     库做 4 件事 (per-process 引擎 / 规则源 / 集群协调 / 遥测 hook)
+     + 1 件 UI (per-process dashboard), 不做 3 件事 (跨进程聚合
+     dashboard / Collector Python / 持久化 / 告警 / TSDB). **撤回**
+     commit `efd2ecc` 的 "M5.4.1 候选" task entry (design-defensive
+     过度, 库职责边界判断不到位).
   2. **Collector Python 留 Java/Go 服务端独立仓**: 1.0 范围**不**实现
      Collector Python, V1 协议 (commit `2c97b3d` 5-owner 签收) 只冻结
      wire contract. 跨语言 hello world (commit `6cf2f33`) 验证互操作.

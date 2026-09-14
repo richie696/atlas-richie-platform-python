@@ -1074,26 +1074,47 @@
 >
 > 见 `M7.6 评审是否发布 1.0.0（M0–M7 闭环后）`。
 
-### M5.4.1 [延后] 跨进程聚合 Dashboard (sentinel-dashboard-aggregator) 候选
-- **背景**: M6.6 v2 (commit `b48f2e8`) 实施 per-process Web 管理页面
-  (`atlas-richie-sentinel-dashboard`), 但**跨进程聚合** Dashboard 仍留
-  候选, 1.0 范围**不**实施. 用户聚合需求 (多进程规则 / metrics 聚合)
-  通过现有 M5.4 metric hook + OTel / Prometheus / 业务自建满足.
-- **范围 (1.x 候选, 需用户单独批准)**:
-  - 接收 M6.5.1 wire protocol envelopes (Java/Go 端 Collector 已实现)
-  - 持久化 (in-memory cache 1.0 → TSDB V2 留)
-  - Web UI 复用 M6.6 v2 模板 (rule / metric / aggregate / alert 视图)
-  - 鉴权 (OAuth client credentials / mTLS, 1.x 才做, M6.7 loopback 仅限 1.0)
-  - 租户隔离 (multi-tenant 视图)
-- **不做**:
-  - 1.0 范围**不**出 `sentinel-dashboard-aggregator` 包
-  - 1.0 不实现跨进程聚合
-  - 1.0 范围**不**出 Collector Python (Java/Go 服务端独立仓)
-- **Test ID**: SEN-DASHBOARD-AGG-001 (候选)
-- **ADR**: 待用户触发时新建 (不得复用 OpenSergo ADR-SEN-016)
-- **Deps**: M6.5.7 V1 frozen + M6.6 v2 per-process dashboard 模板
-- **触发条件**: 用户业务场景出现 dashboard 强需求 (多服务聚合 / 历史
-  查询 / 告警), 单独批准 + 新独立 ADR + DESIGN.md §3.1 修订
+### Sentinel 库职责边界 (2026-09-14 richie696 业务边界判断)
+
+**库本身实现的 4 件事** (1.0 已全部 ✅):
+
+1. **per-process 引擎** (M1.x + M2.x): rate limit / circuit break / system
+   protect / authority / hot param. 单进程内有状态, 不跨进程.
+2. **per-process 规则源** (M3 + M6.1): 多源仲裁 (Nacos polling / file
+   legacy). 单进程消费, 不跨进程.
+3. **per-process 集群协调** (M6.3, `atlas-richie-sentinel-cluster` wheel):
+   跨进程 token 协调 (限流 / 熔断), 通过 Token Server 单点仲裁. 这是
+   库自己**必须**做的跨进程能力.
+4. **per-process 遥测 hook** (M5.4 + M6.5):
+   - M5.4 MetricRegistry.snapshot() 暴露本进程 metrics
+   - M6.5 wire protocol 把本进程 envelopes 推给 Java/Go Collector
+   - 接收方 / 持久化 / 告警 / 长期历史 = 业务运维栈 (OTel / Prometheus
+     / ELK / Grafana / AlertManager), **不是库的事**.
+
+**per-process admin UI** (M6.6 v2, `atlas-richie-sentinel-dashboard` wheel):
+本进程 1 个 socket (`127.0.0.1:8719` loopback, M6.7 决策), 看本进程的
+state / rules / metrics / events + reload / reset breaker. 1 进程 1
+dashboard, **不做**跨进程聚合.
+
+**库明确不做的 3 件事** (任何版本都不做, 是库职责边界):
+
+1. **跨进程聚合 dashboard** (`sentinel-dashboard-aggregator`): 不出.
+   实际部署: K8s pod 1 process 1 socket 1 dashboard (kubectl
+   port-forward 看), 宿主机多服务各自 socket 端口 (nginx upstream
+   做 L7 LB 即可), 多 dashboard 不需要 1 个统一 UI. 想看跨进程
+   聚合 → OTel → Prometheus → Grafana, 走业界标准, 不需要库再做.
+2. **Collector Python**: 不出. 跨进程 events 接收方由 Java/Go 服务端仓
+   维护 (M6.5 wire contract 已就绪, commit `2c97b3d` 5-owner 签收).
+3. **持久化 / TSDB / 告警 / 长期历史查询**: 不做. 这些是运维工具栈的职责,
+   Sentinel 库止于"暴露 metrics + 推 events", 不替用户做监控后端.
+
+**为什么是边界** (richie696 2026-09-14 业务判断):
+- R-219 设计治理: framework 不替用户做 view layer (dashboard UI /
+  监控后端都是 view layer)
+- DEPENDENCY_POLICY.md: 主包 0 3rd-party, extension wheel 允许合理
+  3rd-party 但**不**包括 DB / 监控后端 SDK (那是用户栈)
+- 1 进程 1 dashboard 模型 = 1 进程 1 socket, 天然隔离, 跨进程
+  聚合 = 业务栈职责 (nginx L7 / OTel / Prometheus), 库不重复造轮子
 
 ### M5 Exit [x] (M5.5 退出标准)
 - **Exit Criteria**(§21 + §24,以 M5.5 为 gate):
