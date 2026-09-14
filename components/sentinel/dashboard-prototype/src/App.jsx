@@ -2261,7 +2261,7 @@ export function App() {
     return <LoginPage navigate={navigate} />;
   }
   if (page === "setup") {
-    return <SystemInitializationPage navigate={navigate} />;
+    return <SystemInitializationPage onInitialized={() => navigate("login")} />;
   }
   return (
     <div className="app-shell">

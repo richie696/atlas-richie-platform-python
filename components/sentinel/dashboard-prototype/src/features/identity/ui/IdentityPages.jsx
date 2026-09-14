@@ -10,7 +10,6 @@ import {
   PlusIcon as Plus,
   ShieldCheckIcon as ShieldCheck,
   UserCircleIcon as UserCircle,
-  UserSwitchIcon as UserSwitch,
 } from "@phosphor-icons/react";
 import {
   CONTROL_PLANE_DATABASES,
@@ -205,18 +204,16 @@ export function LoginPage({ navigate }) {
           <label><span>密码</span><input type="password" autoComplete="current-password" value={credentials.password} onChange={(event) => setCredentials({ ...credentials, password: event.target.value })} /></label>
           <button className="primary-button login-submit" type="submit"><LockKey size={17} /> 登录</button>
         </form>
-        <div className="login-help"><UserSwitch size={18} /><span>首次启动？请通过本系统初始化向导配置存储与内置管理员。初始化完成前，控制台不会接受默认密码。</span></div>
-        <button className="link-button login-setup-link" type="button" onClick={() => navigate("setup")}>打开系统初始化 <ArrowRight size={15} /></button>
       </div>
     </div>
   );
 }
 
 /**
- * First-run setup screen. It models the management service bootstrap only;
- * inputs stay in component state and are never persisted by this prototype.
+ * First-run setup screen. Production renders it only while the server reports
+ * an incomplete bootstrap phase; after success, the parent redirects to login.
  */
-export function SystemInitializationPage({ navigate }) {
+export function SystemInitializationPage({ onInitialized }) {
   const [stepIndex, setStepIndex] = useState(0);
   const [databaseKind, setDatabaseKind] = useState("postgresql");
   const selectedDatabase = controlPlaneDatabaseFor(databaseKind);
@@ -243,7 +240,7 @@ export function SystemInitializationPage({ navigate }) {
   };
 
   const complete = () => {
-    setNotice("演示初始化已完成。真实服务会提交迁移、写入初始化审计并关闭初始化窗口。");
+    onInitialized();
   };
 
   const selectDatabase = (nextDatabaseKind) => {
@@ -286,7 +283,6 @@ export function SystemInitializationPage({ navigate }) {
             <div className="setup-actions"><button className="secondary-button" type="button" disabled={stepIndex === 0} onClick={() => setStepIndex((current) => Math.max(0, current - 1))}>上一步</button>{isLastStep ? <button className="primary-button" type="button" onClick={complete}>完成初始化</button> : <button className="primary-button" type="button" onClick={next}>下一步 <ArrowRight size={16} /></button>}</div>
           </div>
         </div>
-        <button className="link-button setup-back" type="button" onClick={() => navigate("login")}><ArrowLeft size={15} /> 返回登录</button>
       </section>
     </div>
   );

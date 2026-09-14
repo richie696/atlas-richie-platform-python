@@ -508,9 +508,6 @@ select:focus-visible {
 .login-card h1 { margin: 6px 0 6px; font-size: 27px; }
 .login-description { color: #a6b9c6; font-size: 12px; margin: 0 0 22px; }
 .login-submit { width: 100%; min-height: 43px; margin-top: 4px; }
-.login-help { align-items: flex-start; gap: 9px; margin-top: 22px; padding-top: 16px; border-top: 1px solid #2b4452; color: #9eb4c1; font-size: 11px; line-height: 1.5; }
-.login-help svg { flex: none; color: var(--blue); }
-.login-setup-link { margin-top: 12px; }
 .setup-page {
   min-height: 100vh;
   padding: 36px 24px;
@@ -619,7 +616,6 @@ select:focus-visible {
 .setup-summary span { color: #ddebF3; }
 .setup-actions { display: flex; justify-content: space-between; gap: 10px; margin-top: 24px; }
 .setup-actions button:disabled { cursor: not-allowed; opacity: .45; }
-.setup-back { margin-top: 18px; }
 .status {
   display: inline-flex;
   align-items: center;

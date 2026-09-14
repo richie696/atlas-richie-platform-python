@@ -14,7 +14,7 @@ Dashboard 已不是单纯的配置中心编辑器。它是 Sentinel 的管理控
 
 - 基础路径：`/api/v1`；媒体类型：`application/json`。
 - 登录成功返回短时访问令牌和过期时间；生产实现优先使用 `HttpOnly`、`Secure`、`SameSite` Cookie，若采用 Bearer 则禁止写入 `localStorage`、URL、日志和分析事件。
-- 当引导状态不是 `ready` 时，除 `/system/bootstrap/*`、`/health` 外全部控制面 API 返回 `503 system_not_initialized`；前端强制进入 `#/setup`。
+- 当引导状态不是 `ready` 时，除 `/system/bootstrap/*`、`/health` 外全部控制面 API 返回 `503 system_not_initialized`；前端只能进入 `#/setup`。当状态为 `ready` 时，前端不得再渲染 setup，任何 `#/setup` 深链接都必须替换为 `#/login`；客户端路由只是体验层，后台仍执行最终限制。
 - 除登录、初始化探测外，其余接口需要有效会话。规则写操作需要 `rules:write`；账户和角色管理接口只允许 `admin` 角色，不新增第三套业务权限。
 - 角色是服务端固定枚举：`admin`、`view`。V1 一个账号只能绑定一个角色；角色的权限集合由服务端维护，客户端不得自行扩大权限。
 - 所有时间使用 RFC 3339 UTC；所有列表支持 `page`、`pageSize`、`query`，服务端限制 `pageSize` 上限。
@@ -24,7 +24,7 @@ Dashboard 已不是单纯的配置中心编辑器。它是 Sentinel 的管理控
 
 ### `GET /system/bootstrap`
 
-服务在没有已配置数据库时仍可启动最小的 setup surface。它只暴露健康检查和本组 API；登录、规则、指标与账户 API 均不可用。返回状态不泄露用户名、数据库 DSN 或凭证。
+服务在没有已配置数据库时仍可启动最小的 setup surface。它只暴露健康检查和本组 API；登录、规则、指标与账户 API 均不可用。返回状态不泄露用户名、数据库 DSN 或凭证。系统已完成初始化时，该接口只返回最小 `ready` 状态供前端执行重定向，绝不重新开放或回显 setup 配置。
 
 ```json
 {
@@ -71,7 +71,7 @@ Request:
 }
 ```
 
-Response: `201 Created`，返回 `BootstrapStatus` 与 `AccountSummary`（均不含 credential）。重复初始化返回 `409 initialization_completed`；迁移或来源登记失败返回可恢复的稳定错误码，不能留下“账号已创建但系统未就绪”的半完成状态。
+Response: `201 Created`，返回 `BootstrapStatus` 与 `AccountSummary`（均不含 credential）。成功后服务端立即关闭 initialization window，前端替换到 `#/login`，不提供“返回登录”或“再次打开 setup”入口。所有重复初始化、在 `ready` 状态下的初始化请求，以及完成后访问 setup 专用操作，均返回 `409 initialization_completed`；迁移或来源登记失败返回可恢复的稳定错误码，不能留下“账号已创建但系统未就绪”的半完成状态。
 
 配置中心在首次启动不是可选的“数据库替代品”：它登记的是规则来源，关系数据库保存的是控制面元数据。后续可补充第二个来源，但多个来源的优先级和切换仍由既有 RuleSourceSupervisor 规则控制。
 
@@ -165,7 +165,7 @@ type BootstrapPhase = "storage_required" | "storage_ready" | "admin_required" | 
 type BootstrapStatus = { phase: BootstrapPhase; initialized: boolean; requestId?: string };
 ```
 
-页面职责：初始化页只处理首次系统配置和后端结果；登录页负责建立会话；账户维护负责账号状态与生命周期；角色绑定负责单角色选择和变更理由；修改密码只负责输入与服务端结果展示。任何页面都不直接处理密码哈希、令牌刷新、数据库口令持久化、配置中心凭证或权限最终判定。
+页面职责：初始化页只处理未初始化服务的首次系统配置与后端结果，成功后立刻离开该路由；登录页不提供 setup 跳转入口；账户维护负责账号状态与生命周期；角色绑定负责单角色选择和变更理由；修改密码只负责输入与服务端结果展示。任何页面都不直接处理密码哈希、令牌刷新、数据库口令持久化、配置中心凭证或权限最终判定。
 
 ## 7. 审计与验证要求
 
