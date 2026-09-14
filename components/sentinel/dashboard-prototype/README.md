@@ -21,7 +21,7 @@
 
 原型通过 CNB npm registry 使用已发布的 React 底座：`@richie696/react-framework@0.1.0` 与 `@richie696/react-framework-react@0.1.0`。`ReactFrameworkProvider` 负责注入底座运行时，`useOnlineStatus` 用于展示浏览器在线/离线状态；这些能力只服务于原型交互，不会连接生产服务。
 
-后续 React 代码的职责划分、底座 API 使用位置与 SCSS 皮肤遵循 `richie696-react-library/docs/REACT_ENGINEERING_STANDARD.md`；现有大文件的逐页拆分清单见 [React 原型迁移对照](docs/REACT_REFACTOR_MAP.md)。
+后续 React 工程遵循 `richie696-react-library/docs/REACT_ENGINEERING_STANDARD.md` 索引下的通用 UI/UE、编码与项目骨架规范；底座 API 的具体场景见其 `RICHIE_FOUNDATION_USAGE.md`。本原型的大文件逐页拆分清单单独放在 [React 原型迁移对照](docs/REACT_REFACTOR_MAP.md)。
 
 规则页采用 Sentinel 的五类规则字段作为配置输入兼容格式：`FlowRule`、`DegradeRule`、`SystemRule`、`AuthorityRule`、`ParamFlowRule`。同一规则类型的配置中心内容预览为 JSON array；它不包含额外的 `ruleType` 包装字段。`ParamFlowRule` 的 `classType` / `object` 仍须在真实的跨语言 codec 中按目标 runtime 校验，原型不把它承诺为通用类型系统。
 
