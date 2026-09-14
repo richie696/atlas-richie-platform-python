@@ -62,6 +62,47 @@ export const INITIALIZATION_STEPS = Object.freeze([
   },
 ]);
 
+/**
+ * Supported persistence choices for the Dashboard control plane.
+ *
+ * The active Sentinel rule snapshot remains in Nacos or Consul. These choices
+ * only persist Dashboard-owned facts such as accounts, audits, drafts, rule
+ * versions, and publishing plans. `id` is the API contract value; labels are
+ * presentation data and must never be used as a protocol value.
+ */
+export const CONTROL_PLANE_DATABASES = Object.freeze([
+  {
+    id: "postgresql",
+    label: "PostgreSQL",
+    description: "生产环境支持，用于可靠的控制面持久化。",
+    defaultPort: "5432",
+    requiresNetworkConfiguration: true,
+    usage: "production",
+  },
+  {
+    id: "mysql",
+    label: "MySQL",
+    description: "生产环境支持，要求 MySQL 8.0+；MariaDB 需作为独立兼容项评估。",
+    defaultPort: "3306",
+    requiresNetworkConfiguration: true,
+    usage: "production",
+  },
+  {
+    id: "sqlite",
+    label: "SQLite",
+    description: "仅限本地体验或单机开发，不作为生产集群存储。",
+    defaultPort: "",
+    requiresNetworkConfiguration: false,
+    usage: "local-development",
+  },
+]);
+
 export function roleFor(roleId) {
   return IDENTITY_ROLES.find((role) => role.id === roleId) ?? IDENTITY_ROLES[1];
+}
+
+/** Returns the supported database metadata for a stable API `kind` value. */
+export function controlPlaneDatabaseFor(databaseKind) {
+  return CONTROL_PLANE_DATABASES.find((database) => database.id === databaseKind)
+    ?? CONTROL_PLANE_DATABASES[0];
 }

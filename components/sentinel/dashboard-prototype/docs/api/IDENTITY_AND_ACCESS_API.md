@@ -7,7 +7,7 @@ Dashboard 已不是单纯的配置中心编辑器。它是 Sentinel 的管理控
 | 存储层 | 权威内容 | 不存什么 |
 | --- | --- | --- |
 | Nacos / Consul | 当前完整规则快照、规则来源版本 | 账号、密码、审计、草稿、会话 |
-| Dashboard 关系数据库 | 初始化状态、账号/角色、审计、草稿、规则版本/计划、发布记录、来源登记 | 当前生效规则的第二份权威副本、密码明文/哈希输出、原始大规模指标 |
+| Dashboard 关系数据库（PostgreSQL 或 MySQL） | 初始化状态、账号/角色、审计、草稿、规则版本/计划、发布记录、来源登记 | 当前生效规则的第二份权威副本、密码明文/哈希输出、原始大规模指标 |
 | 指标/事件存储（后续） | Agent 指标、故障事件、长期趋势 | 规则发布决策、账号与凭证 |
 
 ## 1. 统一约定
@@ -30,7 +30,7 @@ Dashboard 已不是单纯的配置中心编辑器。它是 Sentinel 的管理控
 {
   "phase":"storage_required",
   "initialized":false,
-  "availableDatabaseKinds":["postgresql","sqlite"],
+  "availableDatabaseKinds":["postgresql","mysql","sqlite"],
   "requiresAdminSetup":true,
   "requiresRuleSourceSetup":true
 }
@@ -53,7 +53,7 @@ Dashboard 已不是单纯的配置中心编辑器。它是 Sentinel 的管理控
 }
 ```
 
-本地体验可选择 `{"kind":"sqlite"}`；SQLite 不支持生产集群部署。成功返回 `requestId` 与受限的 `connectionSummary`，绝不回显口令或 DSN。
+`postgresql` 与 `mysql` 都需要 `host`、`port`、`database`、`username`、`password`；`mysql` 的生产支持范围是 MySQL 8.0+，并要求 InnoDB 与 `utf8mb4`。MariaDB 不以 `mysql` 的别名接受，须作为独立数据库种类完成兼容性评审后才可开放。`{"kind":"sqlite"}` 仅用于本地体验和单机开发，不支持生产集群部署。成功返回 `requestId` 与受限的 `connectionSummary`，绝不回显口令或 DSN。
 
 ### `POST /system/bootstrap/initialize`
 
@@ -65,7 +65,7 @@ Request:
 
 ```json
 {
-  "database":{"kind":"postgresql","validationRequestId":"req-db-123"},
+  "database":{"kind":"mysql","validationRequestId":"req-db-123"},
   "admin":{"username":"admin","displayName":"系统管理员","password":"<write-only>"},
   "ruleSource":{"kind":"nacos","endpoint":"https://nacos.example.com","namespace":"prod","credentialRef":"secret://sentinel/nacos"}
 }
@@ -74,6 +74,13 @@ Request:
 Response: `201 Created`，返回 `BootstrapStatus` 与 `AccountSummary`（均不含 credential）。重复初始化返回 `409 initialization_completed`；迁移或来源登记失败返回可恢复的稳定错误码，不能留下“账号已创建但系统未就绪”的半完成状态。
 
 配置中心在首次启动不是可选的“数据库替代品”：它登记的是规则来源，关系数据库保存的是控制面元数据。后续可补充第二个来源，但多个来源的优先级和切换仍由既有 RuleSourceSupervisor 规则控制。
+
+### 数据库兼容边界
+
+- V1 外部数据库类型固定为 `postgresql`、`mysql` 与本地开发用的 `sqlite`。客户端只传递 `kind` 和一次性的验证结果引用，不感知驱动、连接池、SQL 方言或迁移实现。
+- Python 管理后台必须通过自身拥有的最小持久化 Port 访问控制面数据；PostgreSQL、MySQL 与 SQLite 的连接、方言、迁移锁和错误映射分别由基础设施适配器实现。账户、规则版本、审计和发布用例不得内嵌某一方言 SQL。
+- 同一个初始化、迁移、并发引导锁、审计写入与回滚契约必须分别在 PostgreSQL 和 MySQL 集成环境验证。SQLite 只能证明本地单机路径，不能替代任一生产数据库验收。
+- 数据库兼容不改变规则事实来源：Nacos/Consul 仍是当前规则快照的权威存储；控制面数据库只保存 Dashboard 自己的工作流与治理事实。
 
 ## 3. 登录与会话
 

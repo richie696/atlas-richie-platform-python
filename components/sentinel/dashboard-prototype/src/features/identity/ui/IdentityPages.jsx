@@ -13,9 +13,11 @@ import {
   UserSwitchIcon as UserSwitch,
 } from "@phosphor-icons/react";
 import {
+  CONTROL_PLANE_DATABASES,
   INITIAL_ACCOUNTS,
   IDENTITY_ROLES,
   INITIALIZATION_STEPS,
+  controlPlaneDatabaseFor,
   roleFor,
 } from "../model/identityData";
 
@@ -217,6 +219,8 @@ export function LoginPage({ navigate }) {
 export function SystemInitializationPage({ navigate }) {
   const [stepIndex, setStepIndex] = useState(0);
   const [databaseKind, setDatabaseKind] = useState("postgresql");
+  const selectedDatabase = controlPlaneDatabaseFor(databaseKind);
+  const [databasePort, setDatabasePort] = useState(selectedDatabase.defaultPort);
   const [sourceKind, setSourceKind] = useState("nacos");
   const [notice, setNotice] = useState("");
   const [admin, setAdmin] = useState({ username: "admin", displayName: "系统管理员", password: "", confirm: "" });
@@ -242,6 +246,12 @@ export function SystemInitializationPage({ navigate }) {
     setNotice("演示初始化已完成。真实服务会提交迁移、写入初始化审计并关闭初始化窗口。");
   };
 
+  const selectDatabase = (nextDatabaseKind) => {
+    const nextDatabase = controlPlaneDatabaseFor(nextDatabaseKind);
+    setDatabaseKind(nextDatabase.id);
+    setDatabasePort(nextDatabase.defaultPort);
+  };
+
   return (
     <div className="setup-page">
       <section className="setup-shell">
@@ -255,8 +265,8 @@ export function SystemInitializationPage({ navigate }) {
             {notice && <div className="identity-notice" role="status">{notice}</div>}
             {step.id === "storage" && <>
               <div className="setup-title"><Database size={25} /><div><h2>配置系统数据库</h2><p>账户、角色、审计、草稿、规则版本与发布计划需要关系数据库；活动规则仍不直接写入数据库。</p></div></div>
-              <div className="setup-choice"><label><input type="radio" name="database-kind" checked={databaseKind === "postgresql"} onChange={() => setDatabaseKind("postgresql")} /><span><b>PostgreSQL</b><small>生产环境推荐，用于可靠的控制面持久化。</small></span></label><label><input type="radio" name="database-kind" checked={databaseKind === "sqlite"} onChange={() => setDatabaseKind("sqlite")} /><span><b>SQLite</b><small>仅限本地体验或单机开发，不作为生产集群存储。</small></span></label></div>
-              {databaseKind === "postgresql" ? <div className="setup-form-grid"><label>主机<input placeholder="db.internal.example" autoComplete="off" /></label><label>端口<input defaultValue="5432" inputMode="numeric" /></label><label>数据库名<input defaultValue="sentinel_control" autoComplete="off" /></label><label>用户名<input autoComplete="username" /></label><label className="wide">密码<input type="password" autoComplete="new-password" /></label></div> : <div className="setup-local-note">SQLite 数据文件会保存在服务端的受控数据目录中；浏览器不会保存数据库内容。</div>}
+              <div className="setup-choice">{CONTROL_PLANE_DATABASES.map((database) => <label key={database.id}><input type="radio" name="database-kind" checked={databaseKind === database.id} onChange={() => selectDatabase(database.id)} /><span><b>{database.label}</b><small>{database.description}</small></span></label>)}</div>
+              {selectedDatabase.requiresNetworkConfiguration ? <div className="setup-form-grid"><label>主机<input placeholder="db.internal.example" autoComplete="off" /></label><label>端口<input value={databasePort} onChange={(event) => setDatabasePort(event.target.value)} inputMode="numeric" /></label><label>数据库名<input defaultValue="sentinel_control" autoComplete="off" /></label><label>用户名<input autoComplete="username" /></label><label className="wide">密码<input type="password" autoComplete="new-password" /></label></div> : <div className="setup-local-note">SQLite 数据文件会保存在服务端的受控数据目录中；浏览器不会保存数据库内容。</div>}
               <button className="secondary-button" type="button" onClick={() => setNotice("演示连接检查通过；真实服务会建立连接、执行迁移并返回 requestId。")}>测试连接并准备数据结构</button>
             </>}
             {step.id === "admin" && <>
@@ -270,7 +280,7 @@ export function SystemInitializationPage({ navigate }) {
             </>}
             {step.id === "complete" && <>
               <div className="setup-title"><CheckCircle size={25} /><div><h2>确认并完成</h2><p>完成后，系统写入初始化状态、创建内置管理员并开放登录与控制台 API。</p></div></div>
-              <div className="setup-summary"><div><b>系统存储</b><span>{databaseKind === "postgresql" ? "PostgreSQL（生产推荐）" : "SQLite（本地开发）"}</span></div><div><b>内置账号</b><span>{admin.username || "admin"} · admin</span></div><div><b>规则来源</b><span>{sourceKind === "nacos" ? "Nacos" : "Consul"}</span></div></div>
+              <div className="setup-summary"><div><b>系统存储</b><span>{selectedDatabase.usage === "production" ? `${selectedDatabase.label}（生产可用）` : `${selectedDatabase.label}（本地开发）`}</span></div><div><b>内置账号</b><span>{admin.username || "admin"} · admin</span></div><div><b>规则来源</b><span>{sourceKind === "nacos" ? "Nacos" : "Consul"}</span></div></div>
               <div className="identity-warning"><LockKey size={18} /> 初始化是一次性受保护操作。生产环境必须由部署侧提供启动密钥或受管密钥，服务端不得以明文文件保存数据库口令。</div>
             </>}
             <div className="setup-actions"><button className="secondary-button" type="button" disabled={stepIndex === 0} onClick={() => setStepIndex((current) => Math.max(0, current - 1))}>上一步</button>{isLastStep ? <button className="primary-button" type="button" onClick={complete}>完成初始化</button> : <button className="primary-button" type="button" onClick={next}>下一步 <ArrowRight size={16} /></button>}</div>
