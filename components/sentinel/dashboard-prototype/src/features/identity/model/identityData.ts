@@ -2,6 +2,33 @@
  * Demo-only identity contracts. The production API must return these shapes
  * without exposing password hashes, reset tokens, or other credentials.
  */
+export type IdentityRoleId = "admin" | "view";
+export type AccountStatus = "active" | "disabled";
+export type IdentityRole = {
+  id: IdentityRoleId;
+  label: string;
+  description: string;
+  permissions: readonly string[];
+};
+export type AccountSummary = {
+  id: string;
+  username: string;
+  displayName: string;
+  roleId: IdentityRoleId;
+  status: AccountStatus;
+  builtIn: boolean;
+  lastLoginAt: string;
+};
+export type ControlPlaneDatabaseKind = "postgresql" | "mysql" | "sqlite";
+export type ControlPlaneDatabase = {
+  id: ControlPlaneDatabaseKind;
+  label: string;
+  description: string;
+  defaultPort: string;
+  requiresNetworkConfiguration: boolean;
+  usage: "production" | "local-development";
+};
+
 export const IDENTITY_ROLES = Object.freeze([
   {
     id: "admin",
@@ -15,7 +42,7 @@ export const IDENTITY_ROLES = Object.freeze([
     description: "查看总览、实例、监控和故障分析，不具备任何编辑能力。",
     permissions: ["metrics:view"],
   },
-]);
+] satisfies readonly IdentityRole[]);
 
 export const INITIAL_ACCOUNTS = Object.freeze([
   {
@@ -36,7 +63,7 @@ export const INITIAL_ACCOUNTS = Object.freeze([
     builtIn: false,
     lastLoginAt: "2026-09-14 13:58",
   },
-]);
+] satisfies readonly AccountSummary[]);
 
 /** Ordered, persisted bootstrap checkpoints; these are not rule-source states. */
 export const INITIALIZATION_STEPS = Object.freeze([
@@ -95,14 +122,16 @@ export const CONTROL_PLANE_DATABASES = Object.freeze([
     requiresNetworkConfiguration: false,
     usage: "local-development",
   },
-]);
+] satisfies readonly ControlPlaneDatabase[]);
 
-export function roleFor(roleId) {
+export function roleFor(roleId: IdentityRoleId): IdentityRole {
   return IDENTITY_ROLES.find((role) => role.id === roleId) ?? IDENTITY_ROLES[1];
 }
 
 /** Returns the supported database metadata for a stable API `kind` value. */
-export function controlPlaneDatabaseFor(databaseKind) {
+export function controlPlaneDatabaseFor(
+  databaseKind: ControlPlaneDatabaseKind,
+): ControlPlaneDatabase {
   return CONTROL_PLANE_DATABASES.find((database) => database.id === databaseKind)
     ?? CONTROL_PLANE_DATABASES[0];
 }

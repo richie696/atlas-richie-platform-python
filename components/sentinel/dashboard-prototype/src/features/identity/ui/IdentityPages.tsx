@@ -1,4 +1,10 @@
-import { useMemo, useState } from "react";
+import {
+  useMemo,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import {
   ArrowLeftIcon as ArrowLeft,
   ArrowRightIcon as ArrowRight,
@@ -19,8 +25,31 @@ import {
   controlPlaneDatabaseFor,
   roleFor,
 } from "../model/identityData";
+import type {
+  AccountSummary,
+  ControlPlaneDatabaseKind,
+  IdentityRoleId,
+} from "../model/identityData";
 
-function IdentityIntro({ eyebrow, title, description, action }) {
+type Navigate = (next: string, contextId?: string) => void;
+type IdentityIntroProps = {
+  eyebrow: string;
+  title: string;
+  description: string;
+  action?: ReactNode;
+};
+type IdentityPanelProps = {
+  title: string;
+  subtitle?: string;
+  children: ReactNode;
+};
+type AccountDraft = {
+  username: string;
+  displayName: string;
+  roleId: IdentityRoleId;
+};
+
+function IdentityIntro({ eyebrow, title, description, action }: IdentityIntroProps) {
   return (
     <div className="intro identity-intro">
       <div>
@@ -33,7 +62,7 @@ function IdentityIntro({ eyebrow, title, description, action }) {
   );
 }
 
-function IdentityPanel({ title, subtitle, children }) {
+function IdentityPanel({ title, subtitle, children }: IdentityPanelProps) {
   return (
     <section className="panel identity-panel">
       <div className="panel-head">
@@ -47,17 +76,17 @@ function IdentityPanel({ title, subtitle, children }) {
   );
 }
 
-function roleLabel(roleId) {
+function roleLabel(roleId: IdentityRoleId) {
   return roleFor(roleId).label;
 }
 
-export function AccountMaintenancePage({ navigate }) {
-  const [accounts, setAccounts] = useState(() => INITIAL_ACCOUNTS.map((item) => ({ ...item })));
+export function AccountMaintenancePage({ navigate }: { navigate: Navigate }) {
+  const [accounts, setAccounts] = useState<AccountSummary[]>(() => INITIAL_ACCOUNTS.map((item) => ({ ...item })));
   const [showCreate, setShowCreate] = useState(false);
   const [notice, setNotice] = useState("");
-  const [draft, setDraft] = useState({ username: "", displayName: "", roleId: "view" });
+  const [draft, setDraft] = useState<AccountDraft>({ username: "", displayName: "", roleId: "view" });
 
-  const createAccount = (event) => {
+  const createAccount = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!draft.username.trim() || !draft.displayName.trim()) {
       setNotice("请填写登录名和显示名称。");
@@ -80,7 +109,7 @@ export function AccountMaintenancePage({ navigate }) {
     setNotice("账号已加入演示列表；真实环境需由后台 API 创建并审计。");
   };
 
-  const toggleStatus = (id) => {
+  const toggleStatus = (id: string) => {
     setAccounts((current) =>
       current.map((account) =>
         account.id === id
@@ -109,7 +138,7 @@ export function AccountMaintenancePage({ navigate }) {
           <form className="identity-form" onSubmit={createAccount}>
             <label>登录名<input value={draft.username} onChange={(event) => setDraft({ ...draft, username: event.target.value })} autoComplete="off" /></label>
             <label>显示名称<input value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label>
-            <label>初始角色<select value={draft.roleId} onChange={(event) => setDraft({ ...draft, roleId: event.target.value })}>{IDENTITY_ROLES.map((role) => <option key={role.id} value={role.id}>{role.label}</option>)}</select></label>
+            <label>初始角色<select value={draft.roleId} onChange={(event) => setDraft({ ...draft, roleId: event.target.value as IdentityRoleId })}>{IDENTITY_ROLES.map((role) => <option key={role.id} value={role.id}>{role.label}</option>)}</select></label>
             <div className="identity-form-actions"><button className="secondary-button" type="button" onClick={() => setShowCreate(false)}>取消</button><button className="primary-button" type="submit">创建账号</button></div>
           </form>
         </IdentityPanel>
@@ -135,13 +164,13 @@ export function AccountMaintenancePage({ navigate }) {
   );
 }
 
-export function RoleBindingPage({ navigate, selectedAccountId = "account-admin" }) {
-  const [accounts, setAccounts] = useState(() => INITIAL_ACCOUNTS.map((item) => ({ ...item })));
+export function RoleBindingPage({ navigate, selectedAccountId = "account-admin" }: { navigate: Navigate; selectedAccountId?: string }) {
+  const [accounts, setAccounts] = useState<AccountSummary[]>(() => INITIAL_ACCOUNTS.map((item) => ({ ...item })));
   const [accountId, setAccountId] = useState(selectedAccountId);
   const selected = accounts.find((account) => account.id === accountId) ?? accounts[0];
   const role = roleFor(selected.roleId);
-  const saveRole = (event) => {
-    const roleId = event.target.value;
+  const saveRole = (event: ChangeEvent<HTMLInputElement>) => {
+    const roleId = event.target.value as IdentityRoleId;
     setAccounts((current) => current.map((account) => account.id === selected.id ? { ...account, roleId } : account));
   };
 
@@ -162,11 +191,11 @@ export function RoleBindingPage({ navigate, selectedAccountId = "account-admin" 
   );
 }
 
-export function ChangePasswordPage({ navigate, accountId = "account-admin" }) {
+export function ChangePasswordPage({ navigate, accountId = "account-admin" }: { navigate: Navigate; accountId?: string }) {
   const account = useMemo(() => INITIAL_ACCOUNTS.find((item) => item.id === accountId) ?? INITIAL_ACCOUNTS[0], [accountId]);
   const [form, setForm] = useState({ current: "", next: "", confirm: "" });
   const [message, setMessage] = useState("");
-  const submit = (event) => {
+  const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (form.next.length < 12) return setMessage("新密码至少 12 位，并应包含多种字符类型。");
     if (form.next !== form.confirm) return setMessage("两次输入的新密码不一致。");
@@ -189,10 +218,10 @@ export function ChangePasswordPage({ navigate, accountId = "account-admin" }) {
   );
 }
 
-export function LoginPage({ navigate }) {
+export function LoginPage({ navigate }: { navigate: Navigate }) {
   const [credentials, setCredentials] = useState({ username: "", password: "" });
   const [message, setMessage] = useState("");
-  const submit = (event) => { event.preventDefault(); if (!credentials.username || !credentials.password) return setMessage("请输入登录名和密码。"); navigate("overview"); };
+  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!credentials.username || !credentials.password) return setMessage("请输入登录名和密码。"); navigate("overview"); };
   return (
     <div className="login-page">
       <div className="login-card">
@@ -213,9 +242,9 @@ export function LoginPage({ navigate }) {
  * First-run setup screen. Production renders it only while the server reports
  * an incomplete bootstrap phase; after success, the parent redirects to login.
  */
-export function SystemInitializationPage({ onInitialized }) {
+export function SystemInitializationPage({ onInitialized }: { onInitialized: () => void }) {
   const [stepIndex, setStepIndex] = useState(0);
-  const [databaseKind, setDatabaseKind] = useState("postgresql");
+  const [databaseKind, setDatabaseKind] = useState<ControlPlaneDatabaseKind>("postgresql");
   const selectedDatabase = controlPlaneDatabaseFor(databaseKind);
   const [databasePort, setDatabasePort] = useState(selectedDatabase.defaultPort);
   const [sourceKind, setSourceKind] = useState("nacos");
@@ -243,7 +272,7 @@ export function SystemInitializationPage({ onInitialized }) {
     onInitialized();
   };
 
-  const selectDatabase = (nextDatabaseKind) => {
+  const selectDatabase = (nextDatabaseKind: ControlPlaneDatabaseKind) => {
     const nextDatabase = controlPlaneDatabaseFor(nextDatabaseKind);
     setDatabaseKind(nextDatabase.id);
     setDatabasePort(nextDatabase.defaultPort);

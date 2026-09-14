@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useOnlineStatus } from "@richie696/react-framework-react";
 import {
   ActivityIcon as Activity,
@@ -76,6 +76,88 @@ const AUXILIARY_PAGES = Object.freeze([
   "setup",
 ]);
 
+type SelectOption = string | { value: string | number; label: string };
+type TrendPoint = { time: string } & Record<string, string | number>;
+type TrendDomain = [string | number, string | number];
+type Navigate = (next: string, nextApp?: string) => void;
+type DashboardPageProps = {
+  navigate: Navigate;
+  appId: string;
+  setAppId: (appId: string) => void;
+  range: string;
+  setRange: (range: string) => void;
+};
+/**
+ * Sentinel-compatible rules are intentionally open JSON documents. The future
+ * backend codec owns their discriminated wire schema; this prototype keeps the
+ * editor boundary explicit without pretending the fixture is that codec.
+ */
+type RuleDraft = Record<string, any> & {
+  clusterConfig?: Record<string, any>;
+  paramFlowItemList?: Array<Record<string, any>>;
+};
+type RuleOption = { value: number; label: string };
+
+type StatusProps = { tone?: string; children: ReactNode };
+type LinkButtonProps = { children: ReactNode; onClick: () => void };
+type PanelProps = {
+  title: ReactNode;
+  subtitle?: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+};
+type NumberCardProps = {
+  label: ReactNode;
+  value: ReactNode;
+  unit?: ReactNode;
+  note: ReactNode;
+  tone?: string;
+};
+type SelectProps = {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: ReadonlyArray<SelectOption>;
+};
+type FiltersProps = {
+  appId: string;
+  setAppId: (id: string) => void;
+  range: string;
+  setRange: (range: string) => void;
+  all?: boolean;
+  extra?: ReactNode;
+  showRange?: boolean;
+  labels?: {
+    environment: string;
+    production: string;
+    application: string;
+    allApplications: string;
+    sample: string;
+  };
+};
+type TrendProps = {
+  data: TrendPoint[];
+  metric: string;
+  color?: string;
+  unit?: string;
+  second?: string;
+  secondColor?: string;
+  secondAxis?: boolean;
+  secondUnit?: string;
+  marker?: boolean;
+  cursorTime?: string;
+  height?: number;
+  domain?: TrendDomain;
+};
+type IntroProps = {
+  eyebrow: ReactNode;
+  title: ReactNode;
+  description: ReactNode;
+  aside?: ReactNode;
+};
+type TableProps = { heads: string[]; rows: ReactNode; className?: string };
+
 function initialPage() {
   const name = window.location.hash.slice(1);
   return PAGE_ITEMS.some((item) => item.id === name) || AUXILIARY_PAGES.includes(name)
@@ -83,10 +165,10 @@ function initialPage() {
     : "overview";
 }
 
-function Status({ tone = "healthy", children }) {
+function Status({ tone = "healthy", children }: StatusProps) {
   return <span className={`status status-${tone}`}>{children}</span>;
 }
-function LinkButton({ children, onClick }) {
+function LinkButton({ children, onClick }: LinkButtonProps) {
   return (
     <button type="button" className="link-button" onClick={onClick}>
       {children}
@@ -94,7 +176,7 @@ function LinkButton({ children, onClick }) {
     </button>
   );
 }
-function Panel({ title, subtitle, action, children, className = "" }) {
+function Panel({ title, subtitle, action = null, children, className = "" }: PanelProps) {
   return (
     <section className={`panel ${className}`}>
       <div className="panel-head">
@@ -108,7 +190,7 @@ function Panel({ title, subtitle, action, children, className = "" }) {
     </section>
   );
 }
-function NumberCard({ label, value, unit, note, tone = "" }) {
+function NumberCard({ label, value, unit = "", note, tone = "" }: NumberCardProps) {
   return (
     <div className="number-card">
       <span>{label}</span>
@@ -121,7 +203,7 @@ function NumberCard({ label, value, unit, note, tone = "" }) {
   );
 }
 
-function Select({ label, value, onChange, options }) {
+function Select({ label, value, onChange, options }: SelectProps) {
   return (
     <label className="select-control">
       <span>{label}</span>
@@ -131,8 +213,11 @@ function Select({ label, value, onChange, options }) {
           onChange={(event) => onChange(event.target.value)}
         >
           {options.map((item) => (
-            <option key={item.value ?? item} value={item.value ?? item}>
-              {item.label ?? item}
+            <option
+              key={typeof item === "string" ? item : item.value}
+              value={typeof item === "string" ? item : item.value}
+            >
+              {typeof item === "string" ? item : item.label}
             </option>
           ))}
         </select>
@@ -148,7 +233,7 @@ function Filters({
   range,
   setRange,
   all = false,
-  extra,
+  extra = null,
   showRange = true,
   labels = {
     environment: "环境",
@@ -157,7 +242,7 @@ function Filters({
     allApplications: "全部应用",
     sample: "示例采样 · 14:32:18",
   },
-}) {
+}: FiltersProps) {
   const appOptions = APPLICATIONS.map((app) => ({
     value: app.id,
     label: app.label,
@@ -209,7 +294,7 @@ function Trend({
   cursorTime,
   height = 170,
   domain,
-}) {
+}: TrendProps) {
   return (
     <div className="trend" style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
@@ -320,7 +405,7 @@ function Trend({
   );
 }
 
-function Intro({ eyebrow, title, description, aside }) {
+function Intro({ eyebrow, title, description, aside = null }: IntroProps) {
   return (
     <div className="intro">
       <div>
@@ -332,7 +417,7 @@ function Intro({ eyebrow, title, description, aside }) {
     </div>
   );
 }
-function Table({ heads, rows, className = "" }) {
+function Table({ heads, rows, className = "" }: TableProps) {
   return (
     <div className="table-scroll">
       <table className={`data-table ${className}`}>
@@ -349,7 +434,7 @@ function Table({ heads, rows, className = "" }) {
   );
 }
 
-function Overview({ navigate, appId, setAppId, range, setRange }) {
+function Overview({ navigate, appId, setAppId, range, setRange }: DashboardPageProps) {
   const trend = seriesForRange(FLEET_TREND, range);
   const apps =
     appId === "all"
@@ -516,14 +601,19 @@ function Overview({ navigate, appId, setAppId, range, setRange }) {
   );
 }
 
-function Usage({ value, tone = "blue" }) {
+function Usage({ value, tone = "blue" }: { value: number; tone?: string }) {
   return (
     <span className="usage">
       <i className={`usage-${tone}`} style={{ width: `${value}%` }} />
     </span>
   );
 }
-function HostRows({ host, rows, selectedId, setSelectedId }) {
+function HostRows({ host, rows, selectedId, setSelectedId }: {
+  host: string;
+  rows: ReadonlyArray<(typeof ORDER_INSTANCES)[number]>;
+  selectedId: string;
+  setSelectedId: (id: string) => void;
+}) {
   const [open, setOpen] = useState(true);
   return (
     <>
@@ -572,7 +662,7 @@ function HostRows({ host, rows, selectedId, setSelectedId }) {
     </>
   );
 }
-function Applications({ navigate, appId, setAppId, range, setRange }) {
+function Applications({ navigate, appId, setAppId, range, setRange }: DashboardPageProps) {
   const [selectedId, setSelectedId] = useState("order-5");
   const [anomaliesOnly, setAnomaliesOnly] = useState(false);
   const [scope, setScope] = useState("容器");
@@ -841,11 +931,15 @@ const DEFAULT_CLUSTER_CONFIG = Object.freeze({
   windowIntervalMs: 1000,
 });
 
-function cloneRule(rule) {
-  return JSON.parse(JSON.stringify(rule));
+function cloneRule<T>(rule: T): T {
+  return JSON.parse(JSON.stringify(rule)) as T;
 }
 
-function RuleField({ label, hint, children }) {
+function RuleField({ label, hint, children }: {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
   return (
     <label className="rule-field">
       <span>{label}</span>
@@ -862,6 +956,13 @@ function RuleInput({
   onChange,
   disabled,
   numeric = false,
+}: {
+  label: string;
+  hint?: string;
+  value: string | number | undefined;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  numeric?: boolean;
 }) {
   return (
     <RuleField label={label} hint={hint}>
@@ -876,7 +977,14 @@ function RuleInput({
   );
 }
 
-function RuleSelect({ label, hint, value, options, onChange, disabled }) {
+function RuleSelect({ label, hint, value, options, onChange, disabled }: {
+  label: string;
+  hint?: string;
+  value: number;
+  options: ReadonlyArray<RuleOption>;
+  onChange: (value: number) => void;
+  disabled?: boolean;
+}) {
   return (
     <RuleField label={label} hint={hint}>
       <select
@@ -894,7 +1002,13 @@ function RuleSelect({ label, hint, value, options, onChange, disabled }) {
   );
 }
 
-function RuleToggle({ label, hint, checked, onChange, disabled }) {
+function RuleToggle({ label, hint, checked, onChange, disabled }: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+}) {
   return (
     <label className="rule-toggle">
       <input
@@ -911,12 +1025,16 @@ function RuleToggle({ label, hint, checked, onChange, disabled }) {
   );
 }
 
-function localizedOptions(options, labels) {
+function localizedOptions(options: ReadonlyArray<RuleOption>, labels: readonly string[]) {
   return options.map((option, index) => ({ ...option, label: labels[index] }));
 }
 
-function validationErrors(ruleType, rule, t) {
-  const errors = [];
+function validationErrors(
+  ruleType: string,
+  rule: RuleDraft,
+  t: (path: string) => string,
+) {
+  const errors: string[] = [];
   if (ruleType !== "system" && !String(rule.resource ?? "").trim())
     errors.push(t("rules.errors.resourceRequired"));
   if (["flow", "param"].includes(ruleType) && !(Number(rule.count) > 0))
@@ -956,18 +1074,24 @@ function validationErrors(ruleType, rule, t) {
   return errors;
 }
 
-function RuleEditor({ type, rule, editable, onChange, messages }) {
+function RuleEditor({ type, rule, editable, onChange, messages }: {
+  type: string;
+  rule: RuleDraft;
+  editable: boolean;
+  onChange: (rule: RuleDraft) => void;
+  messages: any;
+}) {
   const disabled = !editable;
   const fields = messages.fields;
   const typeMessages = messages.types[type];
-  const update = (field, value) => onChange({ ...rule, [field]: value });
-  const updateNumber = (field, value) =>
+  const update = (field: string, value: unknown) => onChange({ ...rule, [field]: value });
+  const updateNumber = (field: string, value: string) =>
     update(field, value === "" ? "" : Number(value));
-  const updateCluster = (field, value) =>
+  const updateCluster = (field: string, value: unknown) =>
     update("clusterConfig", { ...rule.clusterConfig, [field]: value });
-  const systemValue = (field) =>
+  const systemValue = (field: string) =>
     rule[field] === SentinelCode.DISABLED_SYSTEM_THRESHOLD ? "" : rule[field];
-  const updateSystem = (field, value) =>
+  const updateSystem = (field: string, value: string) =>
     update(
       field,
       value === "" ? SentinelCode.DISABLED_SYSTEM_THRESHOLD : Number(value),
@@ -980,7 +1104,7 @@ function RuleEditor({ type, rule, editable, onChange, messages }) {
       rule.controlBehavior === SentinelCode.FLOW_BEHAVIOR_WARM_UP;
     const isQueueing =
       rule.controlBehavior === SentinelCode.FLOW_BEHAVIOR_QUEUEING;
-    const setClusterMode = (enabled) =>
+    const setClusterMode = (enabled: boolean) =>
       onChange(
         enabled
           ? {
@@ -1424,7 +1548,7 @@ function RuleEditor({ type, rule, editable, onChange, messages }) {
   );
 }
 
-function VersionPlan({ messages }) {
+function VersionPlan({ messages }: { messages: any }) {
   const [message, setMessage] = useState("");
   const labels = messages.rules.versions;
   const toneFor = {
@@ -1499,13 +1623,13 @@ function VersionPlan({ messages }) {
   );
 }
 
-function Rules({ appId, setAppId, range, setRange, locale }) {
+function Rules({ appId, setAppId, range, setRange, locale }: Omit<DashboardPageProps, "navigate"> & { locale: string }) {
   const messages = ruleMessages(locale);
   const t = createRuleTranslator(locale);
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("all");
   const [selectedId, setSelectedId] = useState(RULES[0].id);
-  const [draftRule, setDraftRule] = useState(() =>
+  const [draftRule, setDraftRule] = useState<RuleDraft>(() =>
     cloneRule(RULES[0].sentinelRule),
   );
   const [draft, setDraft] = useState(false);
@@ -1526,6 +1650,7 @@ function Rules({ appId, setAppId, range, setRange, locale }) {
     setMessage("");
   }
   function validate() {
+    if (!selected) return;
     const errors = validationErrors(selected.ruleType, draftRule, t);
     setMessage(
       errors.length > 0 ? errors.join(" ") : t("rules.validationPassed"),
@@ -1587,9 +1712,9 @@ function Rules({ appId, setAppId, range, setRange, locale }) {
                 onChange={(event) => setKind(event.target.value)}
               >
                 <option value="all">{t("rules.allTypes")}</option>
-                {Object.entries(messages.types).map(([type, metadata]) => (
-                  <option key={type} value={type}>
-                    {metadata.label}
+              {Object.entries(messages.types).map(([type, metadata]) => (
+                <option key={type} value={type}>
+                  {(metadata as { label: string }).label}
                   </option>
                 ))}
               </select>
@@ -1740,7 +1865,7 @@ function Rules({ appId, setAppId, range, setRange, locale }) {
   );
 }
 
-function Realtime({ navigate, appId, setAppId, range, setRange }) {
+function Realtime({ navigate, appId, setAppId, range, setRange }: DashboardPageProps) {
   const [paused, setPaused] = useState(false);
   const [metric, setMetric] = useState("全部指标");
   const [frame, setFrame] = useState(0);
@@ -1895,7 +2020,7 @@ function Realtime({ navigate, appId, setAppId, range, setRange }) {
   );
 }
 
-function Faults({ navigate, appId, setAppId, range, setRange }) {
+function Faults({ navigate, appId, setAppId, range, setRange }: DashboardPageProps) {
   const [severity, setSeverity] = useState("all");
   const [selectedId, setSelectedId] = useState(FAULT_EVENTS[0].id);
   const scopeEvents = FAULT_EVENTS.filter(
@@ -2038,7 +2163,7 @@ function Faults({ navigate, appId, setAppId, range, setRange }) {
   );
 }
 
-function System({ navigate }) {
+function System({ navigate }: Pick<DashboardPageProps, "navigate">) {
   const [tab, setTab] = useState("连接与采集");
   return (
     <>
@@ -2241,7 +2366,7 @@ export function App() {
     window.addEventListener("hashchange", handler);
     return () => window.removeEventListener("hashchange", handler);
   }, []);
-  function navigate(next, nextApp) {
+  function navigate(next: string, nextApp?: string) {
     if (nextApp && (next === "applications" || next === "overview")) {
       setAppId(nextApp);
     }
@@ -2252,7 +2377,7 @@ export function App() {
     setPage(next);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
-  function onNav(next) {
+  function onNav(next: string) {
     if (next === "applications" && appId === "all") setAppId("order-service");
     if (next === "overview" || next === "realtime") setAppId("all");
     navigate(next);

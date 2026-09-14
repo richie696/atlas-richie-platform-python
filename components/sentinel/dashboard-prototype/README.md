@@ -17,7 +17,7 @@
 
 在本目录执行 `npm install`、`npm run dev -- --host 127.0.0.1 --port 4173`。浏览器打开 `http://127.0.0.1:4173/`。页面 hash 可直接定位六个导航，如 `#applications` 或 `#rules`。
 
-`npm run build` 与 `npm run test:sites` 只验证原型构建和静态路由，不构成生产联调验收。
+Dashboard 应用源代码已统一使用 TypeScript：`src/` 仅允许 `.ts` / `.tsx`，并由 `tsconfig.json` 管理编译边界。提交前运行 `npm run typecheck`、`npm run build` 与 `npm run test:sites`；它们只验证类型、原型构建和静态路由，不构成生产联调验收。
 
 原型通过 CNB npm registry 使用已发布的 React 底座：`@richie696/react-framework@0.1.0` 与 `@richie696/react-framework-react@0.1.0`。`ReactFrameworkProvider` 负责注入底座运行时，`useOnlineStatus` 用于展示浏览器在线/离线状态；这些能力只服务于原型交互，不会连接生产服务。
 

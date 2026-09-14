@@ -631,18 +631,18 @@ function resolve(messages, path) {
   return path.split(".").reduce((value, key) => value?.[key], messages);
 }
 
-export function createRuleTranslator(locale) {
+export function createRuleTranslator(locale: string) {
   const messages = MESSAGES[locale] ?? MESSAGES["zh-CN"];
-  return (path, replacements = {}) => {
+  return (path: string, replacements: Record<string, string | number> = {}) => {
     const value = resolve(messages, path);
     if (typeof value !== "string") return path;
     return Object.entries(replacements).reduce(
-      (text, [key, replacement]) => text.replaceAll(`{${key}}`, replacement),
+      (text, [key, replacement]) => text.replaceAll(`{${key}}`, String(replacement)),
       value,
     );
   };
 }
 
-export function ruleMessages(locale) {
+export function ruleMessages(locale: string) {
   return MESSAGES[locale] ?? MESSAGES["zh-CN"];
 }
