@@ -21,6 +21,8 @@
 
 原型通过 CNB npm registry 使用已发布的 React 底座：`@richie696/react-framework@0.1.0` 与 `@richie696/react-framework-react@0.1.0`。`ReactFrameworkProvider` 负责注入底座运行时，`useOnlineStatus` 用于展示浏览器在线/离线状态；这些能力只服务于原型交互，不会连接生产服务。
 
+后续 React 代码的职责划分、底座 API 使用位置与 SCSS 皮肤遵循 `richie696-react-library/docs/REACT_ENGINEERING_STANDARD.md`；现有大文件的逐页拆分清单见 [React 原型迁移对照](docs/REACT_REFACTOR_MAP.md)。
+
 规则页采用 Sentinel 的五类规则字段作为配置输入兼容格式：`FlowRule`、`DegradeRule`、`SystemRule`、`AuthorityRule`、`ParamFlowRule`。同一规则类型的配置中心内容预览为 JSON array；它不包含额外的 `ruleType` 包装字段。`ParamFlowRule` 的 `classType` / `object` 仍须在真实的跨语言 codec 中按目标 runtime 校验，原型不把它承诺为通用类型系统。
 
 规则工作台提供简体中文、English、日文三种语言。表单使用正式业务名称，例如「资源名称 / Resource name / リソース名」；`resource`、`count` 等标准键只在 JSON 配置内容中保留。语言切换不会改变草稿、版本或配置中心内容。公共导航和示例提示也接入同一语言选择；其余五页的完整文案迁移仍是后续原型工作，不能视为全控制台翻译完成。
