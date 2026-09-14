@@ -49,6 +49,12 @@ import {
   createRuleTranslator,
   ruleMessages,
 } from "./ruleI18n";
+import {
+  AccountMaintenancePage,
+  ChangePasswordPage,
+  LoginPage,
+  RoleBindingPage,
+} from "./features/identity/ui/IdentityPages";
 
 const NAV_ICONS = [
   SquaresFour,
@@ -61,10 +67,18 @@ const NAV_ICONS = [
 const ISSUES = ORDER_INSTANCES.filter(
   (item) => item.status !== "healthy",
 ).length;
+const AUXILIARY_PAGES = Object.freeze([
+  "accounts",
+  "roles",
+  "change-password",
+  "login",
+]);
 
 function initialPage() {
   const name = window.location.hash.slice(1);
-  return PAGE_ITEMS.some((item) => item.id === name) ? name : "overview";
+  return PAGE_ITEMS.some((item) => item.id === name) || AUXILIARY_PAGES.includes(name)
+    ? name
+    : "overview";
 }
 
 function Status({ tone = "healthy", children }) {
@@ -2033,7 +2047,7 @@ function System({ navigate }) {
         aside={<Status tone="blue">演示环境 · 无凭证操作</Status>}
       />
       <div className="tabs" role="group" aria-label="系统管理分类">
-        {["连接与采集", "权限与审计", "协议与版本"].map((name) => (
+        {["连接与采集", "权限与审计", "协议与版本", "账户维护", "角色绑定"].map((name) => (
           <button
             type="button"
             aria-pressed={tab === name}
@@ -2123,6 +2137,11 @@ function System({ navigate }) {
               </div>
               <Status tone="blue">只读</Status>
             </div>
+            <div className="identity-shortcuts">
+              <button className="secondary-button" type="button" onClick={() => navigate("accounts")}>账户维护</button>
+              <button className="secondary-button" type="button" onClick={() => navigate("roles")}>角色绑定</button>
+              <button className="link-button" type="button" onClick={() => navigate("login")}>打开登录页 <ArrowRight size={15} /></button>
+            </div>
             <div className="permission">
               <SlidersHorizontal size={23} />
               <div>
@@ -2152,6 +2171,8 @@ function System({ navigate }) {
           </Panel>
         </div>
       )}
+      {tab === "账户维护" && <AccountMaintenancePage navigate={navigate} />}
+      {tab === "角色绑定" && <RoleBindingPage navigate={navigate} />}
       {tab === "协议与版本" && (
         <div className="system-grid">
           <Panel title="协议边界" subtitle="控制面与观测面独立演进。">
@@ -2210,6 +2231,7 @@ export function App() {
   const [appId, setAppId] = useState("all");
   const [range, setRange] = useState("最近 1 小时");
   const [locale, setLocale] = useState("zh-CN");
+  const [identityAccountId, setIdentityAccountId] = useState("account-admin");
   const online = useOnlineStatus();
   const shell = ruleMessages(locale).shell;
   useEffect(() => {
@@ -2218,7 +2240,12 @@ export function App() {
     return () => window.removeEventListener("hashchange", handler);
   }, []);
   function navigate(next, nextApp) {
-    if (nextApp) setAppId(nextApp);
+    if (nextApp && (next === "applications" || next === "overview")) {
+      setAppId(nextApp);
+    }
+    if ((next === "roles" || next === "change-password") && nextApp) {
+      setIdentityAccountId(nextApp);
+    }
     window.location.hash = next;
     setPage(next);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2227,6 +2254,9 @@ export function App() {
     if (next === "applications" && appId === "all") setAppId("order-service");
     if (next === "overview" || next === "realtime") setAppId("all");
     navigate(next);
+  }
+  if (page === "login") {
+    return <LoginPage navigate={navigate} />;
   }
   return (
     <div className="app-shell">
@@ -2273,7 +2303,7 @@ export function App() {
             <i className="live-dot" /> {online ? shell.online : shell.offline}
           </span>
           <span className="clock">2026-09-14 14:32（示例）</span>
-          <span className="avatar">LD</span>
+          <button className="avatar" type="button" onClick={() => navigate("accounts")} aria-label="打开账户维护">LD</button>
         </div>
       </header>
       <div className="demo-banner" role="status">
@@ -2329,6 +2359,9 @@ export function App() {
           />
         )}
         {page === "system" && <System navigate={navigate} />}
+        {page === "accounts" && <AccountMaintenancePage navigate={navigate} />}
+        {page === "roles" && <RoleBindingPage navigate={navigate} selectedAccountId={identityAccountId} />}
+        {page === "change-password" && <ChangePasswordPage navigate={navigate} accountId={identityAccountId} />}
       </main>
       <footer className="footer">
         Atlas Richie Sentinel · Dashboard 设计原型{" "}
