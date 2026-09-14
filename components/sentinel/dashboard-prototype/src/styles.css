@@ -510,6 +510,116 @@ select:focus-visible {
 .login-submit { width: 100%; min-height: 43px; margin-top: 4px; }
 .login-help { align-items: flex-start; gap: 9px; margin-top: 22px; padding-top: 16px; border-top: 1px solid #2b4452; color: #9eb4c1; font-size: 11px; line-height: 1.5; }
 .login-help svg { flex: none; color: var(--blue); }
+.login-setup-link { margin-top: 12px; }
+.setup-page {
+  min-height: 100vh;
+  padding: 36px 24px;
+  background: radial-gradient(circle at 50% -15%, #1b3648 0, transparent 54%), var(--bg);
+}
+.setup-shell {
+  width: min(100%, 1060px);
+  margin: 0 auto;
+  padding: 27px;
+  border: 1px solid #2d4959;
+  border-radius: 10px;
+  background: #142630;
+  box-shadow: 0 20px 55px #050d1470;
+}
+.setup-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #e8f2f8;
+  font-size: 18px;
+  font-weight: 650;
+}
+.setup-brand b { color: var(--blue); }
+.setup-heading { margin: 34px 0 23px; }
+.setup-heading h1 { margin: 6px 0; font-size: 28px; letter-spacing: -0.035em; }
+.setup-heading p { margin: 0; color: #a7bac7; font-size: 13px; }
+.setup-layout {
+  display: grid;
+  grid-template-columns: minmax(210px, .7fr) minmax(0, 1.3fr);
+  gap: 18px;
+}
+.setup-steps {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  margin: 0;
+  padding: 8px;
+  list-style: none;
+  border: 1px solid #2a4655;
+  border-radius: 7px;
+  background: #10212b;
+}
+.setup-steps li {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 9px;
+  padding: 12px 9px;
+  border-radius: 5px;
+  color: #90a6b5;
+}
+.setup-steps li.active { background: #19384a; color: #e4f3fc; }
+.setup-steps li.complete { color: #75d7ae; }
+.setup-steps li > span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid #3d5968;
+  border-radius: 50%;
+  color: #a9c5d5;
+  font-size: 10px;
+  font-weight: 750;
+}
+.setup-steps li.complete > span { border-color: #438d70; color: #65d5a6; }
+.setup-steps b, .setup-steps small { display: block; }
+.setup-steps b { font-size: 12px; }
+.setup-steps small { margin-top: 3px; font-size: 10px; line-height: 1.4; }
+.setup-workspace {
+  min-height: 405px;
+  padding: 21px;
+  border: 1px solid #2a4655;
+  border-radius: 7px;
+  background: #172c38;
+}
+.setup-title {
+  display: flex;
+  gap: 11px;
+  margin-bottom: 20px;
+}
+.setup-title > svg { flex: none; color: var(--blue); }
+.setup-title h2 { margin: 0 0 4px; font-size: 18px; }
+.setup-title p { margin: 0; color: #9fb4c1; font-size: 11px; line-height: 1.5; }
+.setup-choice { display: grid; gap: 9px; margin-bottom: 14px; }
+.setup-choice label {
+  display: flex;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid #345364;
+  border-radius: 5px;
+  color: #dcecf5;
+  cursor: pointer;
+}
+.setup-choice input { accent-color: var(--blue); margin-top: 3px; }
+.setup-choice b, .setup-choice small { display: block; }
+.setup-choice b { font-size: 12px; }
+.setup-choice small { margin-top: 3px; color: #93aab8; font-size: 10px; line-height: 1.45; }
+.setup-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.setup-form-grid label { display: grid; gap: 6px; color: #c5d6df; font-size: 11px; }
+.setup-form-grid input { min-height: 37px; border: 1px solid #49677a; border-radius: 5px; padding: 8px 9px; color: #e9f5fd; background: #203642; font-size: 12px; }
+.setup-form-grid .wide { grid-column: span 2; }
+.setup-local-note { margin-bottom: 15px; padding: 11px; border: 1px solid #35596f; border-radius: 5px; color: #b5d9ed; background: #173344; font-size: 11px; line-height: 1.5; }
+.setup-summary { display: grid; gap: 1px; border: 1px solid #345364; border-radius: 6px; overflow: hidden; }
+.setup-summary div { display: grid; grid-template-columns: 125px 1fr; gap: 10px; padding: 11px 12px; background: #132933; font-size: 11px; }
+.setup-summary div + div { border-top: 1px solid #345364; }
+.setup-summary b { color: #93aab8; }
+.setup-summary span { color: #ddebF3; }
+.setup-actions { display: flex; justify-content: space-between; gap: 10px; margin-top: 24px; }
+.setup-actions button:disabled { cursor: not-allowed; opacity: .45; }
+.setup-back { margin-top: 18px; }
 .status {
   display: inline-flex;
   align-items: center;
@@ -1916,5 +2026,22 @@ select:focus-visible {
   }
   .login-card {
     padding: 24px 20px;
+  }
+  .setup-page {
+    padding: 16px 12px;
+  }
+  .setup-shell {
+    padding: 20px 15px;
+  }
+  .setup-layout,
+  .setup-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .setup-form-grid .wide {
+    grid-column: span 1;
+  }
+  .setup-workspace {
+    min-height: auto;
+    padding: 16px;
   }
 }

@@ -1,6 +1,10 @@
 import { useMemo, useState } from "react";
 import {
   ArrowLeftIcon as ArrowLeft,
+  ArrowRightIcon as ArrowRight,
+  CheckCircleIcon as CheckCircle,
+  CloudCheckIcon as CloudCheck,
+  DatabaseIcon as Database,
   KeyIcon as Key,
   LockKeyIcon as LockKey,
   PlusIcon as Plus,
@@ -8,7 +12,12 @@ import {
   UserCircleIcon as UserCircle,
   UserSwitchIcon as UserSwitch,
 } from "@phosphor-icons/react";
-import { INITIAL_ACCOUNTS, IDENTITY_ROLES, roleFor } from "../model/identityData";
+import {
+  INITIAL_ACCOUNTS,
+  IDENTITY_ROLES,
+  INITIALIZATION_STEPS,
+  roleFor,
+} from "../model/identityData";
 
 function IdentityIntro({ eyebrow, title, description, action }) {
   return (
@@ -194,8 +203,81 @@ export function LoginPage({ navigate }) {
           <label><span>密码</span><input type="password" autoComplete="current-password" value={credentials.password} onChange={(event) => setCredentials({ ...credentials, password: event.target.value })} /></label>
           <button className="primary-button login-submit" type="submit"><LockKey size={17} /> 登录</button>
         </form>
-        <div className="login-help"><UserSwitch size={18} /><span>首次启动？请先在 Python 后台初始化页面设置内置管理员账号。初始化完成前，控制台不会接受默认密码。</span></div>
+        <div className="login-help"><UserSwitch size={18} /><span>首次启动？请通过本系统初始化向导配置存储与内置管理员。初始化完成前，控制台不会接受默认密码。</span></div>
+        <button className="link-button login-setup-link" type="button" onClick={() => navigate("setup")}>打开系统初始化 <ArrowRight size={15} /></button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * First-run setup screen. It models the management service bootstrap only;
+ * inputs stay in component state and are never persisted by this prototype.
+ */
+export function SystemInitializationPage({ navigate }) {
+  const [stepIndex, setStepIndex] = useState(0);
+  const [databaseKind, setDatabaseKind] = useState("postgresql");
+  const [sourceKind, setSourceKind] = useState("nacos");
+  const [notice, setNotice] = useState("");
+  const [admin, setAdmin] = useState({ username: "admin", displayName: "系统管理员", password: "", confirm: "" });
+  const step = INITIALIZATION_STEPS[stepIndex];
+  const isLastStep = stepIndex === INITIALIZATION_STEPS.length - 1;
+
+  const next = () => {
+    if (step.id === "admin") {
+      if (!admin.username.trim() || !admin.displayName.trim() || admin.password.length < 12) {
+        setNotice("请填写管理员信息，并设置至少 12 位的密码。");
+        return;
+      }
+      if (admin.password !== admin.confirm) {
+        setNotice("两次输入的管理员密码不一致。");
+        return;
+      }
+    }
+    setNotice("");
+    setStepIndex((current) => Math.min(current + 1, INITIALIZATION_STEPS.length - 1));
+  };
+
+  const complete = () => {
+    setNotice("演示初始化已完成。真实服务会提交迁移、写入初始化审计并关闭初始化窗口。");
+  };
+
+  return (
+    <div className="setup-page">
+      <section className="setup-shell">
+        <div className="setup-brand"><span className="login-mark" aria-hidden="true">↗</span><span>Atlas Richie <b>Sentinel</b></span></div>
+        <div className="setup-heading"><span className="eyebrow">FIRST-RUN SETUP</span><h1>初始化控制面</h1><p>先建立本系统的持久化基础，再创建内置管理员并登记规则配置中心。</p></div>
+        <div className="setup-layout">
+          <ol className="setup-steps" aria-label="初始化步骤">
+            {INITIALIZATION_STEPS.map((item, index) => <li key={item.id} className={index === stepIndex ? "active" : index < stepIndex ? "complete" : ""}><span>{index < stepIndex ? <CheckCircle size={17} weight="fill" /> : `0${index + 1}`}</span><div><b>{item.label}</b><small>{item.description}</small></div></li>)}
+          </ol>
+          <div className="setup-workspace">
+            {notice && <div className="identity-notice" role="status">{notice}</div>}
+            {step.id === "storage" && <>
+              <div className="setup-title"><Database size={25} /><div><h2>配置系统数据库</h2><p>账户、角色、审计、草稿、规则版本与发布计划需要关系数据库；活动规则仍不直接写入数据库。</p></div></div>
+              <div className="setup-choice"><label><input type="radio" name="database-kind" checked={databaseKind === "postgresql"} onChange={() => setDatabaseKind("postgresql")} /><span><b>PostgreSQL</b><small>生产环境推荐，用于可靠的控制面持久化。</small></span></label><label><input type="radio" name="database-kind" checked={databaseKind === "sqlite"} onChange={() => setDatabaseKind("sqlite")} /><span><b>SQLite</b><small>仅限本地体验或单机开发，不作为生产集群存储。</small></span></label></div>
+              {databaseKind === "postgresql" ? <div className="setup-form-grid"><label>主机<input placeholder="db.internal.example" autoComplete="off" /></label><label>端口<input defaultValue="5432" inputMode="numeric" /></label><label>数据库名<input defaultValue="sentinel_control" autoComplete="off" /></label><label>用户名<input autoComplete="username" /></label><label className="wide">密码<input type="password" autoComplete="new-password" /></label></div> : <div className="setup-local-note">SQLite 数据文件会保存在服务端的受控数据目录中；浏览器不会保存数据库内容。</div>}
+              <button className="secondary-button" type="button" onClick={() => setNotice("演示连接检查通过；真实服务会建立连接、执行迁移并返回 requestId。")}>测试连接并准备数据结构</button>
+            </>}
+            {step.id === "admin" && <>
+              <div className="setup-title"><UserCircle size={25} /><div><h2>创建内置管理员</h2><p>该账号是首个 admin；系统不会生成、展示或保留任何默认密码。</p></div></div>
+              <div className="setup-form-grid"><label>登录名<input autoComplete="username" value={admin.username} onChange={(event) => setAdmin({ ...admin, username: event.target.value })} /></label><label>显示名称<input value={admin.displayName} onChange={(event) => setAdmin({ ...admin, displayName: event.target.value })} /></label><label>管理员密码<input type="password" autoComplete="new-password" value={admin.password} onChange={(event) => setAdmin({ ...admin, password: event.target.value })} /></label><label>确认管理员密码<input type="password" autoComplete="new-password" value={admin.confirm} onChange={(event) => setAdmin({ ...admin, confirm: event.target.value })} /></label></div>
+            </>}
+            {step.id === "sources" && <>
+              <div className="setup-title"><CloudCheck size={25} /><div><h2>登记规则配置中心</h2><p>选择本次部署的首个规则来源；稍后可在系统管理中补充另一个来源。</p></div></div>
+              <div className="setup-choice"><label><input type="radio" name="source-kind" checked={sourceKind === "nacos"} onChange={() => setSourceKind("nacos")} /><span><b>Nacos</b><small>管理服务通过受控写回流程发布完整规则快照。</small></span></label><label><input type="radio" name="source-kind" checked={sourceKind === "consul"} onChange={() => setSourceKind("consul")} /><span><b>Consul</b><small>与 Nacos 同为规则事实来源，不作为账户或审计存储。</small></span></label></div>
+              <div className="setup-form-grid"><label className="wide">服务地址<input placeholder={sourceKind === "nacos" ? "https://nacos.example.com" : "https://consul.example.com"} autoComplete="off" /></label><label>命名空间 / 数据中心<input autoComplete="off" /></label><label>凭证引用<input placeholder="由部署密钥管理系统提供" autoComplete="off" /></label></div>
+            </>}
+            {step.id === "complete" && <>
+              <div className="setup-title"><CheckCircle size={25} /><div><h2>确认并完成</h2><p>完成后，系统写入初始化状态、创建内置管理员并开放登录与控制台 API。</p></div></div>
+              <div className="setup-summary"><div><b>系统存储</b><span>{databaseKind === "postgresql" ? "PostgreSQL（生产推荐）" : "SQLite（本地开发）"}</span></div><div><b>内置账号</b><span>{admin.username || "admin"} · admin</span></div><div><b>规则来源</b><span>{sourceKind === "nacos" ? "Nacos" : "Consul"}</span></div></div>
+              <div className="identity-warning"><LockKey size={18} /> 初始化是一次性受保护操作。生产环境必须由部署侧提供启动密钥或受管密钥，服务端不得以明文文件保存数据库口令。</div>
+            </>}
+            <div className="setup-actions"><button className="secondary-button" type="button" disabled={stepIndex === 0} onClick={() => setStepIndex((current) => Math.max(0, current - 1))}>上一步</button>{isLastStep ? <button className="primary-button" type="button" onClick={complete}>完成初始化</button> : <button className="primary-button" type="button" onClick={next}>下一步 <ArrowRight size={16} /></button>}</div>
+          </div>
+        </div>
+        <button className="link-button setup-back" type="button" onClick={() => navigate("login")}><ArrowLeft size={15} /> 返回登录</button>
+      </section>
     </div>
   );
 }

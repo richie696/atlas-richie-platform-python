@@ -38,6 +38,30 @@ export const INITIAL_ACCOUNTS = Object.freeze([
   },
 ]);
 
+/** Ordered, persisted bootstrap checkpoints; these are not rule-source states. */
+export const INITIALIZATION_STEPS = Object.freeze([
+  {
+    id: "storage",
+    label: "系统存储",
+    description: "验证数据库连接并创建控制面数据结构。",
+  },
+  {
+    id: "admin",
+    label: "内置管理员",
+    description: "创建唯一的首个 admin；系统不提供默认密码。",
+  },
+  {
+    id: "sources",
+    label: "规则来源",
+    description: "登记 Nacos 或 Consul，规则仍由配置中心权威持有。",
+  },
+  {
+    id: "complete",
+    label: "完成初始化",
+    description: "记录初始化结果，开放登录与控制台 API。",
+  },
+]);
+
 export function roleFor(roleId) {
   return IDENTITY_ROLES.find((role) => role.id === roleId) ?? IDENTITY_ROLES[1];
 }

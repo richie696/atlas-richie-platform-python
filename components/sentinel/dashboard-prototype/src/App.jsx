@@ -54,6 +54,7 @@ import {
   ChangePasswordPage,
   LoginPage,
   RoleBindingPage,
+  SystemInitializationPage,
 } from "./features/identity/ui/IdentityPages";
 
 const NAV_ICONS = [
@@ -72,6 +73,7 @@ const AUXILIARY_PAGES = Object.freeze([
   "roles",
   "change-password",
   "login",
+  "setup",
 ]);
 
 function initialPage() {
@@ -2257,6 +2259,9 @@ export function App() {
   }
   if (page === "login") {
     return <LoginPage navigate={navigate} />;
+  }
+  if (page === "setup") {
+    return <SystemInitializationPage navigate={navigate} />;
   }
   return (
     <div className="app-shell">
