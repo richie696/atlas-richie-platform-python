@@ -156,6 +156,27 @@ describe("应用壳导航", () => {
     });
   });
 
+  // 无实例示例数据的应用
+  // --------------------
+  // `hasInstanceSamples` 只对 order-service 为 true（`model/instancePolicy.ts`），
+  // 选另一个应用会走 `hasInstanceSamples === false` 分支。该分支有两句文案：
+  // 页头的「此原型仅有 order-service 的实例示例……」与矩阵上方的
+  // 「下方仍为 order-service 的示例矩阵……」。此前**没有任何断言覆盖**——
+  // 两条都是条件渲染，而所有 applications 用例都固定选 order-service。
+  describe("无实例示例数据的应用", () => {
+    it("换到没有实例数据的应用时给出缺口说明, 而不是伪造空矩阵", async () => {
+      await withPage(async (page) => {
+        await page.goto(`${E2E_BASE_URL}/#/applications?app=payment-service&range=1h`);
+        await page.waitFor(`document.querySelector('.app-hero') !== null`, { label: "应用页" });
+        const hero = await page.text(".alert-hero p");
+        assert.match(hero, /order-service/, "缺口说明应指明只有哪个应用有实例示例数据");
+        // 缺口说明不能替代矩阵：仍渲染 order-service 的示例矩阵，而不是空白。
+        const rows = await page.count(".instance-matrix tbody tr, .identity-table tr, table tr");
+        assert.ok(rows > 0, "矩阵仍应渲染示例数据");
+      });
+    });
+  });
+
   // 权限门禁
   // --------
   // `DASHBOARD_CONTROL_PLANE.md` §2：两个能力可独立授予，缺 `rules:write` 时

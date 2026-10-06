@@ -33,12 +33,26 @@ export type RuleValidationState =
   | { readonly status: "failed"; readonly issues: ReturnType<typeof validateRuleDraft> };
 
 /** 目录条目 + 草稿快照。一条规则在目录和编辑器之间共享同一份内容。 */
+/**
+ * 目录条目的展示摘要。
+ *
+ * 中文
+ * ----
+ * 这里只列**确实被渲染**的字段。曾经还有 `kind`（"流量控制"）与 `status`
+ * （"生效中"）两个字段，它们在界面上零消费——目录的类型列用 `types[ruleType].label`
+ * 从协议值派生，状态列用 `activeLabel`；两处中文字面量于是永远不出现，却让
+ * 「界面上有多少中文」这个问题无法靠读代码回答。
+ *
+ * 同理，`kind` 与 `status` 都不该是数据：规则类型已是 `ruleType`（协议枚举），
+ * 版本状态由 `versions` 区块单独呈现。留在 fixture 里只会让人以为它们参与渲染，
+ * 也让翻译永远漏掉它们。
+ *
+ * `scope` / `threshold` / `provider` / `version` 则**在用**：分别是生效范围示例、
+ * 目录阈值列、配置来源标签与版本号。
+ */
 export interface RuleWorkbenchEntry extends RuleCatalogEntry {
-  /** 展示用摘要。 */
-  readonly kind: string;
   readonly threshold: string;
   readonly scope: string;
-  readonly status: string;
   readonly provider: string;
   readonly version: string;
   /** 写回配置中心的兼容内容。 */

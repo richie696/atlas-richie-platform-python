@@ -62,6 +62,11 @@ const CASES = [
   { name: "overview-single-app", hash: "#/overview?app=order-service&range=1h" },
   { name: "applications", hash: "#/applications?app=order-service&range=1h" },
   { name: "applications-15m", hash: "#/applications?app=order-service&range=15m" },
+  // 只有 order-service 有实例示例数据（`hasInstanceSamples`）。选另一个应用会走
+  // `hasInstanceSamples === false` 分支，那两句文案（`applications.summary.noSamples`
+  // 与 `applications.note.matrixScope`）此前**没有任何用例覆盖**——它们是按条件
+  // 渲染的，而两个 applications 用例都固定选 order-service，永远走不到。
+  { name: "applications-no-samples", hash: "#/applications?app=payment-service&range=1h" },
   { name: "rules", hash: "#/rules?app=order-service&range=1h" },
   // 规则页的类型筛选受控于 URL `view`。五个类型各一个用例 + 非法值回落。
   { name: "rules-filter-flow", hash: "#/rules?app=order-service&range=1h&view=flow" },
