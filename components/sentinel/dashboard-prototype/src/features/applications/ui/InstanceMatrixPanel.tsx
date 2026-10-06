@@ -21,17 +21,18 @@ import { Status } from "../../../shared/ui/Status";
 import { formatInstanceNumber } from "../model/instanceFormat";
 import { isBlockingRateAlert, isUnderResourcePressure } from "../model/instancePolicy";
 import type { HostGroup, InstanceRecord } from "../model/instance";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 
 /** 列顺序即渲染顺序，也决定宿主机表头行的 `colSpan`。 */
 const INSTANCE_MATRIX_HEADS = [
-  "实例 / 宿主机",
-  "状态",
-  "容器 CPU",
-  "容器内存",
-  "HTTP QPS",
-  "RT p95",
-  "请求拦截率",
-  "规则版本",
+  "applications.matrix.head.instance",
+  "applications.matrix.head.status",
+  "applications.matrix.head.containerCpu",
+  "applications.matrix.head.containerMemory",
+  "applications.matrix.head.httpQps",
+  "applications.matrix.head.rtP95",
+  "applications.matrix.head.blockedRate",
+  "applications.matrix.head.ruleVersion",
 ] as const;
 
 export interface InstanceMatrixPanelProps {
@@ -68,8 +69,9 @@ function HostRows({
   setSelectedId: (id: string) => void;
 }) {
   const [open, setOpen] = useState(true);
+  const t = useTranslator();
   return <>
-    <tr className="host-row"><td colSpan={INSTANCE_MATRIX_HEADS.length}><ActionButton type="button" onClick={() => setOpen(!open)}><CaretDown size={14} className={open ? "" : "rotated"} /> {host} <span>({rows.length} 个实例)</span></ActionButton></td></tr>
+    <tr className="host-row"><td colSpan={INSTANCE_MATRIX_HEADS.length}><ActionButton type="button" onClick={() => setOpen(!open)}><CaretDown size={14} className={open ? "" : "rotated"} /> {host} <span>({rows.length}{t("applications.matrix.hostCountUnit")}</span></ActionButton></td></tr>
     {open && rows.map((row) => <tr key={row.id} className={`instance-row ${selectedId === row.id ? "selected" : ""} ${row.status !== "healthy" ? row.status : ""}`} onClick={() => setSelectedId(row.id)}>
       <td><ActionButton type="button" onClick={() => setSelectedId(row.id)}>{row.id}</ActionButton></td>
       <td><Status tone={row.status}>{row.statusLabel}</Status></td>
@@ -89,17 +91,21 @@ export function InstanceMatrixPanel({
   onAnomaliesOnlyChange,
   onSelectInstance,
 }: InstanceMatrixPanelProps) {
+  const t = useTranslator();
   return (
     <Panel
-      title="实例健康矩阵"
-      subtitle={`共 ${instanceCount} 个示例实例，按宿主机分组 · ${anomaliesOnly ? "仅看异常" : "全部"}`}
+      title={t("applications.matrix.title")}
+      subtitle={t("applications.matrix.subtitle", {
+        count: instanceCount,
+        filter: t(anomaliesOnly ? "applications.matrix.anomaliesOnly" : "applications.matrix.all"),
+      })}
       action={
-        <CheckboxField label="仅看异常" checked={anomaliesOnly} onChange={onAnomaliesOnlyChange} className="checkbox" />
+        <CheckboxField label={t("applications.matrix.anomaliesOnly")} checked={anomaliesOnly} onChange={onAnomaliesOnlyChange} className="checkbox" />
       }
       className="instance-panel"
     >
       <Table
-        heads={[...INSTANCE_MATRIX_HEADS]}
+        heads={INSTANCE_MATRIX_HEADS.map((key) => t(key))}
         rows={hosts.map((group) => (
           <HostRows
             key={group.host}

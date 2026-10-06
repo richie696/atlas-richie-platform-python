@@ -20,6 +20,7 @@ import { Filters } from "../../../shared/ui/Filters";
 import { Intro } from "../../../shared/ui/Intro";
 import { LinkButton } from "../../../shared/ui/LinkButton";
 import type { DashboardPageProps } from "../../../shared/types/dashboard";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 import { ROUTE } from "../../../app/router/route.constants";
 import {
   APPLICATION_FIXTURES,
@@ -36,8 +37,8 @@ export function ApplicationsPage({
   setAppId,
   range,
   setRange,
-  locale,
 }: DashboardPageProps) {
+  const t = useTranslator();
   const matrix = useInstanceMatrix({
     applications: APPLICATION_FIXTURES,
     instances: ORDER_INSTANCE_FIXTURES,
@@ -55,8 +56,8 @@ export function ApplicationsPage({
       <div className="application-context">
         <Intro
           eyebrow="APPLICATIONS / INSTANCES"
-          title="应用与实例"
-          description="先比较实例，再按宿主机、容器或进程定位资源压力与流控影响。"
+          title={t("applications.intro.title")}
+          description={t("applications.intro.description")}
         />
         <Filters
           appId={appId}
@@ -76,13 +77,13 @@ export function ApplicationsPage({
             <h2>
               {app.label} ·{" "}
               {hasInstanceSamples
-                ? `${instanceCount} 个实例中 ${anomalyCount} 个资源压力偏高`
+                ? t("applications.summary.anomalyCount", { instanceCount, anomalyCount })
                 : app.stateLabel}
             </h2>
             <p>
               {hasInstanceSamples
-                ? "两个实例出现 CPU 或内存持续高位，建议尽快处理。"
-                : "此原型仅有 order-service 的实例示例，不会伪造其他应用的实例。"}
+                ? t("applications.summary.advice")
+                : t("applications.summary.noSamples")}
             </p>
           </div>
           <ActionButton
@@ -90,31 +91,28 @@ export function ApplicationsPage({
             type="button"
             onClick={() => matrix.setAnomaliesOnly(true)}
           >
-            查看异常实例 <ArrowRight size={16} />
+            {t("applications.action.viewAnomalies")} <ArrowRight size={16} />
           </ActionButton>
         </div>
         <div className="rule-card">
           <span>
-            当前规则版本 <b>{app.version}</b>
+            {t("applications.card.ruleVersion")} <b>{app.version}</b>
           </span>
           <span>
-            配置来源 <b>{app.provider}</b>
+            {t("applications.card.configProvider")} <b>{app.provider}</b>
           </span>
           <span>
-            示例生效{" "}
-            <b>
-              {app.running} / {app.total} 实例
-            </b>
+            {t("applications.card.effective")} {" "}
+            <b>{t("applications.card.instances", { running: app.running, total: app.total })}</b>
           </span>
           <LinkButton onClick={() => navigate(ROUTE.Rules)}>
-            查看规则详情
+            {t("applications.action.viewRuleDetail")}
           </LinkButton>
         </div>
       </div>
       {!hasInstanceSamples && (
         <div className="inline-note">
-          <Info size={16} /> 下方仍为 order-service
-          的示例矩阵，应用筛选不改变这组演示数据。
+          <Info size={16} /> {t("applications.note.matrixScope")}
         </div>
       )}
       <div className="instance-layout">

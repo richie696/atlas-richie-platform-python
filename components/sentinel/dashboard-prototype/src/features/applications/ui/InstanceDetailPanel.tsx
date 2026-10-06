@@ -19,6 +19,8 @@ import { Status } from "../../../shared/ui/Status";
 import { TrendChart as Trend } from "../../../shared/ui/charts/TrendChart";
 import type { MetricPoint } from "../../../shared/types/dashboard";
 import { INSTANCE_SCOPES, type InstanceRecord, type InstanceScope } from "../model/instance";
+import { useTranslator } from "../../../core/i18n/useTranslator";
+import type { Translate } from "../../../core/i18n/types";
 import { isScopeSupported } from "../model/instancePolicy";
 
 /**
@@ -27,17 +29,22 @@ import { isScopeSupported } from "../model/instancePolicy";
  * 文案属于 UI 层，不进协议常量。阶段 1.3 建立统一语言资源后，这里由 `t()` 取代；
  * 层级本身已经是协议值，换语言不会再影响状态判断。
  */
-const SCOPE_LABELS: Readonly<Record<InstanceScope, string>> = Object.freeze({
-  host: "宿主机",
-  container: "容器",
-  process: "进程",
+const SCOPE_LABEL_KEY: Readonly<Record<InstanceScope, string>> = Object.freeze({
+  host: "applications.scope.host",
+  container: "applications.scope.container",
+  process: "applications.scope.process",
 });
 
-/** 状态行文案：已接入的层级标明数据性质，未接入的层级说明缺什么。 */
-function scopeStatusText(scope: InstanceScope): string {
+/**
+ * 状态行文案：已接入的层级标明数据性质，未接入的层级说明缺什么。
+ *
+ * 层级名先翻译再拼句子，而不是把整句当一个键——「{scope}指标 · 演示数据」这类
+ * 模板里嵌语言片段，按整句建键会让每种语言都要复制一遍层级名的翻译。
+ */
+function scopeStatusText(scope: InstanceScope, t: Translate): string {
   return isScopeSupported(scope)
-    ? `${SCOPE_LABELS[scope]}指标 · 演示数据`
-    : `${SCOPE_LABELS[scope]}指标尚无示例数据`;
+    ? t("applications.metrics.demo", { scope: t(SCOPE_LABEL_KEY[scope]) })
+    : t("applications.metrics.empty", { scope: t(SCOPE_LABEL_KEY[scope]) });
 }
 
 export interface InstanceDetailPanelProps {
@@ -57,10 +64,11 @@ export function InstanceDetailPanel({
   onScopeChange,
   onViewRules,
 }: InstanceDetailPanelProps) {
+  const t = useTranslator();
   if (!instance) {
     return (
-      <Panel title="实例详情" subtitle="实例目录为空">
-        <div className="empty">实例目录为空：0</div>
+      <Panel title={t("applications.detail.title")} subtitle={t("applications.detail.emptySubtitle")}>
+        <div className="empty">{t("applications.detail.emptyBody")}</div>
       </Panel>
     );
   }
@@ -68,7 +76,7 @@ export function InstanceDetailPanel({
   return (
     <Panel
       title={instance.id}
-      subtitle={`${instance.host} · container: ${instance.id} · 示例`}
+      subtitle={t("applications.detail.subtitle", { host: instance.host, id: instance.id })}
       action={
         <div className="segments">
           {INSTANCE_SCOPES.map((name) => (
@@ -78,7 +86,7 @@ export function InstanceDetailPanel({
               className={scope === name ? "active" : ""}
               onClick={() => onScopeChange(name)}
             >
-              {SCOPE_LABELS[name]}
+              {t(SCOPE_LABEL_KEY[name])}
             </ActionButton>
           ))}
         </div>
@@ -87,15 +95,15 @@ export function InstanceDetailPanel({
     >
       <div className="detail-status">
         <Status tone={instance.status}>{instance.statusLabel}</Status>
-        <span>{scopeStatusText(scope)}</span>
+        <span>{scopeStatusText(scope, t)}</span>
       </div>
       {isScopeSupported(scope) ? (
         <>
           <h3>
-            CPU / 内存使用率{" "}
+            {t("applications.detail.usage")} {" "}
             <small>
               <i className="dot-blue" /> CPU　
-              <i className="dot-amber" /> 内存
+              <i className="dot-amber" /> {t("applications.detail.memory")}
             </small>
           </h3>
           <Trend
@@ -107,10 +115,10 @@ export function InstanceDetailPanel({
             height={212}
           />
           <h3>
-            HTTP QPS / 请求拦截率
+            {t("applications.detail.http")}
             <small>
               <i className="dot-blue" /> QPS　
-              <i className="dot-red" /> 拦截率
+              <i className="dot-red" /> {t("applications.detail.blockedRate")}
             </small>
           </h3>
           <Trend
@@ -126,13 +134,13 @@ export function InstanceDetailPanel({
       ) : (
         <div className="scope-empty">
           <Info size={20} />{" "}
-          当前原型只提供容器级示例曲线；宿主机和进程指标需接入对应采集源。
+          {t("applications.detail.scopeNote")}
         </div>
       )}
       <div className="detail-rule">
-        <b>当前流控规则</b>
-        <span>QPS 阈值 2,000 · 慢调用比例 20%</span>
-        <LinkButton onClick={onViewRules}>查看规则</LinkButton>
+        <b>{t("applications.detail.currentRule")}</b>
+        <span>{t("applications.detail.ruleThreshold")}</span>
+        <LinkButton onClick={onViewRules}>{t("applications.action.viewRules")}</LinkButton>
       </div>
     </Panel>
   );
