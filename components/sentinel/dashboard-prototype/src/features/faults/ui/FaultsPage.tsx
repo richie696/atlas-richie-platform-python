@@ -35,7 +35,16 @@ export function FaultsPage({ navigate, appId, setAppId, range, setRange, locale 
         eyebrow={t("faults.intro.eyebrow")}
         title={t("faults.intro.title")}
         description={t("faults.intro.description")}
-        aside={<Status tone="critical">{timeline.counts.critical} 个严重事件</Status>}
+        // 刻意写成「数字 + 空格 + 译文」三个子节点，而不是把整句交给一次插值：
+        // Astryx 的 `Badge` 只在 `label` 是**单个非空字符串**时才渲染 `title`
+        // 属性（见 @astryxdesign/core Badge.js 的 `labelTitle`），用于标签被截断时
+        // 让全文仍可达。合成一个字符串会让 Status 突然多出一个 tooltip，
+        // 那是展示行为变化，不是文案迁移。
+        aside={
+          <Status tone="critical">
+            {timeline.counts.critical} {t("faults.summary.criticalUnit")}
+          </Status>
+        }
       />
       <Filters
         appId={appId}

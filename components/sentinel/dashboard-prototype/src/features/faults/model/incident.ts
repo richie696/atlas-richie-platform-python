@@ -25,11 +25,19 @@ export const INCIDENT_SEVERITY = Object.freeze({
 /** {@link INCIDENT_SEVERITY} 的值联合。 */
 export type IncidentSeverity = (typeof INCIDENT_SEVERITY)[keyof typeof INCIDENT_SEVERITY];
 
-/** 严重级别的界面标签。协议值与文案分开维护。 */
-export const SEVERITY_LABEL: Readonly<Record<IncidentSeverity, string>> = Object.freeze({
-  [INCIDENT_SEVERITY.Critical]: "严重",
-  [INCIDENT_SEVERITY.Warning]: "警告",
-  [INCIDENT_SEVERITY.Info]: "信息",
+/**
+ * 严重级别的展示文案**键**。
+ *
+ * 中文
+ * ----
+ * 协议值与文案分开维护。原先这里存的是中文字面量（"严重" / "警告" / "信息"），
+ * 而 `i18n/locales.ts` 里又有一份 `faults.severity.*` 三语键——同一个概念两份
+ * 定义，改一处不会提示另一处已经对不上。收敛成键，译文只存在于语言包。
+ */
+export const SEVERITY_LABEL_KEY: Readonly<Record<IncidentSeverity, string>> = Object.freeze({
+  [INCIDENT_SEVERITY.Critical]: "faults.severity.critical",
+  [INCIDENT_SEVERITY.Warning]: "faults.severity.warning",
+  [INCIDENT_SEVERITY.Info]: "faults.severity.info",
 });
 
 /** 级别筛选的「全部」哨兵值。协议值，不是文案。 */
@@ -46,10 +54,10 @@ export const SEVERITY_FILTER_ORDER: readonly SeverityFilter[] = Object.freeze([
   INCIDENT_SEVERITY.Info,
 ]);
 
-/** 级别筛选项的标签。 */
-export const SEVERITY_FILTER_LABEL: Readonly<Record<SeverityFilter, string>> = Object.freeze({
-  [SEVERITY_FILTER_ALL]: "全部级别",
-  ...SEVERITY_LABEL,
+/** 级别筛选项的展示文案键。 */
+export const SEVERITY_FILTER_LABEL_KEY: Readonly<Record<SeverityFilter, string>> = Object.freeze({
+  [SEVERITY_FILTER_ALL]: "faults.severity.all",
+  ...SEVERITY_LABEL_KEY,
 });
 
 /**
@@ -75,12 +83,12 @@ export const INCIDENT_CATEGORY = Object.freeze({
 /** {@link INCIDENT_CATEGORY} 的值联合。 */
 export type IncidentCategory = (typeof INCIDENT_CATEGORY)[keyof typeof INCIDENT_CATEGORY];
 
-/** 事件类别的界面标签。 */
-export const CATEGORY_LABEL: Readonly<Record<IncidentCategory, string>> = Object.freeze({
-  [INCIDENT_CATEGORY.Resource]: "资源压力",
-  [INCIDENT_CATEGORY.ResponseTime]: "响应时间",
-  [INCIDENT_CATEGORY.RulePublished]: "规则发布",
-  [INCIDENT_CATEGORY.RuleEffective]: "规则生效",
+/** 事件类别的展示文案键。 */
+export const CATEGORY_LABEL_KEY: Readonly<Record<IncidentCategory, string>> = Object.freeze({
+  [INCIDENT_CATEGORY.Resource]: "faults.category.resource",
+  [INCIDENT_CATEGORY.ResponseTime]: "faults.category.responseTime",
+  [INCIDENT_CATEGORY.RulePublished]: "faults.category.rulePublished",
+  [INCIDENT_CATEGORY.RuleEffective]: "faults.category.ruleEffective",
 });
 
 /** 无关联实例时的占位值。配置面事件（例如发布）不属于任何单个实例。 */

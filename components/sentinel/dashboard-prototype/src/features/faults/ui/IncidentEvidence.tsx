@@ -16,7 +16,7 @@ import { LinkButton } from "../../../shared/ui/LinkButton";
 import { Panel } from "../../../shared/ui/Panel";
 import { useTranslator } from "../../../core/i18n/useTranslator";
 import { Status } from "../../../shared/ui/Status";
-import { SEVERITY_LABEL, type IncidentEvent } from "../model/incident";
+import { SEVERITY_LABEL_KEY, type IncidentEvent } from "../model/incident";
 
 export interface IncidentEvidenceProps {
   /** 当前选中的事件；`null` 表示没有可展示的事件。 */
@@ -41,7 +41,7 @@ export function IncidentEvidence({ event, onOpenApplication }: IncidentEvidenceP
       className="event-detail"
     >
       <Status tone={event.severity}>
-        {SEVERITY_LABEL[event.severity]}
+        {t(SEVERITY_LABEL_KEY[event.severity])}
       </Status>
       <h2>{event.title}</h2>
       <div className="key-value">
@@ -57,15 +57,15 @@ export function IncidentEvidence({ event, onOpenApplication }: IncidentEvidenceP
         <b>{event.instanceId}</b>
       </div>
       <div className="divider" />
-      <h3>观测事实</h3>
+      <h3>{t("faults.evidence.observed")}</h3>
       <p>{event.observedFact}</p>
-      <h3>建议下一步</h3>
+      <h3>{t("faults.evidence.suggested")}</h3>
       <p>{event.suggestedAction}</p>
       <div className="inline-note">
         <Info size={16} /> {t("faults.evidence.noCausality")}
       </div>
       <LinkButton onClick={() => onOpenApplication(event.appId)}>
-        查看应用与实例
+        {t("faults.evidence.viewApp")}
       </LinkButton>
     </Panel>
   );

@@ -21,6 +21,7 @@ export const FAULTS_COPY = {
     "faults.intro.description":
       "把压力、响应变慢、拦截升高和规则发布放到同一条证据时间线上。",
     "faults.summary.critical": "严重事件",
+    "faults.summary.criticalUnit": "个严重事件",
     "faults.summary.criticalNote": "需要处理",
     "faults.summary.warning": "警告事件",
     "faults.summary.warningNote": "持续观察",
@@ -46,6 +47,11 @@ export const FAULTS_COPY = {
     "faults.severity.critical": "严重",
     "faults.severity.warning": "警告",
     "faults.severity.info": "信息",
+    "faults.severity.all": "全部级别",
+    "faults.category.resource": "资源压力",
+    "faults.category.responseTime": "响应时间",
+    "faults.category.rulePublished": "规则发布",
+    "faults.category.ruleEffective": "规则生效",
   },
   "en-US": {
     "faults.intro.eyebrow": "DIAGNOSIS / INCIDENTS",
@@ -53,6 +59,7 @@ export const FAULTS_COPY = {
     "faults.intro.description":
       "Put resource pressure, response slowdown, block-rate increases and rule releases on one evidence timeline.",
     "faults.summary.critical": "Critical events",
+    "faults.summary.criticalUnit": "critical events",
     "faults.summary.criticalNote": "Needs action",
     "faults.summary.warning": "Warning events",
     "faults.summary.warningNote": "Keep watching",
@@ -80,6 +87,11 @@ export const FAULTS_COPY = {
     "faults.severity.critical": "Critical",
     "faults.severity.warning": "Warning",
     "faults.severity.info": "Info",
+    "faults.severity.all": "All levels",
+    "faults.category.resource": "Resource pressure",
+    "faults.category.responseTime": "Response time",
+    "faults.category.rulePublished": "Rule published",
+    "faults.category.ruleEffective": "Rule effective",
   },
   "ja-JP": {
     "faults.intro.eyebrow": "DIAGNOSIS / INCIDENTS",
@@ -87,6 +99,7 @@ export const FAULTS_COPY = {
     "faults.intro.description":
       "リソース圧迫、応答劣化、ブロック率の上昇、ルール公開を 1 本の証跡タイムラインにまとめます。",
     "faults.summary.critical": "重大なイベント",
+    "faults.summary.criticalUnit": "件の重大なイベント",
     "faults.summary.criticalNote": "要対応",
     "faults.summary.warning": "警告イベント",
     "faults.summary.warningNote": "継続監視",
@@ -114,5 +127,10 @@ export const FAULTS_COPY = {
     "faults.severity.critical": "重大",
     "faults.severity.warning": "警告",
     "faults.severity.info": "情報",
+    "faults.severity.all": "すべての重要度",
+    "faults.category.resource": "リソース圧迫",
+    "faults.category.responseTime": "応答時間",
+    "faults.category.rulePublished": "ルール公開",
+    "faults.category.ruleEffective": "ルール有効化",
   },
 } as const satisfies LocaleBundle;

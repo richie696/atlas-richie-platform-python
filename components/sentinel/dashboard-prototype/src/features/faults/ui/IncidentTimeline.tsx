@@ -16,8 +16,8 @@ import { Panel } from "../../../shared/ui/Panel";
 import { Select } from "../../../shared/ui/Select";
 import { useTranslator } from "../../../core/i18n/useTranslator";
 import {
-  CATEGORY_LABEL,
-  SEVERITY_FILTER_LABEL,
+  CATEGORY_LABEL_KEY,
+  SEVERITY_FILTER_LABEL_KEY,
   SEVERITY_FILTER_ORDER,
   type IncidentEvent,
   type SeverityFilter,
@@ -51,7 +51,7 @@ export function IncidentTimeline({
           isLabelHidden
           value={severity}
           onChange={onSeverityChange}
-          options={SEVERITY_FILTER_ORDER.map((value) => ({ value, label: SEVERITY_FILTER_LABEL[value] }))}
+          options={SEVERITY_FILTER_ORDER.map((value) => ({ value, label: t(SEVERITY_FILTER_LABEL_KEY[value]) }))}
         />
       }
     >
@@ -68,7 +68,7 @@ export function IncidentTimeline({
             <div>
               <b>{item.title}</b>
               <small>
-                {item.appId} · {CATEGORY_LABEL[item.category]}
+                {item.appId} · {t(CATEGORY_LABEL_KEY[item.category])}
               </small>
             </div>
             <ArrowRight size={16} />
