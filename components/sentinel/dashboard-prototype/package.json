@@ -8,16 +8,20 @@
     "typecheck": "tsc --noEmit",
     "build": "vite build && node scripts/prepare-sites-build.mjs",
     "preview": "vite preview",
-    "test:sites": "node --test tests/sites-worker.test.mjs"
+    "test:sites": "node --test tests/sites-worker.test.mjs",
+    "test:e2e": "node --check tests/e2e/app.e2e.test.mjs && node --check tests/e2e/cdp.mjs && node --test --test-concurrency=1 tests/e2e/app.e2e.test.mjs"
   },
   "dependencies": {
+    "@astryxdesign/core": "0.6.1",
+    "@astryxdesign/theme-neutral": "0.6.1",
+    "@nivo/line": "^0.99.0",
     "@phosphor-icons/react": "^2.1.10",
-    "@richie696/react-framework": "0.1.0",
-    "@richie696/react-framework-react": "0.1.0",
+    "@richie696/react-framework": "^1.0.1",
+    "@richie696/react-framework-react": "^1.0.1",
+    "@stylexjs/stylex": "0.19.0",
     "@vitejs/plugin-react": "5.0.4",
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "recharts": "^3.10.1",
     "vite": "6.4.2"
   },
   "devDependencies": {
