@@ -116,6 +116,32 @@ const ACCEPT_RENDER = process.env.ACCEPT_RENDER
   : new Set();
 
 /**
+ * 声明接受某个用例的 **DOM 变化**。
+ *
+ * 中文
+ * ----
+ * DOM 等价是本工具的主硬约束，渲染 diff 只是附加信号。因此有意的结构或文案变更
+ * （例如登录页加一句演示账号说明）必须能被显式记录，而不是靠「换个基线目录」
+ * 让它变绿——后者是静默的，而静默重新基线化会让人以为这次变更从未发生。
+ *
+ * **必须同时给 `DOM_CHANGE_REASON`**，否则直接报错退出：接受一个自己说不出原因的
+ * DOM 变化，和不接受它的差别只剩下一个绿色输出。
+ */
+const ACCEPT_DOM = process.env.ACCEPT_DOM
+  ? new Set(process.env.ACCEPT_DOM.split(",").map((item) => item.trim()).filter(Boolean))
+  : new Set();
+
+/** 接受 DOM 变化时必须给出的原因，会打印在输出里。 */
+const DOM_CHANGE_REASON = process.env.DOM_CHANGE_REASON ?? "";
+
+if (ACCEPT_DOM.size > 0 && !DOM_CHANGE_REASON.trim()) {
+  throw new Error(
+    "ACCEPT_DOM 需要同时提供 DOM_CHANGE_REASON：接受一个说不出原因的 DOM 变化，" +
+      "与不接受它只差一个绿色输出。",
+  );
+}
+
+/**
  * 渲染容差。可用 `TOLERANCE_RATIO` / `TOLERANCE_MAX_DELTA` 覆盖。
  *
  * 默认值来自实测：跨进程 Chrome 捕获的抗锯齿抖动上限约 0.0077% 像素 / 通道差 44；
@@ -334,7 +360,9 @@ function compare(baseDir, newDir) {
     const baseline = readFileSync(baseHtml, "utf8");
     const candidate = readFileSync(newHtml, "utf8");
     const domOk = baseline === candidate;
+    const domAccepted = !domOk && ACCEPT_DOM.has(name);
     if (domOk) domEqual += 1;
+    else if (domAccepted) accepted.push(name);
     else failures.push({ name, reason: "DOM 不等价", ...firstDifference(baseline, candidate) });
 
     // DOM 相等但渲染不同 = 纯 CSS 层回归。这是最容易漏掉的一类。
@@ -348,7 +376,8 @@ function compare(baseDir, newDir) {
     }
 
     process.stdout.write(
-      `  ${domOk && !render.failure ? "✓" : "✗"} ${name.padEnd(24)} DOM ${domOk ? "等价" : "不等价"} · ${render.state}\n`,
+      `  ${(domOk || domAccepted) && !render.failure ? "✓" : "✗"} ${name.padEnd(24)} ` +
+        `DOM ${domOk ? "等价" : domAccepted ? "变化(已声明接受)" : "不等价"} · ${render.state}\n`,
     );
   }
 
