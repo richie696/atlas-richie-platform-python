@@ -4,7 +4,7 @@
   "realtime.action.viewFaults": "查看关联故障",
   "realtime.bar.liveHint": "光标跟随实时数据流",
   "realtime.bar.replayHint": "光标移动仅演示交互，未连接实时数据流",
-  "realtime.bar.replayRange": "{range} · 示例曲线回放",
+  "realtime.bar.replayRange": "{{range}} · 示例曲线回放",
   "realtime.chart.blocked": "请求拦截率",
   "realtime.chart.cpu": "CPU 与内存使用率",
   "realtime.chart.qps": "HTTP QPS",

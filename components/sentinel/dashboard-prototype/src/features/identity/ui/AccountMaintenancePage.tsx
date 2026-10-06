@@ -14,7 +14,7 @@
  * 留在最近的组件里，不进 store。
  */
 import { useState } from "react";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import {
   PlusIcon as Plus,
   ShieldCheckIcon as ShieldCheck,
@@ -44,7 +44,7 @@ import { IdentityPanel } from "./components/IdentityPanel";
 loadAccounts(INITIAL_ACCOUNTS);
 
 export function AccountMaintenancePage({ navigate }: { navigate: Navigate }) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   const { accounts, add, setStatus } = useAccounts();
   const [showCreate, setShowCreate] = useState(false);
   const [notice, setNotice] = useState("");

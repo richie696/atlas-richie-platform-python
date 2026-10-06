@@ -19,12 +19,14 @@
     "@astryxdesign/theme-neutral": "0.6.1",
     "@nivo/line": "^0.99.0",
     "@phosphor-icons/react": "^2.1.10",
-    "@richie696/react-framework": "^1.0.1",
-    "@richie696/react-framework-react": "^1.0.1",
+    "@richie696/react-framework": "^1.0.2",
+    "@richie696/react-framework-react": "^1.0.2",
     "@stylexjs/stylex": "0.19.0",
     "@vitejs/plugin-react": "5.0.4",
+    "i18next": "^26.4.2",
     "react": "19.2.0",
     "react-dom": "19.2.0",
+    "react-i18next": "^17.0.15",
     "vite": "6.4.2"
   },
   "devDependencies": {

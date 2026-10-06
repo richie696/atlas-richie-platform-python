@@ -4,7 +4,7 @@
   "realtime.action.viewFaults": "View related incidents",
   "realtime.bar.liveHint": "The cursor follows the live data stream",
   "realtime.bar.replayHint": "Cursor movement only demonstrates the interaction; no live data stream is connected",
-  "realtime.bar.replayRange": "{range} · sample curve replay",
+  "realtime.bar.replayRange": "{{range}} · sample curve replay",
   "realtime.chart.blocked": "Request block rate",
   "realtime.chart.cpu": "CPU and memory usage",
   "realtime.chart.qps": "HTTP QPS",

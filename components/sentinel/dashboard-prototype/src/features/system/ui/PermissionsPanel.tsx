@@ -28,7 +28,7 @@ import {
   VIEWER_PERMISSION,
   type PermissionDeclaration,
 } from "../model/systemStatus";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 
 /** 角色 id → 图标。图标是呈现细节，留在 UI 层。 */
 const PERMISSION_ICONS: Readonly<Record<PermissionDeclaration["id"], typeof ShieldCheck>> =
@@ -48,7 +48,7 @@ const PERMISSION_ICONS: Readonly<Record<PermissionDeclaration["id"], typeof Shie
 const PERMISSION_HINT = "system.permissions.grantHint";
 
 export function PermissionsPanel() {
-  const t = useTranslator();
+  const { t } = useTranslation();
   const ViewerIcon = PERMISSION_ICONS[VIEWER_PERMISSION.id];
   const MaintainerIcon = PERMISSION_ICONS[RULE_MAINTAINER_PERMISSION.id];
 

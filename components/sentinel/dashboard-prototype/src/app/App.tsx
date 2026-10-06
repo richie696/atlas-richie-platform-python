@@ -4,8 +4,8 @@ import { useOnlineStatus } from "@richie696/react-framework-react";
 
 import { ActionButton } from "../shared/ui/ActionButton";
 import { Select } from "../shared/ui/Select";
-import { DASHBOARD_LOCALES } from "../core/i18n/locales";
-import { useTranslator } from "../core/i18n/useTranslator";
+import { LOCALE_OPTIONS } from "./i18n/locales";
+import { useTranslation } from "react-i18next";
 import {
   AccountMaintenancePage,
   ChangePasswordPage,
@@ -25,7 +25,7 @@ import { navigationItemsWithIcons } from "./router/navigation";
 import type { Navigate } from "../shared/types/dashboard";
 import { ROUTE, type RouteId, type TimeRangeId } from "./router/route.constants";
 import { useHashRoute } from "./router/useHashRoute";
-import { useLocale, useLocaleSetter } from "../core/i18n/useTranslator";
+import { useLocale, useLocaleSetter } from "./i18n/locales";
 
 /**
  * 应用装配边界。
@@ -115,7 +115,7 @@ export function App() {
   const locale = useLocale();
   const setLocale = useLocaleSetter();
   const online = useOnlineStatus();
-  const t = useTranslator();
+  const { t } = useTranslation();
 
   const { route: currentRoute, navigate, appId, setAppId, range, setRange, accountId, view } = route;
 
@@ -158,7 +158,7 @@ export function App() {
             isLabelHidden
             value={locale}
             onChange={setLocale}
-            options={DASHBOARD_LOCALES.map((item) => ({ value: item.code, label: item.label }))}
+            options={LOCALE_OPTIONS.map((item) => ({ value: item.code, label: item.label }))}
             className="locale-selector"
           />
         </div>

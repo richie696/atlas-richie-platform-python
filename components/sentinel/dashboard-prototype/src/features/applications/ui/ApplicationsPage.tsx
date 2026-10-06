@@ -20,7 +20,7 @@ import { Filters } from "../../../shared/ui/Filters";
 import { Intro } from "../../../shared/ui/Intro";
 import { LinkButton } from "../../../shared/ui/LinkButton";
 import type { DashboardPageProps } from "../../../shared/types/dashboard";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import { ROUTE } from "../../../app/router/route.constants";
 import {
   APPLICATION_FIXTURES,
@@ -38,7 +38,7 @@ export function ApplicationsPage({
   range,
   setRange,
 }: DashboardPageProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   const matrix = useInstanceMatrix({
     applications: APPLICATION_FIXTURES,
     instances: ORDER_INSTANCE_FIXTURES,

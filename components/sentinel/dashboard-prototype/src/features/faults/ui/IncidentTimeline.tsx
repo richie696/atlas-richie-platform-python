@@ -14,7 +14,7 @@ import { ArrowRightIcon as ArrowRight } from "@phosphor-icons/react";
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { Panel } from "../../../shared/ui/Panel";
 import { Select } from "../../../shared/ui/Select";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import {
   CATEGORY_LABEL_KEY,
   SEVERITY_FILTER_LABEL_KEY,
@@ -40,7 +40,7 @@ export function IncidentTimeline({
   onSeverityChange,
   onSelect,
 }: IncidentTimelineProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   return (
     <Panel
       title={t("faults.timeline.title")}

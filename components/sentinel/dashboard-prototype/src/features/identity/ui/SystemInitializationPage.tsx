@@ -18,7 +18,7 @@
  * `#/setup` 深链重定向到登录页（`REWRITE_PLAN` §4.7）。本页没有「返回登录」入口。
  */
 import { CheckCircleIcon as CheckCircle, CloudCheckIcon as CloudCheck, DatabaseIcon as Database, ArrowRightIcon as ArrowRight, LockKeyIcon as LockKey, UserCircleIcon as UserCircle } from "@phosphor-icons/react";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { TextField } from "../../../shared/ui/TextField";
@@ -38,7 +38,7 @@ import { useSetupFlow } from "../state/useSetupFlow";
  * an incomplete bootstrap phase; after success, the parent redirects to login.
  */
 export function SystemInitializationPage({ onInitialized }: { onInitialized: () => void }) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   const flow = useSetupFlow();
   const { draft, selectedDatabase, step, stepIndex, isLastStep } = flow;
   const notice =

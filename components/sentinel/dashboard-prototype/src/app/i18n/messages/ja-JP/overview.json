@@ -1,6 +1,6 @@
 {
-  "overview.attention.appsRunning": "{count} 個のアプリケーションが稼働中、",
-  "overview.attention.needsAttention": "{count} 個が要注目",
+  "overview.attention.appsRunning": "{{count}} 個のアプリケーションが稼働中、",
+  "overview.attention.needsAttention": "{{count}} 個が要注目",
   "overview.attention.viewApps": "異常アプリケーションを表示",
   "overview.infra.component.ruleDelivery": "ルールバージョン配信",
   "overview.infra.demoOnly": "すべてデモ状態",
@@ -24,7 +24,7 @@
   "overview.table.health.critical": "リソース圧迫",
   "overview.table.health.healthy": "正常",
   "overview.table.health.warning": "CPU 高め",
-  "overview.table.note": "デモ一覧は {shown} / {total} 個のアプリケーションを表示しています。",
+  "overview.table.note": "デモ一覧は {{shown}} / {{total}} 個のアプリケーションを表示しています。",
   "overview.table.subtitle": "アプリケーションごとに集約した主要指標です。クリックでインスタンス一覧へ移動します。",
   "overview.table.title": "アプリケーション稼働状況",
   "overview.table.viewAll": "すべてのアプリケーションを表示",
@@ -36,5 +36,5 @@
   "overview.trend.sharedWindow": "両グラフは同じ時間範囲を使用します。青い破線はルールリリースの例を示します。",
   "overview.trend.title": "全体のトラフィックと防御傾向",
   "overview.trend.tpsNote": "TPS は未連携 · QPS とは混合しません",
-  "overview.trend.windowExcludesRelease": "このウィンドウには 14:02 のリリースは含まれません。{longer}に切替えると前後を比較できます。"
+  "overview.trend.windowExcludesRelease": "このウィンドウには 14:02 のリリースは含まれません。{{longer}}に切替えると前後を比較できます。"
 }

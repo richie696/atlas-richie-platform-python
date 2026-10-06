@@ -23,7 +23,7 @@ import {
   type ApplicationSummary,
   type FleetAttention,
 } from "../model/overview";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import type { Navigate } from "../../../shared/types/dashboard";
 
 export interface ApplicationTableProps {
@@ -41,7 +41,7 @@ export function ApplicationTable({
   appId,
   navigate,
 }: ApplicationTableProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   return (
     <Panel
       title={t("overview.table.title")}

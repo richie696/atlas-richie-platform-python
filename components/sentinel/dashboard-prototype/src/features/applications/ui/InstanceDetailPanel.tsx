@@ -11,6 +11,7 @@
  * 两处 JSX 里。
  */
 import { InfoIcon as Info } from "@phosphor-icons/react";
+import type { Translate } from "../../../app/i18n/types";
 
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { LinkButton } from "../../../shared/ui/LinkButton";
@@ -19,8 +20,8 @@ import { Status } from "../../../shared/ui/Status";
 import { TrendChart as Trend } from "../../../shared/ui/charts/TrendChart";
 import type { MetricPoint } from "../../../shared/types/dashboard";
 import { INSTANCE_SCOPES, type InstanceRecord, type InstanceScope } from "../model/instance";
-import { useTranslator } from "../../../core/i18n/useTranslator";
-import type { Translate } from "../../../core/i18n/types";
+import { useTranslation } from "react-i18next";
+
 import { isScopeSupported } from "../model/instancePolicy";
 
 /**
@@ -64,7 +65,7 @@ export function InstanceDetailPanel({
   onScopeChange,
   onViewRules,
 }: InstanceDetailPanelProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   if (!instance) {
     return (
       <Panel title={t("applications.detail.title")} subtitle={t("applications.detail.emptySubtitle")}>

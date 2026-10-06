@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { useTranslator } from "../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import {
   ALL_APPLICATIONS,
   TIME_RANGES,
@@ -68,7 +68,7 @@ export function Filters({
   showRange = true,
   labels,
 }: FiltersProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   const shellLabels = {
     environment: t("shell.filter.environment"),
     production: t("shell.filter.production"),

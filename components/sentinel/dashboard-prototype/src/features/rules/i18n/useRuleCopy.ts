@@ -18,9 +18,10 @@
  * 译文全部来自 `useTranslator()`，本文件不含任何字面量。
  */
 import { useMemo } from "react";
+import type { Translate } from "../../../app/i18n/types";
 
-import type { Translate } from "../../../core/i18n/types";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+
+import { useTranslation } from "react-i18next";
 import { RULE_KINDS, RULE_SCOPE, type RuleKind } from "../model/ruleKinds";
 import { RULE_FIELD_KEYS } from "../model/ruleMessages";
 import type {
@@ -194,7 +195,7 @@ function buildMessages(t: Translate): RuleWorkbenchMessages {
 
 /** 规则工作台文案。结构在 locale 变化时才重建。 */
 export function useRuleCopy(): RuleCopy {
-  const t = useTranslator();
+  const { t } = useTranslation();
   const messages = useMemo(() => buildMessages(t), [t]);
   return { t, messages };
 }

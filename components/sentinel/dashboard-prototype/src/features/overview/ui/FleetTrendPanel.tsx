@@ -18,7 +18,7 @@
 import { Panel } from "../../../shared/ui/Panel";
 import { TrendChart as Trend } from "../../../shared/ui/charts/TrendChart";
 import { TIME_RANGE, TIME_RANGE_LABEL_KEY } from "../../../app/router/route.constants";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import {
   isShortWindow,
   TREND_SUBTITLE_KEYS,
@@ -33,7 +33,7 @@ export interface FleetTrendPanelProps {
 }
 
 export function FleetTrendPanel({ trend, window }: FleetTrendPanelProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   const shortWindow = isShortWindow(window);
   return (
     <Panel

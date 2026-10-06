@@ -12,7 +12,7 @@
  * 的值域由 `draft.roleId` 推出 `IdentityRoleId`。
  */
 import { useId, useState, type FormEvent } from "react";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { DialogFrame } from "../../../shared/ui/DialogFrame";
 import { Select } from "../../../shared/ui/Select";
@@ -41,7 +41,7 @@ export function AccountCreateDialog({
   onCreate,
   onValidationError,
 }: AccountCreateDialogProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   const formId = useId();
   const [draft, setDraft] = useState<AccountCreateForm>(EMPTY_DRAFT);
 

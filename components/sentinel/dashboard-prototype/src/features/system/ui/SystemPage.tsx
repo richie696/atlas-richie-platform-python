@@ -31,7 +31,7 @@ import {
   resolveSystemTab,
   type SystemTab,
 } from "../model/systemStatus";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import { CONNECTIONS, CONNECTION_SUMMARY_CARDS } from "../fixtures/systemFixtures";
 import { ConnectionPanel } from "./ConnectionPanel";
 import { PermissionsPanel } from "./PermissionsPanel";
@@ -46,7 +46,7 @@ export interface SystemPageProps {
 
 /** Connection, protocol, permission and identity administration workspace. */
 export function SystemPage({ navigate, view }: SystemPageProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   // 受控：tab 不再是本组件的 state，唯一来源是 URL。切换 = 写回 URL。
   const tab: SystemTab = resolveSystemTab(view);
   const selectTab = (next: SystemTab) => {

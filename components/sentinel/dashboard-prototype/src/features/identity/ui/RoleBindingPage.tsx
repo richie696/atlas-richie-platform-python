@@ -18,7 +18,7 @@
  * 不在页面里另存一份。
  */
 import { useState } from "react";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import {
   ArrowLeftIcon as ArrowLeft,
   ShieldCheckIcon as ShieldCheck,
@@ -44,7 +44,7 @@ loadAccounts(INITIAL_ACCOUNTS);
 const DEFAULT_ACCOUNT_ID = "account-admin";
 
 export function RoleBindingPage({ navigate, selectedAccountId = DEFAULT_ACCOUNT_ID }: { navigate: Navigate; selectedAccountId?: string }) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   const { accounts, setRole } = useAccounts();
   const [accountId, setAccountId] = useState(selectedAccountId);
   const selected = accounts.find((account) => account.id === accountId) ?? accounts[0];

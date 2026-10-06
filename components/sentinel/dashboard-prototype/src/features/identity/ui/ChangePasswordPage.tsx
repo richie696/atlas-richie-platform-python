@@ -13,7 +13,7 @@
  * 打开时也能显示正确的用户名。
  */
 import { useState, type FormEvent } from "react";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import {
   ArrowLeftIcon as ArrowLeft,
   KeyIcon as Key,
@@ -36,7 +36,7 @@ loadAccounts(INITIAL_ACCOUNTS);
 const DEFAULT_ACCOUNT_ID = "account-admin";
 
 export function ChangePasswordPage({ navigate, accountId = DEFAULT_ACCOUNT_ID }: { navigate: Navigate; accountId?: string }) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   const { accounts } = useAccounts();
   const account = accounts.find((item) => item.id === accountId) ?? accounts[0];
   const form = usePasswordForm();

@@ -17,7 +17,7 @@ import { PauseIcon as Pause, PlayIcon as Play } from "@phosphor-icons/react";
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import type { TimeRangeId } from "../../../app/router/route.constants";
 import type { StreamStatus } from "../model/realtime";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 
 /** 已接入采样器时的游标说明。接入前不会出现。 */
 const LIVE_STREAM_HINT = "realtime.bar.liveHint";
@@ -33,7 +33,7 @@ export interface StreamStatusBarProps {
 }
 
 export function StreamStatusBar({ range, status, onToggle }: StreamStatusBarProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   return (
     <div className="monitor-bar">
       <div>

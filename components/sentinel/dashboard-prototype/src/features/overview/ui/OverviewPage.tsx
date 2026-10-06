@@ -28,7 +28,7 @@ import {
 import { Filters } from "../../../shared/ui/Filters";
 import { Intro } from "../../../shared/ui/Intro";
 import type { DashboardPageProps } from "../../../shared/types/dashboard";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import {
   APPLICATION_SUMMARIES,
   FLEET_ATTENTION,
@@ -51,7 +51,7 @@ export function OverviewPage({
   range,
   setRange,
 }: DashboardPageProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   const overview = useFleetOverview({
     appId,
     range,
@@ -112,7 +112,7 @@ export function OverviewPage({
  * （界面文案）。共用一条路径会让其中一个永远不跟随语言切换。
  */
 function infraItemBody(item: InfraStatus) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   if (item.component === "config-center") {
     return (
       <>
@@ -147,7 +147,7 @@ function infraItemKey(item: InfraStatus): string {
  * 基础组件与规则下发状态卡片（`overview-top` 行的第二格）。
  */
 function InfraStatusCard({ items }: { readonly items: readonly InfraStatus[] }) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   return (
     <div className="infra-card">
       <div className="card-heading">

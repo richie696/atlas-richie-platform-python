@@ -8,7 +8,7 @@ import {
   type ChartSeriesColor,
 } from "./chartTheme";
 
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import type { MetricKey, MetricPoint } from "../../types/dashboard";
 
 export type TrendDomain = [string | number, string | number];
@@ -50,7 +50,7 @@ export function TrendChart({
   height = 170,
   domain,
 }: TrendChartProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   // 主题与序列色都由 CSS token 解析。memo 一次即可：Nivo 在 theme 变化时会重算整套
   // 刻度，没必要每帧新建对象。
   const theme = useMemo(() => buildChartTheme(), []);

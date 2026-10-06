@@ -14,7 +14,7 @@ import { useMemo } from "react";
 import { InfoIcon as Info } from "@phosphor-icons/react";
 
 import { ALL_APPLICATIONS, ROUTE } from "../../../app/router/route.constants";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import { Filters } from "../../../shared/ui/Filters";
 import { Intro } from "../../../shared/ui/Intro";
 import { LinkButton } from "../../../shared/ui/LinkButton";
@@ -55,7 +55,7 @@ const STREAM_MODE_LABEL_KEY: Readonly<Record<StreamMode, string>> = Object.freez
 
 /** Synchronized telemetry charts for the selected application and time range. */
 export function RealtimePage({ navigate, appId, setAppId, range, setRange }: DashboardPageProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   const trend = useMemo(() => seriesForRange(FLEET_TREND, range), [range]);
   const series = useRealtimeSeries(trend);
   return (

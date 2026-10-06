@@ -13,7 +13,7 @@
  * 页面不套应用壳：没有导航、没有全局筛选，因此也不展示「示例回放」横幅。
  */
 import { useState, type FormEvent } from "react";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import { LockKeyIcon as LockKey } from "@phosphor-icons/react";
 
 import { ActionButton } from "../../../shared/ui/ActionButton";
@@ -34,7 +34,7 @@ function ChartLineUpIcon() {
 export function LoginPage({ navigate }: { navigate: Navigate }) {
   const [credentials, setCredentials] = useState<LoginCredentials>(EMPTY_CREDENTIALS);
   const [message, setMessage] = useState("");
-  const t = useTranslator();
+  const { t } = useTranslation();
   const setRole = useSessionRoleSetter();
 
   const submit = (event: FormEvent<HTMLFormElement>) => {

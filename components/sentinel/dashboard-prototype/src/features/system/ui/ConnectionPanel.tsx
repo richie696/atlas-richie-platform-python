@@ -26,7 +26,7 @@ import {
   type ConnectionStatus,
   type ConnectionSummaryCard,
 } from "../model/systemStatus";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 
 export interface ConnectionPanelProps {
   readonly cards: readonly ConnectionSummaryCard[];
@@ -35,7 +35,7 @@ export interface ConnectionPanelProps {
 }
 
 export function ConnectionPanel({ cards, connections, navigate }: ConnectionPanelProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   return (
     <>
       <div className="number-grid">

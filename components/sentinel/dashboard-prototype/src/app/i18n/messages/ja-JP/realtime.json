@@ -4,7 +4,7 @@
   "realtime.action.viewFaults": "関連する障害を表示",
   "realtime.bar.liveHint": "カーソルはリアルタイムデータストリームに追従します",
   "realtime.bar.replayHint": "カーソル移動は操作のデモンストレーションのみで、リアルタイムデータストリームは接続されていません",
-  "realtime.bar.replayRange": "{range} · サンプル曲線再生",
+  "realtime.bar.replayRange": "{{range}} · サンプル曲線再生",
   "realtime.chart.blocked": "リクエスト遮断率",
   "realtime.chart.cpu": "CPU とメモリ使用率",
   "realtime.chart.qps": "HTTP QPS",

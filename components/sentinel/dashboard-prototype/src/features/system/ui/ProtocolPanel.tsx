@@ -20,7 +20,7 @@ import {
   PROTOCOL_BOUNDARIES,
   type ProtocolBoundaryId,
 } from "../model/systemStatus";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 
 /** 边界 id → 图标。图标是呈现细节，留在 UI 层。 */
 const PROTOCOL_ICONS: Readonly<Record<ProtocolBoundaryId, typeof Activity>> = Object.freeze({
@@ -30,7 +30,7 @@ const PROTOCOL_ICONS: Readonly<Record<ProtocolBoundaryId, typeof Activity>> = Ob
 });
 
 export function ProtocolPanel() {
-  const t = useTranslator();
+  const { t } = useTranslation();
   return (
     <div className="system-grid">
       <Panel

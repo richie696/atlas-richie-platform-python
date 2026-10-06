@@ -14,7 +14,7 @@ import { InfoIcon as Info } from "@phosphor-icons/react";
 
 import { LinkButton } from "../../../shared/ui/LinkButton";
 import { Panel } from "../../../shared/ui/Panel";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import { Status } from "../../../shared/ui/Status";
 import { SEVERITY_LABEL_KEY, type IncidentEvent } from "../model/incident";
 
@@ -26,7 +26,7 @@ export interface IncidentEvidenceProps {
 }
 
 export function IncidentEvidence({ event, onOpenApplication }: IncidentEvidenceProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   if (!event) {
     return (
       <Panel title={t("faults.evidence.title")} subtitle={t("faults.evidence.emptySubtitle")}>

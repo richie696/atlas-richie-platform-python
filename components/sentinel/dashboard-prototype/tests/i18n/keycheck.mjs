@@ -3,7 +3,7 @@
  *
  * 中文
  * ----
- * 文案放在 `messages/<locale>/<namespace>.json` 换来的是「翻译者不用碰代码」，
+ * 文案放在 `app/i18n/messages/<locale>/<namespace>.json` 换来的是「翻译者不用碰代码」，
  * 代价是失去编译期检查——`t("ovrview.table.title")` 拼错不会报错，只会在页面上
  * 显示成键本身。这个脚本把那条检查补回来。
  *
@@ -38,7 +38,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const SRC = "src";
-const MESSAGES = join(SRC, "core/i18n/messages");
+const MESSAGES = join(SRC, "app/i18n/messages");
 const LOCALES = ["zh-CN", "en-US", "ja-JP"];
 
 /**

@@ -21,7 +21,7 @@ import { Status } from "../../../shared/ui/Status";
 import { formatInstanceNumber } from "../model/instanceFormat";
 import { isBlockingRateAlert, isUnderResourcePressure } from "../model/instancePolicy";
 import type { HostGroup, InstanceRecord } from "../model/instance";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 
 /** 列顺序即渲染顺序，也决定宿主机表头行的 `colSpan`。 */
 const INSTANCE_MATRIX_HEADS = [
@@ -69,7 +69,7 @@ function HostRows({
   setSelectedId: (id: string) => void;
 }) {
   const [open, setOpen] = useState(true);
-  const t = useTranslator();
+  const { t } = useTranslation();
   return <>
     <tr className="host-row"><td colSpan={INSTANCE_MATRIX_HEADS.length}><ActionButton type="button" onClick={() => setOpen(!open)}><CaretDown size={14} className={open ? "" : "rotated"} /> {host} <span>({rows.length}{t("applications.matrix.hostCountUnit")}</span></ActionButton></td></tr>
     {open && rows.map((row) => <tr key={row.id} className={`instance-row ${selectedId === row.id ? "selected" : ""} ${row.status !== "healthy" ? row.status : ""}`} onClick={() => setSelectedId(row.id)}>
@@ -91,7 +91,7 @@ export function InstanceMatrixPanel({
   onAnomaliesOnlyChange,
   onSelectInstance,
 }: InstanceMatrixPanelProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   return (
     <Panel
       title={t("applications.matrix.title")}

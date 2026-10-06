@@ -15,7 +15,7 @@ import { ArrowRightIcon as ArrowRight, WarningIcon as Warning } from "@phosphor-
 
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { ROUTE } from "../../../app/router/route.constants";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import type { Navigate } from "../../../shared/types/dashboard";
 import type { FleetAttention } from "../model/overview";
 
@@ -27,7 +27,7 @@ export interface AttentionHeroProps {
 }
 
 export function AttentionHero({ attention, appId, navigate }: AttentionHeroProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   return (
     <div className="alert-hero">
       <span className="alert-icon">

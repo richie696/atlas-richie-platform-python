@@ -19,7 +19,7 @@ import { Intro } from "../../../shared/ui/Intro";
 import { NumberCard } from "../../../shared/ui/NumberCard";
 import { Status } from "../../../shared/ui/Status";
 import type { DashboardPageProps } from "../../../shared/types/dashboard";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import { INCIDENT_FIXTURES, FAULTS_APP_FIXTURES } from "../fixtures/faultsFixtures";
 import { useIncidentTimeline } from "../state/useIncidentTimeline";
 import { IncidentEvidence } from "./IncidentEvidence";
@@ -27,7 +27,7 @@ import { IncidentTimeline } from "./IncidentTimeline";
 
 /** Incident timeline and evidence panel for operational diagnosis. */
 export function FaultsPage({ navigate, appId, setAppId, range, setRange, locale }: DashboardPageProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   const timeline = useIncidentTimeline(INCIDENT_FIXTURES, appId, range);
   return (
     <>

@@ -15,7 +15,7 @@
 import { Panel } from "../../../shared/ui/Panel";
 import { TrendChart as Trend } from "../../../shared/ui/charts/TrendChart";
 import type { MetricPoint } from "../../../shared/types/dashboard";
-import { useTranslator } from "../../../core/i18n/useTranslator";
+import { useTranslation } from "react-i18next";
 import {
   hasReleaseMarker,
   type RealtimeChartMetric,
@@ -54,7 +54,7 @@ export interface RealtimeChartGridProps {
 }
 
 export function RealtimeChartGrid({ series, cursorTime, cards }: RealtimeChartGridProps) {
-  const t = useTranslator();
+  const { t } = useTranslation();
   const releaseVisible = hasReleaseMarker(series);
   return (
     <div className="monitor-grid">
