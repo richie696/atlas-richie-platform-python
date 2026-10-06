@@ -12,12 +12,12 @@
  * 的值域由 `draft.roleId` 推出 `IdentityRoleId`。
  */
 import { useId, useState, type FormEvent } from "react";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { DialogFrame } from "../../../shared/ui/DialogFrame";
 import { Select } from "../../../shared/ui/Select";
 import { TextField } from "../../../shared/ui/TextField";
 import { IDENTITY_ROLES, validateAccountDraft, type AccountDraft } from "../model/account";
-import { identityIssueText } from "./identityCopy";
 
 type AccountCreateForm = AccountDraft;
 
@@ -41,6 +41,7 @@ export function AccountCreateDialog({
   onCreate,
   onValidationError,
 }: AccountCreateDialogProps) {
+  const t = useTranslator();
   const formId = useId();
   const [draft, setDraft] = useState<AccountCreateForm>(EMPTY_DRAFT);
 
@@ -65,7 +66,7 @@ export function AccountCreateDialog({
     event.preventDefault();
     const issues = validateAccountDraft(draft);
     if (issues.length > 0) {
-      onValidationError(identityIssueText(issues[0]));
+      onValidationError(t(issues[0].key));
       return;
     }
     onCreate({
@@ -80,44 +81,44 @@ export function AccountCreateDialog({
     <DialogFrame
       isOpen={isOpen}
       onOpenChange={handleOpenChange}
-      title="新增账号"
-      subtitle="创建时设置初始登录密码；服务端只保存密码哈希，页面不会回显凭证。"
+      title={t("accountDialog.title")}
+      subtitle={t("accountDialog.subtitle")}
       actions={
         <>
           <ActionButton className="secondary-button" type="button" onClick={close}>
-            取消
+            {t("accountDialog.action.cancel")}
           </ActionButton>
           <ActionButton className="primary-button" type="submit" form={formId}>
-            创建账号
+            {t("accountDialog.action.create")}
           </ActionButton>
         </>
       }
     >
       <form id={formId} className="account-dialog-form" onSubmit={submit}>
         <TextField
-          label="账号名"
+          label={t("accountDialog.field.username")}
           value={draft.username}
           onChange={(value) => updateDraft("username", value)}
           autoComplete="username"
         />
         <TextField
-          label="密码"
+          label={t("accountDialog.field.password")}
           type="password"
           autoComplete="new-password"
           value={draft.password}
           onChange={(value) => updateDraft("password", value)}
         />
         <Select
-          label="角色"
+          label={t("accountDialog.field.role")}
           value={draft.roleId}
           onChange={(value) => updateDraft("roleId", value)}
           options={IDENTITY_ROLES.map((role) => ({
             value: role.id,
-            label: role.label,
+            label: t(role.labelKey),
           }))}
         />
         <p className="account-dialog-password-note">
-          密码至少 12 位；仅提交给后台保存哈希，页面不会保存或回显凭证。
+          {t("accountDialog.passwordHint")}
         </p>
       </form>
     </DialogFrame>

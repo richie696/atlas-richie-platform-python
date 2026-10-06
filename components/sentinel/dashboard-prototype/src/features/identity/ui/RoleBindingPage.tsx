@@ -18,6 +18,7 @@
  * 不在页面里另存一份。
  */
 import { useState } from "react";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 import {
   ArrowLeftIcon as ArrowLeft,
   ShieldCheckIcon as ShieldCheck,
@@ -43,6 +44,7 @@ loadAccounts(INITIAL_ACCOUNTS);
 const DEFAULT_ACCOUNT_ID = "account-admin";
 
 export function RoleBindingPage({ navigate, selectedAccountId = DEFAULT_ACCOUNT_ID }: { navigate: Navigate; selectedAccountId?: string }) {
+  const t = useTranslator();
   const { accounts, setRole } = useAccounts();
   const [accountId, setAccountId] = useState(selectedAccountId);
   const selected = accounts.find((account) => account.id === accountId) ?? accounts[0];
@@ -55,17 +57,17 @@ export function RoleBindingPage({ navigate, selectedAccountId = DEFAULT_ACCOUNT_
 
   return (
     <>
-      <IdentityIntro eyebrow="SYSTEM / ROLE BINDING" title="角色绑定" description="角色是唯一授权入口：admin 可维护规则，view 只能查看指标和事件。" action={<ActionButton className="secondary-button" type="button" onClick={() => navigate(ROUTE.Accounts)}><ArrowLeft size={16} /> 返回账户维护</ActionButton>} />
+      <IdentityIntro eyebrow="SYSTEM / ROLE BINDING" title={t("roles.intro.title")} description={t("roles.intro.description")} action={<ActionButton className="secondary-button" type="button" onClick={() => navigate(ROUTE.Accounts)}><ArrowLeft size={16} /> {t("roles.action.back")}</ActionButton>} />
       <div className="identity-split">
-        <IdentityPanel title="选择账号" subtitle="一个账号当前只绑定一个角色，避免权限组合产生歧义。">
+        <IdentityPanel title={t("roles.accountPanel.title")} subtitle={t("roles.accountPanel.subtitle")}>
           <div className="identity-select">
-            <Select label="账号" value={accountId} onChange={setAccountId} options={accounts.map((account) => ({ value: account.id, label: account.username }))} />
+            <Select label={t("roles.field.account")} value={accountId} onChange={setAccountId} options={accounts.map((account) => ({ value: account.id, label: account.username }))} />
           </div>
-          <div className="identity-account-summary"><UserCircle size={30} /><div><b>{selected.username}</b><small>{selected.builtIn ? "内置管理员账号" : "普通账号"}</small></div><span className={`status ${selected.status === ACCOUNT_STATUS.Active ? "status-healthy" : "status-critical"}`}>{selected.status === ACCOUNT_STATUS.Active ? "启用" : "停用"}</span></div>
+          <div className="identity-account-summary"><UserCircle size={30} /><div><b>{selected.username}</b><small>{t(selected.builtIn ? "accounts.type.builtInAdmin" : "accounts.type.normal")}</small></div><span className={`status ${selected.status === ACCOUNT_STATUS.Active ? "status-healthy" : "status-critical"}`}>{t(selected.status === ACCOUNT_STATUS.Active ? "accounts.status.active" : "accounts.status.disabled")}</span></div>
         </IdentityPanel>
-        <IdentityPanel title="绑定角色" subtitle="修改后需要后端记录操作者、原因与生效时间。">
-          <RadioGroup label="绑定角色" value={role.id} onChange={saveRole} className="role-options" options={IDENTITY_ROLES.map((item) => ({ value: item.id, label: item.label, description: <>{item.description}<br /><em>{item.permissions.join(" · ")}</em></> }))} />
-          <div className="identity-warning"><ShieldCheck size={18} /> 前端选择只改变演示状态；服务端必须在每次请求重新校验权限。</div>
+        <IdentityPanel title={t("roles.bindingPanel.title")} subtitle={t("roles.bindingPanel.subtitle")}>
+          <RadioGroup label={t("roles.field.binding")} value={role.id} onChange={saveRole} className="role-options" options={IDENTITY_ROLES.map((item) => ({ value: item.id, label: t(item.labelKey), description: <>{t(item.descriptionKey)}<br /><em>{item.permissions.join(" · ")}</em></> }))} />
+          <div className="identity-warning"><ShieldCheck size={18} /> {t("roles.warning")}</div>
         </IdentityPanel>
       </div>
     </>

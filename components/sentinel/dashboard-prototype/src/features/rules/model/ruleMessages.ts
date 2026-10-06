@@ -6,9 +6,9 @@
  * 旧实现把整包语言资源以 `messages: any` 传进编辑器与页面，于是
  * `messages.fields.resorceName` 这类拼写错误、缺失字段都不会被发现。
  *
- * 本模块只描述**规则 feature 真正读取的那部分形状**，并让 `ruleMessages()` 的返回
- * 值受该类型约束。语言资源本身仍是共享字典（阶段 1.3 会把整包拆成
- * `core/i18n/locales`），但从规则 feature 出去的那条边界是强类型的。
+ * 本模块只描述**规则 feature 真正读取的那部分形状**，并让 `useRuleCopy()` 组装出的
+ * 返回值受该类型约束。文案本身归 `features/rules/i18n/locales.ts`；本模块只定契约，
+ * 不含译文。
  *
  * 协议键与界面标签严格分离：`resourceName` 是本文件的键，`"资源名称"` 是它的值。
  * 任何 `label` 都不会被当作协议字段名使用。

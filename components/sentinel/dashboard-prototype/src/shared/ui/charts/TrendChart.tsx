@@ -8,6 +8,7 @@ import {
   type ChartSeriesColor,
 } from "./chartTheme";
 
+import { useTranslator } from "../../../core/i18n/useTranslator";
 import type { MetricKey, MetricPoint } from "../../types/dashboard";
 
 export type TrendDomain = [string | number, string | number];
@@ -49,6 +50,7 @@ export function TrendChart({
   height = 170,
   domain,
 }: TrendChartProps) {
+  const t = useTranslator();
   // 主题与序列色都由 CSS token 解析。memo 一次即可：Nivo 在 theme 变化时会重算整套
   // 刻度，没必要每帧新建对象。
   const theme = useMemo(() => buildChartTheme(), []);
@@ -103,7 +105,7 @@ export function TrendChart({
         animate={false}
         isInteractive
         markers={[
-          ...(marker && data.some((item) => item.time === "14:02") ? [{ axis: "x" as const, value: "14:02", lineStyle: { stroke: releaseAnnotation.stroke, strokeWidth: releaseAnnotation.strokeWidth, strokeDasharray: releaseAnnotation.strokeDasharray }, textStyle: { fill: releaseAnnotation.fill, fontSize: releaseAnnotation.fontSize, fontWeight: releaseAnnotation.fontWeight }, legend: "发布变更", legendPosition: "top-right" as const, legendOrientation: "horizontal" as const }] : []),
+          ...(marker && data.some((item) => item.time === "14:02") ? [{ axis: "x" as const, value: "14:02", lineStyle: { stroke: releaseAnnotation.stroke, strokeWidth: releaseAnnotation.strokeWidth, strokeDasharray: releaseAnnotation.strokeDasharray }, textStyle: { fill: releaseAnnotation.fill, fontSize: releaseAnnotation.fontSize, fontWeight: releaseAnnotation.fontWeight }, legend: t("shell.chart.releaseMarker"), legendPosition: "top-right" as const, legendOrientation: "horizontal" as const }] : []),
           ...(cursorTime ? [{ axis: "x" as const, value: cursorTime || "", lineStyle: { stroke: theme.crosshair.line.stroke, strokeOpacity: 0.6, strokeWidth: 1 } }] : []),
         ]}
         theme={theme}

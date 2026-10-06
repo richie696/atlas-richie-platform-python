@@ -35,8 +35,10 @@ export type ControlPlaneDatabaseKind =
  */
 export interface ControlPlaneDatabase {
   readonly id: ControlPlaneDatabaseKind;
+  /** 产品名（PostgreSQL / MySQL / SQLite），是**数据**不翻译。 */
   readonly label: string;
-  readonly description: string;
+  /** 说明的语言键。 */
+  readonly descriptionKey: string;
   readonly defaultPort: string;
   /** SQLite 为 false：它不需要主机、端口和账号。 */
   readonly requiresNetworkConfiguration: boolean;
@@ -48,7 +50,7 @@ export const CONTROL_PLANE_DATABASES: readonly ControlPlaneDatabase[] = Object.f
   {
     id: CONTROL_PLANE_DATABASE.PostgreSql,
     label: "PostgreSQL",
-    description: "生产环境支持，用于可靠的控制面持久化。",
+    descriptionKey: "setup.option.postgres.description",
     defaultPort: "5432",
     requiresNetworkConfiguration: true,
     usage: "production",
@@ -56,7 +58,7 @@ export const CONTROL_PLANE_DATABASES: readonly ControlPlaneDatabase[] = Object.f
   {
     id: CONTROL_PLANE_DATABASE.MySql,
     label: "MySQL",
-    description: "生产环境支持，要求 MySQL 8.0+；MariaDB 需作为独立兼容项评估。",
+    descriptionKey: "setup.option.mysql.description",
     defaultPort: "3306",
     requiresNetworkConfiguration: true,
     usage: "production",
@@ -64,7 +66,7 @@ export const CONTROL_PLANE_DATABASES: readonly ControlPlaneDatabase[] = Object.f
   {
     id: CONTROL_PLANE_DATABASE.Sqlite,
     label: "SQLite",
-    description: "仅限本地体验或单机开发，不作为生产集群存储。",
+    descriptionKey: "setup.option.sqlite.description",
     defaultPort: "",
     requiresNetworkConfiguration: false,
     usage: "local-development",
@@ -83,8 +85,9 @@ export type RuleSourceKind = (typeof RULE_SOURCE)[keyof typeof RULE_SOURCE];
 /** 规则来源的展示文案。`id` 是协议值，`label` 只用于界面。 */
 export interface RuleSourceOption {
   readonly id: RuleSourceKind;
+  /** 产品名（Nacos / Consul），是**数据**不翻译。 */
   readonly label: string;
-  readonly description: string;
+  readonly descriptionKey: string;
 }
 
 /**
@@ -98,12 +101,12 @@ export const RULE_SOURCE_OPTIONS: readonly RuleSourceOption[] = Object.freeze([
   {
     id: RULE_SOURCE.Nacos,
     label: "Nacos",
-    description: "管理服务通过受控写回流程发布完整规则快照。",
+    descriptionKey: "setup.option.nacos.description",
   },
   {
     id: RULE_SOURCE.Consul,
     label: "Consul",
-    description: "与 Nacos 同为规则事实来源，不作为账户或审计存储。",
+    descriptionKey: "setup.option.consul.description",
   },
 ] satisfies readonly RuleSourceOption[]);
 
@@ -121,8 +124,9 @@ export type RuleSourceAuthenticationMode =
 /** 单个认证方式的展示契约。 */
 export interface RuleSourceAuthenticationOption {
   readonly id: RuleSourceAuthenticationMode;
-  readonly label: string;
-  readonly description: string;
+  /** 功能名的语言键（「使用部署凭证引用」是界面措辞，不是协议值）。 */
+  readonly labelKey: string;
+  readonly descriptionKey: string;
 }
 
 /**
@@ -135,18 +139,18 @@ export const RULE_SOURCE_AUTHENTICATION_OPTIONS: readonly RuleSourceAuthenticati
   Object.freeze([
     {
       id: RULE_SOURCE_AUTHENTICATION.CredentialReference,
-      label: "使用部署凭证引用",
-      description: "由密钥管理系统、Kubernetes Secret 或部署配置向服务端提供凭证。",
+      labelKey: "setup.option.credentialReference.label",
+      descriptionKey: "setup.option.credentialReference.description",
     },
     {
       id: RULE_SOURCE_AUTHENTICATION.Direct,
-      label: "在控制台填写凭证",
-      description: "适用于受控内网；凭证仅写入式提交给后台，不会在页面再次展示。",
+      labelKey: "setup.option.direct.label",
+      descriptionKey: "setup.option.direct.description",
     },
     {
       id: RULE_SOURCE_AUTHENTICATION.None,
-      label: "不启用认证",
-      description: "仅用于已隔离且明确允许匿名访问的配置中心；仍建议启用 TLS。",
+      labelKey: "setup.option.none.label",
+      descriptionKey: "setup.option.none.description",
     },
   ] satisfies readonly RuleSourceAuthenticationOption[]);
 
@@ -164,31 +168,32 @@ export type SetupStepId = (typeof SETUP_STEP)[keyof typeof SETUP_STEP];
 /** 单个初始化步骤的元数据。 */
 export interface SetupStep {
   readonly id: SetupStepId;
-  readonly label: string;
-  readonly description: string;
+  /** 步骤名的语言键。 */
+  readonly labelKey: string;
+  readonly descriptionKey: string;
 }
 
 /** 一次性初始化的检查点。这些是引导阶段，不是规则来源状态。 */
 export const INITIALIZATION_STEPS: readonly SetupStep[] = Object.freeze([
   {
     id: SETUP_STEP.Storage,
-    label: "系统存储",
-    description: "验证数据库连接并创建控制面数据结构。",
+    labelKey: "setup.step.database.label",
+    descriptionKey: "setup.step.database.description",
   },
   {
     id: SETUP_STEP.Admin,
-    label: "内置管理员",
-    description: "创建唯一的首个 admin；系统不提供默认密码。",
+    labelKey: "setup.step.admin.label",
+    descriptionKey: "setup.step.admin.description",
   },
   {
     id: SETUP_STEP.Sources,
-    label: "规则来源",
-    description: "登记 Nacos 或 Consul，规则仍由配置中心权威持有。",
+    labelKey: "setup.step.source.label",
+    descriptionKey: "setup.step.source.description",
   },
   {
     id: SETUP_STEP.Complete,
-    label: "完成初始化",
-    description: "记录初始化结果，开放登录与控制台 API。",
+    labelKey: "setup.step.finish.label",
+    descriptionKey: "setup.step.finish.description",
   },
 ] satisfies readonly SetupStep[]);
 

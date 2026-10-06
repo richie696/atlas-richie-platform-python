@@ -7,25 +7,21 @@
  * 本模块只负责**组装**：各 feature 把自己的文案包交进来，重复键在组装时立刻抛错，
  * 而不是让后注册的 feature 静默覆盖先注册的。
  *
- * ## 迁移期状态
+ * ## 迁移已完成
  *
- * 规则工作台仍在用旧的 `ruleI18n.ts`（嵌套对象 + 自己的 `createRuleTranslator`），
- * 它**不**并入这里 —— 旧包是嵌套结构、键名带 `rules.` 前缀，压平后与新包并存只会
- * 引入暂时无意义的键空间迁移。做法是：每迁完一个 feature，就把该页的调用点切到
- * `createTranslator`，六页全部迁完后 `ruleI18n.ts` 整体删除。
- *
- * 这样每个 feature 的文案所有权是独立的一步，不需要一次改完。
- *
- * 已迁：shell、faults、overview。其余 feature 的 `ui/` 层仍直接写中文字面量，
- * 真实规模见 `tests/i18n/audit.mjs`。
+ * `src/ruleI18n.ts`（嵌套对象 + 自己的 `createRuleTranslator`）已随规则工作台的
+ * 迁移整体删除。七个 feature 的文案各自归自己的 `i18n/`，共享的壳层文案归
+ * `core/i18n/shell.ts`；重复键在 `buildDictionary` 组装期抛错。
  */
 import { Translator } from "@richie696/react-framework";
 
 import { SHELL_COPY } from "./shell";
 import { APPLICATIONS_COPY } from "../../features/applications/i18n/locales";
 import { FAULTS_COPY } from "../../features/faults/i18n/locales";
+import { IDENTITY_COPY } from "../../features/identity/i18n/locales";
 import { OVERVIEW_COPY } from "../../features/overview/i18n/locales";
 import { REALTIME_COPY } from "../../features/realtime/i18n/locales";
+import { RULES_COPY } from "../../features/rules/i18n/locales";
 import { SYSTEM_COPY } from "../../features/system/i18n/locales";
 import { FALLBACK_LOCALE, resolveLocale } from "./locales";
 import {
@@ -47,7 +43,9 @@ const BUNDLES: readonly LocaleBundle[] = [
   OVERVIEW_COPY,
   APPLICATIONS_COPY,
   REALTIME_COPY,
+  RULES_COPY,
   SYSTEM_COPY,
+  IDENTITY_COPY,
 ];
 
 const translator = new Translator(buildDictionary(BUNDLES), FALLBACK_LOCALE);

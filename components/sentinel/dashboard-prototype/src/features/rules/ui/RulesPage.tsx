@@ -16,8 +16,7 @@ import { ActionButton } from "../../../shared/ui/ActionButton";
 import { Filters } from "../../../shared/ui/Filters";
 import { Intro } from "../../../shared/ui/Intro";
 import { Status } from "../../../shared/ui/Status";
-import { createRuleTranslator, ruleMessages } from "../../../ruleI18n";
-import type { RuleWorkbenchMessages } from "../model/ruleMessages";
+import { useRuleCopy } from "../i18n/useRuleCopy";
 import { RULE_CATALOG_HEADERS } from "../model/ruleCatalog";
 import { RULE_KIND_ALL, resolveRuleKindFilter } from "../model/ruleKinds";
 import { ROUTE } from "../../../app/router/route.constants";
@@ -38,14 +37,13 @@ export function RulesPage({
   setAppId,
   range,
   setRange,
-  locale,
   view,
 }: DashboardPageProps) {
-  const t = createRuleTranslator(locale);
+  // 规则页的全部文案同源于新基座：`t` 用于单条查表，`messages` 是给表单用的结构。
+  const { t, messages } = useRuleCopy();
   // `rules:write` 门禁。缺能力时隐藏写入口（§2：界面隐藏不是安全边界，
   // 服务端在每次写操作上仍会独立校验）。
   const canWrite = useCan(SESSION_CAPABILITY.RulesWrite);
-  const messages = ruleMessages(locale) as RuleWorkbenchMessages;
   // 规则类型筛选受控：唯一来源是 URL 的 `view` 参数，切换 = 写回 URL。
   const kindFilter = resolveRuleKindFilter(view);
   const workbench = useRuleWorkbench({

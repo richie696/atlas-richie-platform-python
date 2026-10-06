@@ -4,7 +4,8 @@ import { useOnlineStatus } from "@richie696/react-framework-react";
 
 import { ActionButton } from "../shared/ui/ActionButton";
 import { Select } from "../shared/ui/Select";
-import { DASHBOARD_LOCALES, createRuleTranslator } from "../ruleI18n";
+import { DASHBOARD_LOCALES } from "../core/i18n/locales";
+import { useTranslator } from "../core/i18n/useTranslator";
 import {
   AccountMaintenancePage,
   ChangePasswordPage,
@@ -114,7 +115,7 @@ export function App() {
   const locale = useLocale();
   const setLocale = useLocaleSetter();
   const online = useOnlineStatus();
-  const t = useMemo(() => createRuleTranslator(locale), [locale]);
+  const t = useTranslator();
 
   const { route: currentRoute, navigate, appId, setAppId, range, setRange, accountId, view } = route;
 
@@ -164,7 +165,7 @@ export function App() {
         <span className={online ? "" : "offline-state"}>
           <i className="live-dot" /> {online ? t("shell.online") : t("shell.offline")}
         </span>
-        <span className="clock">2026-09-14 14:32（示例）</span>
+        <span className="clock">{t("shell.clock.sample")}</span>
         <ActionButton
           className="avatar"
           type="button"
@@ -186,8 +187,8 @@ export function App() {
 
   const footer = (
     <footer className="footer">
-      Atlas Richie Sentinel · Dashboard 设计原型{" "}
-      <span>示例数据仅用于交互与布局评审</span>
+      {t("shell.footer.title")} {" "}
+      <span>{t("shell.footer.note")}</span>
     </footer>
   );
 

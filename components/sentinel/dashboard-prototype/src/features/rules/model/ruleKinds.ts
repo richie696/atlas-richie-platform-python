@@ -73,10 +73,17 @@ export const RULE_TYPE_META: Readonly<Record<RuleKind, RuleTypeMeta>> = Object.f
   [RULE_KIND.ParamFlow]: { className: "ParamFlowRule", configName: "param-flow-rules" },
 });
 
-/** 规则生效范围。值是协议值，标签由语言包 `rules.scopes` 提供。 */
+/**
+ * 规则生效范围。值是协议值，标签由语言包 `rules.scopes.*` 提供。
+ *
+ * 值是**协议标识**而不是展示文案，因此用 ASCII 标识符：它们会随目录条目进入读模型，
+ * 界面文字一律来自语言包。早年这里写的是「应用 / 资源」，于是同一份协议值既是
+ * 中文又是数据来源；改成标识符后展示不受影响（`RuleInspectorPanel` 取的是
+ * `scopes[entry.scope]`，即语言包的值）。
+ */
 export const RULE_SCOPE = Object.freeze({
-  Application: "应用",
-  Resource: "资源",
+  Application: "application",
+  Resource: "resource",
 } as const);
 
 /** {@link RULE_SCOPE} 的值联合。 */

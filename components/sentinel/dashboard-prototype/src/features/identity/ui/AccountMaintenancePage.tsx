@@ -14,6 +14,7 @@
  * 留在最近的组件里，不进 store。
  */
 import { useState } from "react";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 import {
   PlusIcon as Plus,
   ShieldCheckIcon as ShieldCheck,
@@ -43,6 +44,7 @@ import { IdentityPanel } from "./components/IdentityPanel";
 loadAccounts(INITIAL_ACCOUNTS);
 
 export function AccountMaintenancePage({ navigate }: { navigate: Navigate }) {
+  const t = useTranslator();
   const { accounts, add, setStatus } = useAccounts();
   const [showCreate, setShowCreate] = useState(false);
   const [notice, setNotice] = useState("");
@@ -52,25 +54,25 @@ export function AccountMaintenancePage({ navigate }: { navigate: Navigate }) {
     add(
       toAccountSummary(`account-${Date.now()}`, draft, NEW_ACCOUNT_LAST_LOGIN),
     );
-    setNotice("账号已加入演示列表；真实环境需由后台 API 创建并审计。");
+    setNotice(t("accounts.notice.created"));
   };
 
   const toggleStatus = (id: string) => {
     const account = accounts.find((item) => item.id === id);
     if (!account) return;
     setStatus(id, nextAccountStatus(account.status));
-    setNotice("状态变更仅作用于当前演示页面，未写入服务端。");
+    setNotice(t("accounts.notice.statusChanged"));
   };
 
   return (
     <>
       <IdentityIntro
         eyebrow="SYSTEM / ACCOUNTS"
-        title="账户维护"
-        description="维护登录身份、状态与角色入口。密码只在后端保存，页面不展示或回显任何凭证。"
+        title={t("accounts.intro.title")}
+        description={t("accounts.intro.description")}
         action={
           <ActionButton className="primary-button" type="button" onClick={() => setShowCreate(true)}>
-            <Plus size={16} /> 新增账号
+            <Plus size={16} /> {t("accounts.action.create")}
           </ActionButton>
         }
       />
@@ -81,15 +83,22 @@ export function AccountMaintenancePage({ navigate }: { navigate: Navigate }) {
         onCreate={createAccount}
         onValidationError={setNotice}
       />
-      <IdentityPanel title="账号列表" subtitle="内置管理员不可删除；停用账号会立即拒绝新的登录请求。">
-        <DataTable className="identity-table" heads={["账号", "角色", "状态", "最近登录", "类型", "操作"]} rows={accounts.map((account) => (
+      <IdentityPanel title={t("accounts.panel.title")} subtitle={t("accounts.panel.subtitle")}>
+        <DataTable className="identity-table" heads={[
+            t("accounts.head.username"),
+            t("accounts.head.role"),
+            t("accounts.head.status"),
+            t("accounts.head.lastLogin"),
+            t("accounts.head.type"),
+            t("accounts.head.actions"),
+          ]} rows={accounts.map((account) => (
               <tr key={account.id}>
-                <td><div className="identity-user"><UserCircle size={23} /><span><b>{account.username}</b><small>{account.builtIn ? "内置管理员账号" : "普通账号"}</small></span></div></td>
-                <td><span className="role-chip"><ShieldCheck size={14} />{roleFor(account.roleId).label}</span></td>
-                <td><span className={`status ${account.status === ACCOUNT_STATUS.Active ? "status-healthy" : "status-critical"}`}>{account.status === ACCOUNT_STATUS.Active ? "启用" : "已停用"}</span></td>
+                <td><div className="identity-user"><UserCircle size={23} /><span><b>{account.username}</b><small>{t(account.builtIn ? "accounts.type.builtInAdmin" : "accounts.type.normal")}</small></span></div></td>
+                <td><span className="role-chip"><ShieldCheck size={14} />{t(roleFor(account.roleId).labelKey)}</span></td>
+                <td><span className={`status ${account.status === ACCOUNT_STATUS.Active ? "status-healthy" : "status-critical"}`}>{t(account.status === ACCOUNT_STATUS.Active ? "accounts.status.active" : "accounts.status.disabled")}</span></td>
                 <td>{account.lastLoginAt}</td>
-                <td>{account.builtIn ? "内置账号" : "普通账号"}</td>
-                <td><div className="identity-actions"><ActionButton className="link-button" type="button" onClick={() => navigate(ROUTE.Roles, { accountId: account.id })}>角色绑定</ActionButton><ActionButton className="link-button" type="button" onClick={() => navigate(ROUTE.ChangePassword, { accountId: account.id })}>修改密码</ActionButton><ActionButton className="link-button" type="button" onClick={() => toggleStatus(account.id)}>{account.status === ACCOUNT_STATUS.Active ? "停用" : "启用"}</ActionButton></div></td>
+                <td>{t(account.builtIn ? "accounts.type.builtIn" : "accounts.type.normal")}</td>
+                <td><div className="identity-actions"><ActionButton className="link-button" type="button" onClick={() => navigate(ROUTE.Roles, { accountId: account.id })}>{t("accounts.action.bindRole")}</ActionButton><ActionButton className="link-button" type="button" onClick={() => navigate(ROUTE.ChangePassword, { accountId: account.id })}>{t("accounts.action.changePassword")}</ActionButton><ActionButton className="link-button" type="button" onClick={() => toggleStatus(account.id)}>{t(account.status === ACCOUNT_STATUS.Active ? "accounts.action.disable" : "accounts.action.enable")}</ActionButton></div></td>
               </tr>
             ))} />
       </IdentityPanel>

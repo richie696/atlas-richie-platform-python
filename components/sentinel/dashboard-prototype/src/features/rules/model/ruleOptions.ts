@@ -68,6 +68,10 @@ const GROUPS: Readonly<Record<OptionGroup, readonly { value: number; label: "" }
  *
  * 标签数量与协议值数量不一致是语言资源的缺陷，必须立刻暴露：界面上出现
  * `undefined` 标签会让用户无法判断当前选中项代表什么配置。
+ *
+ * 抛出的 `Error` 是**开发者诊断**而不是界面文案——它只在语言包与协议值写错时触发，
+ * 此时组件树已经无法正常渲染，不会出现在页面上。因此这里用英文并带 `[rules]`
+ * 前缀，让它与代码里其它不变量消息一致，也不占用 `rules.*` 文案键。
  */
 export function localizedOptions(
   group: OptionGroup,
@@ -77,7 +81,7 @@ export function localizedOptions(
   const labels = copy[group];
   if (values.length !== labels.length) {
     throw new Error(
-      `规则选项标签数量不匹配: ${group} 有 ${values.length} 个协议值但 ${labels.length} 条标签`,
+      `[rules] localizedOptions("${group}"): ${values.length} protocol values but ${labels.length} labels`,
     );
   }
   return values.map((item, index) => ({ value: item.value, label: labels[index] }));

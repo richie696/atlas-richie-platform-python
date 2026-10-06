@@ -51,8 +51,10 @@ export type IdentityCapability = SessionCapability;
 /** 单个角色的定义。`permissions` 是 {@link IDENTITY_CAPABILITY} 的子集。 */
 export interface IdentityRole {
   readonly id: IdentityRoleId;
-  readonly label: string;
-  readonly description: string;
+  /** 名称与说明的**语言键**。译文在 `features/identity/i18n/locales.ts`。 */
+  readonly labelKey: string;
+  readonly descriptionKey: string;
+  /** 能力码（协议值，不翻译）。 */
   readonly permissions: readonly string[];
 }
 
@@ -95,14 +97,14 @@ export interface LoginCredentials {
 export const IDENTITY_ROLES: readonly IdentityRole[] = Object.freeze([
   {
     id: IDENTITY_ROLE.Admin,
-    label: "管理员",
-    description: "查看全部运行数据，并创建、修改、发布和回滚流控规则。",
+    labelKey: "roles.role.admin.title",
+    descriptionKey: "roles.role.admin.description",
     permissions: [IDENTITY_CAPABILITY.MetricsView, IDENTITY_CAPABILITY.RulesWrite],
   },
   {
     id: IDENTITY_ROLE.View,
-    label: "查看者",
-    description: "查看总览、实例、监控和故障分析，不具备任何编辑能力。",
+    labelKey: "roles.role.view.title",
+    descriptionKey: "roles.role.view.description",
     permissions: [IDENTITY_CAPABILITY.MetricsView],
   },
 ] satisfies readonly IdentityRole[]);

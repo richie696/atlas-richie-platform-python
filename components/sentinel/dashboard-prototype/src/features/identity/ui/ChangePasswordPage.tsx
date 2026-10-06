@@ -13,6 +13,7 @@
  * 打开时也能显示正确的用户名。
  */
 import { useState, type FormEvent } from "react";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 import {
   ArrowLeftIcon as ArrowLeft,
   KeyIcon as Key,
@@ -27,7 +28,6 @@ import { loadAccounts, useAccounts } from "../state/accountStore";
 import { INITIAL_ACCOUNTS } from "../fixtures/identityFixtures";
 import { IdentityIntro } from "./components/IdentityIntro";
 import { IdentityPanel } from "./components/IdentityPanel";
-import { identityIssueText } from "./identityCopy";
 
 // 演示装配，与另外两个账号页面共用同一个 store 命令。
 loadAccounts(INITIAL_ACCOUNTS);
@@ -36,6 +36,7 @@ loadAccounts(INITIAL_ACCOUNTS);
 const DEFAULT_ACCOUNT_ID = "account-admin";
 
 export function ChangePasswordPage({ navigate, accountId = DEFAULT_ACCOUNT_ID }: { navigate: Navigate; accountId?: string }) {
+  const t = useTranslator();
   const { accounts } = useAccounts();
   const account = accounts.find((item) => item.id === accountId) ?? accounts[0];
   const form = usePasswordForm();
@@ -46,21 +47,21 @@ export function ChangePasswordPage({ navigate, accountId = DEFAULT_ACCOUNT_ID }:
     const result = form.submit();
     setMessage(
       result.status === "accepted"
-        ? "演示校验通过；真实环境将调用修改密码 API，不会在页面保存密码。"
-        : identityIssueText(result.issue),
+        ? t("changePassword.success")
+        : t(result.issue.key),
     );
   };
 
   return (
     <>
-      <IdentityIntro eyebrow="SYSTEM / PASSWORD" title="修改密码" description={`为账号 ${account.username} 设置新的登录密码。密码只提交给后端校验，不进入 URL、日志或浏览器存储。`} action={<ActionButton className="secondary-button" type="button" onClick={() => navigate(ROUTE.Accounts)}><ArrowLeft size={16} /> 返回账户维护</ActionButton>} />
+      <IdentityIntro eyebrow="SYSTEM / PASSWORD" title={t("changePassword.intro.title")} description={t("changePassword.intro.description", { username: account.username })} action={<ActionButton className="secondary-button" type="button" onClick={() => navigate(ROUTE.Accounts)}><ArrowLeft size={16} /> {t("changePassword.action.back")}</ActionButton>} />
       {message && <div className="identity-notice" role="status">{message}</div>}
-      <IdentityPanel title="更新登录密码" subtitle="建议使用密码管理器生成唯一密码；修改成功后可使其它会话失效。">
+      <IdentityPanel title={t("changePassword.panel.title")} subtitle={t("changePassword.panel.subtitle")}>
         <form className="password-form" onSubmit={submit}>
-          <TextField label="当前密码" type="password" autoComplete="current-password" value={form.values.current} onChange={form.setCurrent} />
-          <TextField label="新密码" type="password" autoComplete="new-password" hint="至少 12 位；不要使用账号名或环境名称。" value={form.values.next} onChange={form.setNext} />
-          <TextField label="确认新密码" type="password" autoComplete="new-password" value={form.values.confirm} onChange={form.setConfirm} />
-          <div className="identity-form-actions"><ActionButton className="primary-button" type="submit"><Key size={16} /> 保存新密码</ActionButton></div>
+          <TextField label={t("changePassword.field.current")} type="password" autoComplete="current-password" value={form.values.current} onChange={form.setCurrent} />
+          <TextField label={t("changePassword.field.next")} type="password" autoComplete="new-password" hint={t("changePassword.field.nextHint")} value={form.values.next} onChange={form.setNext} />
+          <TextField label={t("changePassword.field.confirm")} type="password" autoComplete="new-password" value={form.values.confirm} onChange={form.setConfirm} />
+          <div className="identity-form-actions"><ActionButton className="primary-button" type="submit"><Key size={16} /> {t("changePassword.submit")}</ActionButton></div>
         </form>
       </IdentityPanel>
     </>

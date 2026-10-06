@@ -57,9 +57,11 @@ function isComment(trimmed) {
   return (
     trimmed.startsWith("*") ||
     trimmed.startsWith("//") ||
-    trimmed.startsWith("/*") ||
-    trimmed.startsWith("{/*")
+    trimmed.startsWith("/*")
   );
+  // 注意：JSX 块注释（`{/*`）**故意不在这里处理**——它需要跨行状态，
+  // 而 `isComment` 是单行判断。先在这里返回的话，状态机永远设不上，
+  // 多行注释的中间行就会被当成界面文案报出来。
 }
 
 const featureDirs = readdirSync(join(SRC, "features"))
@@ -123,12 +125,27 @@ function scan(roots, layer) {
           ? "shared"
           : rel.split("/")[1];
       const hits = [];
+      // 每个文件重置：JSX 块注释不跨文件。
+      let inJsxBlock = false;
       readFileSync(file, "utf8")
         .split("\n")
         .forEach((raw, index) => {
+          if (inJsxBlock) {
+            if (raw.includes("*/")) inJsxBlock = false;
+            return;
+          }
           const trimmed = raw.trim();
           if (isComment(trimmed)) return;
-          if (CJK.test(stripTrailingComment(raw))) {
+          // JSX 注释可以**出现在行中间**（`...</h1> {/* 说明 */}`）且跨多行。
+          // 只判行首会漏掉起始标记；只判单行会把延续行报成界面文案。
+          // 因此切掉注释部分，注释**之前**的代码仍要检查。
+          let code = raw;
+          const start = raw.indexOf("{/*");
+          if (start >= 0) {
+            if (!raw.includes("*/", start)) inJsxBlock = true;
+            code = raw.slice(0, start);
+          }
+          if (CJK.test(stripTrailingComment(code))) {
             hits.push({ line: index + 1, text: trimmed });
           }
         });
