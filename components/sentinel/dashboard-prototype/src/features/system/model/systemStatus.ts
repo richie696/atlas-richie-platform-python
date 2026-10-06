@@ -37,8 +37,40 @@ export const CONNECTION_KIND = Object.freeze({
 /** {@link CONNECTION_KIND} 的值联合。 */
 export type ConnectionKind = (typeof CONNECTION_KIND)[keyof typeof CONNECTION_KIND];
 
-/** 连接可用时的状态文案。判定状态色时用它，避免散落字面量。 */
-export const CONNECTION_AVAILABLE_STATE = "可用";
+/**
+ * 连接状态（协议值）。
+ *
+ * 中文
+ * ----
+ * 原本这里是 `CONNECTION_AVAILABLE_STATE = "可用"`，而 `connectionStatusTone` 用
+ * `state === CONNECTION_AVAILABLE_STATE` 判定状态色——**用展示文案做判定**。
+ * 翻译一次就会让所有链路变成中性蓝，而这种失效没有任何测试能发现：页面照常渲染，
+ * 只是所有连接都不再是健康绿。
+ *
+ * 状态色是判断，展示是文案，两者必须分开。判定基于枚举值，译文在
+ * `system.connection.state.*`。
+ */
+export const CONNECTION_STATE = Object.freeze({
+  /** 真实探测到连通。 */
+  Available: "available",
+  /**
+   * 原型未接入采集器。
+   *
+   * 这是**产品事实**不是故障：演示阶段「未接入」用中性蓝而不是红色，
+   * 不得为了让页面「看起来健康」而把它写成 `Available`。
+   */
+  Demo: "demo",
+} as const);
+
+/** {@link CONNECTION_STATE} 的值联合。 */
+export type ConnectionState = (typeof CONNECTION_STATE)[keyof typeof CONNECTION_STATE];
+
+/** 连接状态的展示文案键。 */
+export const CONNECTION_STATE_LABEL_KEY: Readonly<Record<ConnectionState, string>> =
+  Object.freeze({
+    [CONNECTION_STATE.Available]: "system.connection.state.available",
+    [CONNECTION_STATE.Demo]: "system.connection.state.demo",
+  } as const);
 
 /**
  * 一条连接状态。
@@ -56,7 +88,8 @@ export interface ConnectionStatus {
   readonly kind: ConnectionKind;
   /** 展示名，同时作为表格行的稳定 key。 */
   readonly name: string;
-  readonly state: string;
+  /** 探测结果。枚举值，渲染时按 `CONNECTION_STATE_LABEL_KEY` 取译文。 */
+  readonly state: ConnectionState;
   readonly latency: string;
   readonly scope: string;
   readonly purpose: string;
@@ -72,18 +105,18 @@ export interface ConnectionStatus {
  * 这里是它唯一的归属：未连通的链路用 `blue`（中性提示），不是 `critical`——
  * 原型阶段「未接入」是产品事实，不是故障。
  */
-export function connectionStatusTone(state: string): "healthy" | "blue" {
-  return state === CONNECTION_AVAILABLE_STATE ? "healthy" : "blue";
+export function connectionStatusTone(state: ConnectionState): "healthy" | "blue" {
+  return state === CONNECTION_STATE.Available ? "healthy" : "blue";
 }
 
-/** 连接表格的列头。集中在 model，避免 JSX 里写一串无名字符串。 */
+/** 连接表格的列头（语言键）。集中在 model，避免 JSX 里写一串无名字符串。 */
 export const CONNECTION_HEADERS: readonly string[] = Object.freeze([
-  "组件",
-  "状态",
-  "延迟",
-  "覆盖",
-  "用途",
-  "能力边界",
+  "system.connection.head.component",
+  "system.connection.head.state",
+  "system.connection.head.latency",
+  "system.connection.head.coverage",
+  "system.connection.head.purpose",
+  "system.connection.head.capability",
 ]);
 
 /** 「连接与采集」顶部四个概览数字。 */
@@ -126,12 +159,19 @@ export type SystemTab = (typeof SYSTEM_TAB)[keyof typeof SYSTEM_TAB];
  * 键与 {@link SYSTEM_TAB} 一一对应；缺一个键即类型错误。文本与旧实现逐字相同，
  * 因此渲染结果不变。
  */
-export const SYSTEM_TAB_LABEL: Readonly<Record<SystemTab, string>> = Object.freeze({
-  [SYSTEM_TAB.Connections]: "连接与采集",
-  [SYSTEM_TAB.Permissions]: "权限与审计",
-  [SYSTEM_TAB.Protocol]: "协议与版本",
-  [SYSTEM_TAB.Accounts]: "账户维护",
-  [SYSTEM_TAB.Roles]: "角色绑定",
+/**
+ * tab 展示文案的**键**。
+ *
+ * `Accounts` / `Roles` 指向的就是壳层导航里的那两个页面，壳层已有
+ * `shell.nav.accounts` / `shell.nav.roles`，这里直接复用——同一个词两处定义时，
+ * 改一处不会提示另一处已经对不上。
+ */
+export const SYSTEM_TAB_LABEL_KEY: Readonly<Record<SystemTab, string>> = Object.freeze({
+  [SYSTEM_TAB.Connections]: "system.tab.connections",
+  [SYSTEM_TAB.Permissions]: "system.tab.permissions",
+  [SYSTEM_TAB.Protocol]: "system.tab.protocol",
+  [SYSTEM_TAB.Accounts]: "shell.nav.accounts",
+  [SYSTEM_TAB.Roles]: "shell.nav.roles",
 });
 
 /** tab 渲染顺序。首屏默认停在 {@link SYSTEM_TAB.Connections}。 */
@@ -174,14 +214,15 @@ export type Capability = (typeof CAPABILITY)[keyof typeof CAPABILITY];
 export interface PermissionDeclaration {
   /** 稳定 id，同时是面板选择图标的键。 */
   readonly id: "viewer" | "rule-maintainer";
-  readonly title: string;
-  /** 该角色被授予的能力标识。 */
+  /** 该角色被授予的能力标识（协议值，不翻译）。 */
   readonly capability: Capability;
-  readonly description: string;
   /** 展示用状态标签的语义 tone。 */
   readonly tone: "blue" | "warning";
-  /** 展示用状态标签文案（「只读」/「可变更」）。 */
-  readonly statusLabel: string;
+  /** 展示用状态标签的**键**。 */
+  readonly statusLabelKey: string;
+  /** 标题与说明的语言键。 */
+  readonly titleKey: string;
+  readonly descriptionKey: string;
 }
 
 /**
@@ -198,27 +239,29 @@ export interface PermissionDeclaration {
  */
 export const VIEWER_PERMISSION: PermissionDeclaration = Object.freeze({
   id: "viewer",
-  title: "观察者",
+  titleKey: "system.permissions.viewer.title",
   capability: CAPABILITY.MetricsView,
-  description: "可查看总览、应用实例、实时指标、故障事件与规则详情。",
+  descriptionKey: "system.permissions.viewer.description",
   tone: "blue",
-  statusLabel: "只读",
+  statusLabelKey: "system.permissions.viewer.status",
 });
 
 export const RULE_MAINTAINER_PERMISSION: PermissionDeclaration = Object.freeze({
   id: "rule-maintainer",
-  title: "规则维护者",
+  titleKey: "system.permissions.maintainer.title",
   capability: CAPABILITY.RulesWrite,
-  description: "可提交规则变更；生产流程仍需基准版本校验与审计。",
+  descriptionKey: "system.permissions.maintainer.description",
   tone: "warning",
-  statusLabel: "可变更",
+  statusLabelKey: "system.permissions.maintainer.status",
 });
 
 /** 发布审计链的一步。原型不产生真实记录，只声明链路顺序。 */
 export interface AuditChainStep {
+  /** 步骤序号（协议值，非文案）。 */
   readonly step: string;
-  readonly title: string;
-  readonly detail: string;
+  /** 标题与说明的语言键。 */
+  readonly titleKey: string;
+  readonly detailKey: string;
 }
 
 /**
@@ -231,10 +274,10 @@ export interface AuditChainStep {
  * 前一步永远不能被当作后一步的结论。
  */
 export const AUDIT_CHAIN_STEPS: readonly AuditChainStep[] = Object.freeze([
-  { step: "01", title: "编辑并校验", detail: "schema、阈值、影响范围" },
-  { step: "02", title: "生成差异", detail: "基准版本、操作者、理由" },
-  { step: "03", title: "条件写回", detail: "Nacos / Consul 成功确认" },
-  { step: "04", title: "观察生效", detail: "各实例版本与失败项" },
+  { step: "01", titleKey: "system.permissions.audit.step1.title", detailKey: "system.permissions.audit.step1.detail" },
+  { step: "02", titleKey: "system.permissions.audit.step2.title", detailKey: "system.permissions.audit.step2.detail" },
+  { step: "03", titleKey: "system.permissions.audit.step3.title", detailKey: "system.permissions.audit.step3.detail" },
+  { step: "04", titleKey: "system.permissions.audit.step4.title", detailKey: "system.permissions.audit.step4.detail" },
 ]);
 
 /** 协议边界的稳定 id，同时是面板选择图标的键。 */
@@ -252,9 +295,16 @@ export type ProtocolBoundaryId = "rule-config" | "agent-reporting" | "cluster-to
 export interface ProtocolBoundary {
   /** 稳定 id，同时是面板选择图标的键。 */
   readonly id: ProtocolBoundaryId;
-  readonly name: string;
-  /** 这条协议负责什么。 */
-  readonly role: string;
+  /**
+   * 协议展示名的语言键。
+   *
+   * 三条都用键而不是「一半数据一半文案」：`Agent Reporting` 与 `Cluster Token`
+   * 在中文里本来就是英文，借用 zh 译文免去在三种语言里各写一遍；等真的需要
+   * 「用中文解释这个协议叫什么」时再加一个独立的 `displayName`。
+   */
+  readonly nameKey: string;
+  /** 这条协议负责什么的语言键。 */
+  readonly roleKey: string;
 }
 
 /**
@@ -269,25 +319,28 @@ export interface ProtocolBoundary {
 export const PROTOCOL_BOUNDARIES: readonly ProtocolBoundary[] = Object.freeze([
   {
     id: "rule-config",
-    name: "规则配置",
-    role: "Nacos / Consul 为权威规则源；Dashboard 通过管理服务写入。",
+    nameKey: "system.protocol.ruleConfig.name",
+    roleKey: "system.protocol.ruleConfig.role",
   },
   {
     id: "agent-reporting",
-    name: "Agent Reporting",
-    role: "上报实例版本、健康与事件，不参与准入决策。",
+    nameKey: "system.protocol.agentReporting.name",
+    roleKey: "system.protocol.agentReporting.role",
   },
   {
     id: "cluster-token",
-    name: "Cluster Token",
-    role: "负责配额决策，与规则编辑和事件上报分离。",
+    nameKey: "system.protocol.clusterToken.name",
+    roleKey: "system.protocol.clusterToken.role",
   },
 ]);
 
 /** 版本与状态面板的一行。 */
 export interface DeliveryStatusItem {
-  readonly label: string;
-  readonly value: string;
+  /** 标签与取值的语言键。 */
+  readonly labelKey: string;
+  readonly valueKey: string;
+  /** 稳定 id，作为 `key` 用——标签会随语言变化，不能拿它当 key。 */
+  readonly id: string;
 }
 
 /**
@@ -300,8 +353,8 @@ export interface DeliveryStatusItem {
  * 实时事件」三项会变成 gateway 返回的探测值；「界面状态」仍是产品自身的事实。
  */
 export const DELIVERY_STATUS_ITEMS: readonly DeliveryStatusItem[] = Object.freeze([
-  { label: "界面状态", value: "设计原型" },
-  { label: "配置中心写回", value: "未实现" },
-  { label: "真实指标数据", value: "未连接" },
-  { label: "实时事件", value: "未连接" },
+  { id: "ui-state", labelKey: "system.protocol.delivery.uiState.label", valueKey: "system.protocol.delivery.uiState.value" },
+  { id: "config-writeback", labelKey: "system.protocol.delivery.configWriteback.label", valueKey: "system.protocol.delivery.configWriteback.value" },
+  { id: "real-metrics", labelKey: "system.protocol.delivery.realMetrics.label", valueKey: "system.protocol.delivery.realMetrics.value" },
+  { id: "live-events", labelKey: "system.protocol.delivery.liveEvents.label", valueKey: "system.protocol.delivery.liveEvents.value" },
 ]);

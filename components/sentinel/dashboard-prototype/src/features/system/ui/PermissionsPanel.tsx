@@ -28,6 +28,7 @@ import {
   VIEWER_PERMISSION,
   type PermissionDeclaration,
 } from "../model/systemStatus";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 
 /** 角色 id → 图标。图标是呈现细节，留在 UI 层。 */
 const PERMISSION_ICONS: Readonly<Record<PermissionDeclaration["id"], typeof ShieldCheck>> =
@@ -44,50 +45,56 @@ const PERMISSION_ICONS: Readonly<Record<PermissionDeclaration["id"], typeof Shie
  * 指向的是**本页的 tab**，不是路由：`账户维护` 与 `角色绑定` 就在上方 tab 条里，
  * 说清楚去哪里做即可，不需要再放一组会跳走的按钮。
  */
-const PERMISSION_HINT =
-  "授予方式：在「账户维护」创建账号，再在「角色绑定」为它指定角色。界面隐藏不是安全边界，服务端会在每次写操作时独立校验。";
+const PERMISSION_HINT = "system.permissions.grantHint";
 
 export function PermissionsPanel() {
+  const t = useTranslator();
   const ViewerIcon = PERMISSION_ICONS[VIEWER_PERMISSION.id];
   const MaintainerIcon = PERMISSION_ICONS[RULE_MAINTAINER_PERMISSION.id];
 
   return (
     <div className="system-grid">
       <Panel
-        title="最小权限模型"
-        subtitle="只区分查看与修改规则，不引入多租户 RBAC。"
+        title={t("system.permissions.title")}
+        subtitle={t("system.permissions.subtitle")}
       >
         <div className="permission">
           <ViewerIcon size={23} />
           <div>
-            <b>{VIEWER_PERMISSION.title}</b>
+            <b>{t(VIEWER_PERMISSION.titleKey)}</b>
             <p>
-              {VIEWER_PERMISSION.capability} · {VIEWER_PERMISSION.description}
+              {VIEWER_PERMISSION.capability} · {t(VIEWER_PERMISSION.descriptionKey)}
             </p>
           </div>
-          <Status tone={VIEWER_PERMISSION.tone}>{VIEWER_PERMISSION.statusLabel}</Status>
+          <Status tone={VIEWER_PERMISSION.tone}>
+            {t(VIEWER_PERMISSION.statusLabelKey)}
+          </Status>
         </div>
         <div className="permission">
           <MaintainerIcon size={23} />
           <div>
-            <b>{RULE_MAINTAINER_PERMISSION.title}</b>
+            <b>{t(RULE_MAINTAINER_PERMISSION.titleKey)}</b>
             <p>
-              {RULE_MAINTAINER_PERMISSION.capability} · {RULE_MAINTAINER_PERMISSION.description}
+              {RULE_MAINTAINER_PERMISSION.capability} ·{" "}
+              {t(RULE_MAINTAINER_PERMISSION.descriptionKey)}
             </p>
           </div>
           <Status tone={RULE_MAINTAINER_PERMISSION.tone}>
-            {RULE_MAINTAINER_PERMISSION.statusLabel}
+            {t(RULE_MAINTAINER_PERMISSION.statusLabelKey)}
           </Status>
         </div>
-        <p className="permission-hint">{PERMISSION_HINT}</p>
+        <p className="permission-hint">{t(PERMISSION_HINT)}</p>
       </Panel>
-      <Panel title="发布审计链" subtitle="本原型不产生真实发布记录。">
+      <Panel
+        title={t("system.permissions.auditTitle")}
+        subtitle={t("system.permissions.auditSubtitle")}
+      >
         <div className="audit-flow">
           {AUDIT_CHAIN_STEPS.map((step) => (
             <div key={step.step}>
               <span>{step.step}</span>
-              <b>{step.title}</b>
-              <small>{step.detail}</small>
+              <b>{t(step.titleKey)}</b>
+              <small>{t(step.detailKey)}</small>
             </div>
           ))}
         </div>

@@ -27,10 +27,11 @@ import { ROUTE } from "../../../app/router/route.constants";
 import {
   SYSTEM_TABS,
   SYSTEM_TAB,
-  SYSTEM_TAB_LABEL,
+  SYSTEM_TAB_LABEL_KEY,
   resolveSystemTab,
   type SystemTab,
 } from "../model/systemStatus";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 import { CONNECTIONS, CONNECTION_SUMMARY_CARDS } from "../fixtures/systemFixtures";
 import { ConnectionPanel } from "./ConnectionPanel";
 import { PermissionsPanel } from "./PermissionsPanel";
@@ -45,6 +46,7 @@ export interface SystemPageProps {
 
 /** Connection, protocol, permission and identity administration workspace. */
 export function SystemPage({ navigate, view }: SystemPageProps) {
+  const t = useTranslator();
   // 受控：tab 不再是本组件的 state，唯一来源是 URL。切换 = 写回 URL。
   const tab: SystemTab = resolveSystemTab(view);
   const selectTab = (next: SystemTab) => {
@@ -56,11 +58,11 @@ export function SystemPage({ navigate, view }: SystemPageProps) {
     <>
       <Intro
         eyebrow="ADMIN / SYSTEM"
-        title="系统管理"
-        description="检查配置中心、指标采集和事件上报边界，保持运维权限简单明确。"
-        aside={<Status tone="blue">演示环境 · 无凭证操作</Status>}
+        title={t("system.intro.title")}
+        description={t("system.intro.description")}
+        aside={<Status tone="blue">{t("system.intro.aside")}</Status>}
       />
-      <div className="tabs" role="group" aria-label="系统管理分类">
+      <div className="tabs" role="group" aria-label={t("system.intro.tabGroupLabel")}>
         {SYSTEM_TABS.map((id) => (
           <ActionButton
             type="button"
@@ -69,7 +71,7 @@ export function SystemPage({ navigate, view }: SystemPageProps) {
             key={id}
             onClick={() => selectTab(id)}
           >
-            {SYSTEM_TAB_LABEL[id]}
+            {t(SYSTEM_TAB_LABEL_KEY[id])}
           </ActionButton>
         ))}
       </div>

@@ -20,6 +20,7 @@ import {
   PROTOCOL_BOUNDARIES,
   type ProtocolBoundaryId,
 } from "../model/systemStatus";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 
 /** 边界 id → 图标。图标是呈现细节，留在 UI 层。 */
 const PROTOCOL_ICONS: Readonly<Record<ProtocolBoundaryId, typeof Activity>> = Object.freeze({
@@ -29,32 +30,38 @@ const PROTOCOL_ICONS: Readonly<Record<ProtocolBoundaryId, typeof Activity>> = Ob
 });
 
 export function ProtocolPanel() {
+  const t = useTranslator();
   return (
     <div className="system-grid">
-      <Panel title="协议边界" subtitle="控制面与观测面独立演进。">
+      <Panel
+        title={t("system.protocol.boundaryTitle")}
+        subtitle={t("system.protocol.boundarySubtitle")}
+      >
         {PROTOCOL_BOUNDARIES.map((boundary) => {
           const Icon = PROTOCOL_ICONS[boundary.id];
           return (
             <div className="protocol" key={boundary.id}>
               <Icon size={23} />
               <div>
-                <b>{boundary.name}</b>
-                <p>{boundary.role}</p>
+                <b>{t(boundary.nameKey)}</b>
+                <p>{t(boundary.roleKey)}</p>
               </div>
             </div>
           );
         })}
       </Panel>
-      <Panel title="版本与状态" subtitle="示例值不代表部署环境现状。">
+      <Panel
+        title={t("system.protocol.deliveryTitle")}
+        subtitle={t("system.protocol.deliverySubtitle")}
+      >
         {DELIVERY_STATUS_ITEMS.map((item) => (
-          <div className="key-value" key={item.label}>
-            <span>{item.label}</span>
-            <b>{item.value}</b>
+          <div className="key-value" key={item.id}>
+            <span>{t(item.labelKey)}</span>
+            <b>{t(item.valueKey)}</b>
           </div>
         ))}
         <div className="inline-note">
-          <Info size={16} /> 正式交付前需分开验证
-          UI、管理服务、配置中心和实例生效闭环。
+          <Info size={16} /> {t("system.protocol.note")}
         </div>
       </Panel>
     </div>

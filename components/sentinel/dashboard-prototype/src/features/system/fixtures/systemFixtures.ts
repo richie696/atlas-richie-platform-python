@@ -17,6 +17,7 @@
  */
 import {
   CONNECTION_KIND,
+  CONNECTION_STATE,
   type ConnectionStatus,
   type ConnectionSummaryCard,
 } from "../model/systemStatus";
@@ -26,7 +27,7 @@ export const CONNECTIONS: readonly ConnectionStatus[] = Object.freeze([
   {
     kind: CONNECTION_KIND.ConfigCenter,
     name: "Nacos",
-    state: "可用",
+    state: CONNECTION_STATE.Available,
     latency: "12 ms",
     scope: "3 个应用",
     purpose: "配置查询与规则发布",
@@ -35,7 +36,7 @@ export const CONNECTIONS: readonly ConnectionStatus[] = Object.freeze([
   {
     kind: CONNECTION_KIND.ConfigCenter,
     name: "Consul",
-    state: "可用",
+    state: CONNECTION_STATE.Available,
     latency: "18 ms",
     scope: "1 个应用",
     purpose: "KV 查询与条件写入",
@@ -44,7 +45,7 @@ export const CONNECTIONS: readonly ConnectionStatus[] = Object.freeze([
   {
     kind: CONNECTION_KIND.MetricsBackend,
     name: "指标后端",
-    state: "演示模式",
+    state: CONNECTION_STATE.Demo,
     latency: "—",
     scope: "示例曲线",
     purpose: "主机、容器和进程时序指标",
@@ -53,7 +54,7 @@ export const CONNECTIONS: readonly ConnectionStatus[] = Object.freeze([
   {
     kind: CONNECTION_KIND.ReportingCollector,
     name: "Agent Reporting",
-    state: "演示模式",
+    state: CONNECTION_STATE.Demo,
     latency: "—",
     scope: "示例事件",
     purpose: "实例版本与故障事件",

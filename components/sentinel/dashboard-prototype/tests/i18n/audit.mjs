@@ -40,7 +40,27 @@ import { join, relative } from "node:path";
 
 const SRC = "src";
 const CJK = /[\u4e00-\u9fff]/;
-const COMMENT_PREFIX = ["*", "//", "/*"];
+/**
+ * 是否注释行。
+ *
+ * 逐个前缀匹配是错的两次：
+ * 1. 只认星号、斜杠、星斜杠，会把 JSX 注释（行首是花括号）报成界面文案。
+ * 2. 把花括号也当通用前缀，会把 `{cond ? "甲" : "乙"}` 这种**表达式**当成注释——
+ *    rules 从 15 处掉到 3 处、identity 从 66 掉到 62，两处都是被误杀的文案。
+ *
+ * 所以花括号必须与星号**紧邻**才算 JSX 注释。
+ *
+ * 注意：本文件（以及任何 `.mjs`）的块注释里**不能**出现闭合注释的字符序列，
+ * 即使它被反引号包着。JS 解析器不管它出现在什么位置，会就地结束块注释。
+ */
+function isComment(trimmed) {
+  return (
+    trimmed.startsWith("*") ||
+    trimmed.startsWith("//") ||
+    trimmed.startsWith("/*") ||
+    trimmed.startsWith("{/*")
+  );
+}
 
 const featureDirs = readdirSync(join(SRC, "features"))
   .filter((name) => statSync(join(SRC, "features", name)).isDirectory())
@@ -107,7 +127,7 @@ function scan(roots, layer) {
         .split("\n")
         .forEach((raw, index) => {
           const trimmed = raw.trim();
-          if (COMMENT_PREFIX.some((p) => trimmed.startsWith(p))) return;
+          if (isComment(trimmed)) return;
           if (CJK.test(stripTrailingComment(raw))) {
             hits.push({ line: index + 1, text: trimmed });
           }

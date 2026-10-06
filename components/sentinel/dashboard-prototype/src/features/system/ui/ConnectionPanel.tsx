@@ -21,10 +21,12 @@ import type { Navigate } from "../../../shared/types/dashboard";
 import { ROUTE } from "../../../app/router/route.constants";
 import {
   CONNECTION_HEADERS,
+  CONNECTION_STATE_LABEL_KEY,
   connectionStatusTone,
   type ConnectionStatus,
   type ConnectionSummaryCard,
 } from "../model/systemStatus";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 
 export interface ConnectionPanelProps {
   readonly cards: readonly ConnectionSummaryCard[];
@@ -33,6 +35,7 @@ export interface ConnectionPanelProps {
 }
 
 export function ConnectionPanel({ cards, connections, navigate }: ConnectionPanelProps) {
+  const t = useTranslator();
   return (
     <>
       <div className="number-grid">
@@ -48,19 +51,21 @@ export function ConnectionPanel({ cards, connections, navigate }: ConnectionPane
         ))}
       </div>
       <Panel
-        title="连接与能力状态"
-        subtitle="配置中心读写、指标与事件上报是不同链路；下列状态均为示例。"
+        title={t("system.connection.title")}
+        subtitle={t("system.connection.subtitle")}
       >
         {/* 列头复制成可变数组是 `DataTable` 的 props 形状要求；model 侧保持只读。 */}
         <Table
-          heads={[...CONNECTION_HEADERS]}
+          heads={CONNECTION_HEADERS.map((key) => t(key))}
           rows={connections.map((item) => (
             <tr key={item.name}>
               <td>
                 <b>{item.name}</b>
               </td>
               <td>
-                <Status tone={connectionStatusTone(item.state)}>{item.state}</Status>
+                <Status tone={connectionStatusTone(item.state)}>
+                  {t(CONNECTION_STATE_LABEL_KEY[item.state])}
+                </Status>
               </td>
               <td>{item.latency}</td>
               <td>{item.scope}</td>
@@ -71,10 +76,9 @@ export function ConnectionPanel({ cards, connections, navigate }: ConnectionPane
         />
       </Panel>
       <div className="bottom-note">
-        <Info size={18} /> 真正的 Nacos / Consul
-        健康检查、条件写入和回滚能力需由独立管理服务实现。
+        <Info size={18} /> {t("system.connection.note")}
         <LinkButton onClick={() => navigate(ROUTE.Rules)}>
-          查看规则工作台
+          {t("system.connection.action.openRules")}
         </LinkButton>
       </div>
     </>
