@@ -35,7 +35,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -157,19 +157,60 @@ function chrome(args) {
   );
 }
 
+/**
+ * 截一张图并等到**渲染收敛**。
+ *
+ * 中文
+ * ----
+ * 页面里存在懒绘制（Astryx 的 `content-visibility: auto`），视口下缘的内容按需补绘。
+ * 截图若早于补绘完成，那一带会画成页面背景色；晚于则画成面板底色。两种结果都是
+ * **合法渲染**，但截图捕获到哪一个是随机的——实测同一份代码 8 次采样里 5 次落在
+ * 状态 A、3 次落在状态 B，差异 23287px / 2.02% / 通道差 61，而 DOM 逐字节相同。
+ *
+ * 这会让像素门禁变成随机噪声：同一个 commit 有时「全绿」有时「失败」，而失败信息
+ * 指向的区域其实与被测改动无关。改前状态同样复现（8 次里 3 次落到 B），所以这是
+ * 既有缺陷，不是某次改动引入的。
+ *
+ * 修法不是去猜绘制时序，而是**拒绝接受未收敛的捕获**：连续两次截图一致才算数。
+ * 收敛后记录的就是稳定态，基线与比对才重新有意义。代价约 1.7 倍截图时间。
+ *
+ * 逐字节比较足够：像素完全相同则 PNG 编码结果也完全相同（实测同态两次 md5 一致）。
+ */
+function captureSettled(testCase, outDir) {
+  const url = `${BASE_URL}/${testCase.hash}`;
+  const finalPath = path.join(outDir, `${testCase.name}.png`);
+  const scratch = `${finalPath}.settling.png`;
+  const args = (target) => [
+    `--screenshot=${target}`,
+    `--window-size=${VIEWPORT.width},${VIEWPORT.height}`,
+    "--virtual-time-budget=4000",
+    url,
+  ];
+
+  let previous = null;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    chrome(args(scratch));
+    const current = readFileSync(scratch);
+    if (previous !== null && current.equals(previous)) {
+      writeFileSync(finalPath, current);
+      rmSync(scratch, { force: true });
+      return { attempts: attempt, converged: true };
+    }
+    previous = current;
+  }
+  // 5 次仍未收敛：采用最后一次，并如实标记，让比对阶段知道这条不可靠。
+  writeFileSync(finalPath, previous);
+  rmSync(scratch, { force: true });
+  return { attempts: 5, converged: false };
+}
+
 function captureCase(testCase, outDir) {
   const url = `${BASE_URL}/${testCase.hash}`;
   const dom = normalizeDom(chrome(["--dump-dom", url]));
   writeFileSync(path.join(outDir, `${testCase.name}.html`), dom, "utf8");
 
-  // 截图要等首屏图表（SVG 动画关闭，animate={false}）绘制完成
-  chrome([
-    `--screenshot=${path.join(outDir, `${testCase.name}.png`)}`,
-    `--window-size=${VIEWPORT.width},${VIEWPORT.height}`,
-    "--virtual-time-budget=4000",
-    url,
-  ]);
-  return { name: testCase.name, bytes: dom.length };
+  const shot = captureSettled(testCase, outDir);
+  return { name: testCase.name, bytes: dom.length, ...shot };
 }
 
 function capture(outDir) {
@@ -178,11 +219,25 @@ function capture(outDir) {
   for (const testCase of selectedCases()) {
     const result = captureCase(testCase, outDir);
     results.push(result);
-    process.stdout.write(`  ✓ ${result.name.padEnd(24)} dom=${result.bytes}B\n`);
+    // 收敛信息必须可见：静默重采会让人以为一次就稳定，而那正是本工具出过问题的地方。
+    const settle = result.converged
+      ? `settle=${result.attempts}`
+      : `⚠ 未收敛(重试 ${result.attempts} 次)`;
+    process.stdout.write(`  ✓ ${result.name.padEnd(24)} dom=${result.bytes}B  ${settle}\n`);
   }
   writeFileSync(
     path.join(outDir, "manifest.json"),
-    JSON.stringify({ viewport: VIEWPORT, cases: selectedCases().map((c) => ({ name: c.name, hash: c.hash })) }, null, 2),
+    JSON.stringify(
+      {
+        viewport: VIEWPORT,
+        cases: selectedCases().map((c) => ({
+          name: c.name,
+          hash: c.hash,
+          settled: results.find((r) => r.name === c.name)?.converged ?? null,
+        })),
+      },
+      null, 2,
+    ),
     "utf8",
   );
   return results.length;
