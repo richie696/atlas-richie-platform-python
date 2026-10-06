@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { createRuleTranslator } from "../../ruleI18n";
+import { useTranslator } from "../../core/i18n/useTranslator";
 import {
   ALL_APPLICATIONS,
   TIME_RANGES,
@@ -22,6 +22,18 @@ import { Select } from "./Select";
  * 这个筛选的候选集在所有页面共享一份全局常量——任何一个 feature 改演示数据都会
  * 静默影响另外五个页面的下拉内容。应用目录属于各 feature 自己的读模型
  * （`DASHBOARD_CONTROL_PLANE.md` §4.2），由页面传入更符合边界。
+ *
+ * ## 标签归属 `core/i18n/shell.ts`，不再内联
+ *
+ * 旧实现在本文件里写死 `DEFAULT_LABELS` 与 `label="时间范围"`。本组件被 4 个页面
+ * 共用，页面迁到 i18n 而它没迁，筛选条就仍是中文——而且**看起来**每个页面都迁完了。
+ * 共享组件的文案归壳层包（`core/i18n`），只有一个变化原因。
+ *
+ * `labels` prop 保留为覆盖入口：规则页有自己的措辞（`ruleMessages().rules.filters`），
+ * 语义确实不同，不强行共用。
+ *
+ * 时间范围标签原先经 `createRuleTranslator`（旧的 `ruleI18n`）解析，而
+ * `shell.range.*` 键早就在 `SHELL_COPY` 里了——那是一处不必要的耦合，一并切断。
  */
 export type FiltersProps = {
   readonly appId: string;
@@ -35,6 +47,7 @@ export type FiltersProps = {
   /** 追加的业务筛选控件。 */
   readonly extra?: ReactNode;
   readonly showRange?: boolean;
+  /** 覆盖壳层默认措辞。规则页用自己的 filters 文案。 */
   readonly labels?: {
     readonly environment: string;
     readonly production: string;
@@ -42,17 +55,7 @@ export type FiltersProps = {
     readonly allApplications: string;
     readonly sample: string;
   };
-  /** 界面语言，用于解析时间窗口与筛选项标签。 */
-  readonly locale: string;
 };
-
-const DEFAULT_LABELS = {
-  environment: "环境",
-  production: "生产环境 (PROD)",
-  application: "应用",
-  allApplications: "全部应用",
-  sample: "示例采样 · 14:32:18",
-} as const;
 
 export function Filters({
   appId,
@@ -63,10 +66,17 @@ export function Filters({
   all = false,
   extra = null,
   showRange = true,
-  labels = DEFAULT_LABELS,
-  locale,
+  labels,
 }: FiltersProps) {
-  const t = createRuleTranslator(locale);
+  const t = useTranslator();
+  const shellLabels = {
+    environment: t("shell.filter.environment"),
+    production: t("shell.filter.production"),
+    application: t("shell.filter.application"),
+    allApplications: t("shell.filter.allApplications"),
+    sample: t("shell.filter.sample"),
+  };
+  const text = labels ?? shellLabels;
   const appOptions = applications.map((app) => ({ value: app.id, label: app.label }));
   const rangeOptions = TIME_RANGES.map((value) => ({
     value,
@@ -76,20 +86,20 @@ export function Filters({
   return (
     <div className="filters">
       <Select
-        label={labels.environment}
-        value={labels.production}
+        label={text.environment}
+        value={text.production}
         onChange={() => undefined}
-        options={[labels.production]}
+        options={[text.production]}
       />
       <Select
-        label={labels.application}
+        label={text.application}
         value={appId}
         onChange={setAppId}
-        options={all ? [{ value: ALL_APPLICATIONS, label: labels.allApplications }, ...appOptions] : appOptions}
+        options={all ? [{ value: ALL_APPLICATIONS, label: text.allApplications }, ...appOptions] : appOptions}
       />
       {showRange && (
         <Select<TimeRangeId>
-          label="时间范围"
+          label={t("shell.filter.range")}
           value={range}
           onChange={setRange}
           options={rangeOptions}
@@ -97,7 +107,7 @@ export function Filters({
       )}
       {extra}
       <span className="sample-age">
-        <i className="live-dot" /> {labels.sample}
+        <i className="live-dot" /> {text.sample}
       </span>
     </div>
   );

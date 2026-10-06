@@ -78,7 +78,6 @@ export function OverviewPage({
           setRange={setRange}
           all
           applications={overview.appOptions}
-          locale={locale}
         />
       </div>
       <div className="overview-top">

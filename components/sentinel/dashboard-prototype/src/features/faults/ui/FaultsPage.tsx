@@ -43,7 +43,6 @@ export function FaultsPage({ navigate, appId, setAppId, range, setRange, locale 
         range={range}
         setRange={setRange}
         all
-        locale={locale}
         applications={FAULTS_APP_FIXTURES}
       />
       <div className="number-grid">

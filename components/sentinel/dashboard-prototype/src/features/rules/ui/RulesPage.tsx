@@ -75,7 +75,6 @@ export function RulesPage({
         all
         showRange={false}
         labels={messages.rules.filters}
-        locale={locale}
         applications={RULE_APP_FIXTURES}
       />
       <div className="rule-headline">

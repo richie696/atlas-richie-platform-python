@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { InfoIcon as Info, ChartLineUpIcon as ChartLineUp } from "@phosphor-icons/react";
 import { useOnlineStatus } from "@richie696/react-framework-react";
 
@@ -24,6 +24,7 @@ import { navigationItemsWithIcons } from "./router/navigation";
 import type { Navigate } from "../shared/types/dashboard";
 import { ROUTE, type RouteId, type TimeRangeId } from "./router/route.constants";
 import { useHashRoute } from "./router/useHashRoute";
+import { useLocale, useLocaleSetter } from "../core/i18n/useTranslator";
 
 /**
  * 应用装配边界。
@@ -108,8 +109,10 @@ export function App() {
   // 可分享的导航上下文（路由 / 应用 / 时间窗口 / 账号 / 子视图）全部由 URL 拥有。
   // 这里只订阅它，不再在组件里保存第二份副本。
   const route = useHashRoute({ applicationScopeIds: APPLICATION_SCOPE_IDS, defaultAccountId: DEFAULT_ACCOUNT_ID });
-  // 语言是有界的本地偏好，不进可分享链接，因此仍是真正的本地 state。
-  const [locale, setLocale] = useState("zh-CN");
+  // 语言是有界的本机偏好，不进可分享链接。状态由 `LocaleProvider` 持有，
+  // 本组件只消费与下发——与页面里 `useTranslator()` 读的是同一份事实。
+  const locale = useLocale();
+  const setLocale = useLocaleSetter();
   const online = useOnlineStatus();
   const t = useMemo(() => createRuleTranslator(locale), [locale]);
 

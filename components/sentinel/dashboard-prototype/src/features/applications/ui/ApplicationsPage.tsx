@@ -62,7 +62,7 @@ export function ApplicationsPage({
           appId={appId}
           setAppId={setAppId}
           range={range}
-          setRange={setRange} locale={locale}
+          setRange={setRange}
         applications={APPLICATION_FIXTURES}
         />
       </div>

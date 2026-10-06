@@ -11,22 +11,6 @@ const frameworkOptions = Object.freeze({
   showLoading: false,
 });
 
-/**
- * 首屏语言在**挂载前**确定，避免挂载后再切导致的语言闪烁。
- * 语言选择是本机界面偏好，不进 URL；刷新后回落到默认语言是可接受的，
- * 正式实现应从 `StorageAdapter` 读取。
- */
-const storedLocale = (() => {
-  try {
-    return window.localStorage.getItem("sentinel.locale") ?? "";
-  } catch {
-    // 隐私模式下 localStorage 可能抛异常；语言回落到默认即可，不阻断渲染。
-    return "";
-  }
-})();
-
-const initialLocale = storedLocale;
-
 const rootElement = document.getElementById("root");
 
 if (!rootElement) {
@@ -36,7 +20,16 @@ if (!rootElement) {
 createRoot(rootElement).render(
   <React.StrictMode>
     <ReactFrameworkProvider options={frameworkOptions}>
-      <LocaleProvider locale={initialLocale}>
+      {/*
+        LocaleProvider 自己持有 locale 状态：首屏从 `sentinel.locale` 读，之后由
+        语言下拉的命令更新并写回。
+
+        旧实现在这里传一个模块加载时算出的 `initialLocale` 常量，Provider 就再也不
+        变；而 App 内部另有一份活的 useState，于是同一个 locale 存在两份——壳层
+        用新的一份（切语言生效），用 useTranslator 的页面读旧的一份（永远不响应）。
+        详见 `core/i18n/useTranslator.tsx` 的说明。
+      */}
+      <LocaleProvider>
         <AstryxProvider>
           <App />
         </AstryxProvider>

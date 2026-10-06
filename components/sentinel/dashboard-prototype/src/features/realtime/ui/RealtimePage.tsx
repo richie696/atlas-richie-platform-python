@@ -79,7 +79,6 @@ export function RealtimePage({ navigate, appId, setAppId, range, setRange, local
         setRange={setRange}
         all
         applications={REALTIME_APP_FIXTURES}
-        locale={locale}
         extra={
           <Select<MetricFilter>
             label="指标"
