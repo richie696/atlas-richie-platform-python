@@ -1,23 +1,68 @@
+/**
+ * 控制台支持的三种界面语言。
+ *
+ * 语言只影响**展示**：规则 JSON、配置中心 key、资源名、版本与审计事实保持原值，
+ * 不随浏览器语言变化（`DASHBOARD_CONTROL_PLANE.md` §4.3.1）。
+ */
 export const DASHBOARD_LOCALES = Object.freeze([
   { code: "zh-CN", label: "简体中文" },
   { code: "en-US", label: "English" },
   { code: "ja-JP", label: "日本語" },
-]);
+] as const);
 
-const field = (label, hint) => Object.freeze({ label, hint });
+/** 默认语言，也是翻译缺失时的回落 locale。 */
+export const FALLBACK_LOCALE = "zh-CN";
+
+/** 界面语言代码。 */
+export type DashboardLocale = (typeof DASHBOARD_LOCALES)[number]["code"];
+
+/** 字段的标签与说明。缺 `hint` 的字段按空串处理，避免调用点写 `?? ""`。 */
+export interface FieldCopy {
+  readonly label: string;
+  readonly hint: string;
+}
+
+/** 构造一个字段文案。参数类型显式声明，不再依赖隐式 any。 */
+const field = (label: string, hint = ""): FieldCopy =>
+  Object.freeze({ label, hint });
 
 const MESSAGES = Object.freeze({
   "zh-CN": {
+    realtime: {
+      metric: {
+        all: "全部指标",
+        qps: "HTTP QPS",
+        rt: "RT p95",
+        blocked: "拦截率",
+        cpu: "CPU",
+      },
+    },
+    overview: {
+      trend: {
+        windowExcludesRelease:
+          "当前窗口不含 14:02 发布时点；切换到{longer}查看发布前后对比。",
+        sharedWindow: "上下图共用时间范围；蓝色虚线标注一次示例规则发布。",
+      },
+    },
     shell: {
       language: "界面语言",
-      navigation: [
-        "总览",
-        "应用与实例",
-        "规则",
-        "实时监控",
-        "故障分析",
-        "系统管理",
-      ],
+      nav: {
+        overview: "总览",
+        applications: "应用与实例",
+        rules: "规则",
+        realtime: "实时监控",
+        faults: "故障分析",
+        system: "系统管理",
+        accounts: "账户维护",
+        roles: "角色绑定",
+        changePassword: "修改密码",
+        login: "登录",
+        setup: "系统初始化",
+      },
+      range: {
+        last15Minutes: "最近 15 分钟",
+        last1Hour: "最近 1 小时",
+      },
       prototype: "设计原型",
       online: "浏览器在线",
       offline: "浏览器离线 · 仅本地演示",
@@ -38,6 +83,7 @@ const MESSAGES = Object.freeze({
       catalog: "规则清单",
       catalogDetail: "{count} 条示例规则 · 按来源与版本追踪",
       search: "搜索资源或策略",
+      noMatchingRule: "没有匹配当前筛选条件的规则",
       allTypes: "全部类型",
       resourceAndType: "资源 / 类型",
       policy: "策略",
@@ -176,16 +222,41 @@ const MESSAGES = Object.freeze({
     },
   },
   "en-US": {
+    realtime: {
+      metric: {
+        all: "All metrics",
+        qps: "HTTP QPS",
+        rt: "RT p95",
+        blocked: "Block rate",
+        cpu: "CPU",
+      },
+    },
+    overview: {
+      trend: {
+        windowExcludesRelease:
+          "This window excludes the 14:02 release; switch to {longer} to compare before and after.",
+        sharedWindow: "Both charts share one time range; the blue dashed line marks a sample rule release.",
+      },
+    },
     shell: {
       language: "Language",
-      navigation: [
-        "Overview",
-        "Applications & instances",
-        "Rules",
-        "Live monitoring",
-        "Fault analysis",
-        "System",
-      ],
+      nav: {
+        overview: "Overview",
+        applications: "Applications & instances",
+        rules: "Rules",
+        realtime: "Live monitoring",
+        faults: "Fault analysis",
+        system: "System",
+        accounts: "Account maintenance",
+        roles: "Role binding",
+        changePassword: "Change password",
+        login: "Sign in",
+        setup: "System setup",
+      },
+      range: {
+        last15Minutes: "Last 15 minutes",
+        last1Hour: "Last 1 hour",
+      },
       prototype: "Design prototype",
       online: "Browser online",
       offline: "Browser offline · local demo only",
@@ -207,6 +278,7 @@ const MESSAGES = Object.freeze({
       catalog: "Rule catalog",
       catalogDetail: "{count} sample rules · traced by source and version",
       search: "Search resource or policy",
+      noMatchingRule: "No rule matches the current filter",
       allTypes: "All types",
       resourceAndType: "Resource / type",
       policy: "Policy",
@@ -406,16 +478,41 @@ const MESSAGES = Object.freeze({
     },
   },
   "ja-JP": {
+    realtime: {
+      metric: {
+        all: "全メトリクス",
+        qps: "HTTP QPS",
+        rt: "RT p95",
+        blocked: "ブロック率",
+        cpu: "CPU",
+      },
+    },
+    overview: {
+      trend: {
+        windowExcludesRelease:
+          "このウィンドウには 14:02 のリリースは含まれません。{longer}に切替えると前後を比較できます。",
+        sharedWindow: "両グラフは同じ時間範囲を使用します。青い破線はルールリリースの例を示します。",
+      },
+    },
     shell: {
       language: "表示言語",
-      navigation: [
-        "概要",
-        "アプリケーションとインスタンス",
-        "ルール",
-        "リアルタイム監視",
-        "障害分析",
-        "システム",
-      ],
+      nav: {
+        overview: "概要",
+        applications: "アプリケーションとインスタンス",
+        rules: "ルール",
+        realtime: "リアルタイム監視",
+        faults: "障害分析",
+        system: "システム",
+        accounts: "アカウント管理",
+        roles: "ロール割り当て",
+        changePassword: "パスワード変更",
+        login: "ログイン",
+        setup: "システム初期化",
+      },
+      range: {
+        last15Minutes: "直近 15 分",
+        last1Hour: "直近 1 時間",
+      },
       prototype: "デザインプロトタイプ",
       online: "ブラウザ接続中",
       offline: "ブラウザオフライン · ローカルデモのみ",
@@ -436,6 +533,7 @@ const MESSAGES = Object.freeze({
       catalog: "ルール一覧",
       catalogDetail: "{count} 件のサンプルルール · ソースとバージョンで追跡",
       search: "リソースまたはポリシーを検索",
+      noMatchingRule: "現在の絞り込み条件に一致するルールはありません",
       allTypes: "すべての種類",
       resourceAndType: "リソース / 種類",
       policy: "ポリシー",
@@ -627,13 +725,34 @@ const MESSAGES = Object.freeze({
   },
 });
 
-function resolve(messages, path) {
-  return path.split(".").reduce((value, key) => value?.[key], messages);
+/**
+ * 按点号路径在字典中取值。
+ *
+ * 字典尚未整体类型化（阶段 1.3 会按领域拆成 `core/i18n/locales`），因此这里
+ * 显式声明为递归可索引的 `unknown`，返回值交给调用方收窄，而不是留成隐式 any。
+ */
+function resolve(messages: unknown, path: string): unknown {
+  if (typeof messages !== "object" || messages === null) return undefined;
+  return path
+    .split(".")
+    .reduce<unknown>(
+      (value, key) =>
+        typeof value === "object" && value !== null
+          ? (value as Record<string, unknown>)[key]
+          : undefined,
+      messages,
+    );
 }
 
+/**
+ * 返回一个翻译函数：缺失键回退到键名本身，而不是回退成协议字段名。
+ *
+ * 缺失时返回 `path` 是刻意的——它让「没配文案」在界面上显形，便于补齐，而不是
+ * 静默显示一个空标签或字段名。
+ */
 export function createRuleTranslator(locale: string) {
-  const messages = MESSAGES[locale] ?? MESSAGES["zh-CN"];
-  return (path: string, replacements: Record<string, string | number> = {}) => {
+  const messages = (MESSAGES as Record<string, unknown>)[locale] ?? MESSAGES[FALLBACK_LOCALE];
+  return (path: string, replacements: Readonly<Record<string, string | number>> = {}): string => {
     const value = resolve(messages, path);
     if (typeof value !== "string") return path;
     return Object.entries(replacements).reduce(
@@ -643,6 +762,12 @@ export function createRuleTranslator(locale: string) {
   };
 }
 
+/**
+ * 返回某个 locale 的原始文案包。
+ *
+ * feature 边界处会用它做类型收窄（例如 rules feature 的 `RuleWorkbenchMessages`）。
+ * 调用方负责 cast，不在这里强制收窄，否则各 feature 的契约会被这一处抹平。
+ */
 export function ruleMessages(locale: string) {
-  return MESSAGES[locale] ?? MESSAGES["zh-CN"];
+  return (MESSAGES as Record<string, unknown>)[locale] ?? MESSAGES[FALLBACK_LOCALE];
 }
