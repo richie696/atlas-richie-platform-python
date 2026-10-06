@@ -390,6 +390,38 @@ describe("规则工作台筛选", () => {
 });
 
 describe("多语言", () => {
+  /**
+   * 切换语言用的页面清单。
+   *
+   * 中文
+   * ----
+   * 每页用 `?app=` 明确应用粒度：只给 hash 的页面在渲染前会经过一次收敛，等待
+   * 条件要多绕一圈，容易读到中间态。
+   */
+  const LOCALIZED_PAGES = [
+    { name: "总览", hash: "#/overview?app=all&range=1h" },
+    { name: "应用与实例", hash: "#/applications?app=order-service&range=1h" },
+    { name: "规则", hash: "#/rules?app=order-service&range=1h" },
+    { name: "实时监控", hash: "#/realtime?app=all&range=1h" },
+    { name: "故障分析", hash: "#/faults?app=all&range=1h" },
+    { name: "系统管理", hash: "#/system" },
+  ];
+
+  /**
+   * 元素文本里残留的中文字符数。
+   *
+   * 踩过的坑：`.match(/[\\u4e00-\\u9fa5]/g)` **无匹配时返回 null**，于是
+   * `?.length ?? -1` 得到 -1 而不是 0 —— 结果「翻译正确的页面」永远通不过
+   * `=== 0`，而「全是中文的页面」反而能通过。判据必须用 `?? 0`。
+   *
+   * 选 0 作��缺失元素的默认：元素不存在与「有 0 个汉字」都视为达标，另外用一条
+   * 独立的 `before >= 0` 断言确认选择器真的取到了东西，避免恒真。
+   */
+  const cjkCount = (selector) =>
+    `(document.querySelector('${selector}')?.textContent ?? '').match(/[\\u4e00-\\u9fa5]/g)?.length ?? 0`;
+  const TITLE_CJK = cjkCount(".intro h1");
+  const FILTERS_CJK = cjkCount(".filters");
+
   it("切到 English 后导航文案随之切换", async () => {
     await withPage(async (page) => {
       await page.goto(`${E2E_BASE_URL}/#/overview?app=all&range=1h`);
@@ -401,4 +433,70 @@ describe("多语言", () => {
       );
     });
   });
+
+  /**
+   * 逐页断言「切到 English / 日本語后页面标题不再含中文」。
+   *
+   * 中文
+   * ----
+   * 判据只取 `.intro h1`，不取全文：正文里的中文有一部分是**领域数据**
+   * （规则名「国庆大促保护方案」、应用名「生产环境」、故障描述），它们本来就不该
+   * 翻译。用全文汉字数当判据会把 fixture 误判成漏翻——本轮就是这么误判过一次：
+   * faults 正文汉字最高（288），实际它 ui 层一条未翻译文案都没有，全是注释与
+   * fixture。
+   *
+   * 这批用例在迁移前应当**失败**，那正是它们要证明的缺口。
+   */
+  for (const [locale, optionLabel] of [
+    ["en-US", "English"],
+    ["ja-JP", "日本語"],
+  ]) {
+    for (const { name, hash } of LOCALIZED_PAGES) {
+      it(`切到 ${locale} 后「${name}」页标题不含中文`, async () => {
+        await withPage(async (page) => {
+          await page.goto(`${E2E_BASE_URL}/${hash}`);
+          await page.waitFor(`!!document.querySelector('.app-shell')`, { label: "壳层" });
+          // 记录切换前的中文数：已经是 0 的页面（如 faults / rules）这条断言形同虚设，
+          // 顺带确认确实存在标题，避免选择器写错导致恒真。
+          const before = await page.eval(TITLE_CJK);
+          assert.ok(before >= 0, `未取到「${name}」页标题，选择器可能失效`);
+
+          await selectOption(page, 0, optionLabel);
+          await page.waitFor(`${TITLE_CJK} === 0`, {
+            label: `「${name}」标题切到 ${locale}（切换前中文数 ${before}）`,
+          });
+        });
+      });
+    }
+  }
+
+  /**
+   * 筛选条必须跟着切语言。
+   *
+   * 中文
+   * ----
+   * `shared/ui/Filters.tsx` 被 4 个页面共用，它硬编码了
+   * 「环境 / 生产环境 (PROD) / 应用 / 全部应用 / 示例采样 / 时间范围」。
+   * 页面迁完而它没迁，筛选条仍是中文——所以它必须与页面迁移一起验。
+   */
+  for (const [locale, optionLabel] of [
+    ["en-US", "English"],
+    ["ja-JP", "日本語"],
+  ]) {
+    for (const { name, hash } of LOCALIZED_PAGES.filter((p) => p.name !== "系统管理")) {
+      it(`切到 ${locale} 后「${name}」筛选条不含中文`, async () => {
+        await withPage(async (page) => {
+          await page.goto(`${E2E_BASE_URL}/${hash}`);
+          await page.waitFor(`!!document.querySelector('.filters')`, { label: "筛选条" });
+          const before = await page.eval(FILTERS_CJK);
+          assert.ok(before >= 0, `未取到「${name}」筛选条，选择器可能失效`);
+
+          await selectOption(page, 0, optionLabel);
+          await page.waitFor(`${FILTERS_CJK} === 0`, {
+            label: `「${name}」筛选条切到 ${locale}（切换前中文数 ${before}）`,
+          });
+        });
+      });
+    }
+  }
 });

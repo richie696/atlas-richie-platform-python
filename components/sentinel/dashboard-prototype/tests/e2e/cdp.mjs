@@ -171,8 +171,9 @@ class Page {
     return result.result?.value;
   }
 
-  async goto(url, { waitFor } = {}) {
-    const loaded = new Promise((resolve) => {
+  /** 等一次 `Page.loadEventFired`（带上限，避免无响应时挂死）。 */
+  #nextLoad(timeoutMs = 20000) {
+    return new Promise((resolve) => {
       const off = this.#connection.on((message) => {
         if (message.sessionId !== this.#sessionId) return;
         if (message.method === "Page.loadEventFired") {
@@ -180,9 +181,37 @@ class Page {
           resolve();
         }
       });
+      setTimeout(() => {
+        off();
+        resolve();
+      }, timeoutMs);
     });
+  }
+
+  /**
+   * 导航到 `url`，**保证是完整文档加载**。
+   *
+   * 中文
+   * ----
+   * 应用是 hash 路由，测试里的 URL 往往只有 hash 不同。这种情况下 `Page.navigate`
+   * 走的是**同文档导航**：浏览器不重新加载文档，**组件 state 全部保留**。
+   *
+   * 后果实测过：在一个 page 里循环 goto 六个页面测「切语言后还剩多少中文」，而
+   * locale 是 `useState`（不在 URL 里），于是第 2 页起就带着第 1 页切好的语言，
+   * 整份测量报告都是污染的。看起来却「每个页面测出来都对」。
+   *
+   * 修法是先跳 `about:blank` 再跳目标，强制一次真实的文档替换。代价是多一次导航，
+   * 换来「每个用例都从已知初始状态开始」。
+   */
+  async goto(url, { waitFor } = {}) {
+    const blanked = this.#nextLoad();
+    await this.send("Page.navigate", { url: "about:blank" });
+    await blanked;
+
+    const loaded = this.#nextLoad();
     await this.send("Page.navigate", { url });
-    await Promise.race([loaded, delay(20000)]);
+    await loaded;
+
     if (waitFor) await this.waitFor(waitFor);
   }
 
