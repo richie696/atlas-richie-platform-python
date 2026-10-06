@@ -8,6 +8,7 @@
  * 结构化结果，不是页面临时拼接的字符串。
  */
 import { FloppyDiskIcon as FloppyDisk } from "@phosphor-icons/react";
+import { SESSION_CAPABILITY, useCan } from "../../../core/session";
 
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { Panel } from "../../../shared/ui/Panel";
@@ -59,6 +60,7 @@ export function RuleInspectorPanel({
   onBeginEditing,
   onValidate,
 }: RuleInspectorPanelProps) {
+  const canWrite = useCan(SESSION_CAPABILITY.RulesWrite);
   const feedback = feedbackText(validation, t);
   const typeCopy = entry ? messages.types[entry.ruleType as RuleKind] : null;
 
@@ -105,7 +107,7 @@ export function RuleInspectorPanel({
           <b>{t("rules.configuration", { type: typeCopy.label })}</b>
           <span>{typeCopy.description}</span>
         </div>
-        {!editing && (
+        {canWrite && !editing && (
           <ActionButton
             type="button"
             className="rule-edit-button"
@@ -136,9 +138,11 @@ export function RuleInspectorPanel({
           {feedback.text}
         </div>
       )}
-      <ActionButton type="button" className="primary-button full" onClick={onValidate}>
-        <FloppyDisk size={16} /> {t("rules.validate")}
-      </ActionButton>
+      {canWrite && (
+        <ActionButton type="button" className="primary-button full" onClick={onValidate}>
+          <FloppyDisk size={16} /> {t("rules.validate")}
+        </ActionButton>
+      )}
       <p className="nonproduction">{t("rules.notProduction")}</p>
     </Panel>
   );

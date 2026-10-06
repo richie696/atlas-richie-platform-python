@@ -28,6 +28,8 @@
  * 上报采集器三条链路各自独立健康，任何一条断开都不代表其余两条不可用。
  * 分类值只用于读模型自身，页面文案由 UI 层决定。
  */
+import { SESSION_CAPABILITY, type SessionCapability } from "../../../core/session/capabilities";
+
 export const CONNECTION_KIND = Object.freeze({
   ConfigCenter: "config-center",
   MetricsBackend: "metrics-backend",
@@ -202,13 +204,10 @@ export function resolveSystemTab(value: string | undefined): SystemTab {
 }
 
 /** 控制台只判断的两项能力（`DASHBOARD_CONTROL_PLANE.md` §2）。 */
-export const CAPABILITY = Object.freeze({
-  MetricsView: "metrics:view",
-  RulesWrite: "rules:write",
-} as const);
+export const CAPABILITY = SESSION_CAPABILITY;
 
-/** {@link CAPABILITY} 的值联合。 */
-export type Capability = (typeof CAPABILITY)[keyof typeof CAPABILITY];
+/** 能力值联合。与 `core/session` 同一份定义。 */
+export type Capability = SessionCapability;
 
 /** 最小权限模型里的一条角色说明。 */
 export interface PermissionDeclaration {

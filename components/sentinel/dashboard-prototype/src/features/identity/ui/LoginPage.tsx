@@ -20,6 +20,8 @@ import { TextField } from "../../../shared/ui/TextField";
 import { ROUTE } from "../../../app/router/route.constants";
 import type { Navigate } from "../../../shared/types/dashboard";
 import { validateLoginCredentials, type LoginCredentials } from "../model/account";
+import { INITIAL_ACCOUNTS } from "../fixtures/identityFixtures";
+import { useSessionRoleSetter, type SessionRoleId } from "../../../core/session";
 import { identityIssueText } from "./identityCopy";
 
 const EMPTY_CREDENTIALS: LoginCredentials = { username: "", password: "" };

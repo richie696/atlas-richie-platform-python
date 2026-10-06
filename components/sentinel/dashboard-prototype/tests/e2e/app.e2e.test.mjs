@@ -156,6 +156,66 @@ describe("应用壳导航", () => {
     });
   });
 
+  // 权限门禁
+  // --------
+  // `DASHBOARD_CONTROL_PLANE.md` §2：两个能力可独立授予，缺 `rules:write` 时
+  // 规则页隐藏写入口。**界面隐藏不是安全边界**——服务端在每次写操作上仍会独立
+  // 校验，这层用例验证的只是「入口不显示」。
+  describe("权限门禁", () => {
+    /**
+     * 切换演示身份。
+     *
+     * 会话存在 `localStorage` 的 `sentinel.session`（`core/session`），不经过登录
+     * 流程——这里要验证的是门禁，不是登录表单。
+     */
+    async function withRole(page, role) {
+      await page.goto(`${E2E_BASE_URL}/`);
+      await page.eval(`window.localStorage.setItem('sentinel.session', ${JSON.stringify(role)})`);
+      await page.goto(`${E2E_BASE_URL}/#/rules?app=order-service&range=1h`);
+      await page.waitFor(`document.querySelector('.rules-layout') !== null`, {
+        label: "规则页",
+      });
+    }
+
+    it("全权限身份显示规则写入口", async () => {
+      await withPage(async (page) => {
+        await withRole(page, "admin");
+        assert.equal(await page.count(".rule-headline .secondary-button"), 1, "应显示「编辑示例」");
+        assert.equal(await page.count(".rule-edit-button"), 1, "应显示「编辑草稿」");
+        assert.equal(await page.count(".primary-button.full"), 1, "应显示「校验」");
+      });
+    });
+
+    it("只读身份隐藏全部规则写入口, 但仍可读规则目录", async () => {
+      await withPage(async (page) => {
+        await withRole(page, "view");
+        assert.equal(await page.count(".rule-headline .secondary-button"), 0, "不应显示「编辑示例」");
+        assert.equal(await page.count(".rule-edit-button"), 0, "不应显示「编辑草稿」");
+        assert.equal(await page.count(".primary-button.full"), 0, "不应显示「校验」");
+        // 文档 §2：登录用户可查看规则摘要、版本和规则源健康状态。
+        // 门禁只挡写，不挡读——把「读也被挡」当成通过会掩盖真实的过度收敛。
+        //
+        // 规则目录是 `Table` 渲染的 `<tr>`，每行一个 `.resource-button`。
+        // （早先这里写的是 `.rule-catalog li`——这个类名在 DOM 里根本不存在，
+        // 断言恒为 0，看起来像「只读把目录也挡了」，实际是选择器写错。）
+        const listed = await page.count(".resource-button");
+        assert.ok(listed > 0, "只读身份仍应看到规则目录");
+      });
+    });
+
+    it("身份切换后无需刷新即可生效", async () => {
+      await withPage(async (page) => {
+        await withRole(page, "admin");
+        assert.equal(await page.count(".rule-edit-button"), 1, "初始应有写入口");
+        await page.eval(`window.localStorage.setItem('sentinel.session', 'view')`);
+        await page.goto(`${E2E_BASE_URL}/#/faults`);
+        await page.goto(`${E2E_BASE_URL}/#/rules?app=order-service&range=1h`);
+        await page.waitFor(`document.querySelector('.rules-layout') !== null`, { label: "规则页" });
+        assert.equal(await page.count(".rule-edit-button"), 0, "切到只读后写入口应消失");
+      });
+    });
+  });
+
   it("登录页不套应用壳", async () => {
     await withPage(async (page) => {
       await page.goto(`${E2E_BASE_URL}/#/login`);

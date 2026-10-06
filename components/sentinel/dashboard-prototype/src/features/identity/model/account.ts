@@ -17,6 +17,7 @@
  *   够长」这种领域判断不再被绑死在界面语言上。
  */
 import { PASSWORD_MIN_LENGTH, type IdentityIssue } from "./passwordPolicy";
+import { SESSION_CAPABILITY, type SessionCapability } from "../../../core/session/capabilities";
 
 /** 授权角色。值即 API 契约里的 `roleId`，不是展示文案。 */
 export const IDENTITY_ROLE = Object.freeze({
@@ -42,13 +43,10 @@ export type AccountStatus = (typeof ACCOUNT_STATUS)[keyof typeof ACCOUNT_STATUS]
  * 授权只有这两个维度：能看运行数据（`metrics:view`）与能写规则（`rules:write`）。
  * 服务端在**每次请求**上重新判定，客户端持有的能力快照只用于导航和展示。
  */
-export const IDENTITY_CAPABILITY = Object.freeze({
-  MetricsView: "metrics:view",
-  RulesWrite: "rules:write",
-} as const);
+export const IDENTITY_CAPABILITY = SESSION_CAPABILITY;
 
 /** {@link IDENTITY_CAPABILITY} 的值联合。 */
-export type IdentityCapability = (typeof IDENTITY_CAPABILITY)[keyof typeof IDENTITY_CAPABILITY];
+export type IdentityCapability = SessionCapability;
 
 /** 单个角色的定义。`permissions` 是 {@link IDENTITY_CAPABILITY} 的子集。 */
 export interface IdentityRole {

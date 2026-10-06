@@ -4,6 +4,7 @@ import { ReactFrameworkProvider } from "@richie696/react-framework-react";
 import { App } from "./App";
 import { AstryxProvider } from "./app/providers/AstryxProvider";
 import { LocaleProvider } from "./core/i18n/useTranslator";
+import { SessionProvider } from "./core/session";
 import "./styles.css";
 
 const frameworkOptions = Object.freeze({
@@ -30,9 +31,16 @@ createRoot(rootElement).render(
         详见 `core/i18n/useTranslator.tsx` 的说明。
       */}
       <LocaleProvider>
-        <AstryxProvider>
-          <App />
-        </AstryxProvider>
+        {/*
+          SessionProvider 持有当前演示身份与它的能力快照。门禁默认给全量能力，
+          因此界面与门禁落地前逐像素相同；切换到只读身份才隐藏写入口。
+          详见 `core/session/SessionProvider.tsx`。
+        */}
+        <SessionProvider>
+          <AstryxProvider>
+            <App />
+          </AstryxProvider>
+        </SessionProvider>
       </LocaleProvider>
     </ReactFrameworkProvider>
   </React.StrictMode>,

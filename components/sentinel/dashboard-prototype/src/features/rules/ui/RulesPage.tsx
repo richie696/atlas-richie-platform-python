@@ -10,6 +10,7 @@
  * 条目列表，本组件不需要改动。
  */
 import { ShieldCheckIcon as ShieldCheck } from "@phosphor-icons/react";
+import { SESSION_CAPABILITY, useCan } from "../../../core/session";
 
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { Filters } from "../../../shared/ui/Filters";
@@ -41,6 +42,9 @@ export function RulesPage({
   view,
 }: DashboardPageProps) {
   const t = createRuleTranslator(locale);
+  // `rules:write` 门禁。缺能力时隐藏写入口（§2：界面隐藏不是安全边界，
+  // 服务端在每次写操作上仍会独立校验）。
+  const canWrite = useCan(SESSION_CAPABILITY.RulesWrite);
   const messages = ruleMessages(locale) as RuleWorkbenchMessages;
   // 规则类型筛选受控：唯一来源是 URL 的 `view` 参数，切换 = 写回 URL。
   const kindFilter = resolveRuleKindFilter(view);
@@ -83,13 +87,15 @@ export function RulesPage({
           <b>{t("rules.headline")}</b>
           <p>{t("rules.headlineDetail")}</p>
         </div>
-        <ActionButton
-          type="button"
-          className="secondary-button"
-          onClick={workbench.beginEditing}
-        >
-          {t("rules.editSample")}
-        </ActionButton>
+        {canWrite && (
+          <ActionButton
+            type="button"
+            className="secondary-button"
+            onClick={workbench.beginEditing}
+          >
+            {t("rules.editSample")}
+          </ActionButton>
+        )}
       </div>
       <VersionPlan versions={RULE_VERSION_FIXTURES} copy={messages.rules.versions} />
       <div className="rules-layout">
