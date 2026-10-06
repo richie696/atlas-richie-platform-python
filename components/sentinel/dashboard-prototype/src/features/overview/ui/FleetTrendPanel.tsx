@@ -18,9 +18,9 @@
 import { Panel } from "../../../shared/ui/Panel";
 import { TrendChart as Trend } from "../../../shared/ui/charts/TrendChart";
 import { TIME_RANGE, TIME_RANGE_LABEL_KEY } from "../../../app/router/route.constants";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 import {
   isShortWindow,
-  TPS_INTEGRATION,
   TREND_SUBTITLE_KEYS,
   type FleetTrendPoints,
   type FleetTrendWindow,
@@ -30,14 +30,14 @@ export interface FleetTrendPanelProps {
   /** 当前窗口的只读点列。 */
   readonly trend: FleetTrendPoints;
   readonly window: FleetTrendWindow;
-  readonly t: (key: string, values?: Record<string, string | number>) => string;
 }
 
-export function FleetTrendPanel({ trend, window, t }: FleetTrendPanelProps) {
+export function FleetTrendPanel({ trend, window }: FleetTrendPanelProps) {
+  const t = useTranslator();
   const shortWindow = isShortWindow(window);
   return (
     <Panel
-      title="全局流量与防护趋势"
+      title={t("overview.trend.title")}
       subtitle={
         shortWindow
           ? t(TREND_SUBTITLE_KEYS.windowExcludesRelease, {
@@ -45,17 +45,18 @@ export function FleetTrendPanel({ trend, window, t }: FleetTrendPanelProps) {
             })
           : t(TREND_SUBTITLE_KEYS.sharedWindow)
       }
-      action={<span className="muted">{TPS_INTEGRATION.note}</span>}
+      action={<span className="muted">{t("overview.trend.tpsNote")}</span>}
       className="overview-trends"
     >
       <div className="trend-block">
         <div className="trend-title">
-          <h3>总 HTTP QPS（次/秒）</h3>
+          <h3>{t("overview.trend.qpsTitle")}</h3>
           {shortWindow ? (
-            <span>14:17–14:32 · 示例窗口</span>
+            <span>{t("overview.trend.sampleWindow")}</span>
           ) : (
             <span>
-              发布前 <b>24.1K</b> → 发布后 <b>17.6K</b>{" "}
+              {t("overview.trend.beforeRelease")} <b>24.1K</b> →{" "}
+              {t("overview.trend.afterRelease")} <b>17.6K</b>{" "}
               <em className="green">↓ 27%</em>
             </span>
           )}
@@ -64,12 +65,13 @@ export function FleetTrendPanel({ trend, window, t }: FleetTrendPanelProps) {
       </div>
       <div className="trend-block">
         <div className="trend-title">
-          <h3>请求拦截率（Blocked Rate）</h3>
+          <h3>{t("overview.trend.blockedTitle")}</h3>
           {shortWindow ? (
-            <span>14:17–14:32 · 示例窗口</span>
+            <span>{t("overview.trend.sampleWindow")}</span>
           ) : (
             <span>
-              发布前 <b>1.8%</b> → 发布后 <b>8.6%</b>{" "}
+              {t("overview.trend.beforeRelease")} <b>1.8%</b> →{" "}
+              {t("overview.trend.afterRelease")} <b>8.6%</b>{" "}
               <em className="red">↑ 6.8%</em>
             </span>
           )}

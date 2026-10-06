@@ -17,11 +17,13 @@ import { Status } from "../../../shared/ui/Status";
 import { ROUTE } from "../../../app/router/route.constants";
 import { numberText } from "../format/numberText";
 import {
+  APPLICATION_HEALTH_LABEL_KEY,
   APPLICATION_TABLE_HEADERS,
   CELL_ALERT_THRESHOLDS,
   type ApplicationSummary,
   type FleetAttention,
 } from "../model/overview";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 import type { Navigate } from "../../../shared/types/dashboard";
 
 export interface ApplicationTableProps {
@@ -39,18 +41,19 @@ export function ApplicationTable({
   appId,
   navigate,
 }: ApplicationTableProps) {
+  const t = useTranslator();
   return (
     <Panel
-      title="应用运行状态"
-      subtitle="按应用聚合的关键指标，点击应用可进入实例矩阵。"
+      title={t("overview.table.title")}
+      subtitle={t("overview.table.subtitle")}
       action={
         <LinkButton onClick={() => navigate(ROUTE.Applications, { appId })}>
-          查看全部应用
+          {t("overview.table.viewAll")}
         </LinkButton>
       }
     >
       <Table
-        heads={[...APPLICATION_TABLE_HEADERS]}
+        heads={APPLICATION_TABLE_HEADERS.map((key) => t(key))}
         rows={applications.map((app) => (
           <tr key={app.id}>
             <td>
@@ -59,7 +62,7 @@ export function ApplicationTable({
               </LinkButton>
             </td>
             <td>
-              <Status tone={app.health}>{app.healthReason}</Status>
+              <Status tone={app.health}>{t(APPLICATION_HEALTH_LABEL_KEY[app.health])}</Status>
             </td>
             <td>
               {app.runningInstances} / {app.totalInstances}
@@ -78,14 +81,17 @@ export function ApplicationTable({
             <td>{app.ruleVersion}</td>
             <td>
               <LinkButton onClick={() => navigate(ROUTE.Applications, { appId: app.id })}>
-                详情
+                {t("overview.table.detail")}
               </LinkButton>
             </td>
           </tr>
         ))}
       />
       <p className="table-note">
-        {`演示列表显示 ${applications.length} / ${attention.totalApps} 个应用。`}
+        {t("overview.table.note", {
+          shown: applications.length,
+          total: attention.totalApps,
+        })}
       </p>
     </Panel>
   );

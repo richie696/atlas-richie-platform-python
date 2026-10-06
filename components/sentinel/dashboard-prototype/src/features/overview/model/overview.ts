@@ -45,8 +45,6 @@ export interface ApplicationSummary {
   /** 展示名，筛选下拉与表格首列共用。 */
   readonly name: string;
   readonly health: ApplicationHealth;
-  /** 健康结论的人话说明（`stateLabel` 的领域含义）。 */
-  readonly healthReason: string;
   readonly runningInstances: number;
   readonly totalInstances: number;
   readonly cpuPercent: number;
@@ -64,19 +62,39 @@ export const CELL_ALERT_THRESHOLDS = Object.freeze({
   blockedRatePercent: 10,
 } as const);
 
-/** 应用状态表格的列头。 */
+/** 应用状态表格的列头。值是语言键，译文在 `i18n/locales.ts`。 */
 export const APPLICATION_TABLE_HEADERS: readonly string[] = Object.freeze([
-  "应用名称",
-  "状态",
-  "实例数",
-  "CPU 平均",
-  "内存平均",
-  "HTTP QPS",
-  "RT p95",
-  "拦截率",
-  "规则版本",
-  "操作",
+  "overview.table.head.name",
+  "overview.table.head.status",
+  "overview.table.head.instances",
+  "overview.table.head.cpuAvg",
+  "overview.table.head.memoryAvg",
+  "overview.table.head.httpQps",
+  "overview.table.head.rtP95",
+  "overview.table.head.blockedRate",
+  "overview.table.head.ruleVersion",
+  "overview.table.head.actions",
 ]);
+
+/**
+ * 健康等级的展示文案键。
+ *
+ * 中文
+ * ----
+ * 曾经还有一个 `healthReason: string` 字段，由 fixture 直接给中文（"资源压力"）。
+ * 它的取值与 `health` 一一对应，于是同一份事实存在两份：改枚举要记得改 fixture，
+ * 改 fixture 又不影响枚举——两份都可能对不上，且中文绕过了语言包。
+ *
+ * 这里收敛成「枚举 -> 语言键」的单向映射，`healthReason` 从模型里删除。
+ * 将来若真需要自由文本说明（例如「CPU 连续 5 分钟高于 90%」），应另加一个
+ * 明确的 `healthDetail` 字段，而不是让枚举标签兼职说明文字。
+ */
+export const APPLICATION_HEALTH_LABEL_KEY: Readonly<Record<ApplicationHealth, string>> =
+  Object.freeze({
+    critical: "overview.table.health.critical",
+    warning: "overview.table.health.warning",
+    healthy: "overview.table.health.healthy",
+  } as const);
 
 /**
  * 异常摘要。
@@ -108,11 +126,32 @@ export function attentionDrilldownAppId(attention: FleetAttention): string {
  * TPS = 完成的**业务事务**数/秒，必须由应用明确标记事务边界与成功口径。
  * 当前未接入业务事务埋点，因此 `integrated` 为 `false`，界面必须显示缺口文案，
  * **不得**用 HTTP QPS 或 `succeeded` entry 推算，也不显示 0。
+ *
+ * 缺口文案本身在 `features/overview/i18n/locales.ts` 的 `overview.trend.tpsNote`，
+ * 不在这里——model 层持有界面文案会让「这个接入状态」和「这句话怎么说」耦在一起，
+ * 接入 TPS 后改文案要动 model。
  */
 export const TPS_INTEGRATION = Object.freeze({
   integrated: false,
-  note: "TPS 暂无接入 · 不与 QPS 混用",
 } as const);
+
+/**
+ * 配置中心的连接状态。
+ *
+ * 中文
+ * ----
+ * 是枚举而不是 `string`：连接状态是**界面**决定的取值集合，`"可用"` 这种中文字面量
+ * 放在 fixture 里等于让演示数据绕过语言包（与曾经的 `healthReason` 同一个毛病）。
+ */
+export type InfraConnectionState = "available" | "unavailable" | "connecting";
+
+/** 连接状态的展示文案键。 */
+export const INFRA_STATE_LABEL_KEY: Readonly<Record<InfraConnectionState, string>> =
+  Object.freeze({
+    available: "overview.infra.state.available",
+    unavailable: "overview.infra.state.unavailable",
+    connecting: "overview.infra.state.connecting",
+  } as const);
 
 /**
  * 基础组件与规则下发状态。
@@ -122,18 +161,26 @@ export const TPS_INTEGRATION = Object.freeze({
  * 判别联合而不是一个全可空的大对象：配置中心有延迟观测值，规则下发覆盖只有
  * 实例数与百分比，两者的「缺什么」不同，合成一个结构会让调用方用 `?? 0`
  * 伪造出「延迟 0 ms」这种不存在的观测。
+ *
+ * `name` 在两个分支里语义不同，因此也分成两种形态：
+ * - `config-center` 的 `name` 是**产品名**（Nacos / Consul），属于数据，保持原样。
+ * - `rule-delivery` 的 `name` 是**功能名**（规则版本下发），属于界面文案，用语言键。
+ *
+ * 之前两边共用一个 `name: string`，于是「Nacos」和「规则版本下发」被同一条路径渲染，
+ * 一个能翻译一个不能——差异藏在一个共用字段里，只有切到非中文语言才暴露。
  */
 export type InfraStatus =
   | {
       readonly component: "config-center";
-      /** Nacos / Consul。 */
+      /** Nacos / Consul。产品名，不翻译。 */
       readonly name: string;
-      readonly state: string;
+      readonly state: InfraConnectionState;
       readonly latencyMs: number;
     }
   | {
       readonly component: "rule-delivery";
-      readonly name: string;
+      /** 展示名的语言键。 */
+      readonly nameKey: string;
       readonly appliedInstances: number;
       readonly totalInstances: number;
       readonly coveragePercent: number;

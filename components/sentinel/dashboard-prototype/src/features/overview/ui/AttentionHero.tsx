@@ -15,6 +15,7 @@ import { ArrowRightIcon as ArrowRight, WarningIcon as Warning } from "@phosphor-
 
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { ROUTE } from "../../../app/router/route.constants";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 import type { Navigate } from "../../../shared/types/dashboard";
 import type { FleetAttention } from "../model/overview";
 
@@ -26,6 +27,7 @@ export interface AttentionHeroProps {
 }
 
 export function AttentionHero({ attention, appId, navigate }: AttentionHeroProps) {
+  const t = useTranslator();
   return (
     <div className="alert-hero">
       <span className="alert-icon">
@@ -34,8 +36,8 @@ export function AttentionHero({ attention, appId, navigate }: AttentionHeroProps
       <div>
         <span className="eyebrow">NEEDS ATTENTION</span>
         <h2>
-          {`${attention.totalApps} 个应用运行中，`}
-          <em>{`${attention.attentionCount} 个需要关注`}</em>
+          {t("overview.attention.appsRunning", { count: attention.totalApps })}
+          <em>{t("overview.attention.needsAttention", { count: attention.attentionCount })}</em>
         </h2>
         <p>{attention.summary}</p>
       </div>
@@ -44,7 +46,7 @@ export function AttentionHero({ attention, appId, navigate }: AttentionHeroProps
         className="primary-button"
         onClick={() => navigate(ROUTE.Applications, { appId })}
       >
-        查看异常应用 <ArrowRight size={16} />
+        {t("overview.attention.viewApps")} <ArrowRight size={16} />
       </ActionButton>
     </div>
   );

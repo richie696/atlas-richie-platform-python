@@ -28,7 +28,7 @@ import {
 import { Filters } from "../../../shared/ui/Filters";
 import { Intro } from "../../../shared/ui/Intro";
 import type { DashboardPageProps } from "../../../shared/types/dashboard";
-import { createRuleTranslator } from "../../../ruleI18n";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 import {
   APPLICATION_SUMMARIES,
   FLEET_ATTENTION,
@@ -37,6 +37,7 @@ import {
   seriesForRange,
 } from "../fixtures/overviewFixtures";
 import type { InfraStatus } from "../model/overview";
+import { INFRA_STATE_LABEL_KEY } from "../model/overview";
 import { useFleetOverview } from "../state/useFleetOverview";
 import { ApplicationTable } from "./ApplicationTable";
 import { AttentionHero } from "./AttentionHero";
@@ -49,9 +50,8 @@ export function OverviewPage({
   setAppId,
   range,
   setRange,
-  locale,
 }: DashboardPageProps) {
-  const t = createRuleTranslator(locale);
+  const t = useTranslator();
   const overview = useFleetOverview({
     appId,
     range,
@@ -68,8 +68,8 @@ export function OverviewPage({
       <div className="overview-context">
         <Intro
           eyebrow="OPERATIONS / FLEET"
-          title="全局运行概览"
-          description="从应用视角了解整体流量与防护状况，快速定位需要关注的服务。"
+          title={t("overview.intro.title")}
+          description={t("overview.intro.description")}
         />
         <Filters
           appId={appId}
@@ -88,7 +88,7 @@ export function OverviewPage({
         />
         <InfraStatusCard items={overview.infra} />
       </div>
-      <FleetTrendPanel trend={trend} window={overview.window} t={t} />
+      <FleetTrendPanel trend={trend} window={overview.window} />
       <ApplicationTable
         applications={overview.applicationRows}
         attention={overview.attention}
@@ -107,15 +107,19 @@ export function OverviewPage({
  * 两条数据形态不同：配置中心有延迟观测值，规则下发只有实例覆盖数与百分比。
  * model 用判别联合表达，这里的分支让「规则下发没有延迟」成为类型层面的事实，
  * 而不是渲染时补一个 `0 ms`。
+ *
+ * 展示名也随分支走：`config-center` 渲染产品名（数据），`rule-delivery` 渲染语言键
+ * （界面文案）。共用一条路径会让其中一个永远不跟随语言切换。
  */
 function infraItemBody(item: InfraStatus) {
+  const t = useTranslator();
   if (item.component === "config-center") {
     return (
       <>
         <CloudCheck size={30} color="#56d6a1" />
         <b>{item.name}</b>
         <small>
-          {item.state} · {item.latencyMs} ms
+          {t(INFRA_STATE_LABEL_KEY[item.state])} · {item.latencyMs} ms
         </small>
       </>
     );
@@ -123,7 +127,7 @@ function infraItemBody(item: InfraStatus) {
   return (
     <>
       <ShieldCheck size={30} color="#5badff" />
-      <b>{item.name}</b>
+      <b>{t(item.nameKey)}</b>
       <small>
         {item.appliedInstances} / {item.totalInstances} · {item.coveragePercent}%
       </small>
@@ -132,17 +136,26 @@ function infraItemBody(item: InfraStatus) {
 }
 
 /**
+ * 列表 key。判别联合的两个分支没有共同的身份字段，所以按分支各取一个，
+ * 并带上 component 前缀避免不同分支的取值撞车。
+ */
+function infraItemKey(item: InfraStatus): string {
+  return item.component === "config-center" ? `cc:${item.name}` : `rd:${item.nameKey}`;
+}
+
+/**
  * 基础组件与规则下发状态卡片（`overview-top` 行的第二格）。
  */
 function InfraStatusCard({ items }: { readonly items: readonly InfraStatus[] }) {
+  const t = useTranslator();
   return (
     <div className="infra-card">
       <div className="card-heading">
-        基础组件与规则状态 <small>均为演示状态</small>
+        {t("overview.infra.title")} <small>{t("overview.infra.demoOnly")}</small>
       </div>
       <div className="infra-items">
         {items.map((item) => (
-          <div key={item.name}>{infraItemBody(item)}</div>
+          <div key={infraItemKey(item)}>{infraItemBody(item)}</div>
         ))}
       </div>
     </div>

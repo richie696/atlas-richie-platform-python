@@ -15,11 +15,15 @@
  * `createTranslator`，六页全部迁完后 `ruleI18n.ts` 整体删除。
  *
  * 这样每个 feature 的文案所有权是独立的一步，不需要一次改完。
+ *
+ * 已迁：shell、faults、overview。其余 feature 的 `ui/` 层仍直接写中文字面量，
+ * 真实规模见 `tests/i18n/audit.mjs`。
  */
 import { Translator } from "@richie696/react-framework";
 
 import { SHELL_COPY } from "./shell";
 import { FAULTS_COPY } from "../../features/faults/i18n/locales";
+import { OVERVIEW_COPY } from "../../features/overview/i18n/locales";
 import { FALLBACK_LOCALE, resolveLocale } from "./locales";
 import {
   buildDictionary,
@@ -34,7 +38,7 @@ export type { Translate } from "./types";
  *
  * 新增 feature 迁移时在此追加一项。顺序不影响结果——重复键会抛错，不存在覆盖。
  */
-const BUNDLES: readonly LocaleBundle[] = [SHELL_COPY, FAULTS_COPY];
+const BUNDLES: readonly LocaleBundle[] = [SHELL_COPY, FAULTS_COPY, OVERVIEW_COPY];
 
 const translator = new Translator(buildDictionary(BUNDLES), FALLBACK_LOCALE);
 

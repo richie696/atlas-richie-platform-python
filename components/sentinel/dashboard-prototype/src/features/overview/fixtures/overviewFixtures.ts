@@ -30,11 +30,11 @@ export const FLEET_ATTENTION: FleetAttention = Object.freeze({
 
 /** 基础组件与规则下发状态。 */
 export const INFRA_STATUS: readonly InfraStatus[] = Object.freeze([
-  { component: "config-center", name: "Nacos", state: "可用", latencyMs: 12 },
-  { component: "config-center", name: "Consul", state: "可用", latencyMs: 18 },
+  { component: "config-center", name: "Nacos", state: "available", latencyMs: 12 },
+  { component: "config-center", name: "Consul", state: "available", latencyMs: 18 },
   {
     component: "rule-delivery",
-    name: "规则版本下发",
+    nameKey: "overview.infra.component.ruleDelivery",
     appliedInstances: 142,
     totalInstances: 145,
     coveragePercent: 98,
@@ -47,7 +47,6 @@ export const APPLICATION_SUMMARIES: readonly ApplicationSummary[] = Object.freez
     id: "order-service",
     name: "order-service",
     health: "critical",
-    healthReason: "资源压力",
     runningInstances: 11,
     totalInstances: 12,
     cpuPercent: 78,
@@ -61,7 +60,6 @@ export const APPLICATION_SUMMARIES: readonly ApplicationSummary[] = Object.freez
     id: "payment-service",
     name: "payment-service",
     health: "warning",
-    healthReason: "CPU 偏高",
     runningInstances: 8,
     totalInstances: 8,
     cpuPercent: 62,
@@ -75,7 +73,6 @@ export const APPLICATION_SUMMARIES: readonly ApplicationSummary[] = Object.freez
     id: "user-service",
     name: "user-service",
     health: "healthy",
-    healthReason: "运行正常",
     runningInstances: 12,
     totalInstances: 12,
     cpuPercent: 24,
