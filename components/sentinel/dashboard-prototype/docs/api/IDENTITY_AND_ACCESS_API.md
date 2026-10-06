@@ -1,6 +1,6 @@
 # Sentinel Dashboard 控制面初始化与身份 API 契约（V1 草案）
 
-本契约服务于 Dashboard 与 Python 管理后台之间的控制面。Dashboard 不直接连接 Nacos/Consul，也不保存密码、密码哈希、访问令牌、数据库口令或初始化密钥。所有写操作由后台再次鉴权、校验并审计；前端路由隐藏只是交互优化，不是安全边界。
+本契约服务于 Dashboard 与 Python 管理后台之间的控制面。Dashboard 浏览器不直接连接 Nacos/Consul，也不持久化或回显密码、密码哈希、访问令牌、数据库口令或初始化密钥。规则源可使用部署凭证引用、一次性直接录入的凭证，或不启用认证；后两者均由后台在 TLS 请求中接收并按受保护安装配置处理。所有写操作由后台再次鉴权、校验并审计；前端路由隐藏只是交互优化，不是安全边界。
 
 Dashboard 已不是单纯的配置中心编辑器。它是 Sentinel 的管理控制面：配置中心持有**当前生效规则**，关系数据库持有**控制面事实**，指标/事件由 Agent Reporting 与后续指标存储承担。
 
@@ -66,10 +66,33 @@ Request:
 ```json
 {
   "database":{"kind":"mysql","validationRequestId":"req-db-123"},
-  "admin":{"username":"admin","displayName":"系统管理员","password":"<write-only>"},
-  "ruleSource":{"kind":"nacos","endpoint":"https://nacos.example.com","namespace":"prod","credentialRef":"secret://sentinel/nacos"}
+  "admin":{"username":"admin","password":"<write-only>"},
+  "ruleSource":{
+    "kind":"nacos",
+    "endpoint":"https://nacos.example.com",
+    "namespace":"prod",
+    "authentication":{"mode":"credential_reference","reference":"secret://sentinel/nacos"}
+  }
 }
 ```
+
+`ruleSource.authentication` 是按来源区分的受限联合类型；其所有敏感字段均为 write-only，服务端响应、审计记录与错误信息不得回显：
+
+```ts
+type NacosRuleSourceAuthentication =
+  | { mode: "credential_reference"; reference: string }
+  | { mode: "direct"; username: string; password: string }
+  | { mode: "none" };
+
+type ConsulRuleSourceAuthentication =
+  | { mode: "credential_reference"; reference: string }
+  | { mode: "direct"; aclToken: string }
+  | { mode: "none" };
+```
+
+- `credential_reference`：推荐的生产方式。`reference` 可以由 KMS、Vault、Kubernetes Secret、受控挂载文件或部署环境变量解析；KMS 不是连接配置中心的强制条件。
+- `direct`：允许内网、隔离网络或一次性 K8s 部署通过 Web setup 配置 Nacos 用户名/密码或 Consul ACL Token。请求必须走 TLS；浏览器不得保留、再次读取或回显凭证。后台仅在初始化窗口内接收，并使用部署侧提供的安装加密密钥保护持久化配置；该密钥可来自 Kubernetes Secret 或环境注入，不要求使用 KMS。
+- `none`：允许未启用认证的 Nacos/Consul 部署。后台仍须记录操作者和选择结果，并在连接校验中明确标记匿名模式；生产暴露网络必须由网络隔离、访问控制和 TLS 保护。
 
 Response: `201 Created`，返回 `BootstrapStatus` 与 `AccountSummary`（均不含 credential）。成功后服务端立即关闭 initialization window，前端替换到 `#/login`，不提供“返回登录”或“再次打开 setup”入口。所有重复初始化、在 `ready` 状态下的初始化请求，以及完成后访问 setup 专用操作，均返回 `409 initialization_completed`；迁移或来源登记失败返回可恢复的稳定错误码，不能留下“账号已创建但系统未就绪”的半完成状态。
 
@@ -102,7 +125,7 @@ Query：`page`、`pageSize`、`query`、`status`。Response：
 
 ```json
 {"items":[{
-  "id":"account-admin","username":"admin","displayName":"系统管理员",
+  "id":"account-admin","username":"admin",
   "roleId":"admin","status":"active","builtIn":true,
   "lastLoginAt":"2026-09-14T06:21:00Z"
 }],"page":1,"pageSize":20,"total":1}
@@ -110,11 +133,11 @@ Query：`page`、`pageSize`、`query`、`status`。Response：
 
 ### `POST /accounts`
 
-创建普通账号。Request：`username`、`displayName`、`roleId`（`admin|view`）；V1 不接收初始密码，后台发送一次性设置密码流程或要求账号首次设置。仅 `admin` 可调用。
+创建普通账号。Request：`username`、`password`、`roleId`（`admin|view`）；密码为写入即忘的凭证字段，服务端只保存哈希，不返回或记录明文。仅 `admin` 可调用。
 
 ### `PATCH /accounts/{accountId}`
 
-仅允许修改 `displayName`、`status`。内置管理员不可删除；停用当前最后一个 admin 必须返回 `409 last_admin`。仅 `admin` 可调用。
+仅允许修改 `status`。账号名创建后不可修改；内置管理员不可删除；停用当前最后一个 admin 必须返回 `409 last_admin`。仅 `admin` 可调用。
 
 ### `DELETE /accounts/{accountId}`
 
@@ -151,7 +174,7 @@ Request：`{"roleId":"view","reason":"..."}`；服务端检查不能移除最后
 
 ```ts
 type AccountSummary = {
-  id: string; username: string; displayName: string;
+  id: string; username: string;
   roleId: "admin" | "view";
   status: "active" | "disabled";
   builtIn: boolean; lastLoginAt: string | null;
@@ -165,7 +188,7 @@ type BootstrapPhase = "storage_required" | "storage_ready" | "admin_required" | 
 type BootstrapStatus = { phase: BootstrapPhase; initialized: boolean; requestId?: string };
 ```
 
-页面职责：初始化页只处理未初始化服务的首次系统配置与后端结果，成功后立刻离开该路由；登录页不提供 setup 跳转入口；账户维护负责账号状态与生命周期；角色绑定负责单角色选择和变更理由；修改密码只负责输入与服务端结果展示。任何页面都不直接处理密码哈希、令牌刷新、数据库口令持久化、配置中心凭证或权限最终判定。
+页面职责：初始化页只处理未初始化服务的首次系统配置与后端结果，成功后立刻离开该路由；登录页不提供 setup 跳转入口；账户维护负责账号状态与生命周期；角色绑定负责单角色选择和变更理由；修改密码只负责输入与服务端结果展示。初始化页可在用户明确选择 `direct` 时一次性收集配置中心凭证，但不得持久化、回显或处理其加密；密码哈希、令牌刷新、数据库口令持久化、配置中心凭证保护与权限最终判定均属于后台职责。
 
 ## 7. 审计与验证要求
 

@@ -961,6 +961,9 @@
 ## M5：Embedded Dashboard、文档和 1.0
 
 ### M5.1 [x] 实现 per-process embedded 管理 API
+- **历史说明**：下列端点与 PUT 退出标准保留原始规划记录，**不代表当前实际 API**；
+  现行 per-process 端点以 §M6.6 和实现为准。配置中心回写是独立规则控制台
+  设计，不复活本进程 `PUT /api/v1/rule-snapshots/{source}`。
 - **Deliverable**:
   - 新 wheel `components/sentinel/sentinel-dashboard/`
   - REST API:
@@ -1096,13 +1099,11 @@
 state / rules / metrics / events + reload / reset breaker. 1 进程 1
 dashboard, **不做**跨进程聚合.
 
-**库明确不做的 3 件事** (任何版本都不做, 是库职责边界):
+**Sentinel 运行时库及 per-process Dashboard 不做的 3 件事**（独立管理产品另行规划）:
 
-1. **跨进程聚合 dashboard** (`sentinel-dashboard-aggregator`): 不出.
-   实际部署: K8s pod 1 process 1 socket 1 dashboard (kubectl
-   port-forward 看), 宿主机多服务各自 socket 端口 (nginx upstream
-   做 L7 LB 即可), 多 dashboard 不需要 1 个统一 UI. 想看跨进程
-   聚合 → OTel → Prometheus → Grafana, 走业界标准, 不需要库再做.
+1. **跨进程聚合控制台**：不塞入运行时主包或 per-process Dashboard wheel；
+   统一规则编辑与跨实例查看属于独立部署的管理服务，指标历史优先复用
+   OTel/Prometheus 等现有运维后端，不把多进程内存拼成虚假的全局视图。
 2. **Collector Python**: 不出. 跨进程 events 接收方由 Java/Go 服务端仓
    维护 (M6.5 wire contract 已就绪, commit `2c97b3d` 5-owner 签收).
 3. **持久化 / TSDB / 告警 / 长期历史查询**: 不做. 这些是运维工具栈的职责,
@@ -1113,8 +1114,18 @@ dashboard, **不做**跨进程聚合.
   监控后端都是 view layer)
 - DEPENDENCY_POLICY.md: 主包 0 3rd-party, extension wheel 允许合理
   3rd-party 但**不**包括 DB / 监控后端 SDK (那是用户栈)
-- 1 进程 1 dashboard 模型 = 1 进程 1 socket, 天然隔离, 跨进程
-  聚合 = 业务栈职责 (nginx L7 / OTel / Prometheus), 库不重复造轮子
+- 1 进程 1 dashboard 模型只承担本进程诊断；独立控制台可以消费受控
+  实例回执和现有监控后端，但不改变运行时库的数据所有权或依赖边界。
+
+**独立规则控制台新方向（产品方向已确认，接口与 UI 仍为设计草案）**：
+每个应用/环境/规则集只绑定一个当前生效的 Nacos 或 Consul 配置项；
+控制台编辑完整规则快照并回写配置中心，再区分「写入成功」与「实例已生效」。
+不直写业务 DB 作为规则源，不默认双写。权限只保留 `metrics:view` 与
+`rules:write` 两项能力，无租户、组织树或多级审批。界面必须有 host/
+container/process 范围标识和资源压力、HTTP QPS、业务 TPS、RT、阻断趋势；
+TPS 必须有业务事务埋点，p95/p99 必须有可聚合 RT 分布数据，不能把当前累计
+快照当作这些图表已经实现。详见 [DASHBOARD_CONTROL_PLANE.md](../DASHBOARD_CONTROL_PLANE.md)。
+此方向不纳入 M6.6 per-process 交付勾选；后续须独立拆分实施和真实双后端验收。
 
 ### M5 Exit [x] (M5.5 退出标准)
 - **Exit Criteria**(§21 + §24,以 M5.5 为 gate):
@@ -1428,7 +1439,7 @@ dashboard, **不做**跨进程聚合.
     包 (Python 投影), 跨语言 contract test (Go / Java SDK mock 跑同
     spec) — 留 worker / Mavis 实施
 
-### M6.6 [ ] 聚合 Dashboard 和 Web UI(2026-09-14 重新打开: 实施 per-process Web 管理页面, 合理依赖 OK)
+### M6.6 [ ] Per-process Dashboard Web UI（2026-09-14 重新打开；不包含独立规则控制台）
 - **重新打开状态 (2026-09-14)**: richie696 显式反馈 "dashboard 应用除外,
   需要用它做 Web 管理页面, 合理的依赖是需要的". 修正之前"1.x 不实施"
   评估, 实施 per-process Web 管理页面 (HTML + JSON 双协议), 合理依赖
@@ -1443,7 +1454,7 @@ dashboard, **不做**跨进程聚合.
   - 鉴权: Bearer token (admin) — 跟现有保持一致
   - 审计: JSON list, capped 1000 (现有保留)
   - Bind: 127.0.0.1 默认 (loopback, M6.7 决策一致)
-- **API 端点 (保留 6 个 JSON, 新增 HTML 页面)**:
+- **API 端点 (保留 7 个 JSON, 新增 HTML 页面)**:
   - 保留: GET /health, /metrics, /rules, /rules/<id>, /state; POST /admin/rules/reload, /admin/breaker/<id>/reset
   - 新增: GET / (dashboard overview), /rules (HTML), /metrics (HTML), /settings, /audit
 - **依赖 (extension wheel, 主包 0 3rd-party 不变)**:
