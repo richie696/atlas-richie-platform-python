@@ -21,7 +21,7 @@ import { RULE_CATALOG_HEADERS } from "../model/ruleCatalog";
 import { RULE_KIND_ALL, resolveRuleKindFilter } from "../model/ruleKinds";
 import { ROUTE } from "../../../app/router/route.constants";
 import { useRuleWorkbench } from "../state/useRuleWorkbench";
-import { fixtureGateway } from "../../../core/api/fixtureGateway";
+import { useConsoleGateway } from "../../../core/api/GatewayProvider";
 import { RuleCatalogPanel } from "./RuleCatalogPanel";
 import { RuleInspectorPanel } from "./RuleInspectorPanel";
 import { VersionPlan } from "./VersionPlan";
@@ -42,8 +42,8 @@ export function RulesPage({
   const canWrite = useCan(SESSION_CAPABILITY.RulesWrite);
   // 规则类型筛选受控：唯一来源是 URL 的 `view` 参数，切换 = 写回 URL。
   const kindFilter = resolveRuleKindFilter(view);
-  // 数据从 gateway 取，页面不感知来源（见 `core/api/fixtureGateway.ts`）。
-  const { applications: ruleApps, rules, versions } = fixtureGateway.readRulesSync();
+  // 数据从 gateway 取，页面不感知来源（见 `core/api/GatewayProvider.tsx`）。
+  const {applications: ruleApps, rules, versions} = useConsoleGateway().readRulesSync();
   const workbench = useRuleWorkbench({
     entries: rules,
     appId,

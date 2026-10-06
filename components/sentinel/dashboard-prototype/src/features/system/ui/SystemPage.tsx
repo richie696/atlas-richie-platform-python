@@ -19,7 +19,7 @@
  *   （`REWRITE_PLAN.md` §9.5）。
  */
 import { ActionButton } from "../../../shared/ui/ActionButton";
-import { fixtureGateway } from "../../../core/api/fixtureGateway";
+import { useConsoleGateway } from "../../../core/api/GatewayProvider";
 import { Intro } from "../../../shared/ui/Intro";
 import { Status } from "../../../shared/ui/Status";
 import type { DashboardPageProps } from "../../../shared/types/dashboard";
@@ -48,7 +48,7 @@ export interface SystemPageProps {
 export function SystemPage({ navigate, view }: SystemPageProps) {
   const { t } = useTranslation();
   // 数据从 gateway 取，页面不感知来源。
-  const { connections, summaryCards } = fixtureGateway.readSystemSync();
+  const {connections, summaryCards} = useConsoleGateway().readSystemSync();
   // 受控：tab 不再是本组件的 state，唯一来源是 URL。切换 = 写回 URL。
   const tab: SystemTab = resolveSystemTab(view);
   const selectTab = (next: SystemTab) => {

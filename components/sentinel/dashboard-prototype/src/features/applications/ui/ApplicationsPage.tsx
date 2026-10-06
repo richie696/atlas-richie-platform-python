@@ -23,7 +23,7 @@ import type { DashboardPageProps } from "../../../shared/types/dashboard";
 import { useTranslation } from "react-i18next";
 import { ROUTE } from "../../../app/router/route.constants";
 import { useInstanceMatrix } from "../state/useInstanceMatrix";
-import { fixtureGateway } from "../../../core/api/fixtureGateway";
+import { useConsoleGateway } from "../../../core/api/GatewayProvider";
 import { InstanceDetailPanel } from "./InstanceDetailPanel";
 import { InstanceMatrixPanel } from "./InstanceMatrixPanel";
 
@@ -35,9 +35,9 @@ export function ApplicationsPage({
   setRange,
 }: DashboardPageProps) {
   const { t } = useTranslation();
-  // 数据从 gateway 取，页面不感知来源（见 `core/api/fixtureGateway.ts`）。同步快照
+  // 数据从 gateway 取，页面不感知来源（见 `core/api/GatewayProvider.tsx`）。同步快照
   // 保证首屏与迁移前一致，不引入 loading 态。
-  const { applications, instances, readSeries } = fixtureGateway.readApplicationsSync();
+  const {applications, instances, readSeries} = useConsoleGateway().readApplicationsSync();
   const matrix = useInstanceMatrix({
     applications,
     instances,

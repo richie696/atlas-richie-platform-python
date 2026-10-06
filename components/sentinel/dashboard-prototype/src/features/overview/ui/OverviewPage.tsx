@@ -29,7 +29,7 @@ import { Filters } from "../../../shared/ui/Filters";
 import { Intro } from "../../../shared/ui/Intro";
 import type { DashboardPageProps } from "../../../shared/types/dashboard";
 import { useTranslation } from "react-i18next";
-import { fixtureGateway } from "../../../core/api/fixtureGateway";
+import { useConsoleGateway } from "../../../core/api/GatewayProvider";
 import type { InfraStatus } from "../model/overview";
 import { INFRA_STATE_LABEL_KEY } from "../model/overview";
 import { useFleetOverview } from "../state/useFleetOverview";
@@ -49,8 +49,7 @@ export function OverviewPage({
   // 数据从 gateway 取，不再直接 import fixtures：本页对「数据从哪来」无感知，
   // 接真实控制面时只换 `core/api` 的实现。渲染时机不变（同步快照），因此首屏
   // 与迁移前逐像素相同。
-  const { applications, attention, infra, trend: trendSource, seriesForRange: sliceByRange } =
-    fixtureGateway.readFleetOverviewSync();
+  const {applications, attention, infra, trend: trendSource, seriesForRange: sliceByRange} = useConsoleGateway().readFleetOverviewSync();
   const overview = useFleetOverview({
     appId,
     range,

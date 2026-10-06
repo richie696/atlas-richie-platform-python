@@ -3,9 +3,10 @@
  *
  * 中文
  * ----
- * 从各 feature 的 `fixtures/` 目录读数据，**模拟异步与延迟**，让页面的取数路径
- * 先跑通一遍真实形态（Promise、loading、错误分支），而不是继续让页面
- * `import { X_FIXTURES }` ——后者在接真实控制面时 7 个页面都得改。
+ * 从各 feature 的 `fixtures/` 目录读数据。页面改从 {@link useConsoleGateway} 取，
+ * 不再 `import { X_FIXTURES }` ——后者让数据来源渗透进每个页面的 import 图。
+ *
+ * **只有同步快照被页面使用**（11 处），异步方法目前零消费者。
  *
  * 它是**契约的可执行副本**：`docs/CONSOLE_API_CONTRACT.md` 写了返回形状，这里
  * 按同样的形状产出数据。契约改了这里要一起改，反过来也一样；两者不一致时
@@ -53,12 +54,14 @@ import { CONNECTIONS, CONNECTION_SUMMARY_CARDS } from "../../features/system/fix
 import type { InfraStatus } from "../../features/overview/model/overview";
 import type { MetricPoint } from "../../shared/types/dashboard";
 import { ApiError, type ConsoleGateway, type MetricQuery, type ScopedMetric } from "./contracts";
+import { useConsoleGateway } from "./GatewayProvider";
 
 /**
  * 模拟的网络延迟。
  *
- * 不是装饰：页面需要真的经历一段「数据未到」的时段，否则 loading 与错误分支
- * 在接真服务端之前永远走不到，等于没有测过。0ms 会让这两个分支变成死代码。
+ * **当前没有任何页面调用异步方法**，所以这段延迟从未生效过。它是为「页面开始
+ * await 之后」准备的形状，不是已经验证过的行为——写注释时曾把它说成「让
+ * loading 分支被走到」，那是把意图当成了事实。
  */
 const SIMULATED_LATENCY_MS = 120;
 
@@ -232,6 +235,11 @@ export const fixtureGateway: FixtureGateway = {
   },
 };
 
-/** 鉴权与配置中心故障时的错误样例，供页面分支测试使用。 */
+/**
+ * 鉴权失败样例。
+ *
+ * **当前没有任何调用方**。保留它是因为 `403` 与「没有数据」必须可区分（契约 §7）
+ * 这个约束值得在代码里留一个可用的构造入口；但它在被使用前同样是死代码。
+ */
 export const capabilityDenied = (capability: string): ApiError =>
   new ApiError("capability_denied", `缺少能力 ${capability}`, capability);

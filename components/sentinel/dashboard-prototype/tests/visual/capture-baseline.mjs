@@ -40,14 +40,26 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { launchBrowser } from "../e2e/cdp.mjs";
 import { DEFAULT_TOLERANCE, diffPng } from "./png-diff.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const BASE_URL = process.env.BASE_URL ?? "http://localhost:5173";
-const CHROME = process.env.CHROME_BIN
-  ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const VIEWPORT = { width: 1280, height: 900 };
 
+/** 捕获视口。CDP 模式下由 `Emulation.setDeviceMetricsOverride` 施加。 */
+const VIEWPORT = { width: 1280, height: 900 };
+const BASE_URL = process.env.BASE_URL ?? "http://localhost:5173";
+
+/**
+ * 「页面已渲染」的判据。
+ *
+ * 不能等 `.app-shell`：登录页与系统初始化页**刻意不套应用壳**（E2E 里断言它们
+ * 没有 `.topbar`），等它会永远超时——踩过一次。判据退回「React 已挂载出内容」，
+ * 对全部 29 个用例都成立。
+ */
+const APP_READY = `(() => {
+  const root = document.getElementById("root");
+  return !!root && root.children.length > 0;
+})()`;
 /**
  * 采集矩阵。
  *
@@ -187,218 +199,89 @@ function normalizeDom(html) {
 }
 
 /**
- * 跑一次 Chrome。
- *
- * 中文
- * ----
- * **每次调用都用独立的临时 `--user-data-dir`。** 这不是洁癖，是两个真实问题的共同
- * 原因：
- *
- * 它**不是崩溃的原因**——这一点实测推翻过一个错误结论：曾以为捕获崩溃源于多个
- * Chrome 进程共用用户的默认 profile，加了独立 profile 后崩溃依旧。真正的诱因是
- * **机器负载**（见 `CHROME_TIMEOUT_MS` 上方的说明）。独立 profile 保留的理由只剩
- * 一个，而且它独立成立：捕获过程不该往用户**正在使用**的 Chrome profile 里写缓存、
- * 偏好与站点数据。
- *
- * `tests/e2e/cdp.mjs` 一直使用临时 userDataDir 并在结束时清理，视觉工具此前漏了
- * ——同一个仓库里两套 Chrome 驱动只有一套是对的。
- *
- * ## 不要顺手对齐别的 flag
- *
- * 曾试过再补 `--headless=new` / `--no-first-run` / `--disable-background-networking`
- * / `--disable-sync` / `--disable-extensions` 以「与 cdp.mjs 对齐」，结果 Chrome 卡在
- * network service helper 上、一个用例都出不来。flag 组合本身就是变量：一次改多处，
- * 就分不清是哪一个把进程搞死的。这里只保留有独立理由的那一项。
- *
- * ## 为什么没有改用 CDP
- *
- * `cdp.mjs` 已经有完整的 CDP 客户端，理论上可以复用。视觉工具仍走
- * `--dump-dom` / `--screenshot` 的一次性调用，是为了保持**捕获的浏览器生命周期
- * 独立**——每个用例从全新 profile 冷启动，与前一个用例零共享。复用长驻浏览器
- * 会把「上一个用例残留的 state / 缓存 / 事件监听」带进下一个用例，那才是真正会
- * 让基线失去意义的污染。
- */
-/**
- * 单次 Chrome 调用的超时。
- *
- * 中文
- * ----
- * 不是「正常情况下的耗时上限」，而是**在机器很忙时的逃生阀**：Chrome 在 init 与
- * teardown 阶段都可能因为 CPU 争抢而卡住（实测 `Teardown watchdog expired` 与
- * `Trying to load the allocator multiple times`，后者伴随 spawn 超时）。没有超时的话，
- * 一个卡住的 Chrome 会把整个捕获进程拖死，**已经捕获完的用例结果一起作废**——
- * 28 个用例的捕获实测在第 7~13 个用例随机中断，已发生 4 次。
- *
- * 30 秒：正常一次调用约 1.5 秒，30 秒给了机器极忙时足够的余量；再大就失去
- * 「快速失败重试」的意义。
- */
-const CHROME_TIMEOUT_MS = 30_000;
-
-/** 一次调用失败后的重试次数。 */
-const CHROME_RETRIES = 2;
-
-/**
- * 跑一次 Chrome，失败时重试。
- *
- * 中文
- * ----
- * Chrome 在高负载下偶发挂起是**环境性的**，不是本次改动的缺陷，也不是能靠调 flag
- * 根治的——实测同一台机器上负载低时连跑 30 次无失败。因此这里的策略不是「消灭
- * 崩溃」，而是**不让单次偶发失败毁掉整轮捕获**。
- *
- * 重试前先删掉可能写了一半的输出文件：Chrome 超时被杀时截图可能只落盘了一半，
- * 下一轮若读到它会被误判为「已收敛」。
- */
-function chromeWithRetry(args) {
-  let lastError = null;
-  for (let attempt = 1; attempt <= CHROME_RETRIES + 1; attempt += 1) {
-    try {
-      return chrome(args);
-    } catch (error) {
-      lastError = error;
-      // 半成品输出会让收敛判定读到上一次尝试的残留。
-      for (const arg of args) {
-        if (typeof arg === "string" && arg.startsWith("--screenshot=")) {
-          rmSync(arg.slice("--screenshot=".length), { force: true });
-        }
-      }
-      if (attempt <= CHROME_RETRIES) {
-        process.stdout.write(`    Chrome 第 ${attempt} 次调用失败，重试中 (${error.code ?? error.message})\n`);
-      }
-    }
-  }
-  throw new Error(
-    `Chrome 连续 ${CHROME_RETRIES + 1} 次失败: ${lastError?.code ?? lastError?.message}`,
-  );
-}
-
-/**
- * 跑一次 Chrome。
- *
- * 中文
- * ----
- * ## 为什么**不**给独立 `--user-data-dir`
- *
- * 曾经为了「不污染用户的 Chrome profile」加上它，结果工具直接不可用。实测四个组合
- * （各 40 秒超时上限）：
- *
- * | 组合 | 结果 |
- * | --- | --- |
- * | `--headless` + 独立 profile | 40s 超时 |
- * | `--headless=new` + 独立 profile | 40s 超时 |
- * | `--headless=new` + 默认 profile | **2323ms 成功** |
- * | `--headless` + 默认 profile | **2333ms 成功** |
- *
- * 唯一决定成败的是 profile 本身，与 headless 新旧模式无关：全新 profile 在这个
- * macOS + Chrome 154 组合下无法完成初始化。`tests/e2e/cdp.mjs` 用独立 profile
- * 能跑通，是因为它 `spawn` 之后**先停在 about:blank 再由 CDP 导航**，而不是像这里
- * 一样从命令行直接导航 URL——但要复刻它就得把整套 CDP 搬过来，代价与收益不成比例。
- *
- * **代价是捕获会碰到用户正在使用的 Chrome profile**（写缓存与站点数据）。这是已知
- * 权衡而不是疏漏：`about:blank` 与本地 dev server 不产生需要隔离的凭据，但它确实
- * 不是零副作用。要彻底隔离得把视觉工具改成 CDP 驱动，列为待办。
- */
-function chrome(args) {
-  return execFileSync(
-    CHROME,
-    ["--headless", "--disable-gpu", "--hide-scrollbars", "--no-sandbox", ...args],
-    {
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: CHROME_TIMEOUT_MS,
-      killSignal: "SIGKILL",
-    },
-  );
-}
-
-/**
  * 截一张图并等到**渲染收敛**。
  *
  * 中文
  * ----
  * 页面里存在懒绘制（Astryx 的 `content-visibility: auto`），视口下缘的内容按需补绘。
  * 截图若早于补绘完成，那一带会画成页面背景色；晚于则画成面板底色。两种结果都是
- * **合法渲染**，但截图捕获到哪一个是随机的——实测同一份代码 8 次采样里 5 次落在
- * 状态 A、3 次落在状态 B，差异 23287px / 2.02% / 通道差 61，而 DOM 逐字节相同。
- *
- * 这会让像素门禁变成随机噪声：同一个 commit 有时「全绿」有时「失败」，而失败信息
- * 指向的区域其实与被测改动无关。改前状态同样复现（8 次里 3 次落到 B），所以这是
- * 既有缺陷，不是某次改动引入的。
+ * **合法渲染**，但捕获到哪一个是随机的——同一份代码 8 次采样里 5 次落在 A、3 次落在
+ * B，这会让像素门禁变成随机噪声，而失败信息指向的区域其实与被测改动无关。
  *
  * 修法不是去猜绘制时序，而是**拒绝接受未收敛的捕获**：连续两次截图一致才算数。
  * 收敛后记录的就是稳定态，基线与比对才重新有意义。代价约 1.7 倍截图时间。
  *
  * 逐字节比较足够：像素完全相同则 PNG 编码结果也完全相同（实测同态两次 md5 一致）。
+ *
+ * @param browser 由 `launchBrowser()` 得到的 CDP 会话，**整个捕获共用一个**。
  */
-function captureSettled(testCase, outDir) {
-  const url = `${BASE_URL}/${testCase.hash}`;
+async function captureSettled(page, testCase, outDir) {
   const finalPath = path.join(outDir, `${testCase.name}.png`);
-  const scratch = `${finalPath}.settling.png`;
-  const args = (target) => [
-    `--screenshot=${target}`,
-    `--window-size=${VIEWPORT.width},${VIEWPORT.height}`,
-    "--virtual-time-budget=4000",
-    url,
-  ];
+  const url = `${BASE_URL}/${testCase.hash}`;
 
   let previous = null;
   for (let attempt = 1; attempt <= 5; attempt += 1) {
-    chromeWithRetry(args(scratch));
-    const current = readFileSync(scratch);
+    // 每次都重新导航 + 清存储：实例被复用，不这么做就会把上一个用例的
+    // localStorage（语言偏好、演示会话）带进来。
+    await page.clearStorage(new URL(BASE_URL).origin);
+    await page.goto(url);
+    await page.waitFor(APP_READY, { label: testCase.name });
+    await page.waitForStableLayout();
+    const current = await page.screenshot();
     if (previous !== null && current.equals(previous)) {
       writeFileSync(finalPath, current);
-      rmSync(scratch, { force: true });
       return { attempts: attempt, converged: true };
     }
     previous = current;
   }
   // 5 次仍未收敛：采用最后一次，并如实标记，让比对阶段知道这条不可靠。
   writeFileSync(finalPath, previous);
-  rmSync(scratch, { force: true });
   return { attempts: 5, converged: false };
 }
 
-function captureCase(testCase, outDir) {
+async function captureCase(page, testCase, outDir) {
   const url = `${BASE_URL}/${testCase.hash}`;
-  const dom = normalizeDom(chromeWithRetry(["--dump-dom", url]));
+  await page.clearStorage(new URL(BASE_URL).origin);
+  await page.goto(url);
+  await page.waitFor(APP_READY, { label: testCase.name });
+  await page.waitForStableLayout();
+  const dom = normalizeDom(await page.html());
   writeFileSync(path.join(outDir, `${testCase.name}.html`), dom, "utf8");
 
-  const shot = captureSettled(testCase, outDir);
+  const shot = await captureSettled(page, testCase, outDir);
   return { name: testCase.name, bytes: dom.length, ...shot };
 }
 
-function capture(outDir) {
+async function capture(outDir) {
   if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
+  const browser = await launchBrowser({ viewport: VIEWPORT });
   const results = [];
-  for (const testCase of selectedCases()) {
-    const result = captureCase(testCase, outDir);
-    results.push(result);
-    // 收敛信息必须可见：静默重采会让人以为一次就稳定，而那正是本工具出过问题的地方。
-    const settle = result.converged
-      ? `settle=${result.attempts}`
-      : `⚠ 未收敛(重试 ${result.attempts} 次)`;
-    process.stdout.write(`  ✓ ${result.name.padEnd(24)} dom=${result.bytes}B  ${settle}\n`);
+  try {
+    const page = await browser.newPage();
+    for (const testCase of selectedCases()) {
+      let result;
+      try {
+        result = await captureCase(page, testCase, outDir);
+      } catch (error) {
+        // 单个用例失败不该毁掉整轮——这正是超时+重试没能兜住的那类损失
+        // （缺 per-case 隔离时，一个卡住就把前面已捕获的结果一起丢掉）。
+        process.stdout.write(`  ✗ ${testCase.name.padEnd(24)} 捕获失败：${String(error?.message ?? error)}\n`);
+        result = { name: testCase.name, bytes: 0, attempts: 0, converged: false, failed: true };
+      }
+      results.push(result);
+      // 收敛信息必须可见：静默重采会让人以为一次就稳定，而那正是本工具出过问题的地方。
+      const settle = result.converged
+        ? `settle=${result.attempts}`
+        : `⚠ 未收敛(重试 ${result.attempts} 次)`;
+      process.stdout.write(`  ✓ ${result.name.padEnd(24)} dom=${result.bytes}B  ${settle}\n`);
+    }
+  } finally {
+    // 不关页面的话 CDP WebSocket 与 Chrome 进程句柄会一直持有事件循环。
+    await browser.close();
   }
-  writeFileSync(
-    path.join(outDir, "manifest.json"),
-    JSON.stringify(
-      {
-        viewport: VIEWPORT,
-        cases: selectedCases().map((c) => ({
-          name: c.name,
-          hash: c.hash,
-          settled: results.find((r) => r.name === c.name)?.converged ?? null,
-        })),
-      },
-      null, 2,
-    ),
-    "utf8",
-  );
   return results.length;
 }
 
-/** 找出首个差异位置并打印上下文，便于直接定位到元素。 */
 function firstDifference(baseline, candidate) {
   const limit = Math.min(baseline.length, candidate.length);
   let index = 0;
@@ -541,11 +424,13 @@ function compare(baseDir, newDir) {
 }
 
 const [command, ...rest] = process.argv.slice(2);
+// 顶层 await：`capture()` 现在是 async（CDP 模式要等浏览器起来）。改回同步 +
+// `process.exit(0)` 会直接杀掉还没 settle 的 promise，捕获会静默地少几个用例。
 if (command === "capture") {
   const outDir = rest[0];
   if (!outDir) throw new Error("用法: capture <outDir>");
   process.stdout.write(`捕获基线 -> ${outDir} (${selectedCases().length} 个用例)${ONLY ? ` [ONLY=${[...ONLY].join(",")}]` : ""}\n`);
-  const count = capture(outDir);
+  const count = await capture(outDir);
   process.stdout.write(`\n完成: ${count} 个用例\n`);
   process.exit(0);
 } else if (command === "compare") {

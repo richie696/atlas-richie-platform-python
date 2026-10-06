@@ -367,6 +367,94 @@ class Page {
   eval(expression) {
     return this.#evaluate(expression);
   }
+
+  /**
+   * 整页 HTML（含 `<html>` 根元素）。
+   *
+   * 中文
+   * ----
+   * 视觉基线工具用这个取代 `chrome --dump-dom`。区别不只是「少一次进程启动」：
+   * CDP 模式下浏览器**先停在 `about:blank` 再导航**，而 `--dump-dom <URL>` 是从
+   * 命令行直接导航 —— 实测后者在全新 `--user-data-dir` 下必然挂起（40 秒超时），
+   * 前者稳定。
+   *
+   * 取的是 `documentElement.outerHTML` 而非 `DOM.getOuterHTML`：后者需要先
+   * `DOM.getDocument` 再带 nodeId 递归取，会丢 doctype，且节点被 React 替换后
+   * nodeId 可能失效。
+   */
+  async html() {
+    // 必须自己补 DOCTYPE：`documentElement.outerHTML` 只含根元素本身，
+    // 而 `chrome --dump-dom` 会输出 `<!DOCTYPE html>`。少了它，归一化后的 DOM
+    // 与既有基线**每个用例都差这一个前缀**，29 个全不等价。
+    const doctype = await this.#evaluate("document.doctype?.name ?? ''");
+    const html = await this.#evaluate("document.documentElement.outerHTML");
+    return doctype ? `<!DOCTYPE ${doctype}>\n${html}` : html;
+  }
+
+  /**
+   * 整页截图（PNG 字节）。
+   *
+   * 中文
+   * ----
+   * 用 `Page.captureScreenshot` 而不是 `chrome --screenshot`，理由同 {@link html}。
+   * `captureBeyondViewport: false` 是关键：基线要的是**视口内**那一屏，开启它会
+   * 把 `content-visibility: auto` 的屏外内容也画进来，与既有基线不可比。
+   */
+  async screenshot() {
+    const { data } = await this.send("Page.captureScreenshot", {
+      format: "png",
+      captureBeyondViewport: false,
+      fromSurface: true,
+    });
+    return Buffer.from(data, "base64");
+  }
+
+  /**
+   * 清掉该源的存储（localStorage / sessionStorage / cookie）。
+   *
+   * 中文
+   * ----
+   * CDP 模式下浏览器实例被复用，存储会**跨用例保留**；而每次全新 profile 时是空的。
+   * 两者不等价：语言偏好与演示会话都存在 `localStorage` 里。捕获前清一次，
+   * 才能让每个用例都从「未设置过偏好」的初始状态开始，与既有基线一致。
+   */
+  /**
+   * 等布局与图表尺寸稳定。
+   *
+   * 中文
+   * ----
+   * `--dump-dom` 模式靠 `--virtual-time-budget=4000` 给渲染足够时间；CDP 模式没有
+   * 这个机制，直接截图会抓到**图表还没 resize 完**的状态（实测 Nivo 的 `<svg>`
+   * 宽度是 466 而非 702），于是同一份代码在两种模式下给出的 DOM 不一样。
+   *
+   * 判据是「几个 SVG 的 width/height 连续两次采样相同」——图表尺寸是最后一个稳定
+   * 下来的量，它不再变就意味着布局与 ResizeObserver 都收敛了。
+   */
+  async waitForStableLayout({ samples = 2, intervalMs = 120, timeoutMs = 5000 } = {}) {
+    const probe = `(() => {
+      const svgs = [...document.querySelectorAll("svg[role='img']")]
+        .map((el) => el.getAttribute("width") + "x" + el.getAttribute("height")).join("|");
+      return document.readyState + "#" + svgs;
+    })()`;
+    const deadline = Date.now() + timeoutMs;
+    let previous = await this.#evaluate(probe);
+    let stable = 0;
+    while (Date.now() < deadline) {
+      await delay(intervalMs);
+      const current = await this.#evaluate(probe);
+      stable = current === previous ? stable + 1 : 0;
+      previous = current;
+      if (stable >= samples) return true;
+    }
+    return false;
+  }
+
+  async clearStorage(origin) {
+    await this.send("Storage.clearDataForOrigin", {
+      origin,
+      storageTypes: "local_storage,session_storage,cookies",
+    });
+  }
 }
 
 /**

@@ -13,8 +13,8 @@
  * `notice` 与「是否打开对话框」是页面局部交互状态，按 `REACT_CODING_STANDARD` §3
  * 留在最近的组件里，不进 store。
  */
-import { useState } from "react";
-import { fixtureGateway } from "../../../core/api/fixtureGateway";
+import { useEffect, useState } from "react";
+import { useConsoleGateway } from "../../../core/api/GatewayProvider";
 import { useTranslation } from "react-i18next";
 import {
   PlusIcon as Plus,
@@ -42,14 +42,15 @@ import { IdentityPanel } from "./components/IdentityPanel";
 // 生产实现由 `identity.gateway` 在会话建立后调用同一个 `loadAccounts`，
 // 页面不再需要知道数据来源。
 
-// 数据从 gateway 取，页面不感知来源（见 `core/api/fixtureGateway.ts`）。
-// 模块级：账号在会话建立时装载一次，与原实现同为模块初始化时执行。
-const { accounts: initialAccounts, newAccountLastLogin } = fixtureGateway.readAccountsSync();
-
-loadAccounts(initialAccounts);
-
 export function AccountMaintenancePage({ navigate }: { navigate: Navigate }) {
   const { t } = useTranslation();
+  // 账号在会话建立时装载一次。**不能在模块顶层调 `useConsoleGateway()`**——
+  // Hook 只能在组件体内调用，模块顶层调用会抛 invalid hook call 并让整页白屏。
+  // （这个 bug 真实发生过：改注入式 gateway 时引入，当轮视觉验证被跳过所以没抓到。）
+  const gateway = useConsoleGateway();
+  useEffect(() => {
+    loadAccounts(gateway.readAccountsSync().accounts);
+  }, [gateway]);
   const { accounts, add, setStatus } = useAccounts();
   const [showCreate, setShowCreate] = useState(false);
   const [notice, setNotice] = useState("");
@@ -57,7 +58,11 @@ export function AccountMaintenancePage({ navigate }: { navigate: Navigate }) {
   const createAccount = (draft: AccountDraft) => {
     // id 与「最近登录」都由服务端在真实实现里返回；演示环境在页面侧生成。
     add(
-      toAccountSummary(`account-${Date.now()}`, draft, newAccountLastLogin),
+      toAccountSummary(
+        `account-${Date.now()}`,
+        draft,
+        useConsoleGateway().readAccountsSync().newAccountLastLogin,
+      ),
     );
     setNotice(t("accounts.notice.created"));
   };

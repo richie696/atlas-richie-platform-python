@@ -17,8 +17,8 @@
  * `accountId` 是**可分享的导航上下文**（URL query），因此由路由层持有并作为 prop 传入，
  * 不在页面里另存一份。
  */
-import { useState } from "react";
-import { fixtureGateway } from "../../../core/api/fixtureGateway";
+import { useEffect, useState } from "react";
+import { useConsoleGateway } from "../../../core/api/GatewayProvider";
 import { useTranslation } from "react-i18next";
 import {
   ArrowLeftIcon as ArrowLeft,
@@ -38,20 +38,32 @@ import { IdentityPanel } from "./components/IdentityPanel";
 
 // 与 `AccountMaintenancePage` 相同的演示装配，命令幂等：先执行者生效。
 // 生产实现由 `identity.gateway` 装载真实快照。
-// 数据从 gateway 取，页面不感知来源（见 `core/api/fixtureGateway.ts`）。
-// 模块级：账号在会话建立时装载一次，与原实现同为模块初始化时执行。
-const { accounts: initialAccounts } = fixtureGateway.readAccountsSync();
-
-loadAccounts(initialAccounts);
-
 /** 未指定账号时的演示默认值。真实默认值来自会话。 */
 const DEFAULT_ACCOUNT_ID = "account-admin";
 
 export function RoleBindingPage({ navigate, selectedAccountId = DEFAULT_ACCOUNT_ID }: { navigate: Navigate; selectedAccountId?: string }) {
   const { t } = useTranslation();
+  // 账号在会话建立时装载一次。**不能在模块顶层调 `useConsoleGateway()`**——
+  // Hook 只能在组件体内调用，模块顶层调用会抛 invalid hook call 并让整页白屏。
+  // （这个 bug 真实发生过：改注入式 gateway 时引入，当轮视觉验证被跳过所以没抓到。）
+  const gateway = useConsoleGateway();
+  useEffect(() => {
+    loadAccounts(gateway.readAccountsSync().accounts);
+  }, [gateway]);
   const { accounts, setRole } = useAccounts();
   const [accountId, setAccountId] = useState(selectedAccountId);
   const selected = accounts.find((account) => account.id === accountId) ?? accounts[0];
+  // 账号在 `useEffect` 里装载，因此**首次渲染时列表还是空的**。此前是模块顶层
+  // 同步装载，首次渲染就有数据；改成注入式 gateway 后这个中间态第一次出现，
+  // 而 `roleFor(selected.roleId)` 在 `selected` 为 undefined 时会整页崩掉。
+  // 空列表返回空态——顺带让「账号一个都没有」也是合法状态而不是崩溃。
+  if (!selected) {
+    return (
+      <IdentityPanel title={t("roles.accountPanel.title")} subtitle={t("roles.accountPanel.subtitle")}>
+        <div className="empty">{t("roles.accountPanel.subtitle")}</div>
+      </IdentityPanel>
+    );
+  }
   const role = roleFor(selected.roleId);
 
   const saveRole = (roleIdValue: string) => {

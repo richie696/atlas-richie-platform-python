@@ -5,6 +5,8 @@ import { App } from "./App";
 import { AstryxProvider } from "./app/providers/AstryxProvider";
 import "./app/i18n/config"; // i18next 初始化（副作用导入）
 import { SessionProvider } from "./core/session";
+import { ConsoleGatewayProvider } from "./core/api/GatewayProvider";
+import { fixtureGateway } from "./core/api/fixtureGateway";
 import "./styles.css";
 
 const frameworkOptions = Object.freeze({
@@ -27,9 +29,13 @@ createRoot(rootElement).render(
           详见 `core/session/SessionProvider.tsx`。
         */}
         <SessionProvider>
-          <AstryxProvider>
-            <App />
-          </AstryxProvider>
+          {/* 控制面服务就绪后，把 gateway 换成 `new HttpConsoleGateway({ baseUrl })`。
+              页面不感知实现，它们只通过 `useConsoleGateway()` 取。 */}
+          <ConsoleGatewayProvider gateway={fixtureGateway}>
+            <AstryxProvider>
+              <App />
+            </AstryxProvider>
+          </ConsoleGatewayProvider>
         </SessionProvider>
     </ReactFrameworkProvider>
   </React.StrictMode>,

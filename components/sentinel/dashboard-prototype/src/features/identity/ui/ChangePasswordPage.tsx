@@ -12,8 +12,8 @@
  * 账号来自共享 store 而不是模块内示例列表：新建的账号通过 URL 里的 `account` 参数
  * 打开时也能显示正确的用户名。
  */
-import { useState, type FormEvent } from "react";
-import { fixtureGateway } from "../../../core/api/fixtureGateway";
+import { useEffect, useState, type FormEvent } from "react";
+import { useConsoleGateway } from "../../../core/api/GatewayProvider";
 import { useTranslation } from "react-i18next";
 import {
   ArrowLeftIcon as ArrowLeft,
@@ -31,21 +31,34 @@ import { IdentityPanel } from "./components/IdentityPanel";
 
 // 演示装配，与另外两个账号页面共用同一个 store 命令。
 
-// 数据从 gateway 取，页面不感知来源（见 `core/api/fixtureGateway.ts`）。
-// 模块级：账号在会话建立时装载一次，与原实现同为模块初始化时执行。
-const { accounts: initialAccounts } = fixtureGateway.readAccountsSync();
-
-loadAccounts(initialAccounts);
-
 /** 未指定账号时的演示默认值。真实默认值来自会话。 */
 const DEFAULT_ACCOUNT_ID = "account-admin";
 
 export function ChangePasswordPage({ navigate, accountId = DEFAULT_ACCOUNT_ID }: { navigate: Navigate; accountId?: string }) {
   const { t } = useTranslation();
+  // 账号在会话建立时装载一次。**不能在模块顶层调 `useConsoleGateway()`**——
+  // Hook 只能在组件体内调用，模块顶层调用会抛 invalid hook call 并让整页白屏。
+  // （这个 bug 真实发生过：改注入式 gateway 时引入，当轮视觉验证被跳过所以没抓到。）
+  const gateway = useConsoleGateway();
+  useEffect(() => {
+    loadAccounts(gateway.readAccountsSync().accounts);
+  }, [gateway]);
   const { accounts } = useAccounts();
   const account = accounts.find((item) => item.id === accountId) ?? accounts[0];
   const form = usePasswordForm();
   const [message, setMessage] = useState("");
+  // 同 `RoleBindingPage`：账号在 `useEffect` 里装载，首次渲染时列表还是空的。
+  // 没有账号可改密码——装配错误，渲染提示而不是崩掉。
+  //
+  // **early return 必须在所有 hook 之后**：放前面会让首次渲染（无账号）跳过下面
+  // 那些 hook、第二次渲染再调用，React 直接报「order of Hooks changed」。踩过一次。
+  if (!account) {
+    return (
+      <IdentityPanel title={t("changePassword.panel.title")} subtitle={t("changePassword.panel.subtitle")}>
+        <div className="empty">{t("changePassword.panel.subtitle")}</div>
+      </IdentityPanel>
+    );
+  }
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

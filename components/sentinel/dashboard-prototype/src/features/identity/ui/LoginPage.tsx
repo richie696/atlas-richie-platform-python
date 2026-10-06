@@ -13,7 +13,7 @@
  * 页面不套应用壳：没有导航、没有全局筛选，因此也不展示「示例回放」横幅。
  */
 import { useState, type FormEvent } from "react";
-import { fixtureGateway } from "../../../core/api/fixtureGateway";
+import { useConsoleGateway } from "../../../core/api/GatewayProvider";
 import { useTranslation } from "react-i18next";
 import { LockKeyIcon as LockKey } from "@phosphor-icons/react";
 
@@ -36,7 +36,7 @@ export function LoginPage({ navigate }: { navigate: Navigate }) {
   const [message, setMessage] = useState("");
   const { t } = useTranslation();
   // 数据从 gateway 取，页面不感知来源。
-  const { accounts: identityAccounts } = fixtureGateway.readAccountsSync();
+  const {accounts: identityAccounts} = useConsoleGateway().readAccountsSync();
   const setRole = useSessionRoleSetter();
 
   const submit = (event: FormEvent<HTMLFormElement>) => {

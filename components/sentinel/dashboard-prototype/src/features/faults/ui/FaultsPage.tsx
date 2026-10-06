@@ -14,7 +14,7 @@
  * 更改规则（`DASHBOARD_CONTROL_PLANE.md` §4 故障分析行）。
  */
 import { ROUTE } from "../../../app/router/route.constants";
-import { fixtureGateway } from "../../../core/api/fixtureGateway";
+import { useConsoleGateway } from "../../../core/api/GatewayProvider";
 import { Filters } from "../../../shared/ui/Filters";
 import { Intro } from "../../../shared/ui/Intro";
 import { NumberCard } from "../../../shared/ui/NumberCard";
@@ -29,7 +29,7 @@ import { IncidentTimeline } from "./IncidentTimeline";
 export function FaultsPage({ navigate, appId, setAppId, range, setRange, locale }: DashboardPageProps) {
   const { t } = useTranslation();
   // 数据从 gateway 取，页面不感知来源。
-  const { incidents, applications: faultApps } = fixtureGateway.readFaultsSync();
+  const {incidents, applications: faultApps} = useConsoleGateway().readFaultsSync();
   const timeline = useIncidentTimeline(incidents, appId, range);
   return (
     <>

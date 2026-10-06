@@ -11,7 +11,7 @@
  * §2.2），在那之前「示例回放」标注与底部 TPS 说明都不得去掉。
  */
 import { useMemo } from "react";
-import { fixtureGateway } from "../../../core/api/fixtureGateway";
+import { useConsoleGateway } from "../../../core/api/GatewayProvider";
 import { InfoIcon as Info } from "@phosphor-icons/react";
 
 import { ALL_APPLICATIONS, ROUTE } from "../../../app/router/route.constants";
@@ -52,8 +52,7 @@ const STREAM_MODE_LABEL_KEY: Readonly<Record<StreamMode, string>> = Object.freez
 export function RealtimePage({ navigate, appId, setAppId, range, setRange }: DashboardPageProps) {
   const { t } = useTranslation();
   // 数据从 gateway 取，页面不感知来源。
-  const { trend: trendSource, applications: realtimeApps, summaryCards, sliceByRange } =
-    fixtureGateway.readRealtimeSync();
+  const {trend: trendSource, applications: realtimeApps, summaryCards, sliceByRange} = useConsoleGateway().readRealtimeSync();
   const trend = useMemo(() => sliceByRange(trendSource, range), [range]);
   const series = useRealtimeSeries(trend);
   return (
