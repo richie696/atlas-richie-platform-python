@@ -20,6 +20,7 @@
  * 归一化会抹掉的只有**与展示无关**的渲染期噪声：
  * - Vite 注入的 HMR 脚本与 style 标签内容；
  * - `data-backend-node-id`（Astryx 每次渲染重新生成）；
+ * - `data-pressable-container`（Astryx 在 hydration 之后才补，捕获时机相关）；
  * - SVG `id` / `clip-path`（Nivo 生成的随机实例 id）。
  * stylex 生成的 `x…` class 名**保留**，因为它们决定实际样式。
  *
@@ -171,6 +172,11 @@ function normalizeDom(html) {
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
     // Astryx 每次渲染重新生成的节点标识
     .replace(/\sdata-backend-node-id="[^"]*"/g, "")
+    // Astryx 在 hydration / 首次交互**之后**才补上的可交互容器标记。
+    // 同一份代码连抓两次，一次有、一次没有（实测），因此它是捕获时机噪声而不是
+    // 结构差异——留着会让基线偶发误报，而误报会让人开始忽略这个工具的信号。
+    // 与 `data-backend-node-id` 同类：不参与样式，也不改变 DOM 结构。
+    .replace(/\sdata-pressable-container="[^"]*"/g, "")
     // Nivo / SVG 生成的实例级 id
     .replace(/\sid="[^"]*"/g, ' id="_"')
     .replace(/url\(#[^)]*\)/g, "url(#_)")
