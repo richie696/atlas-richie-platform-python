@@ -25,6 +25,7 @@ import { SHELL_COPY } from "./shell";
 import { APPLICATIONS_COPY } from "../../features/applications/i18n/locales";
 import { FAULTS_COPY } from "../../features/faults/i18n/locales";
 import { OVERVIEW_COPY } from "../../features/overview/i18n/locales";
+import { REALTIME_COPY } from "../../features/realtime/i18n/locales";
 import { FALLBACK_LOCALE, resolveLocale } from "./locales";
 import {
   buildDictionary,
@@ -44,6 +45,7 @@ const BUNDLES: readonly LocaleBundle[] = [
   FAULTS_COPY,
   OVERVIEW_COPY,
   APPLICATIONS_COPY,
+  REALTIME_COPY,
 ];
 
 const translator = new Translator(buildDictionary(BUNDLES), FALLBACK_LOCALE);

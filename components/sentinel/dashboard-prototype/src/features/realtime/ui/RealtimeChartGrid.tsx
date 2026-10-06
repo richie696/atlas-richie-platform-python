@@ -15,6 +15,7 @@
 import { Panel } from "../../../shared/ui/Panel";
 import { TrendChart as Trend } from "../../../shared/ui/charts/TrendChart";
 import type { MetricPoint } from "../../../shared/types/dashboard";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 import {
   hasReleaseMarker,
   type RealtimeChartMetric,
@@ -23,22 +24,22 @@ import {
 
 /** 各图标题。键必须覆盖所有可成图指标，缺键在编译期暴露。 */
 const CHART_TITLES: Readonly<Record<RealtimeChartMetric, string>> = Object.freeze({
-  qps: "HTTP QPS",
-  rt: "RT p95",
-  blocked: "请求拦截率",
-  cpu: "CPU 与内存使用率",
+  qps: "realtime.chart.qps",
+  rt: "realtime.chart.rt",
+  blocked: "realtime.chart.blocked",
+  cpu: "realtime.chart.cpu",
 });
 
 /** 与窗口无关的副标题。 */
 const CHART_SUBTITLES: Readonly<Record<RealtimeChartMetric, string>> = Object.freeze({
-  qps: "整体请求量与规则发布时点",
-  rt: "尾部响应时间，单位 ms",
-  blocked: "被 Sentinel 拒绝的请求占比",
-  cpu: "示例应用资源压力",
+  qps: "realtime.subtitle.qps",
+  rt: "realtime.subtitle.rt",
+  blocked: "realtime.subtitle.blocked",
+  cpu: "realtime.subtitle.cpu",
 });
 
 /** QPS 图在窗口不含发布时点时的副标题。 */
-const QPS_SUBTITLE_WITHOUT_RELEASE = "当前窗口请求量（无发布时点）";
+const QPS_SUBTITLE_WITHOUT_RELEASE = "realtime.subtitle.qpsWithoutRelease";
 
 /** 图表高度（像素）。同一屏四图需要统一高度，否则刻度密度不一致。 */
 const CHART_HEIGHT = 240;
@@ -53,15 +54,18 @@ export interface RealtimeChartGridProps {
 }
 
 export function RealtimeChartGrid({ series, cursorTime, cards }: RealtimeChartGridProps) {
+  const t = useTranslator();
   const releaseVisible = hasReleaseMarker(series);
   return (
     <div className="monitor-grid">
       {cards.map((item) => (
         <Panel
           key={item.key}
-          title={CHART_TITLES[item.key]}
+          title={t(CHART_TITLES[item.key])}
           subtitle={
-            item.key === "qps" && !releaseVisible ? QPS_SUBTITLE_WITHOUT_RELEASE : CHART_SUBTITLES[item.key]
+            item.key === "qps" && !releaseVisible
+              ? t(QPS_SUBTITLE_WITHOUT_RELEASE)
+              : t(CHART_SUBTITLES[item.key])
           }
         >
           <Trend

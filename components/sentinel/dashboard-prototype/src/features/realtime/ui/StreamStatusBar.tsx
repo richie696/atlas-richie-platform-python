@@ -17,12 +17,13 @@ import { PauseIcon as Pause, PlayIcon as Play } from "@phosphor-icons/react";
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import type { TimeRangeId } from "../../../app/router/route.constants";
 import type { StreamStatus } from "../model/realtime";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 
 /** 已接入采样器时的游标说明。接入前不会出现。 */
-const LIVE_STREAM_HINT = "光标跟随实时数据流";
+const LIVE_STREAM_HINT = "realtime.bar.liveHint";
 
 /** 未接入采样器时的游标说明。 */
-const REPLAY_HINT = "光标移动仅演示交互，未连接实时数据流";
+const REPLAY_HINT = "realtime.bar.replayHint";
 
 export interface StreamStatusBarProps {
   /** 当前时间窗口（协议值）。 */
@@ -32,12 +33,13 @@ export interface StreamStatusBarProps {
 }
 
 export function StreamStatusBar({ range, status, onToggle }: StreamStatusBarProps) {
+  const t = useTranslator();
   return (
     <div className="monitor-bar">
       <div>
         <i className="live-dot" />
-        <b>{range} · 示例曲线回放</b>
-        <span>{status.samplerInstalled ? LIVE_STREAM_HINT : REPLAY_HINT}</span>
+        <b>{t("realtime.bar.replayRange", { range })}</b>
+        <span>{t(status.samplerInstalled ? LIVE_STREAM_HINT : REPLAY_HINT)}</span>
       </div>
       <ActionButton
         type="button"
@@ -45,7 +47,7 @@ export function StreamStatusBar({ range, status, onToggle }: StreamStatusBarProp
         onClick={onToggle}
       >
         {status.paused ? <Play size={16} /> : <Pause size={16} />}
-        {status.paused ? "继续回放" : "暂停回放"}
+        {t(status.paused ? "realtime.action.resumeReplay" : "realtime.action.pauseReplay")}
       </ActionButton>
     </div>
   );

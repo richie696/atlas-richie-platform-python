@@ -14,7 +14,7 @@ import { useMemo } from "react";
 import { InfoIcon as Info } from "@phosphor-icons/react";
 
 import { ALL_APPLICATIONS, ROUTE } from "../../../app/router/route.constants";
-import { createRuleTranslator } from "../../../ruleI18n";
+import { useTranslator } from "../../../core/i18n/useTranslator";
 import { Filters } from "../../../shared/ui/Filters";
 import { Intro } from "../../../shared/ui/Intro";
 import { LinkButton } from "../../../shared/ui/LinkButton";
@@ -47,26 +47,28 @@ import { StreamStatusBar } from "./StreamStatusBar";
  * 是为了让「模式 → 文案」只有一个所有者：接入真实流时改 `mode`，标注自动跟着变，
  * 不需要去页面里找字符串。
  */
-const STREAM_MODE_LABEL: Readonly<Record<StreamMode, string>> = Object.freeze({
-  live: "实时数据流",
-  replay: "示例回放",
-  static: "静态样本",
+const STREAM_MODE_LABEL_KEY: Readonly<Record<StreamMode, string>> = Object.freeze({
+  live: "realtime.stream.live",
+  replay: "realtime.stream.replay",
+  static: "realtime.stream.static",
 });
 
 /** Synchronized telemetry charts for the selected application and time range. */
-export function RealtimePage({ navigate, appId, setAppId, range, setRange, locale }: DashboardPageProps) {
-  const t = createRuleTranslator(locale);
+export function RealtimePage({ navigate, appId, setAppId, range, setRange }: DashboardPageProps) {
+  const t = useTranslator();
   const trend = useMemo(() => seriesForRange(FLEET_TREND, range), [range]);
   const series = useRealtimeSeries(trend);
   return (
     <>
       <Intro
         eyebrow="LIVE / TELEMETRY"
-        title="实时监控"
-        description="用同一时间轴观察流量、响应时间、拦截与资源压力的先后关系。"
+        title={t("realtime.intro.title")}
+        description={t("realtime.intro.description")}
         aside={
           <Status tone={series.paused ? "warning" : "healthy"}>
-            {series.paused ? "回放已暂停" : STREAM_MODE_LABEL[series.status.mode]}
+            {series.paused
+              ? t("realtime.stream.paused")
+              : t(STREAM_MODE_LABEL_KEY[series.status.mode])}
           </Status>
         }
       />
@@ -81,7 +83,7 @@ export function RealtimePage({ navigate, appId, setAppId, range, setRange, local
         applications={REALTIME_APP_FIXTURES}
         extra={
           <Select<MetricFilter>
-            label="指标"
+            label={t("realtime.filter.metric")}
             value={series.metric}
             onChange={series.setMetric}
             options={METRIC_FILTER_ORDER.map((value) => ({
@@ -99,9 +101,10 @@ export function RealtimePage({ navigate, appId, setAppId, range, setRange, local
         cards={series.cards}
       />
       <div className="bottom-note">
-        <Info size={18} /> TPS 需由业务成功交易事件定义并单独接入，不能由 HTTP
-        QPS 推算。
-        <LinkButton onClick={() => navigate(ROUTE.Faults)}>查看关联故障</LinkButton>
+        <Info size={18} /> {t("realtime.note.tps")}
+        <LinkButton onClick={() => navigate(ROUTE.Faults)}>
+          {t("realtime.action.viewFaults")}
+        </LinkButton>
       </div>
     </>
   );
