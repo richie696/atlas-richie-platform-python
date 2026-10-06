@@ -15,20 +15,25 @@
  *
  * 本工具的口径
  * ------------
- * 只统计**渲染层**（各 feature 的 `ui` 目录、`shared/ui/`、`app/`）里含 CJK 的
- * 非注释行。
- * fixtures / model / i18n 全部排除：前者是数据，后两者不是界面文案。
+ * 分两级，因为两级的确定性不同：
  *
- * 排除的注释行：strip 后以 `*`、`//`、`/*`、`/**` 开头。行尾注释不做处理——
- * 一行里既有代码又有中文时（例如 `const label = "详情"; // 详情`），本工具
- * 保守地报出来，由人判断。
+ * - **视图层**（各 feature 的 `ui` 目录，加上 `shared/ui` 与 `app`）里的中文
+ *   **确定**是界面文案。排除项：注释行、行尾注释。
+ * - **model / state 层**里的中文**需要人工判定**。判别联合的标签、表头、
+ *   枚举的中文形态是界面文案；而自由叙述（事件标题、观测结论）是数据。
+ *   两者在源码里长得一模一样，只能逐条看。
  *
- * 它是**线索生成器，不是判据**。真正的判据是 `test:e2e` 里切 en-US/ja-JP
- * 后扫 DOM —— 静态扫描回答不了「界面上还有没有中文」。
+ * 排除的目录：`fixtures/`（演示数据，按 `core/i18n/types.ts` 的归属规则有意不译）
+ * 与 `i18n/`（语言包本身，中文本该在那里）。
+ *
+ * 排除的注释行：strip 后以 `*`、`//`、`/*`、`/**` 开头。行尾注释会被剥掉。
+ *
+ * 它是**线索生成器，不是判据**。真正的判据是 `test:i18n:probe`——切到 en-US 后
+ * 扫运行时 DOM；静态扫描回答不了「界面上还有没有中文」。
  *
  * 用法：
- *   node tests/i18n/audit.mjs           # 按 feature 分组列出
- *   node tests/i18n/audit.mjs --summary  # 只出行数汇总
+ *   npm run i18n:audit            # 分级列出
+ *   npm run i18n:audit -- --summary
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -37,14 +42,19 @@ const SRC = "src";
 const CJK = /[\u4e00-\u9fff]/;
 const COMMENT_PREFIX = ["*", "//", "/*"];
 
-/** 需要审计的目录：只覆盖渲染层。 */
-const RENDER_ROOTS = [
+const featureDirs = readdirSync(join(SRC, "features"))
+  .filter((name) => statSync(join(SRC, "features", name)).isDirectory())
+  .map((name) => join(SRC, "features", name));
+
+/** 视图层：中文一定是界面文案。 */
+const VIEW_ROOTS = [
   join(SRC, "app"),
   join(SRC, "shared", "ui"),
-  ...readdirSync(join(SRC, "features"))
-    .filter((name) => statSync(join(SRC, "features", name)).isDirectory())
-    .map((name) => join(SRC, "features", name, "ui")),
+  ...featureDirs.map((dir) => join(dir, "ui")),
 ];
+
+/** 视图层之下的读模型与状态：中文可能是枚举标签（要迁），也可能是数据（不迁）。 */
+const MODEL_LAYERS = ["model", "state"];
 
 function collectFiles(dir) {
   const out = [];
@@ -82,46 +92,85 @@ function stripTrailingComment(line) {
   return line;
 }
 
-const byFeature = new Map();
-for (const root of RENDER_ROOTS) {
-  for (const file of collectFiles(root)) {
-    const rel = relative(SRC, file).replaceAll("\\", "/");
-    const feature = rel.startsWith("app/") ? "app" : rel.startsWith("shared/") ? "shared" : rel.split("/")[1];
-    const hits = [];
-    readFileSync(file, "utf8")
-      .split("\n")
-      .forEach((raw, index) => {
-        const trimmed = raw.trim();
-        if (COMMENT_PREFIX.some((p) => trimmed.startsWith(p))) return;
-        const line = stripTrailingComment(raw);
-        if (CJK.test(line)) hits.push({ line: index + 1, text: trimmed });
-      });
-    if (hits.length) {
-      if (!byFeature.has(feature)) byFeature.set(feature, { files: 0, hits: 0, lines: [] });
-      const bucket = byFeature.get(feature);
-      bucket.files += 1;
+/** 收集一个目录下的 CJK 命中，按「视图层 / 读模型层」两级归类。 */
+function scan(roots, layer) {
+  for (const root of roots) {
+    for (const file of collectFiles(root)) {
+      const rel = relative(SRC, file).replaceAll("\\", "/");
+      const feature = rel.startsWith("app/")
+        ? "app"
+        : rel.startsWith("shared/")
+          ? "shared"
+          : rel.split("/")[1];
+      const hits = [];
+      readFileSync(file, "utf8")
+        .split("\n")
+        .forEach((raw, index) => {
+          const trimmed = raw.trim();
+          if (COMMENT_PREFIX.some((p) => trimmed.startsWith(p))) return;
+          if (CJK.test(stripTrailingComment(raw))) {
+            hits.push({ line: index + 1, text: trimmed });
+          }
+        });
+      if (!hits.length) continue;
+      if (!byFeature.has(feature)) {
+        byFeature.set(feature, { view: { hits: 0, lines: [] }, model: { hits: 0, lines: [] } });
+      }
+      const bucket = byFeature.get(feature)[layer];
       bucket.hits += hits.length;
       for (const hit of hits) bucket.lines.push(`  ${rel}:${hit.line}  ${hit.text}`);
     }
   }
 }
 
-const order = [...byFeature.keys()].sort((a, b) => byFeature.get(b).hits - byFeature.get(a).hits);
-const total = order.reduce((sum, key) => sum + byFeature.get(key).hits, 0);
+const byFeature = new Map();
+scan(VIEW_ROOTS, "view");
+scan(featureDirs.flatMap((dir) => MODEL_LAYERS.map((l) => join(dir, l))), "model");
+
+const order = [...byFeature.keys()].sort((a, b) => {
+  const x = byFeature.get(a);
+  const y = byFeature.get(b);
+  return y.view.hits + y.model.hits - (x.view.hits + x.model.hits);
+});
+const totalView = order.reduce((s, k) => s + byFeature.get(k).view.hits, 0);
+const totalModel = order.reduce((s, k) => s + byFeature.get(k).model.hits, 0);
 
 if (process.argv.includes("--summary")) {
+  console.log(
+    `${"feature".padEnd(14)}${"视图层".padStart(7)}${"读模型层".padStart(10)}   说明`,
+  );
+  console.log("─".repeat(56));
   for (const key of order) {
-    const { files, hits } = byFeature.get(key);
-    console.log(`${key.padEnd(14)}${String(hits).padStart(4)} 处 / ${files} 文件`);
+    const { view, model } = byFeature.get(key);
+    console.log(
+      `${key.padEnd(14)}${String(view.hits).padStart(7)}${String(model.hits).padStart(10)}` +
+        (view.hits || model.hits ? "" : "   （已清零）"),
+    );
   }
-  console.log("─".repeat(34));
-  console.log(`${"合计".padEnd(14)}${String(total).padStart(4)} 处`);
-  process.exit(total === 0 ? 0 : 1);
+  console.log("─".repeat(56));
+  console.log(
+    `${"合计".padEnd(14)}${String(totalView).padStart(7)}${String(totalModel).padStart(10)}` +
+      `   共 ${totalView + totalModel} 处`,
+  );
+  console.log("\n视图层 = 一定是界面文案；读模型层 = 需人工判定（枚举标签要迁，自由叙述是数据）");
+  process.exit(totalView + totalModel === 0 ? 0 : 1);
 }
 
 for (const key of order) {
-  const { files, lines } = byFeature.get(key);
-  console.log(`\n── ${key} ── ${lines.length} 处 / ${files} 文件`);
-  for (const line of lines) console.log(line);
+  const { view, model } = byFeature.get(key);
+  if (view.hits === 0 && model.hits === 0) continue;
+  console.log(`\n━━ ${key} ━━ 视图层 ${view.hits} · 读模型层 ${model.hits}`);
+  if (view.hits) {
+    console.log("  [视图层 · 一定迁]");
+    for (const line of view.lines) console.log(line);
+  }
+  if (model.hits) {
+    console.log("  [读模型层 · 逐条判定：枚举标签要迁，自由叙述是数据不迁]");
+    for (const line of model.lines) console.log(line);
+  }
 }
-console.log(`\n合计 ${total} 处待迁（仅渲染层；fixtures / model / i18n 不计入）`);
+console.log(
+  `\n合计 ${totalView + totalModel} 处（视图层 ${totalView} + 读模型层 ${totalModel}）`,
+);
+console.log("fixtures/ 与 i18n/ 不计入：前者是演示数据，后者是文案包本身。");
+
