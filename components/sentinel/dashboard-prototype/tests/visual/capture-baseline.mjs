@@ -36,8 +36,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -188,11 +187,6 @@ function normalizeDom(html) {
 }
 
 /**
- * 临时 profile 目录名前缀。清理时用它校验，只删本工具自己建的目录。
- */
-const PROFILE_PREFIX = "sentinel-capture-";
-
-/**
  * 跑一次 Chrome。
  *
  * 中文
@@ -278,39 +272,44 @@ function chromeWithRetry(args) {
   );
 }
 
+/**
+ * 跑一次 Chrome。
+ *
+ * 中文
+ * ----
+ * ## 为什么**不**给独立 `--user-data-dir`
+ *
+ * 曾经为了「不污染用户的 Chrome profile」加上它，结果工具直接不可用。实测四个组合
+ * （各 40 秒超时上限）：
+ *
+ * | 组合 | 结果 |
+ * | --- | --- |
+ * | `--headless` + 独立 profile | 40s 超时 |
+ * | `--headless=new` + 独立 profile | 40s 超时 |
+ * | `--headless=new` + 默认 profile | **2323ms 成功** |
+ * | `--headless` + 默认 profile | **2333ms 成功** |
+ *
+ * 唯一决定成败的是 profile 本身，与 headless 新旧模式无关：全新 profile 在这个
+ * macOS + Chrome 154 组合下无法完成初始化。`tests/e2e/cdp.mjs` 用独立 profile
+ * 能跑通，是因为它 `spawn` 之后**先停在 about:blank 再由 CDP 导航**，而不是像这里
+ * 一样从命令行直接导航 URL——但要复刻它就得把整套 CDP 搬过来，代价与收益不成比例。
+ *
+ * **代价是捕获会碰到用户正在使用的 Chrome profile**（写缓存与站点数据）。这是已知
+ * 权衡而不是疏漏：`about:blank` 与本地 dev server 不产生需要隔离的凭据，但它确实
+ * 不是零副作用。要彻底隔离得把视觉工具改成 CDP 驱动，列为待办。
+ */
 function chrome(args) {
-  const userDataDir = mkdtempSync(path.join(tmpdir(), PROFILE_PREFIX));
-  try {
-    return execFileSync(
-      CHROME,
-      [
-        "--headless",
-        "--disable-gpu",
-        "--hide-scrollbars",
-        "--no-sandbox",
-        // 独立临时 profile：**不是因为它能修崩溃**（实测与崩溃无关），而是因为
-        // 捕获过程不该往用户正在使用的 Chrome profile 里写缓存、偏好与站点数据。
-        `--user-data-dir=${userDataDir}`,
-        ...args,
-      ],
-      {
-        encoding: "utf8",
-        maxBuffer: 64 * 1024 * 1024,
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: CHROME_TIMEOUT_MS,
-        killSignal: "SIGKILL",
-      },
-    );
-  } finally {
-    // 只清理本工具自己创建的临时 profile；前缀不符就放弃，绝不误删别处。
-    if (path.basename(userDataDir).startsWith(PROFILE_PREFIX)) {
-      try {
-        rmSync(userDataDir, { recursive: true, force: true });
-      } catch {
-        // 临时目录清理失败不应让捕获失败——截图可能还没落盘。
-      }
-    }
-  }
+  return execFileSync(
+    CHROME,
+    ["--headless", "--disable-gpu", "--hide-scrollbars", "--no-sandbox", ...args],
+    {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: CHROME_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    },
+  );
 }
 
 /**
