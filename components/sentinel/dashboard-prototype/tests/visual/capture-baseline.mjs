@@ -35,7 +35,8 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -175,12 +176,130 @@ function normalizeDom(html) {
     .trim();
 }
 
-function chrome(args) {
-  return execFileSync(
-    CHROME,
-    ["--headless", "--disable-gpu", "--hide-scrollbars", "--no-sandbox", ...args],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] },
+/**
+ * 临时 profile 目录名前缀。清理时用它校验，只删本工具自己建的目录。
+ */
+const PROFILE_PREFIX = "sentinel-capture-";
+
+/**
+ * 跑一次 Chrome。
+ *
+ * 中文
+ * ----
+ * **每次调用都用独立的临时 `--user-data-dir`。** 这不是洁癖，是两个真实问题的共同
+ * 原因：
+ *
+ * 它**不是崩溃的原因**——这一点实测推翻过一个错误结论：曾以为捕获崩溃源于多个
+ * Chrome 进程共用用户的默认 profile，加了独立 profile 后崩溃依旧。真正的诱因是
+ * **机器负载**（见 `CHROME_TIMEOUT_MS` 上方的说明）。独立 profile 保留的理由只剩
+ * 一个，而且它独立成立：捕获过程不该往用户**正在使用**的 Chrome profile 里写缓存、
+ * 偏好与站点数据。
+ *
+ * `tests/e2e/cdp.mjs` 一直使用临时 userDataDir 并在结束时清理，视觉工具此前漏了
+ * ——同一个仓库里两套 Chrome 驱动只有一套是对的。
+ *
+ * ## 不要顺手对齐别的 flag
+ *
+ * 曾试过再补 `--headless=new` / `--no-first-run` / `--disable-background-networking`
+ * / `--disable-sync` / `--disable-extensions` 以「与 cdp.mjs 对齐」，结果 Chrome 卡在
+ * network service helper 上、一个用例都出不来。flag 组合本身就是变量：一次改多处，
+ * 就分不清是哪一个把进程搞死的。这里只保留有独立理由的那一项。
+ *
+ * ## 为什么没有改用 CDP
+ *
+ * `cdp.mjs` 已经有完整的 CDP 客户端，理论上可以复用。视觉工具仍走
+ * `--dump-dom` / `--screenshot` 的一次性调用，是为了保持**捕获的浏览器生命周期
+ * 独立**——每个用例从全新 profile 冷启动，与前一个用例零共享。复用长驻浏览器
+ * 会把「上一个用例残留的 state / 缓存 / 事件监听」带进下一个用例，那才是真正会
+ * 让基线失去意义的污染。
+ */
+/**
+ * 单次 Chrome 调用的超时。
+ *
+ * 中文
+ * ----
+ * 不是「正常情况下的耗时上限」，而是**在机器很忙时的逃生阀**：Chrome 在 init 与
+ * teardown 阶段都可能因为 CPU 争抢而卡住（实测 `Teardown watchdog expired` 与
+ * `Trying to load the allocator multiple times`，后者伴随 spawn 超时）。没有超时的话，
+ * 一个卡住的 Chrome 会把整个捕获进程拖死，**已经捕获完的用例结果一起作废**——
+ * 28 个用例的捕获实测在第 7~13 个用例随机中断，已发生 4 次。
+ *
+ * 30 秒：正常一次调用约 1.5 秒，30 秒给了机器极忙时足够的余量；再大就失去
+ * 「快速失败重试」的意义。
+ */
+const CHROME_TIMEOUT_MS = 30_000;
+
+/** 一次调用失败后的重试次数。 */
+const CHROME_RETRIES = 2;
+
+/**
+ * 跑一次 Chrome，失败时重试。
+ *
+ * 中文
+ * ----
+ * Chrome 在高负载下偶发挂起是**环境性的**，不是本次改动的缺陷，也不是能靠调 flag
+ * 根治的——实测同一台机器上负载低时连跑 30 次无失败。因此这里的策略不是「消灭
+ * 崩溃」，而是**不让单次偶发失败毁掉整轮捕获**。
+ *
+ * 重试前先删掉可能写了一半的输出文件：Chrome 超时被杀时截图可能只落盘了一半，
+ * 下一轮若读到它会被误判为「已收敛」。
+ */
+function chromeWithRetry(args) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= CHROME_RETRIES + 1; attempt += 1) {
+    try {
+      return chrome(args);
+    } catch (error) {
+      lastError = error;
+      // 半成品输出会让收敛判定读到上一次尝试的残留。
+      for (const arg of args) {
+        if (typeof arg === "string" && arg.startsWith("--screenshot=")) {
+          rmSync(arg.slice("--screenshot=".length), { force: true });
+        }
+      }
+      if (attempt <= CHROME_RETRIES) {
+        process.stdout.write(`    Chrome 第 ${attempt} 次调用失败，重试中 (${error.code ?? error.message})\n`);
+      }
+    }
+  }
+  throw new Error(
+    `Chrome 连续 ${CHROME_RETRIES + 1} 次失败: ${lastError?.code ?? lastError?.message}`,
   );
+}
+
+function chrome(args) {
+  const userDataDir = mkdtempSync(path.join(tmpdir(), PROFILE_PREFIX));
+  try {
+    return execFileSync(
+      CHROME,
+      [
+        "--headless",
+        "--disable-gpu",
+        "--hide-scrollbars",
+        "--no-sandbox",
+        // 独立临时 profile：**不是因为它能修崩溃**（实测与崩溃无关），而是因为
+        // 捕获过程不该往用户正在使用的 Chrome profile 里写缓存、偏好与站点数据。
+        `--user-data-dir=${userDataDir}`,
+        ...args,
+      ],
+      {
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: CHROME_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+      },
+    );
+  } finally {
+    // 只清理本工具自己创建的临时 profile；前缀不符就放弃，绝不误删别处。
+    if (path.basename(userDataDir).startsWith(PROFILE_PREFIX)) {
+      try {
+        rmSync(userDataDir, { recursive: true, force: true });
+      } catch {
+        // 临时目录清理失败不应让捕获失败——截图可能还没落盘。
+      }
+    }
+  }
 }
 
 /**
@@ -215,7 +334,7 @@ function captureSettled(testCase, outDir) {
 
   let previous = null;
   for (let attempt = 1; attempt <= 5; attempt += 1) {
-    chrome(args(scratch));
+    chromeWithRetry(args(scratch));
     const current = readFileSync(scratch);
     if (previous !== null && current.equals(previous)) {
       writeFileSync(finalPath, current);
@@ -232,7 +351,7 @@ function captureSettled(testCase, outDir) {
 
 function captureCase(testCase, outDir) {
   const url = `${BASE_URL}/${testCase.hash}`;
-  const dom = normalizeDom(chrome(["--dump-dom", url]));
+  const dom = normalizeDom(chromeWithRetry(["--dump-dom", url]));
   writeFileSync(path.join(outDir, `${testCase.name}.html`), dom, "utf8");
 
   const shot = captureSettled(testCase, outDir);
