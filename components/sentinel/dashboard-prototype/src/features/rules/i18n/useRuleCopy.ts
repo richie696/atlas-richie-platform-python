@@ -57,6 +57,58 @@ const OPTION_LABEL_KEYS = {
   authority: ["rules.options.authority.white", "rules.options.authority.black"],
 } as const satisfies Readonly<Record<keyof RuleOptionCopy, readonly string[]>>;
 
+/**
+ * 规则类型与表单字段的文案键映射。
+ *
+ * 为什么显式列出而不是 `` t(`rules.types.${kind}.label`) ``：模板拼出的键
+ * 静态扫描器无法枚举——`i18n:check` 看不到它们，语言包里少一个字段标签时
+ * 不会有任何报错，只会在那个字段的表单上显示原始键名。改成显式映射后，
+ * 全部 155 个键都变成字面量，可被校验；`satisfies` 还保证枚举加了一个值
+ * 就必须在这里补一行。
+ */
+const TYPE_COPY_KEYS = {
+  authority: { label: "rules.types.authority.label", description: "rules.types.authority.description" },
+  degrade: { label: "rules.types.degrade.label", description: "rules.types.degrade.description" },
+  flow: { label: "rules.types.flow.label", description: "rules.types.flow.description" },
+  param: { label: "rules.types.param.label", description: "rules.types.param.description" },
+  system: { label: "rules.types.system.label", description: "rules.types.system.description" },
+} as const satisfies Readonly<Record<RuleKind, { label: string; description: string }>>;
+
+const FIELD_COPY_KEYS = {
+  authorityMode: { label: "rules.fields.authorityMode.label", hint: "rules.fields.authorityMode.hint" },
+  averageRt: { label: "rules.fields.averageRt.label", hint: "rules.fields.averageRt.hint" },
+  breakDuration: { label: "rules.fields.breakDuration.label", hint: "rules.fields.breakDuration.hint" },
+  callerOrigin: { label: "rules.fields.callerOrigin.label", hint: "rules.fields.callerOrigin.hint" },
+  circuitStrategy: { label: "rules.fields.circuitStrategy.label", hint: "rules.fields.circuitStrategy.hint" },
+  circuitThreshold: { label: "rules.fields.circuitThreshold.label", hint: "rules.fields.circuitThreshold.hint" },
+  clusterMode: { label: "rules.fields.clusterMode.label", hint: "rules.fields.clusterMode.hint" },
+  clusterThresholdType: { label: "rules.fields.clusterThresholdType.label", hint: "rules.fields.clusterThresholdType.hint" },
+  controlBehavior: { label: "rules.fields.controlBehavior.label", hint: "rules.fields.controlBehavior.hint" },
+  controlStrategy: { label: "rules.fields.controlStrategy.label", hint: "rules.fields.controlStrategy.hint" },
+  cpuUsage: { label: "rules.fields.cpuUsage.label", hint: "rules.fields.cpuUsage.hint" },
+  entranceQps: { label: "rules.fields.entranceQps.label", hint: "rules.fields.entranceQps.hint" },
+  exceptionThreshold: { label: "rules.fields.exceptionThreshold.label", hint: "rules.fields.exceptionThreshold.hint" },
+  localFallback: { label: "rules.fields.localFallback.label", hint: "rules.fields.localFallback.hint" },
+  maxQueueingTime: { label: "rules.fields.maxQueueingTime.label", hint: "rules.fields.maxQueueingTime.hint" },
+  maximumThreads: { label: "rules.fields.maximumThreads.label", hint: "rules.fields.maximumThreads.hint" },
+  minimumRequests: { label: "rules.fields.minimumRequests.label", hint: "rules.fields.minimumRequests.hint" },
+  originList: { label: "rules.fields.originList.label", hint: "rules.fields.originList.hint" },
+  parameterExceptions: { label: "rules.fields.parameterExceptions.label", hint: "rules.fields.parameterExceptions.hint" },
+  parameterIndex: { label: "rules.fields.parameterIndex.label", hint: "rules.fields.parameterIndex.hint" },
+  parameterType: { label: "rules.fields.parameterType.label", hint: "rules.fields.parameterType.hint" },
+  parameterValue: { label: "rules.fields.parameterValue.label", hint: "rules.fields.parameterValue.hint" },
+  relatedResource: { label: "rules.fields.relatedResource.label", hint: "rules.fields.relatedResource.hint" },
+  resourceName: { label: "rules.fields.resourceName.label", hint: "rules.fields.resourceName.hint" },
+  sampleCount: { label: "rules.fields.sampleCount.label", hint: "rules.fields.sampleCount.hint" },
+  singleNodeThreshold: { label: "rules.fields.singleNodeThreshold.label", hint: "rules.fields.singleNodeThreshold.hint" },
+  slowCallRatio: { label: "rules.fields.slowCallRatio.label", hint: "rules.fields.slowCallRatio.hint" },
+  statisticPeriod: { label: "rules.fields.statisticPeriod.label", hint: "rules.fields.statisticPeriod.hint" },
+  statisticWindow: { label: "rules.fields.statisticWindow.label", hint: "rules.fields.statisticWindow.hint" },
+  systemLoad: { label: "rules.fields.systemLoad.label", hint: "rules.fields.systemLoad.hint" },
+  thresholdType: { label: "rules.fields.thresholdType.label", hint: "rules.fields.thresholdType.hint" },
+  warmUpPeriod: { label: "rules.fields.warmUpPeriod.label", hint: "rules.fields.warmUpPeriod.hint" },
+} as const satisfies Readonly<Record<RuleFieldKey, { label: string; hint: string }>>;
+
 /** 规则工作台的全部文案。`t` 用于单条查表，`messages` 用于结构化消费。 */
 export interface RuleCopy {
   /** 与 `useTranslator()` 同源的翻译函数。 */
@@ -70,20 +122,24 @@ function labels(t: Translate, keys: readonly string[]): readonly string[] {
 }
 
 function buildMessages(t: Translate): RuleWorkbenchMessages {
+  // 顺序由 `RULE_KINDS` / `RULE_FIELD_KEYS` 决定，**不能改成遍历映射表**。
+  // 映射表是对象字面量，属性顺序是字母序（authority, degrade, flow, …），
+  // 而这里是声明序（flow, degrade, system, authority, param）——下拉选项按
+  // `Object.values(types)` 渲染，顺序一变界面就变了，字节数却完全相同。
+  // 这条是视觉基线抓出来的：`rules-filter-system` 的 DOM 不等价而大小一字不差。
+  //
+  // 映射表只负责「枚举值 → 语言键」的查法：键是字面量可被 `i18n:check` 校验，
+  // 而模板拼键 `` t(`rules.types.${kind}.label`) `` 扫不出来。
   const types = {} as Record<RuleKind, RuleTypeCopy>;
   for (const kind of RULE_KINDS) {
-    types[kind] = {
-      label: t(`rules.types.${kind}.label`),
-      description: t(`rules.types.${kind}.description`),
-    };
+    const copy = TYPE_COPY_KEYS[kind];
+    types[kind] = { label: t(copy.label), description: t(copy.description) };
   }
 
   const fields = {} as Record<RuleFieldKey, FieldCopy>;
   for (const key of RULE_FIELD_KEYS) {
-    fields[key] = {
-      label: t(`rules.fields.${key}.label`),
-      hint: t(`rules.fields.${key}.hint`),
-    };
+    const copy = FIELD_COPY_KEYS[key];
+    fields[key] = { label: t(copy.label), hint: t(copy.hint) };
   }
 
   // 五组逐一列出而不是遍历 `OPTION_LABEL_KEYS`：`RuleOptionCopy` 的属性是 readonly，
