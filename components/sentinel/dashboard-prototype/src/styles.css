@@ -12,6 +12,27 @@
   --green: #56d6a1;
   --amber: #ffbf58;
   --red: #ff787c;
+
+  /*
+   * 图表语义色。
+   *
+   * Nivo 的主题只接受具体颜色值，不解析 CSS 自定义属性（SVG 呈现属性不是 CSS
+   * 声明），所以 `shared/ui/charts/chartTheme.ts` 在运行时把这些 token 读成真实
+   * 色值再交给 Nivo。登记在这里而不是散落在组件与页面的十六进制里，是为了让
+   * 「产品皮肤拥有图表配色」有唯一归属。
+   */
+  --chart-axis-text: #8499a8;
+  --chart-axis-line: transparent;
+  --chart-grid-line: #2a3c47;
+  --chart-crosshair: #d5e9f8;
+  --chart-tooltip-bg: #182a35;
+  --chart-tooltip-border: #426075;
+  --chart-tooltip-text: #eef6fc;
+  --chart-annotation-line: #62b5ff;
+  --chart-annotation-text: #76bcf2;
+  --chart-series-primary: #59adff;
+  --chart-series-secondary: #ffbd59;
+  --chart-series-danger: #ff7778;
 }
 * {
   box-sizing: border-box;
@@ -39,6 +60,19 @@ input:focus-visible,
 select:focus-visible {
   outline: 2px solid var(--blue);
   outline-offset: 3px;
+}
+/* Keep the field focus treatment owned by Astryx's wrapper, not the browser
+   outline layered on top of it. */
+.astryx-text-field input:focus-visible,
+.astryx-number-input input:focus-visible {
+  outline: none;
+  outline-offset: 0;
+}
+/* Astryx resets standalone SVG children to block; action buttons compose
+   text and icons in one inline row, so restore the inline icon contract. */
+.astryx-button svg {
+  display: inline-block;
+  vertical-align: middle;
 }
 .app-shell {
   min-height: 100vh;
@@ -82,6 +116,13 @@ select:focus-visible {
 }
 .main-nav button {
   display: flex;
+  /*
+   * Astryx buttons use a compact intrinsic height by default.  The main
+   * navigation is a full-height topbar slot, so let each tab fill that slot
+   * while keeping its label/icon centered by the flex alignment above.
+   */
+  height: 100%;
+  min-height: 0;
   gap: 7px;
   align-items: center;
   padding: 0 13px;
@@ -112,13 +153,6 @@ select:focus-visible {
   color: #b6c5d0;
   white-space: nowrap;
 }
-.locale-control {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #9eb5c3;
-  font-size: 11px;
-}
 .locale-control select {
   min-height: 30px;
   border: 1px solid #3a5564;
@@ -126,6 +160,13 @@ select:focus-visible {
   padding: 5px 7px;
   color: #e8f4fb;
   background: #1b303c;
+  font-size: 11px;
+}
+.locale-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #9eb5c3;
   font-size: 11px;
 }
 .header-info > span:first-child {
@@ -253,6 +294,15 @@ select:focus-visible {
   border-radius: 8px;
   background: #152733;
 }
+.sample-age {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #9fb6c4;
+  font-size: 12px;
+  margin-left: auto;
+  white-space: nowrap;
+}
 .select-control {
   display: flex;
   align-items: center;
@@ -283,15 +333,6 @@ select:focus-visible {
   right: 10px;
   pointer-events: none;
   color: #acc5d4;
-}
-.sample-age {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #9fb6c4;
-  font-size: 12px;
-  margin-left: auto;
-  white-space: nowrap;
 }
 .panel,
 .infra-card,
@@ -331,6 +372,43 @@ select:focus-visible {
 .muted {
   color: #829cad;
   font-size: 11px;
+}
+.identity-intro { align-items: flex-end; }
+.identity-panel { margin-bottom: 16px; }
+.identity-notice {
+  margin: 0 0 14px;
+  padding: 11px 14px;
+  border: 1px solid #3a617a;
+  border-radius: 6px;
+  background: #173244;
+  color: #bfe0f4;
+  font-size: 12px;
+}
+.identity-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 13px;
+  padding: 0 16px 16px;
+}
+.identity-form label,
+.identity-select {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #c7d7e0;
+  font-size: 11px;
+}
+.identity-form input,
+.identity-form select,
+.identity-select select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #49677a;
+  border-radius: 5px;
+  padding: 8px 10px;
+  color: #e9f5fd;
+  background: #203642;
+  font-size: 12px;
 }
 .link-button {
   display: inline-flex;
@@ -375,49 +453,77 @@ select:focus-visible {
 .secondary-button:hover {
   background: #27475a;
 }
-.identity-intro { align-items: flex-end; }
-.identity-panel { margin-bottom: 16px; }
-.identity-notice {
-  margin: 0 0 14px;
-  padding: 11px 14px;
-  border: 1px solid #3a617a;
-  border-radius: 6px;
-  background: #173244;
-  color: #bfe0f4;
-  font-size: 12px;
-}
-.identity-form {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 13px;
-  padding: 0 16px 16px;
-}
-.identity-form label,
-.password-form label,
-.identity-select {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  color: #c7d7e0;
-  font-size: 11px;
-}
-.identity-form input,
-.identity-form select,
-.password-form input,
-.identity-select select {
-  width: 100%;
-  min-height: 38px;
-  border: 1px solid #49677a;
-  border-radius: 5px;
-  padding: 8px 10px;
-  color: #e9f5fd;
-  background: #203642;
-  font-size: 12px;
-}
 .identity-form-actions {
   display: flex;
   justify-content: flex-end;
   align-items: end;
+  gap: 9px;
+}
+.account-dialog-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.account-dialog-form > * {
+  min-width: 0;
+}
+.account-dialog-password-note {
+  align-self: end;
+  margin: 0 0 3px;
+  color: #8fa6b5;
+  font-size: 10px;
+  line-height: 1.45;
+}
+.dialog-frame .astryx-layout {
+  width: 100%;
+  min-width: 0;
+}
+.dialog-frame {
+  /* Use the Sentinel surface instead of Astryx's neutral showcase surface. */
+  background: var(--surface);
+  border: 1px solid #365668;
+  border-radius: 14px;
+  color: #e8f1f7;
+  box-shadow: 0 24px 70px #020b12b8;
+}
+.dialog-frame::backdrop {
+  background: #020b12c7;
+  backdrop-filter: blur(5px);
+}
+.dialog-frame .astryx-layout-header > div {
+  /* DialogHeader's close action and title use negative compensation margins.
+     Restore the frame's header inset so neither one escapes the surface. */
+  box-sizing: border-box;
+  padding: 14px 22px 12px;
+}
+.dialog-frame .astryx-layout-header h2 {
+  color: #edf6fb;
+}
+.dialog-frame .astryx-layout-header .astryx-text {
+  color: var(--muted);
+}
+.dialog-frame .astryx-layout-header button[aria-label] {
+  color: #aec3cf;
+}
+.dialog-frame .astryx-layout-header button[aria-label]:hover {
+  color: var(--blue);
+  background: #1b3a4a;
+}
+.dialog-frame .astryx-layout-content {
+  padding: 20px 22px 24px;
+  background: #142630;
+}
+.dialog-frame .astryx-layout-footer {
+  border-block-start-color: var(--line);
+  background: #10222c;
+}
+.dialog-frame .astryx-layout-footer > div {
+  padding: 14px 22px;
+}
+.dialog-frame-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 9px;
 }
 .identity-table td { vertical-align: middle; }
@@ -443,6 +549,7 @@ select:focus-visible {
   gap: 16px;
 }
 .identity-select { padding: 0 16px 13px; }
+.identity-select > .astryx-field { width: 100%; }
 .identity-account-summary {
   gap: 10px;
   margin: 0 16px 16px;
@@ -605,9 +712,12 @@ select:focus-visible {
 .setup-choice b { font-size: 12px; }
 .setup-choice small { margin-top: 3px; color: #93aab8; font-size: 10px; line-height: 1.45; }
 .setup-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.setup-form-grid label { display: grid; gap: 6px; color: #c5d6df; font-size: 11px; }
-.setup-form-grid input { min-height: 37px; border: 1px solid #49677a; border-radius: 5px; padding: 8px 9px; color: #e9f5fd; background: #203642; font-size: 12px; }
 .setup-form-grid .wide { grid-column: span 2; }
+.setup-authentication { margin: 14px 0; padding: 0; border: 0; }
+.setup-authentication legend { margin-bottom: 8px; padding: 0; color: #ddebF3; font-size: 12px; font-weight: 650; }
+.setup-field-help { color: #93aab8; font-size: 10px; line-height: 1.45; }
+.setup-security-note { display: flex; align-items: flex-start; gap: 8px; padding: 10px 11px; border: 1px solid #345c72; border-radius: 6px; color: #b9d1dd; background: #183240; font-size: 11px; line-height: 1.55; }
+.setup-security-note svg { flex: 0 0 auto; margin-top: 1px; color: #69b5ff; }
 .setup-local-note { margin-bottom: 15px; padding: 11px; border: 1px solid #35596f; border-radius: 5px; color: #b5d9ed; background: #173344; font-size: 11px; line-height: 1.5; }
 .setup-summary { display: grid; gap: 1px; border: 1px solid #345364; border-radius: 6px; overflow: hidden; }
 .setup-summary div { display: grid; grid-template-columns: 125px 1fr; gap: 10px; padding: 11px 12px; background: #132933; font-size: 11px; }
@@ -616,10 +726,27 @@ select:focus-visible {
 .setup-summary span { color: #ddebF3; }
 .setup-actions { display: flex; justify-content: space-between; gap: 10px; margin-top: 24px; }
 .setup-actions button:disabled { cursor: not-allowed; opacity: .45; }
+/*
+ * 状态徽标：皮肤接管纵向度量。
+ *
+ * Astryx 的 `Badge` 用自己的排版刻度锁定尺寸：`.x1grt7ep { height: var(--spacing-5) }`
+ * = 20px，`.x1ltkj2j { line-height: var(--text-supporting-leading) }` = 1.6667。
+ * 本皮肤独立设定 `font-size: 11px` 与 `padding: 4px 9px`，两套刻度不同步：
+ * 行盒 = 11 × 1.6667 ≈ 18.3px，加上下 padding 共需 26.3px，装不进 20px 的底色，
+ * 文字被裁切并整体偏下。
+ *
+ * 中文全角字形比拉丁字形更高，这个错位在中文界面尤其明显。
+ *
+ * 规则：皮肤一旦覆盖某组件的 `font-size` / `padding`，就必须同时接管它的
+ * `height` 与 `line-height`，否则组件库按另一套刻度算出的固定高度会与皮肤冲突。
+ * 同样的处理见下方 `.event`（Button 的 `height: var(--size-element-md)`）。
+ */
 .status {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  height: auto;
+  line-height: 1.2;
   padding: 4px 9px;
   border-radius: 5px;
   font-size: 11px;
@@ -693,6 +820,9 @@ select:focus-visible {
 }
 .alert-hero .primary-button {
   margin-left: auto;
+  /* Keep the Astryx button's label and trailing icon on one line. */
+  flex: 0 0 auto;
+  min-width: max-content;
 }
 .infra-card {
   padding: 16px;
@@ -864,15 +994,6 @@ select:focus-visible {
   display: grid;
   grid-template-columns: minmax(0, 1.42fr) minmax(380px, 0.95fr);
   gap: 15px;
-}
-.checkbox {
-  font-size: 11px;
-  color: #a7bdcb;
-  white-space: nowrap;
-}
-.checkbox input {
-  accent-color: var(--blue);
-  vertical-align: middle;
 }
 .host-row td {
   padding: 8px 12px;
@@ -1229,23 +1350,27 @@ select:focus-visible {
   gap: 14px;
   padding: 0 16px 6px;
 }
-.rule-format-header b,
-.rule-format-header span {
+.rule-format-header .secondary-button {
+  padding: 7px 10px;
+}
+.rule-format-header .rule-edit-button {
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+.rule-format-copy b,
+.rule-format-copy span {
   display: block;
 }
-.rule-format-header b {
+.rule-format-copy b {
   color: #e6f1f7;
   font-size: 13px;
 }
-.rule-format-header span {
+.rule-format-copy span {
   max-width: 540px;
   margin-top: 4px;
   color: #97afbd;
   font-size: 11px;
   line-height: 1.5;
-}
-.rule-format-header .secondary-button {
-  padding: 7px 10px;
 }
 .rule-form {
   padding: 0 16px 2px;
@@ -1284,14 +1409,12 @@ select:focus-visible {
 }
 .rule-field input:disabled,
 .rule-field select:disabled,
-.rule-toggle input:disabled,
 .text-button:disabled,
 .icon-text-button:disabled {
   cursor: default;
   opacity: 0.72;
 }
-.rule-field small,
-.rule-toggle small {
+.rule-field small {
   color: #849eae;
   font-size: 10px;
   line-height: 1.35;
@@ -1304,29 +1427,6 @@ select:focus-visible {
   border: 1px solid #2f4c5b;
   border-radius: 6px;
   background: #102530;
-}
-.rule-toggle {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  color: #c7d7e1;
-  font-size: 11px;
-}
-.rule-toggle input {
-  width: 15px;
-  height: 15px;
-  margin: 1px 0 0;
-  accent-color: var(--blue);
-}
-.rule-toggle span,
-.rule-toggle small {
-  display: block;
-}
-.rule-toggle b {
-  font-size: 11px;
-}
-.rule-toggle small {
-  margin-top: 3px;
 }
 .cluster-grid {
   margin-top: 12px;
@@ -1442,22 +1542,6 @@ select:focus-visible {
   height: 1px;
   background: var(--line);
   margin: 13px 16px;
-}
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  margin: 13px 16px;
-  font-size: 11px;
-  color: #a9bfcb;
-}
-.field input {
-  background: #203642;
-  border: 1px solid #49677a;
-  color: #e9f5fd;
-  border-radius: 5px;
-  padding: 9px 10px;
-  font-size: 13px;
 }
 .diff {
   display: flex;
@@ -1580,6 +1664,36 @@ select:focus-visible {
 .events {
   padding: 7px 0;
 }
+/*
+ * 让时间线事件行的四个子元素重新成为 grid item。
+ *
+ * Astryx 的 `Button` 会把 children 包在两层 span 里：外层是 `display:contents`
+ * （不参与布局），内层是真实盒子（`overflow:hidden`）。于是 `.event` 的
+ * `grid-template-columns: 12px 60px 1fr 15px` 只看得到内层这一个 item，
+ * 点位、时刻、标题和箭头全部被塞进第一列 12px，逐字换行。
+ *
+ * 把内层也设为 `display:contents`，四个子元素就重新直接参与 grid。
+ * 这条规则只依赖「button > span > span」这个结构，不依赖 Astryx 生成的
+ * class 名；Astryx 升级后若结构变化，本规则自然失效而不会造成新的破坏。
+ * 纯 CSS 修复，不改 DOM。
+ */
+.event > span > span {
+  display: contents;
+}
+/*
+ * 解除 Astryx 的固定高度。
+ *
+ * Astryx 把 `md` 尺寸定义为固定 `height: var(--size-element-md)`，事件行是两行内容
+ * （标题 + 小标题），固定高度装不下，小标题会被挤出按钮盒子压到下一行。实测按钮高
+ * 35px、内部内容盒 42px，溢出 24px。
+ *
+ * 这里用普通单类选择器即可生效：实测 Astryx 的 `:not(#\#)` 并没有真正压制单类规则
+ * （样式表在 `astryx.css` 之后加载，同特异度时后者胜）。因此不需要 `!important`，
+ * 也不需要照抄组件库的 `:not()` 提权手法——后者会让覆盖难以维护和撤销。
+ */
+.event {
+  height: auto;
+}
 .event {
   display: grid;
   grid-template-columns: 12px 60px 1fr 15px;
@@ -1655,6 +1769,22 @@ select:focus-visible {
 .event-detail > .link-button {
   margin-left: 16px;
 }
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 13px 16px;
+  font-size: 11px;
+  color: #a9bfcb;
+}
+.field input {
+  background: #203642;
+  border: 1px solid #49677a;
+  color: #e9f5fd;
+  border-radius: 5px;
+  padding: 9px 10px;
+  font-size: 13px;
+}
 .tabs {
   display: flex;
   gap: 4px;
@@ -1705,6 +1835,28 @@ select:focus-visible {
 }
 .permission .status {
   margin-left: auto;
+}
+/*
+ * 权限面板末尾的操作指引。
+ *
+ * 中文
+ * ----
+ * 这里原本放着「账户维护 / 角色绑定 / 打开登录页」三个按钮，但它们：
+ * 1. 与本页 tab 条里的「账户维护」「角色绑定」重复，且按钮走 `navigate()` 跨路由
+ *    跳走、tab 只切当前页，同一目标两种行为；
+ * 2. 夹在两条角色说明之间，被读成某条角色的操作；
+ * 3. `identity-shortcuts` 从未被样式化，按钮以默认行内布局渲染，更没有视觉分组。
+ *
+ * 「账户维护」和「角色绑定」已由上方 tab 条承担，「打开登录页」不属于权限模型。
+ * 因此改为一行文字指引，直接回答「怎么授予能力」，不引入重复入口。
+ * 横向内缩与上面的 `.permission` 行（19px）保持一致。
+ */
+.permission-hint {
+  margin: 0;
+  padding: 14px 19px 17px;
+  color: #8fa6b5;
+  font-size: 11px;
+  line-height: 1.6;
 }
 .audit-flow {
   padding: 18px 20px;
@@ -1830,6 +1982,13 @@ select:focus-visible {
   .sample-age {
     display: none;
   }
+  .select-control {
+    gap: 5px;
+  }
+  .select-box select {
+    min-width: 112px;
+    padding: 7px 24px 7px 8px;
+  }
   .overview-top,
   .app-hero,
   .fault-layout,
@@ -1914,13 +2073,6 @@ select:focus-visible {
     margin-bottom: 13px;
     padding: 9px;
   }
-  .select-control {
-    gap: 5px;
-  }
-  .select-box select {
-    min-width: 112px;
-    padding: 7px 24px 7px 8px;
-  }
   .alert-hero {
     padding: 13px;
     gap: 10px;
@@ -1972,6 +2124,9 @@ select:focus-visible {
   .rule-filters {
     flex-direction: column;
   }
+  .search input {
+    width: 100px;
+  }
   .rule-format-header,
   .compatibility-json > div,
   .param-exceptions-head {
@@ -1980,9 +2135,6 @@ select:focus-visible {
   }
   .panel-head {
     align-items: flex-start;
-  }
-  .search input {
-    width: 100px;
   }
   .bottom-note {
     align-items: flex-start;
@@ -2009,7 +2161,9 @@ select:focus-visible {
   .identity-intro {
     align-items: flex-start;
   }
-  .identity-form,
+  .account-dialog-form {
+    grid-template-columns: 1fr;
+  }
   .identity-split {
     grid-template-columns: 1fr;
   }
