@@ -90,7 +90,8 @@ function assemble(locale: string, bundles: readonly MessageBundle[]): Record<str
   for (const bundle of bundles) {
     for (const [key, value] of Object.entries(bundle)) {
       if (key in merged) {
-        throw new Error(`语言键重复: "${key}" 在 ${locale} 的多个 namespace 中同时出现`);
+        // 报错文案刻意用英文：它是开发者信息，不是界面文案，不进语言包。
+        throw new Error(`Duplicate i18n key: "${key}" appears in more than one namespace of ${locale}`);
       }
       merged[key] = value;
     }

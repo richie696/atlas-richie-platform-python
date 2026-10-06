@@ -29,13 +29,7 @@ import { Filters } from "../../../shared/ui/Filters";
 import { Intro } from "../../../shared/ui/Intro";
 import type { DashboardPageProps } from "../../../shared/types/dashboard";
 import { useTranslation } from "react-i18next";
-import {
-  APPLICATION_SUMMARIES,
-  FLEET_ATTENTION,
-  FLEET_TREND,
-  INFRA_STATUS,
-  seriesForRange,
-} from "../fixtures/overviewFixtures";
+import { fixtureGateway } from "../../../core/api/fixtureGateway";
 import type { InfraStatus } from "../model/overview";
 import { INFRA_STATE_LABEL_KEY } from "../model/overview";
 import { useFleetOverview } from "../state/useFleetOverview";
@@ -52,17 +46,22 @@ export function OverviewPage({
   setRange,
 }: DashboardPageProps) {
   const { t } = useTranslation();
+  // 数据从 gateway 取，不再直接 import fixtures：本页对「数据从哪来」无感知，
+  // 接真实控制面时只换 `core/api` 的实现。渲染时机不变（同步快照），因此首屏
+  // 与迁移前逐像素相同。
+  const { applications, attention, infra, trend: trendSource, seriesForRange: sliceByRange } =
+    fixtureGateway.readFleetOverviewSync();
   const overview = useFleetOverview({
     appId,
     range,
-    applications: APPLICATION_SUMMARIES,
-    attention: FLEET_ATTENTION,
-    infra: INFRA_STATUS,
+    applications,
+    attention,
+    infra,
     navigate,
     setAppId,
   });
   // 演示窗口切片。接入 Console API 后由服务端按 window 查询，前端不再裁剪。
-  const trend = seriesForRange(FLEET_TREND, range);
+  const trend = sliceByRange(trendSource, range);
   return (
     <>
       <div className="overview-context">

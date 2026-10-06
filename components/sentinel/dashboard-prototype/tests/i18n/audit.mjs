@@ -135,7 +135,7 @@ function scan(roots, layer) {
             return;
           }
           const trimmed = raw.trim();
-          if (isComment(trimmed)) return;
+          if (isComment(trimmed) || isLocaleDisplayName(trimmed)) return;
           // JSX 注释可以**出现在行中间**（`...</h1> {/* 说明 */}`）且跨多行。
           // 只判行首会漏掉起始标记；只判单行会把延续行报成界面文案。
           // 因此切掉注释部分，注释**之前**的代码仍要检查。
@@ -158,6 +158,16 @@ function scan(roots, layer) {
       for (const hit of hits) bucket.lines.push(`  ${rel}:${hit.line}  ${hit.text}`);
     }
   }
+}
+
+/**
+ * 语言下拉的显示名**故意不翻译**：用户按母语认它（"简体中文"/"English"/"日本語"）。
+ * 它们不是可翻译文案，留在源码里，审计不该把它们当成遗漏。
+ */
+function isLocaleDisplayName(trimmed) {
+  return trimmed === '{ code: "zh-CN", label: "简体中文" },'
+    || trimmed === '{ code: "en-US", label: "English" },'
+    || trimmed === '{ code: "ja-JP", label: "日本語" },';
 }
 
 const byFeature = new Map();
