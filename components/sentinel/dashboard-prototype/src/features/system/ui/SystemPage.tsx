@@ -19,6 +19,7 @@
  *   （`REWRITE_PLAN.md` §9.5）。
  */
 import { ActionButton } from "../../../shared/ui/ActionButton";
+import { fixtureGateway } from "../../../core/api/fixtureGateway";
 import { Intro } from "../../../shared/ui/Intro";
 import { Status } from "../../../shared/ui/Status";
 import type { DashboardPageProps } from "../../../shared/types/dashboard";
@@ -32,7 +33,6 @@ import {
   type SystemTab,
 } from "../model/systemStatus";
 import { useTranslation } from "react-i18next";
-import { CONNECTIONS, CONNECTION_SUMMARY_CARDS } from "../fixtures/systemFixtures";
 import { ConnectionPanel } from "./ConnectionPanel";
 import { PermissionsPanel } from "./PermissionsPanel";
 import { ProtocolPanel } from "./ProtocolPanel";
@@ -47,6 +47,8 @@ export interface SystemPageProps {
 /** Connection, protocol, permission and identity administration workspace. */
 export function SystemPage({ navigate, view }: SystemPageProps) {
   const { t } = useTranslation();
+  // 数据从 gateway 取，页面不感知来源。
+  const { connections, summaryCards } = fixtureGateway.readSystemSync();
   // 受控：tab 不再是本组件的 state，唯一来源是 URL。切换 = 写回 URL。
   const tab: SystemTab = resolveSystemTab(view);
   const selectTab = (next: SystemTab) => {
@@ -77,8 +79,8 @@ export function SystemPage({ navigate, view }: SystemPageProps) {
       </div>
       {tab === SYSTEM_TAB.Connections && (
         <ConnectionPanel
-          cards={CONNECTION_SUMMARY_CARDS}
-          connections={CONNECTIONS}
+          cards={summaryCards}
+          connections={connections}
           navigate={navigate}
         />
       )}

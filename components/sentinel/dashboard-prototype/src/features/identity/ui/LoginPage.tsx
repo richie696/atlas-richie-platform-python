@@ -13,6 +13,7 @@
  * 页面不套应用壳：没有导航、没有全局筛选，因此也不展示「示例回放」横幅。
  */
 import { useState, type FormEvent } from "react";
+import { fixtureGateway } from "../../../core/api/fixtureGateway";
 import { useTranslation } from "react-i18next";
 import { LockKeyIcon as LockKey } from "@phosphor-icons/react";
 
@@ -21,7 +22,6 @@ import { TextField } from "../../../shared/ui/TextField";
 import { ROUTE } from "../../../app/router/route.constants";
 import type { Navigate } from "../../../shared/types/dashboard";
 import { validateLoginCredentials, type LoginCredentials } from "../model/account";
-import { INITIAL_ACCOUNTS } from "../fixtures/identityFixtures";
 import { useSessionRoleSetter, type SessionRoleId } from "../../../core/session";
 
 const EMPTY_CREDENTIALS: LoginCredentials = { username: "", password: "" };
@@ -35,6 +35,8 @@ export function LoginPage({ navigate }: { navigate: Navigate }) {
   const [credentials, setCredentials] = useState<LoginCredentials>(EMPTY_CREDENTIALS);
   const [message, setMessage] = useState("");
   const { t } = useTranslation();
+  // 数据从 gateway 取，页面不感知来源。
+  const { accounts: identityAccounts } = fixtureGateway.readAccountsSync();
   const setRole = useSessionRoleSetter();
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -47,7 +49,7 @@ export function LoginPage({ navigate }: { navigate: Navigate }) {
     // 演示登录：账号名决定角色，角色决定能力快照（`core/session`）。
     // 匹配不到账号时给全量权限——原型没有真实认证，保持「任意用户名可进入」的
     // 既有行为，不在这里制造一个假的登录失败。
-    const account = INITIAL_ACCOUNTS.find(
+    const account = identityAccounts.find(
       (item) => item.username === credentials.username.trim(),
     );
     setRole((account?.roleId ?? "admin") as SessionRoleId);

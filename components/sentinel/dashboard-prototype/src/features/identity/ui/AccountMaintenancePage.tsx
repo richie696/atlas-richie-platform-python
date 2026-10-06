@@ -14,6 +14,7 @@
  * 留在最近的组件里，不进 store。
  */
 import { useState } from "react";
+import { fixtureGateway } from "../../../core/api/fixtureGateway";
 import { useTranslation } from "react-i18next";
 import {
   PlusIcon as Plus,
@@ -32,7 +33,6 @@ import {
   toAccountSummary,
   type AccountDraft,
 } from "../model/account";
-import { INITIAL_ACCOUNTS, NEW_ACCOUNT_LAST_LOGIN } from "../fixtures/identityFixtures";
 import { loadAccounts, useAccounts } from "../state/accountStore";
 import { AccountCreateDialog } from "./AccountCreateDialog";
 import { IdentityIntro } from "./components/IdentityIntro";
@@ -41,7 +41,12 @@ import { IdentityPanel } from "./components/IdentityPanel";
 // 演示装配：把示例账号装载进 feature store，模块初始化时执行一次。
 // 生产实现由 `identity.gateway` 在会话建立后调用同一个 `loadAccounts`，
 // 页面不再需要知道数据来源。
-loadAccounts(INITIAL_ACCOUNTS);
+
+// 数据从 gateway 取，页面不感知来源（见 `core/api/fixtureGateway.ts`）。
+// 模块级：账号在会话建立时装载一次，与原实现同为模块初始化时执行。
+const { accounts: initialAccounts, newAccountLastLogin } = fixtureGateway.readAccountsSync();
+
+loadAccounts(initialAccounts);
 
 export function AccountMaintenancePage({ navigate }: { navigate: Navigate }) {
   const { t } = useTranslation();
@@ -52,7 +57,7 @@ export function AccountMaintenancePage({ navigate }: { navigate: Navigate }) {
   const createAccount = (draft: AccountDraft) => {
     // id 与「最近登录」都由服务端在真实实现里返回；演示环境在页面侧生成。
     add(
-      toAccountSummary(`account-${Date.now()}`, draft, NEW_ACCOUNT_LAST_LOGIN),
+      toAccountSummary(`account-${Date.now()}`, draft, newAccountLastLogin),
     );
     setNotice(t("accounts.notice.created"));
   };

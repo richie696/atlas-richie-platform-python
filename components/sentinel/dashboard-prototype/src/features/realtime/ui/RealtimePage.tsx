@@ -11,6 +11,7 @@
  * §2.2），在那之前「示例回放」标注与底部 TPS 说明都不得去掉。
  */
 import { useMemo } from "react";
+import { fixtureGateway } from "../../../core/api/fixtureGateway";
 import { InfoIcon as Info } from "@phosphor-icons/react";
 
 import { ALL_APPLICATIONS, ROUTE } from "../../../app/router/route.constants";
@@ -27,12 +28,6 @@ import {
   type MetricFilter,
   type StreamMode,
 } from "../model/realtime";
-import {
-  FLEET_TREND,
-  REALTIME_APP_FIXTURES,
-  REALTIME_SUMMARY_FIXTURES,
-  seriesForRange,
-} from "../fixtures/realtimeFixtures";
 import { useRealtimeSeries } from "../state/useRealtimeSeries";
 import { RealtimeChartGrid } from "./RealtimeChartGrid";
 import { RealtimeSummaryCards } from "./RealtimeSummaryCards";
@@ -56,7 +51,10 @@ const STREAM_MODE_LABEL_KEY: Readonly<Record<StreamMode, string>> = Object.freez
 /** Synchronized telemetry charts for the selected application and time range. */
 export function RealtimePage({ navigate, appId, setAppId, range, setRange }: DashboardPageProps) {
   const { t } = useTranslation();
-  const trend = useMemo(() => seriesForRange(FLEET_TREND, range), [range]);
+  // 数据从 gateway 取，页面不感知来源。
+  const { trend: trendSource, applications: realtimeApps, summaryCards, sliceByRange } =
+    fixtureGateway.readRealtimeSync();
+  const trend = useMemo(() => sliceByRange(trendSource, range), [range]);
   const series = useRealtimeSeries(trend);
   return (
     <>
@@ -80,7 +78,7 @@ export function RealtimePage({ navigate, appId, setAppId, range, setRange }: Das
         range={range}
         setRange={setRange}
         all
-        applications={REALTIME_APP_FIXTURES}
+        applications={realtimeApps}
         extra={
           <Select<MetricFilter>
             label={t("realtime.filter.metric")}
@@ -94,7 +92,7 @@ export function RealtimePage({ navigate, appId, setAppId, range, setRange }: Das
         }
       />
       <StreamStatusBar range={range} status={series.status} onToggle={series.togglePlayback} />
-      <RealtimeSummaryCards cards={REALTIME_SUMMARY_FIXTURES} />
+      <RealtimeSummaryCards cards={summaryCards} />
       <RealtimeChartGrid
         series={trend}
         cursorTime={series.cursorTime}

@@ -13,6 +13,7 @@
  * 打开时也能显示正确的用户名。
  */
 import { useState, type FormEvent } from "react";
+import { fixtureGateway } from "../../../core/api/fixtureGateway";
 import { useTranslation } from "react-i18next";
 import {
   ArrowLeftIcon as ArrowLeft,
@@ -25,12 +26,16 @@ import { ROUTE } from "../../../app/router/route.constants";
 import type { Navigate } from "../../../shared/types/dashboard";
 import { usePasswordForm } from "../state/usePasswordForm";
 import { loadAccounts, useAccounts } from "../state/accountStore";
-import { INITIAL_ACCOUNTS } from "../fixtures/identityFixtures";
 import { IdentityIntro } from "./components/IdentityIntro";
 import { IdentityPanel } from "./components/IdentityPanel";
 
 // 演示装配，与另外两个账号页面共用同一个 store 命令。
-loadAccounts(INITIAL_ACCOUNTS);
+
+// 数据从 gateway 取，页面不感知来源（见 `core/api/fixtureGateway.ts`）。
+// 模块级：账号在会话建立时装载一次，与原实现同为模块初始化时执行。
+const { accounts: initialAccounts } = fixtureGateway.readAccountsSync();
+
+loadAccounts(initialAccounts);
 
 /** 未指定账号时的演示默认值。真实默认值来自会话。 */
 const DEFAULT_ACCOUNT_ID = "account-admin";

@@ -20,12 +20,8 @@ import { useRuleCopy } from "../i18n/useRuleCopy";
 import { RULE_CATALOG_HEADERS } from "../model/ruleCatalog";
 import { RULE_KIND_ALL, resolveRuleKindFilter } from "../model/ruleKinds";
 import { ROUTE } from "../../../app/router/route.constants";
-import {
-  RULE_APP_FIXTURES,
-  RULE_FIXTURES,
-  RULE_VERSION_FIXTURES,
-} from "../fixtures/ruleFixtures";
 import { useRuleWorkbench } from "../state/useRuleWorkbench";
+import { fixtureGateway } from "../../../core/api/fixtureGateway";
 import { RuleCatalogPanel } from "./RuleCatalogPanel";
 import { RuleInspectorPanel } from "./RuleInspectorPanel";
 import { VersionPlan } from "./VersionPlan";
@@ -46,8 +42,10 @@ export function RulesPage({
   const canWrite = useCan(SESSION_CAPABILITY.RulesWrite);
   // 规则类型筛选受控：唯一来源是 URL 的 `view` 参数，切换 = 写回 URL。
   const kindFilter = resolveRuleKindFilter(view);
+  // 数据从 gateway 取，页面不感知来源（见 `core/api/fixtureGateway.ts`）。
+  const { applications: ruleApps, rules, versions } = fixtureGateway.readRulesSync();
   const workbench = useRuleWorkbench({
-    entries: RULE_FIXTURES,
+    entries: rules,
     appId,
     range,
     setAppId,
@@ -77,7 +75,7 @@ export function RulesPage({
         all
         showRange={false}
         labels={messages.rules.filters}
-        applications={RULE_APP_FIXTURES}
+        applications={ruleApps}
       />
       <div className="rule-headline">
         <ShieldCheck size={24} color="#56d6a1" />
@@ -95,7 +93,7 @@ export function RulesPage({
           </ActionButton>
         )}
       </div>
-      <VersionPlan versions={RULE_VERSION_FIXTURES} copy={messages.rules.versions} />
+      <VersionPlan versions={versions} copy={messages.rules.versions} />
       <div className="rules-layout">
         <RuleCatalogPanel
           entries={workbench.visible}

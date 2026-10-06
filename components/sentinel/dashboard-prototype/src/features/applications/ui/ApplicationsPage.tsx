@@ -22,12 +22,8 @@ import { LinkButton } from "../../../shared/ui/LinkButton";
 import type { DashboardPageProps } from "../../../shared/types/dashboard";
 import { useTranslation } from "react-i18next";
 import { ROUTE } from "../../../app/router/route.constants";
-import {
-  APPLICATION_FIXTURES,
-  ORDER_INSTANCE_FIXTURES,
-  readInstanceSeries,
-} from "../fixtures/applicationsFixtures";
 import { useInstanceMatrix } from "../state/useInstanceMatrix";
+import { fixtureGateway } from "../../../core/api/fixtureGateway";
 import { InstanceDetailPanel } from "./InstanceDetailPanel";
 import { InstanceMatrixPanel } from "./InstanceMatrixPanel";
 
@@ -39,12 +35,15 @@ export function ApplicationsPage({
   setRange,
 }: DashboardPageProps) {
   const { t } = useTranslation();
+  // 数据从 gateway 取，页面不感知来源（见 `core/api/fixtureGateway.ts`）。同步快照
+  // 保证首屏与迁移前一致，不引入 loading 态。
+  const { applications, instances, readSeries } = fixtureGateway.readApplicationsSync();
   const matrix = useInstanceMatrix({
-    applications: APPLICATION_FIXTURES,
-    instances: ORDER_INSTANCE_FIXTURES,
+    applications,
+    instances,
     appId,
     range,
-    readSeries: readInstanceSeries,
+    readSeries,
   });
   const { app, hasInstanceSamples, instanceCount, anomalyCount } = matrix;
 
@@ -64,7 +63,7 @@ export function ApplicationsPage({
           setAppId={setAppId}
           range={range}
           setRange={setRange}
-        applications={APPLICATION_FIXTURES}
+          applications={applications}
         />
       </div>
       <div className="app-hero">

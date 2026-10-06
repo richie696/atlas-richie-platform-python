@@ -17,7 +17,6 @@
  * 本身就是个隐患：数据来源渗透进了 7 个页面的 import 图，将来替换成本高。
  * 先把边界画出来，服务端到位时只换这一个文件。
  */
-import { APPLICATION_FIXTURES } from "../../features/applications/fixtures/applicationsFixtures";
 import type { ApplicationRecord } from "../../features/applications/model/instance";
 import type { ApplicationSummary } from "../../features/overview/model/overview";
 import {
@@ -28,7 +27,29 @@ import {
   seriesForRange,
 } from "../../features/overview/fixtures/overviewFixtures";
 import type { FleetAttention } from "../../features/overview/model/overview";
+import { INITIAL_ACCOUNTS, NEW_ACCOUNT_LAST_LOGIN } from "../../features/identity/fixtures/identityFixtures";
 import { IDENTITY_ROLES } from "../../features/identity/model/account";
+import { INCIDENT_FIXTURES, FAULTS_APP_FIXTURES } from "../../features/faults/fixtures/faultsFixtures";
+import {
+  APPLICATION_FIXTURES,
+  ORDER_INSTANCE_FIXTURES,
+  readInstanceSeries,
+} from "../../features/applications/fixtures/applicationsFixtures";
+// realtime 的 `FLEET_TREND` / `seriesForRange` 与 overview 的**同名但不同源**：
+// 前者由 `makeTrendSeries()` 自生成，后者来自 overview 的演示序列。两个 feature
+// 各有一份趋势数据是既有事实，这里用别名区分，避免 gateway 里静默取错那一份。
+import {
+  FLEET_TREND as REALTIME_TREND,
+  REALTIME_APP_FIXTURES,
+  REALTIME_SUMMARY_FIXTURES,
+  seriesForRange as sliceRealtimeByRange,
+} from "../../features/realtime/fixtures/realtimeFixtures";
+import {
+  RULE_APP_FIXTURES,
+  RULE_FIXTURES,
+  RULE_VERSION_FIXTURES,
+} from "../../features/rules/fixtures/ruleFixtures";
+import { CONNECTIONS, CONNECTION_SUMMARY_CARDS } from "../../features/system/fixtures/systemFixtures";
 import type { InfraStatus } from "../../features/overview/model/overview";
 import type { MetricPoint } from "../../shared/types/dashboard";
 import { ApiError, type ConsoleGateway, type MetricQuery, type ScopedMetric } from "./contracts";
@@ -87,9 +108,79 @@ export interface FixtureGateway extends ConsoleGateway {
   }>;
   /** 应用与实例页读模型。 */
   getApplications(): Promise<readonly ApplicationRecord[]>;
+
+  /** 其余五个页面的同步快照，形态与 `readFleetOverviewSync` 相同。 */
+  readApplicationsSync(): typeof APPLICATIONS_SNAPSHOT;
+  readRealtimeSync(): typeof REALTIME_SNAPSHOT;
+  readFaultsSync(): typeof FAULTS_SNAPSHOT;
+  readSystemSync(): typeof SYSTEM_SNAPSHOT;
+  readRulesSync(): typeof RULES_SNAPSHOT;
+  readAccountsSync(): typeof ACCOUNTS_SNAPSHOT;
 }
 
+/**
+ * 各页的同步快照。
+ *
+ * 中文
+ * ----
+ * **形状就是各页面现在从 fixtures 拿到的那些值，一个不多一个不少。**
+ * 不在这里做转换或归一——转换属于 gateway 的职责，但它必须先有真实的数据来源
+ * 才能做；现在来源就是 fixtures，转换也就无从谈起。
+ */
+const APPLICATIONS_SNAPSHOT = Object.freeze({
+  applications: APPLICATION_FIXTURES,
+  instances: ORDER_INSTANCE_FIXTURES,
+  readSeries: readInstanceSeries,
+});
+
+const REALTIME_SNAPSHOT = Object.freeze({
+  trend: REALTIME_TREND,
+  applications: REALTIME_APP_FIXTURES,
+  summaryCards: REALTIME_SUMMARY_FIXTURES,
+  sliceByRange: sliceRealtimeByRange,
+});
+
+const FAULTS_SNAPSHOT = Object.freeze({
+  incidents: INCIDENT_FIXTURES,
+  applications: FAULTS_APP_FIXTURES,
+});
+
+const SYSTEM_SNAPSHOT = Object.freeze({
+  connections: CONNECTIONS,
+  summaryCards: CONNECTION_SUMMARY_CARDS,
+});
+
+const RULES_SNAPSHOT = Object.freeze({
+  applications: RULE_APP_FIXTURES,
+  rules: RULE_FIXTURES,
+  versions: RULE_VERSION_FIXTURES,
+});
+
+const ACCOUNTS_SNAPSHOT = Object.freeze({
+  accounts: INITIAL_ACCOUNTS,
+  newAccountLastLogin: NEW_ACCOUNT_LAST_LOGIN,
+});
+
 export const fixtureGateway: FixtureGateway = {
+  readApplicationsSync() {
+    return APPLICATIONS_SNAPSHOT;
+  },
+  readRealtimeSync() {
+    return REALTIME_SNAPSHOT;
+  },
+  readFaultsSync() {
+    return FAULTS_SNAPSHOT;
+  },
+  readSystemSync() {
+    return SYSTEM_SNAPSHOT;
+  },
+  readRulesSync() {
+    return RULES_SNAPSHOT;
+  },
+  readAccountsSync() {
+    return ACCOUNTS_SNAPSHOT;
+  },
+
   readFleetOverviewSync() {
     return {
       applications: APPLICATION_SUMMARIES,
