@@ -1,3 +1,5 @@
+import rulesStyles from "../Rules.module.scss";
+import { scopedClasses } from "../../../../shared/ui/styles/scopedClasses";
 /**
  * SystemRule 表单。
  *
@@ -9,10 +11,13 @@
  *
  * `highestCpuUsage` 取值区间是 0..1，不是百分数；界面也不展示百分号。
  */
-import { RuleInput } from "../fields/RuleFields";
-import type { SystemRuleDraft } from "../../model/ruleDraft";
+import { RuleInput, type RuleFieldError } from "../fields/RuleFields";
+import { FormGrid } from "../../../../shared/ui/FormGrid";
+import { parseNumericDraft, type SystemRuleDraft } from "../../editor/ruleDraft";
 import { DISABLED_SYSTEM_THRESHOLD } from "../../model/ruleKinds";
-import type { RuleFieldCopy, RuleTypeCopy } from "../../model/ruleMessages";
+import type { RuleFieldCopy, RuleTypeCopy } from "../../i18n/ruleMessages";
+
+const styleModules = [rulesStyles] as const;
 
 /** 五个系统阈值字段，与 `DASHBOARD_CONTROL_PLANE.md` §4.3 SystemRule 一致。 */
 const SYSTEM_FIELDS = [
@@ -31,6 +36,7 @@ export interface SystemRuleFormProps {
   /** 「留空会序列化为 -1」的说明。 */
   readonly disabledNote: string;
   readonly onChange: (next: SystemRuleDraft) => void;
+  readonly errorFor: RuleFieldError;
 }
 
 /** 把协议值转成表单显示值：未启用显示为空。 */
@@ -45,30 +51,35 @@ export function SystemRuleForm({
   fields,
   disabledNote,
   onChange,
+  errorFor,
 }: SystemRuleFormProps) {
   const update = (key: keyof SystemRuleDraft, value: number | string) =>
     onChange({ ...draft, [key]: value });
 
   return (
-    <div className="rule-form">
-      <p className="form-description">
+    <div className={scopedClasses(styleModules, "rule-form")}>
+      <p className={scopedClasses(styleModules, "form-description")}>
         {typeCopy.description} {disabledNote}
       </p>
-      <div className="rule-form-grid">
+      <FormGrid className="rule-form-grid">
         {SYSTEM_FIELDS.map(({ key, field }) => (
           <RuleInput
             key={key}
             label={fields[field].label}
             hint={fields[field].hint}
             value={displayValue(draft[key])}
+            error={errorFor(key)}
             onChange={(value) =>
-              update(key, value === "" ? DISABLED_SYSTEM_THRESHOLD : Number(value))
+              update(
+                key,
+                value.trim() === "" ? DISABLED_SYSTEM_THRESHOLD : parseNumericDraft(value),
+              )
             }
             disabled={disabled}
             numeric
           />
         ))}
-      </div>
+      </FormGrid>
     </div>
   );
 }

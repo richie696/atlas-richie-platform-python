@@ -6,26 +6,8 @@
  * 这里只放**多个 feature 真的共同需要**的稳定形状。feature 私有类型留在各自目录，
  * 不因为「将来可能用到」就提升到 shared（`REACT_PROJECT_SKELETON` §2）。
  */
-import type { RouteId, TimeRangeId } from "../../app/router/route.constants";
-
-/** 导航命令可携带的上下文。字段与 `app/router` 的 `NavigationContext` 对应。 */
-export type NavigateContext = {
-  readonly appId?: string;
-  readonly accountId?: string;
-  /** 路由内子视图（系统管理的 tab 等），必须是稳定 id 而非展示文案。 */
-  readonly view?: string;
-};
-
-/**
- * 导航命令。
- *
- * 中文
- * ----
- * 参数是 `RouteId` 而不是 `string`：调用方写错路由名会在编译期失败，而不是运行时
- * 静默落到总览页。第二个参数是可选的导航上下文（应用 id / 账号 id / 子视图），
- * 由 `app` 层序列化进 URL query，调用方不需要知道 URL 形态。
- */
-export type Navigate = (route: RouteId, context?: NavigateContext) => void;
+import type { Navigate, TimeRangeId } from "./navigation";
+export type { Navigate, NavigationContext as NavigateContext } from "./navigation";
 
 /**
  * 数据页共用的筛选状态。
@@ -51,6 +33,10 @@ export type DashboardFilters = {
  */
 export type DashboardPageProps = DashboardFilters & {
   readonly navigate: Navigate;
+  /** Safe, role-checked local destination to restore after authentication. */
+  readonly returnTo?: import("./navigation").RouteId;
+  /** Selected identity resource from the URL; never a session identity or authority. */
+  readonly accountId?: string;
   readonly setAppId: (appId: string) => void;
   readonly setRange: (range: TimeRangeId) => void;
   /**
@@ -81,7 +67,8 @@ export type DashboardPageProps = DashboardFilters & {
  * 图表按 key 取值。用字面量联合而不是 `Record<string, string | number>` 索引签名，
  * 是为了让 `metric="qqs"` 这类拼写错误在编译期暴露。
  */
-export type MetricKey = "qps" | "rt" | "blocked" | "cpu" | "memory";
+export type MetricKey =
+  "qps" | "rt" | "blocked" | "cpu" | "memory" | "tps" | "entryRate" | "memoryBytes";
 
 /**
  * 一个采样点上的指标集合。
@@ -95,7 +82,8 @@ export type MetricKey = "qps" | "rt" | "blocked" | "cpu" | "memory";
  * - `qps` / `rt` 是 **HTTP 层**口径：QPS = 入站 HTTP 请求增量/秒，RT 为同窗口完成
  *   请求耗时。TPS 必须由业务事务埋点定义，**不得**由 QPS 推算。
  * - `blocked` 是 Sentinel 拒绝占比。
- * - `cpu` / `memory` 为 0..1 比率，不是百分数。
+ * - 当前演示 `blocked` / `cpu` / `memory` 为展示百分数 0..100；不是 wire DTO。
+ *   后续协议的比率单位必须在 feature mapper 显式换算，不可直接复用此类型。
  *
  * 当前类型尚未包含 `scope` / `source` / `freshness`。这三项是 `DASHBOARD_CONTROL_PLANE.md`
  * §3.1 的硬要求，接入 Console API 时必须补齐，否则无法区分「应用总量」与「单进程」口径。

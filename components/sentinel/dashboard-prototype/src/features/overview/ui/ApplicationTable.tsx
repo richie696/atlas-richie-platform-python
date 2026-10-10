@@ -1,3 +1,6 @@
+import presentationStyles from "../../../shared/ui/styles/Presentation.module.scss";
+import dataTableStyles from "../../../shared/ui/DataTable.module.scss";
+import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 /**
  * 应用运行状态表。
  *
@@ -14,17 +17,21 @@ import { DataTable as Table } from "../../../shared/ui/DataTable";
 import { LinkButton } from "../../../shared/ui/LinkButton";
 import { Panel } from "../../../shared/ui/Panel";
 import { Status } from "../../../shared/ui/Status";
-import { ROUTE } from "../../../app/router/route.constants";
-import { numberText } from "../format/numberText";
+import { ROUTE } from "../../../shared/types/navigation";
+import { formatLocaleNumber } from "../../../shared/presentation/formatLocaleNumber";
 import {
   APPLICATION_HEALTH_LABEL_KEY,
   APPLICATION_TABLE_HEADERS,
+} from "../presentation/overviewLabels";
+import {
   CELL_ALERT_THRESHOLDS,
   type ApplicationSummary,
   type FleetAttention,
 } from "../model/overview";
 import { useTranslation } from "react-i18next";
 import type { Navigate } from "../../../shared/types/dashboard";
+
+const styleModules = [presentationStyles, dataTableStyles] as const;
 
 export interface ApplicationTableProps {
   readonly applications: readonly ApplicationSummary[];
@@ -41,7 +48,7 @@ export function ApplicationTable({
   appId,
   navigate,
 }: ApplicationTableProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   return (
     <Panel
       title={t("overview.table.title")}
@@ -67,15 +74,30 @@ export function ApplicationTable({
             <td>
               {app.runningInstances} / {app.totalInstances}
             </td>
-            <td className={app.cpuPercent > CELL_ALERT_THRESHOLDS.cpuPercent ? "red" : ""}>
+            <td
+              className={scopedClasses(
+                styleModules,
+                app.cpuPercent > CELL_ALERT_THRESHOLDS.cpuPercent ? "red" : "",
+              )}
+            >
               {app.cpuPercent}%
             </td>
             <td>{app.memoryPercent}%</td>
-            <td>{numberText(app.httpQps)}</td>
-            <td className={app.rtP95Ms > CELL_ALERT_THRESHOLDS.rtP95Ms ? "red" : ""}>
+            <td>{formatLocaleNumber(app.httpQps, i18n.resolvedLanguage ?? i18n.language)}</td>
+            <td
+              className={scopedClasses(
+                styleModules,
+                app.rtP95Ms > CELL_ALERT_THRESHOLDS.rtP95Ms ? "red" : "",
+              )}
+            >
               {app.rtP95Ms} ms
             </td>
-            <td className={app.blockedRatePercent > CELL_ALERT_THRESHOLDS.blockedRatePercent ? "red" : ""}>
+            <td
+              className={scopedClasses(
+                styleModules,
+                app.blockedRatePercent > CELL_ALERT_THRESHOLDS.blockedRatePercent ? "red" : "",
+              )}
+            >
               {app.blockedRatePercent}%
             </td>
             <td>{app.ruleVersion}</td>
@@ -87,7 +109,7 @@ export function ApplicationTable({
           </tr>
         ))}
       />
-      <p className="table-note">
+      <p className={scopedClasses(styleModules, "table-note")}>
         {t("overview.table.note", {
           shown: applications.length,
           total: attention.totalApps,

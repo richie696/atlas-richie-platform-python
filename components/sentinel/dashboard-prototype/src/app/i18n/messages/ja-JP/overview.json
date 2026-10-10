@@ -1,6 +1,10 @@
 {
   "overview.attention.appsRunning": "{{count}} 個のアプリケーションが稼働中、",
+  "overview.attention.appsRunning_one": "{{count}} 個のアプリケーションが稼働中、",
+  "overview.attention.appsRunning_other": "{{count}} 個のアプリケーションが稼働中、",
   "overview.attention.needsAttention": "{{count}} 個が要注目",
+  "overview.attention.needsAttention_one": "{{count}} 個が要注目",
+  "overview.attention.needsAttention_other": "{{count}} 個が要注目",
   "overview.attention.viewApps": "異常アプリケーションを表示",
   "overview.infra.component.ruleDelivery": "ルールバージョン配信",
   "overview.infra.demoOnly": "すべてデモ状態",
@@ -28,13 +32,10 @@
   "overview.table.subtitle": "アプリケーションごとに集約した主要指標です。クリックでインスタンス一覧へ移動します。",
   "overview.table.title": "アプリケーション稼働状況",
   "overview.table.viewAll": "すべてのアプリケーションを表示",
-  "overview.trend.afterRelease": "リリース後",
-  "overview.trend.beforeRelease": "リリース前",
   "overview.trend.blockedTitle": "リクエスト遮断率（Blocked Rate）",
   "overview.trend.qpsTitle": "HTTP QPS 合計（req/s）",
-  "overview.trend.sampleWindow": "14:17–14:32 · サンプルウィンドウ",
-  "overview.trend.sharedWindow": "両グラフは同じ時間範囲を使用します。青い破線はルールリリースの例を示します。",
+  "overview.trend.selectedWindow": "選択中の時間範囲",
+  "overview.trend.sharedWindow": "両方のグラフで同じ時間範囲を使用します。",
   "overview.trend.title": "全体のトラフィックと防御傾向",
-  "overview.trend.tpsNote": "TPS は未連携 · QPS とは混合しません",
-  "overview.trend.windowExcludesRelease": "このウィンドウには 14:02 のリリースは含まれません。{{longer}}に切替えると前後を比較できます。"
+  "overview.trend.tpsNote": "TPS は未連携 · QPS とは混合しません"
 }

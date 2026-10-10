@@ -17,7 +17,8 @@
  *
  * - `getSnapshot()` 在没有变化时返回**同一个引用**，否则每次渲染都会触发比较失败；
  * - `subscribe()` 返回取消函数，React 卸载后不再收到通知；
- * - store 不依赖 React，也不 import `fixtures/`。它不知道数据从哪来。
+ * - store 工厂内的状态迁移不依赖 React，也不 import `fixtures/`。同文件末尾的
+ *   Hook 只做订阅适配；工厂不知道数据从哪来。
  */
 import { useCallback, useSyncExternalStore } from "react";
 
@@ -39,6 +40,8 @@ export type AccountListener = () => void;
 export interface AccountStore {
   getSnapshot: () => AccountSnapshot;
   subscribe: (listener: AccountListener) => () => void;
+  /** 同一数据源仅初始化一次；替换数据源时装载其快照。与显式刷新 load 区分。 */
+  initialize: (owner: object, accounts: readonly AccountSummary[]) => void;
   /** 装载账号快照。生产实现由 `identity.gateway` 在会话建立后调用。 */
   load: (accounts: readonly AccountSummary[]) => void;
   /** 新增一个账号。 */
@@ -53,6 +56,7 @@ export interface AccountStore {
 export function createAccountStore(): AccountStore {
   const listeners = new Set<AccountListener>();
   let snapshot: AccountSnapshot = Object.freeze({ accounts: Object.freeze([]) });
+  let initializedOwner: object | undefined;
 
   // 唯一的状态迁移入口：产生新快照并通知订阅者。内容未变化时不换引用。
   const commit = (accounts: readonly AccountSummary[]) => {
@@ -62,9 +66,8 @@ export function createAccountStore(): AccountStore {
   };
 
   const update = (id: string, patch: (account: AccountSummary) => AccountSummary) => {
-    commit(
-      snapshot.accounts.map((account) => (account.id === id ? patch(account) : account)),
-    );
+    const next = snapshot.accounts.map((account) => (account.id === id ? patch(account) : account));
+    if (next.some((account, index) => account !== snapshot.accounts[index])) commit(next);
   };
 
   return {
@@ -75,6 +78,11 @@ export function createAccountStore(): AccountStore {
         listeners.delete(listener);
       };
     },
+    initialize: (owner, accounts) => {
+      if (initializedOwner === owner) return;
+      initializedOwner = owner;
+      commit(accounts);
+    },
     load: (accounts) => {
       commit(Object.freeze([...accounts]));
     },
@@ -82,14 +90,10 @@ export function createAccountStore(): AccountStore {
       commit([...snapshot.accounts, account]);
     },
     setStatus: (id, status) => {
-      update(id, (account) =>
-        account.status === status ? account : { ...account, status },
-      );
+      update(id, (account) => (account.status === status ? account : { ...account, status }));
     },
     setRole: (id, roleId) => {
-      update(id, (account) =>
-        account.roleId === roleId ? account : { ...account, roleId },
-      );
+      update(id, (account) => (account.roleId === roleId ? account : { ...account, roleId }));
     },
   };
 }
@@ -105,8 +109,8 @@ export const accountStore: AccountStore = createAccountStore();
 /**
  * 装载账号快照的模块级装配命令。
  *
- * 演示装配由页面在**模块初始化时**传入 `fixtures/` 的示例列表；接入 Console API 后
- * 改为在会话建立后调用 `accountStore.load(gateway 快照)`，页面不再需要知道数据来源。
+ * 这是显式刷新命令，不用于页面挂载。真实会话/数据生命周期由 identity
+ * HTTP workflow 管理，不在页面挂载时回灌示例。
  */
 export function loadAccounts(accounts: readonly AccountSummary[]): void {
   accountStore.load(accounts);
@@ -133,24 +137,15 @@ export function useAccounts(): AccountList {
     accountStore.getSnapshot,
   ).accounts;
 
-  const add = useCallback<AccountList["add"]>(
-    (account) => {
-      accountStore.add(account);
-    },
-    [],
-  );
-  const setStatus = useCallback<AccountList["setStatus"]>(
-    (id, status) => {
-      accountStore.setStatus(id, status);
-    },
-    [],
-  );
-  const setRole = useCallback<AccountList["setRole"]>(
-    (id, roleId) => {
-      accountStore.setRole(id, roleId);
-    },
-    [],
-  );
+  const add = useCallback<AccountList["add"]>((account) => {
+    accountStore.add(account);
+  }, []);
+  const setStatus = useCallback<AccountList["setStatus"]>((id, status) => {
+    accountStore.setStatus(id, status);
+  }, []);
+  const setRole = useCallback<AccountList["setRole"]>((id, roleId) => {
+    accountStore.setRole(id, roleId);
+  }, []);
 
   return { accounts, add, setStatus, setRole };
 }

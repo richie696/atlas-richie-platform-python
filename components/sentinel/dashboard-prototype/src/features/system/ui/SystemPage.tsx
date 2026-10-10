@@ -1,3 +1,5 @@
+import systemStyles from "./System.module.scss";
+import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 /**
  * 系统管理页面容器。
  *
@@ -19,36 +21,60 @@
  *   （`REWRITE_PLAN.md` §9.5）。
  */
 import { ActionButton } from "../../../shared/ui/ActionButton";
-import { useConsoleGateway } from "../../../core/api/GatewayProvider";
 import { Intro } from "../../../shared/ui/Intro";
 import { Status } from "../../../shared/ui/Status";
+import type { ReactNode } from "react";
 import type { DashboardPageProps } from "../../../shared/types/dashboard";
-import { AccountMaintenancePage, RoleBindingPage } from "../../identity";
-import { ROUTE } from "../../../app/router/route.constants";
-import {
-  SYSTEM_TABS,
-  SYSTEM_TAB,
-  SYSTEM_TAB_LABEL_KEY,
-  resolveSystemTab,
-  type SystemTab,
-} from "../model/systemStatus";
+import type { createSystemObservationResources } from "../application/systemObservationResources";
+import type { createSourceRegistrationWorkflow } from "../application/sourceRegistrationWorkflow";
+import type { AuditQuery } from "../model/systemObservation";
+import type { ControlPlaneAccessState } from "../../identity";
+import { ROUTE } from "../../../shared/types/navigation";
+import { SYSTEM_TABS, SYSTEM_TAB, resolveSystemTab, type SystemTab } from "../model/systemStatus";
+import { SYSTEM_TAB_LABEL_KEY } from "../presentation/systemPresentation";
 import { useTranslation } from "react-i18next";
-import { ConnectionPanel } from "./ConnectionPanel";
-import { PermissionsPanel } from "./PermissionsPanel";
-import { ProtocolPanel } from "./ProtocolPanel";
+import { ObservedPermissionsPanel } from "./ObservedPermissionsPanel";
+import { ObservedConnectionsPanel } from "./ObservedConnectionsPanel";
+import { ObservedProtocolsPanel } from "./ObservedProtocolsPanel";
+import { ObservedAuditPanel } from "./ObservedAuditPanel";
+import { SourceRegistryPanel } from "./SourceRegistryPanel";
+
+type SystemObservationResources = ReturnType<typeof createSystemObservationResources>;
+
+const styleModules = [systemStyles] as const;
 
 export interface SystemPageProps {
   readonly navigate: DashboardPageProps["navigate"];
   readonly locale: string;
   /** URL `view` 参数；非法或缺失时由 `resolveSystemTab` 回落默认 tab。 */
   readonly view: string;
+  /** 角色绑定的 URL 目标；系统 tab 与独立身份页使用相同目标语义。 */
+  readonly accountId?: string;
+  /** Identity panels are composed by the app owner to keep feature dependencies one-way. */
+  readonly identityPanels: {
+    readonly accounts: ReactNode;
+    readonly roles: ReactNode;
+  };
+  readonly access: ControlPlaneAccessState;
+  readonly observations: SystemObservationResources;
+  readonly sourceRegistration: ReturnType<typeof createSourceRegistrationWorkflow> | null;
+  readonly auditQuery: AuditQuery;
+  readonly onAuditQueryChange: (query: AuditQuery) => void;
 }
 
 /** Connection, protocol, permission and identity administration workspace. */
-export function SystemPage({ navigate, view }: SystemPageProps) {
+export function SystemPage({
+  navigate,
+  view,
+  accountId,
+  identityPanels,
+  access,
+  observations,
+  sourceRegistration,
+  auditQuery,
+  onAuditQueryChange,
+}: SystemPageProps) {
   const { t } = useTranslation();
-  // 数据从 gateway 取，页面不感知来源。
-  const {connections, summaryCards} = useConsoleGateway().readSystemSync();
   // 受控：tab 不再是本组件的 state，唯一来源是 URL。切换 = 写回 URL。
   const tab: SystemTab = resolveSystemTab(view);
   const selectTab = (next: SystemTab) => {
@@ -64,12 +90,16 @@ export function SystemPage({ navigate, view }: SystemPageProps) {
         description={t("system.intro.description")}
         aside={<Status tone="blue">{t("system.intro.aside")}</Status>}
       />
-      <div className="tabs" role="group" aria-label={t("system.intro.tabGroupLabel")}>
+      <div
+        className={scopedClasses(styleModules, "tabs")}
+        role="group"
+        aria-label={t("system.intro.tabGroupLabel")}
+      >
         {SYSTEM_TABS.map((id) => (
           <ActionButton
             type="button"
             aria-pressed={tab === id}
-            className={tab === id ? "active" : ""}
+            className={scopedClasses(styleModules, tab === id ? "active" : "")}
             key={id}
             onClick={() => selectTab(id)}
           >
@@ -78,16 +108,31 @@ export function SystemPage({ navigate, view }: SystemPageProps) {
         ))}
       </div>
       {tab === SYSTEM_TAB.Connections && (
-        <ConnectionPanel
-          cards={summaryCards}
-          connections={connections}
-          navigate={navigate}
+        <>
+          <ObservedConnectionsPanel resource={observations.connections} />
+          {sourceRegistration && <SourceRegistryPanel workflow={sourceRegistration} />}
+        </>
+      )}
+      {tab === SYSTEM_TAB.Permissions && <ObservedPermissionsPanel access={access} />}
+      {tab === SYSTEM_TAB.Protocol && <ObservedProtocolsPanel resource={observations.protocols} />}
+      {tab === SYSTEM_TAB.Audit && (
+        <ObservedAuditPanel
+          resource={observations.audit}
+          query={auditQuery}
+          onQueryChange={onAuditQueryChange}
+          onPublication={(record) => {
+            if (record.publicationId !== null)
+              navigate(ROUTE.Rules, {
+                ...(record.environmentId ? { environmentId: record.environmentId } : {}),
+                ...(record.appId ? { appId: record.appId } : {}),
+                ...(record.bindingId ? { bindingId: record.bindingId } : {}),
+                publicationId: record.publicationId,
+              });
+          }}
         />
       )}
-      {tab === SYSTEM_TAB.Permissions && <PermissionsPanel />}
-      {tab === SYSTEM_TAB.Protocol && <ProtocolPanel />}
-      {tab === SYSTEM_TAB.Accounts && <AccountMaintenancePage navigate={navigate} />}
-      {tab === SYSTEM_TAB.Roles && <RoleBindingPage navigate={navigate} />}
+      {tab === SYSTEM_TAB.Accounts && identityPanels.accounts}
+      {tab === SYSTEM_TAB.Roles && identityPanels.roles}
     </>
   );
 }

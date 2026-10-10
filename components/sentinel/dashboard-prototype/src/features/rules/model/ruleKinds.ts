@@ -51,6 +51,8 @@ export const SentinelCode = Object.freeze({
   DEGRADE_ERROR_COUNT: 2,
   AUTHORITY_WHITE: 0,
   AUTHORITY_BLACK: 1,
+  CLUSTER_THRESHOLD_AVERAGE_LOCAL: 0,
+  CLUSTER_THRESHOLD_GLOBAL: 1,
   DISABLED_SYSTEM_THRESHOLD: -1,
 });
 
@@ -108,6 +110,11 @@ export const RULE_KIND_ALL = "all";
 /** 规则类型筛选的可选值。 */
 export type RuleKindFilter = RuleKind | typeof RULE_KIND_ALL;
 
+/** Runtime guard for a rule kind received through an untrusted route value. */
+export function isRuleKind(value: unknown): value is RuleKind {
+  return typeof value === "string" && RULE_KINDS.some((kind) => kind === value);
+}
+
 /**
  * 把 URL 的 `view` 参数解析成规则类型筛选。
  *
@@ -120,7 +127,5 @@ export type RuleKindFilter = RuleKind | typeof RULE_KIND_ALL;
 export function resolveRuleKindFilter(value: string | undefined): RuleKindFilter {
   const candidate = value ?? "";
   if (candidate === RULE_KIND_ALL) return RULE_KIND_ALL;
-  return (RULE_KINDS as readonly string[]).includes(candidate)
-    ? (candidate as RuleKind)
-    : RULE_KIND_ALL;
+  return isRuleKind(candidate) ? candidate : RULE_KIND_ALL;
 }

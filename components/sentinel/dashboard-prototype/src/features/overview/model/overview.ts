@@ -22,7 +22,6 @@
  * `FleetTrendSeries`；接入 Console API 时由 gateway 连同这三个字段一起补齐，
  * 前端不得在此之前把它们推断出来。
  */
-import { TIME_RANGE, type TimeRangeId } from "../../../app/router/route.constants";
 import type { MetricPoint } from "../../../shared/types/dashboard";
 
 /** 应用健康等级。同时是表格状态标签的 tone。 */
@@ -61,40 +60,6 @@ export const CELL_ALERT_THRESHOLDS = Object.freeze({
   rtP95Ms: 350,
   blockedRatePercent: 10,
 } as const);
-
-/** 应用状态表格的列头。值是语言键，译文在 `i18n/locales.ts`。 */
-export const APPLICATION_TABLE_HEADERS: readonly string[] = Object.freeze([
-  "overview.table.head.name",
-  "overview.table.head.status",
-  "overview.table.head.instances",
-  "overview.table.head.cpuAvg",
-  "overview.table.head.memoryAvg",
-  "overview.table.head.httpQps",
-  "overview.table.head.rtP95",
-  "overview.table.head.blockedRate",
-  "overview.table.head.ruleVersion",
-  "overview.table.head.actions",
-]);
-
-/**
- * 健康等级的展示文案键。
- *
- * 中文
- * ----
- * 曾经还有一个 `healthReason: string` 字段，由 fixture 直接给中文（"资源压力"）。
- * 它的取值与 `health` 一一对应，于是同一份事实存在两份：改枚举要记得改 fixture，
- * 改 fixture 又不影响枚举——两份都可能对不上，且中文绕过了语言包。
- *
- * 这里收敛成「枚举 -> 语言键」的单向映射，`healthReason` 从模型里删除。
- * 将来若真需要自由文本说明（例如「CPU 连续 5 分钟高于 90%」），应另加一个
- * 明确的 `healthDetail` 字段，而不是让枚举标签兼职说明文字。
- */
-export const APPLICATION_HEALTH_LABEL_KEY: Readonly<Record<ApplicationHealth, string>> =
-  Object.freeze({
-    critical: "overview.table.health.critical",
-    warning: "overview.table.health.warning",
-    healthy: "overview.table.health.healthy",
-  } as const);
 
 /**
  * 异常摘要。
@@ -145,14 +110,6 @@ export const TPS_INTEGRATION = Object.freeze({
  */
 export type InfraConnectionState = "available" | "unavailable" | "connecting";
 
-/** 连接状态的展示文案键。 */
-export const INFRA_STATE_LABEL_KEY: Readonly<Record<InfraConnectionState, string>> =
-  Object.freeze({
-    available: "overview.infra.state.available",
-    unavailable: "overview.infra.state.unavailable",
-    connecting: "overview.infra.state.connecting",
-  } as const);
-
 /**
  * 基础组件与规则下发状态。
  *
@@ -180,28 +137,11 @@ export type InfraStatus =
   | {
       readonly component: "rule-delivery";
       /** 展示名的语言键。 */
-      readonly nameKey: string;
+      readonly nameKey: import("../../../shared/types/translation").TranslationKey;
       readonly appliedInstances: number;
       readonly totalInstances: number;
       readonly coveragePercent: number;
     };
-
-/**
- * 趋势面板副标题的语言键。
- *
- * 中文
- * ----
- * 15 分钟窗口与 1 小时窗口对「发布时点是否落在窗口内」的结论不同，因此是两句话
- * 而不是同一句话加一个时间标签：`DASHBOARD_CONTROL_PLANE.md` §4.1 要求
- * 「窗口外的发布时点不画标记」。这里只放语言键，翻译在 UI 层。
- */
-export const TREND_SUBTITLE_KEYS = Object.freeze({
-  windowExcludesRelease: "overview.trend.windowExcludesRelease",
-  sharedWindow: "overview.trend.sharedWindow",
-} as const);
-
-/** 趋势序列的展示窗口。 */
-export type FleetTrendWindow = TimeRangeId;
 
 /** 一个趋势窗口内的只读点列。 */
 export type FleetTrendPoints = readonly MetricPoint[];
@@ -222,9 +162,4 @@ export function selectApplicationScope(
 ): readonly ApplicationSummary[] {
   if (appId === allApplicationsId) return applications;
   return applications.filter((application) => application.id === appId);
-}
-
-/** 当前时间窗口是否为 15 分钟。用于「示例窗口」与发布标注的分支。 */
-export function isShortWindow(window: FleetTrendWindow): boolean {
-  return window === TIME_RANGE.Last15Minutes;
 }

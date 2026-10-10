@@ -1,8 +1,16 @@
+import actionButtonStyles from "./ActionButton.module.scss";
+import linkButtonStyles from "./LinkButton.module.scss";
+import { scopedClasses } from "./styles/scopedClasses";
 import { Button, type ButtonSize, type ButtonVariant } from "@astryxdesign/core/Button";
 import { isValidElement, type ButtonHTMLAttributes, type ReactNode } from "react";
 
+const styleModules = [actionButtonStyles, linkButtonStyles] as const;
+
 /** Shared button contract that maps the prototype's semantic classes to Astryx. */
-export type ActionButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "disabled" | "children"> & {
+export type ActionButtonProps = Omit<
+  ButtonHTMLAttributes<HTMLButtonElement>,
+  "disabled" | "children"
+> & {
   children: ReactNode;
   disabled?: boolean;
   label?: string;
@@ -20,8 +28,39 @@ function textContent(node: ReactNode): string {
 }
 
 /** Astryx-backed action button preserving existing Dashboard class hooks. */
-export function ActionButton({ children, label, variant, size = "md", isIconOnly, isLoading, disabled = false, className, type = "button", ...rest }: ActionButtonProps) {
-  const resolvedVariant = variant ?? (className?.includes("primary-button") ? "primary" : className?.includes("link-button") ? "ghost" : "secondary");
+export function ActionButton({
+  children,
+  label,
+  variant,
+  size = "md",
+  isIconOnly,
+  isLoading,
+  disabled = false,
+  className,
+  type = "button",
+  ...rest
+}: ActionButtonProps) {
+  const resolvedVariant =
+    variant ??
+    (className?.includes("primary-button")
+      ? "primary"
+      : className?.includes("link-button")
+        ? "ghost"
+        : "secondary");
   const accessibleLabel = label ?? rest["aria-label"] ?? (textContent(children) || "Action");
-  return <Button {...rest} type={type} className={className} label={accessibleLabel} variant={resolvedVariant} size={size} isDisabled={disabled} isIconOnly={isIconOnly} isLoading={isLoading}>{children}</Button>;
+  return (
+    <Button
+      {...rest}
+      type={type}
+      className={scopedClasses(styleModules, className)}
+      label={accessibleLabel}
+      variant={resolvedVariant}
+      size={size}
+      isDisabled={disabled}
+      isIconOnly={isIconOnly}
+      isLoading={isLoading}
+    >
+      {children}
+    </Button>
+  );
 }

@@ -18,6 +18,7 @@
  */
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
 
 import { E2E_BASE_URL, launchBrowser } from "./cdp.mjs";
 
@@ -29,16 +30,15 @@ before(async () => {
 
 after(async () => {
   await browser?.close();
-  // CDP WebSocket 与 Chrome 进程句柄在用例跑完后仍可能持有事件循环，
-  // `node --test` 会一直等它们自然退出。全部结果已由 reporter 输出，
-  // 这里主动结束进程；退出码保留给 node:test 判定成败。
-  process.exit(process.exitCode ?? 0);
+  // Let node:test report failed hooks/cancelled cases. Forcing exit here can
+  // turn a browser startup failure into a misleading single passing file.
 });
 
-/** 每个用例用独立页面，避免上一个用例的受控状态与监听器泄漏到下一个。 */
+/** Separate document AND origin storage per case; tabs alone share localStorage/cookies. */
 async function withPage(run) {
   const page = await browser.newPage();
   try {
+    await page.clearStorage(new URL(E2E_BASE_URL).origin);
     await run(page);
   } finally {
     try {
@@ -52,6 +52,18 @@ async function withPage(run) {
       await page.close();
     }
   }
+}
+
+/** Await routed content, not merely the shell that appears before a lazy chunk. */
+async function gotoDashboard(page, url) {
+  await page.goto(url);
+  await page.waitFor(
+    `(() => {
+    const root = document.getElementById('root');
+    return !!root?.children.length && !root.querySelector('[data-route-state="loading"]');
+  })()`,
+    { label: "route content ready" },
+  );
 }
 
 /**
@@ -107,6 +119,236 @@ function waitDropdownClosed(page) {
   );
 }
 
+/** Compare vendor control border boxes, not their internally inset native inputs. */
+async function assertFormGridAlignment(page, scope) {
+  const grids =
+    await page.eval(`(() => [...document.querySelectorAll(${JSON.stringify(scope + " .sentinel-form-fields")})].map(grid => {
+    const fields=[...grid.children].map(child=>child.matches('.astryx-field')?child:child.querySelector('.astryx-field')).filter(Boolean);
+    return fields.map(field=>{
+      const control=field.querySelector('.astryx-text-input,.astryx-number-input,.astryx-selector');
+      const f=field.getBoundingClientRect(), c=control?.getBoundingClientRect();
+      return {label:field.querySelector('label')?.textContent, fieldTop:f.top, top:c?.top, left:c?.left, width:c?.width, fieldWidth:f.width};
+    });
+  }))()`);
+  assert.ok(grids.length > 0, `no production FormGrid under ${scope}`);
+  for (const fields of grids) {
+    for (const field of fields) {
+      assert.ok(
+        field.width > 0 && field.width <= field.fieldWidth + 1,
+        `control escaped its slot: ${JSON.stringify(field)}`,
+      );
+      for (const other of fields) {
+        if (field !== other && Math.abs(field.fieldTop - other.fieldTop) < 1)
+          assert.ok(
+            Math.abs(field.top - other.top) < 1,
+            `same-row controls are misaligned: ${JSON.stringify([field, other])}`,
+          );
+      }
+    }
+  }
+}
+
+async function saveFormEvidence(page, name) {
+  // Do not mistake a half-faded opening animation for a new visual baseline.
+  await page.eval(`(async () => {
+    const transitions=document.getAnimations().filter(a=>a.playState==='running'&&Number.isFinite(a.effect?.getTiming().iterations));
+    await Promise.all(transitions.map(a=>a.finished.catch(()=>{})));
+  })()`);
+  const directory = artifactDirectory("sentinel-f3-production-forms-20261007");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(`${directory}/${name}.png`, await page.screenshot());
+}
+
+describe("F3 样式所有权", () => {
+  it("实际集群表单使用正式枚举选项，开关不与数值框混排且无内层焦点框", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=order-service&view=flow`);
+      await page.click(".rule-edit-button");
+      const checked = await page.eval(
+        `(() => {const label=[...document.querySelectorAll('.rule-inspector label')].find(l=>l.textContent==='集群流控');return document.getElementById(label.htmlFor).checked;})()`,
+      );
+      if (!checked) await page.clickByText("集群流控", ".rule-inspector label");
+      await page.waitFor(`!!document.querySelector('.cluster-grid')`);
+      await assertFormGridAlignment(page, ".rule-inspector");
+      assert.equal(
+        await page.count('.cluster-grid input[role="spinbutton"]'),
+        2,
+        "threshold type must not be a numeric code input",
+      );
+      await page.click('.cluster-grid button[role="combobox"]');
+      await waitDropdownOpen(page);
+      assert.deepEqual(
+        await page.eval(
+          `[...document.querySelectorAll('div[role="option"]')].filter(o=>o.offsetParent).map(o=>o.textContent.trim())`,
+        ),
+        ["单机平均额度", "集群总额度"],
+      );
+      await page.clickByText("集群总额度", 'div[role="option"]');
+      await waitDropdownClosed(page);
+      await page.waitFor(
+        `JSON.parse(document.querySelector('.compatibility-json pre').textContent)[0].clusterConfig.thresholdType===1`,
+      );
+      await page.click('.cluster-grid input[role="spinbutton"]');
+      assert.equal(
+        await page.eval(`getComputedStyle(document.activeElement).outlineStyle`),
+        "none",
+      );
+      await saveFormEvidence(page, "flow-cluster");
+    });
+  });
+  it("新增账号与初始化各步骤复用字段布局，单选卡片由公开 slot 着色", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/accounts`);
+      await page.clickByText("新增账号");
+      await page.waitFor(`!!document.querySelector('dialog[open]')`);
+      await assertFormGridAlignment(page, "dialog[open]");
+      assert.equal(await page.count('dialog[open] input[type="password"]'), 1);
+      await saveFormEvidence(page, "account-create");
+      await page.clickByText("取消", "dialog[open] button");
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/setup`);
+      await page.waitFor(`!!document.querySelector('.setup-form-grid')`);
+      await assertFormGridAlignment(page, ".setup-workspace");
+      await saveFormEvidence(page, "setup-storage");
+      await page.type('.setup-workspace input[autocomplete="off"]', "db.synthetic.internal");
+      await page.type(
+        '.setup-workspace input[autocomplete="username"]',
+        "synthetic-connection-user",
+      );
+      await page.clickByText("下一步");
+      await page.waitFor(
+        `document.querySelector('.setup-workspace').textContent.includes('创建内置管理员')`,
+      );
+      await assertFormGridAlignment(page, ".setup-workspace");
+      await saveFormEvidence(page, "setup-admin");
+      await page.type('.setup-workspace input[autocomplete="username"]', "synthetic-admin");
+      await page.type('.setup-workspace input[type="password"]', "Synthetic-only-Password-42");
+      await page.click('.setup-workspace input[type="password"]', { index: 1 });
+      await page.send("Input.insertText", { text: "Synthetic-only-Password-42" });
+      await page.clickByText("下一步");
+      await page.waitFor(`!!document.querySelector('.setup-authentication')`);
+      await assertFormGridAlignment(page, ".setup-workspace");
+      await saveFormEvidence(page, "setup-source-reference");
+      await page.clickByText("在控制台填写凭证", ".setup-authentication .astryx-radio-list-item");
+      await page.waitFor(`!!document.querySelector('.setup-workspace input[type="password"]')`);
+      await assertFormGridAlignment(page, ".setup-workspace");
+      await saveFormEvidence(page, "setup-source-direct");
+    });
+  });
+  it("共享表单在三语长帮助、字段错误和窄容器下对齐，原生输入与 checkbox 仍可用", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/accounts`);
+      await page.eval(`(async () => {
+        const React = (await import('/node_modules/.vite/deps/react.js')).default;
+        const {createRoot} = (await import('/node_modules/.vite/deps/react-dom_client.js')).default;
+        const {FormGridProbe} = await import('/tests/e2e/probes/FormGridProbe.tsx');
+        const container=document.createElement('section'); container.id='form-grid-probe'; document.body.prepend(container);
+        const root=createRoot(container); root.render(React.createElement(FormGridProbe));
+        window.__formGridClean=()=>{root.unmount();container.remove();};
+      })()`);
+      await page.waitFor(`!!document.querySelector('#form-grid-probe output')`);
+      const measure = `(() => {
+        const root=document.querySelector('#form-grid-probe');
+        const control=name=>{const label=[...root.querySelectorAll('label')].find(l=>l.textContent===name);return label&&document.getElementById(label.htmlFor);};
+        const rect=name=>{const input=control(name);const box=input.closest('.astryx-text-input,.astryx-number-input,.astryx-selector')??input;const r=box.getBoundingClientRect(); return {top:r.top,bottom:r.bottom,left:r.left,width:r.width};};
+        const grid=root.querySelector('.sentinel-form-fields').getBoundingClientRect();
+        return {account:rect('Account'),quota:rect('Quota'),mode:rect('Mode'),explanation:rect('Additional explanation with a longer label'),full:rect('Full-row field'),gridWidth:grid.width};
+      })()`;
+      for (const locale of ["zh", "en", "ja"]) {
+        await page.click(`#form-grid-probe [data-locale="${locale}"]`);
+        for (const error of [false, true]) {
+          if (
+            (await page.eval(
+              `JSON.parse(document.querySelector('#form-grid-probe output').textContent).error`,
+            )) !== error
+          )
+            await page.click('#form-grid-probe [data-action="error"]');
+          const bounds = await page.eval(measure);
+          assert.ok(
+            Math.abs(bounds.account.top - bounds.quota.top) < 1,
+            `${locale}/${error}: text/number control top differs: ${JSON.stringify(bounds)}`,
+          );
+          assert.ok(
+            Math.abs(bounds.mode.top - bounds.explanation.top) < 1,
+            `${locale}/${error}: selector/text border box top differs: ${JSON.stringify(bounds)}`,
+          );
+          assert.ok(
+            bounds.full.width > bounds.gridWidth - 5,
+            "full-row field does not fill the grid",
+          );
+        }
+      }
+      await page.click('#form-grid-probe input[role="spinbutton"]');
+      assert.equal(
+        await page.eval(`getComputedStyle(document.activeElement).outlineStyle`),
+        "none",
+        "native outline must not compete with Astryx wrapper focus",
+      );
+      assert.equal(await page.eval(`document.activeElement.getAttribute('role')`), "spinbutton");
+      await page.clickByText("Allow fallback", "#form-grid-probe label");
+      await page.waitFor(
+        `!JSON.parse(document.querySelector('#form-grid-probe output').textContent).fallback`,
+      );
+      const directory = artifactDirectory("sentinel-f3-form-grid-20261007");
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(`${directory}/wide-error-ja.png`, await page.screenshot());
+      await page.click('#form-grid-probe [data-action="width"]');
+      await page.waitFor(
+        `JSON.parse(document.querySelector('#form-grid-probe output').textContent).narrow`,
+      );
+      await page.waitFor(
+        `(() => {const b=${measure};return Math.abs(b.account.left-b.quota.left)<1&&b.quota.top>b.account.bottom;})()`,
+      );
+      const narrow = await page.eval(measure);
+      assert.ok(
+        narrow.account.width > narrow.gridWidth - 5,
+        "narrow container did not become one column",
+      );
+      assert.equal(
+        await page.eval(
+          `JSON.parse(document.querySelector('#form-grid-probe output').textContent).quota`,
+        ),
+        "10",
+      );
+      writeFileSync(`${directory}/narrow-error-ja.png`, await page.screenshot());
+      await page.eval(`window.__formGridClean()`);
+    });
+  });
+  it("跨 lazy 页面载入顺序不改变身份标题、实例密度和页面间距", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/accounts`);
+      await page.waitFor(`!!document.querySelector('.identity-table')`);
+      assert.deepEqual(
+        await page.eval(`(() => ({
+        alignment: getComputedStyle(document.querySelector('.identity-intro')).alignItems,
+        margin: getComputedStyle(document.querySelector('.identity-panel')).marginBottom,
+      }))()`),
+        { alignment: "flex-end", margin: "16px" },
+      );
+      for (const title of ["应用与实例", "总览", "应用与实例"]) {
+        await page.clickByText(title, ".main-nav button");
+        await page.waitFor(
+          `!!document.querySelector(${JSON.stringify(title === "总览" ? ".overview-context" : ".instances-table")})`,
+        );
+        assert.equal(
+          await page.eval(`getComputedStyle(document.querySelector('main')).paddingTop`),
+          "13px",
+        );
+        if (title === "应用与实例") {
+          assert.deepEqual(
+            await page.eval(`(() => {
+            const cell = document.querySelector('.instances-table .instance-row td:nth-child(2)');
+            const host = document.querySelector('.instances-table .host-row td');
+            return {top:getComputedStyle(cell).paddingTop, left:getComputedStyle(cell).paddingLeft,
+              hostTop:getComputedStyle(host).paddingTop};
+          })()`),
+            { top: "8px", left: "9px", hostTop: "8px" },
+          );
+        }
+      }
+    });
+  });
+});
+
 describe("应用壳导航", () => {
   const NAV = [
     ["总览", "overview"],
@@ -120,14 +362,18 @@ describe("应用壳导航", () => {
   for (const [label, route] of NAV) {
     it(`点击「${label}」进入 ${route} 并把路由写进 URL`, async () => {
       await withPage(async (page) => {
-        await page.goto(`${E2E_BASE_URL}/#/overview?app=all&range=1h`);
+        await gotoDashboard(page, `${E2E_BASE_URL}/#/overview?app=all&range=1h`);
         await page.waitFor(`!!document.querySelector('.topbar')`, { label: "顶栏" });
 
         await page.clickByText(label, ".main-nav button");
         await page.waitFor(`location.hash.includes('/${route}')`, { label: `跳到 ${route}` });
 
         const current = await page.hash();
-        assert.match(current, new RegExp(`^#/${route}\\?`), `hash 应以 #/${route}? 开头，实际 ${current}`);
+        assert.match(
+          current,
+          new RegExp(`^#/${route}\\?`),
+          `hash 应以 #/${route}? 开头，实际 ${current}`,
+        );
         // 导航必须带上下文：切页后筛选条件不应丢失
         assert.match(current, /app=/, "导航后应保留 app 上下文");
         assert.match(current, /range=/, "导航后应保留 range 上下文");
@@ -147,9 +393,9 @@ describe("应用壳导航", () => {
   it("深链刷新后恢复到同一视图", async () => {
     await withPage(async (page) => {
       const deep = `${E2E_BASE_URL}/#/realtime?app=order-service&range=15m`;
-      await page.goto(deep);
+      await gotoDashboard(page, deep);
       await page.waitFor(`!!document.querySelector('.topbar')`, { label: "顶栏" });
-      await page.goto(deep);
+      await gotoDashboard(page, deep);
       await page.waitFor(`!!document.querySelector('.page-realtime')`, { label: "实时监控页" });
       assert.match(await page.hash(), /app=order-service/);
       assert.match(await page.hash(), /range=15m/);
@@ -166,7 +412,7 @@ describe("应用壳导航", () => {
   describe("无实例示例数据的应用", () => {
     it("换到没有实例数据的应用时给出缺口说明, 而不是伪造空矩阵", async () => {
       await withPage(async (page) => {
-        await page.goto(`${E2E_BASE_URL}/#/applications?app=payment-service&range=1h`);
+        await gotoDashboard(page, `${E2E_BASE_URL}/#/applications?app=payment-service&range=1h`);
         await page.waitFor(`document.querySelector('.app-hero') !== null`, { label: "应用页" });
         const hero = await page.text(".alert-hero p");
         assert.match(hero, /order-service/, "缺口说明应指明只有哪个应用有实例示例数据");
@@ -186,13 +432,13 @@ describe("应用壳导航", () => {
     /**
      * 切换演示身份。
      *
-     * 会话存在 `localStorage` 的 `sentinel.session`（`core/session`），不经过登录
+     * mock 服务端角色存在 mock-only 的 `sentinel.mock.role`，不经过登录
      * 流程——这里要验证的是门禁，不是登录表单。
      */
     async function withRole(page, role) {
-      await page.goto(`${E2E_BASE_URL}/`);
-      await page.eval(`window.localStorage.setItem('sentinel.session', ${JSON.stringify(role)})`);
-      await page.goto(`${E2E_BASE_URL}/#/rules?app=order-service&range=1h`);
+      await gotoDashboard(page, `${E2E_BASE_URL}/`);
+      await page.eval(`window.localStorage.setItem('sentinel.mock.role', ${JSON.stringify(role)})`);
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=order-service&range=1h`);
       await page.waitFor(`document.querySelector('.rules-layout') !== null`, {
         label: "规则页",
       });
@@ -210,7 +456,11 @@ describe("应用壳导航", () => {
     it("只读身份隐藏全部规则写入口, 但仍可读规则目录", async () => {
       await withPage(async (page) => {
         await withRole(page, "view");
-        assert.equal(await page.count(".rule-headline .secondary-button"), 0, "不应显示「编辑示例」");
+        assert.equal(
+          await page.count(".rule-headline .secondary-button"),
+          0,
+          "不应显示「编辑示例」",
+        );
         assert.equal(await page.count(".rule-edit-button"), 0, "不应显示「编辑草稿」");
         assert.equal(await page.count(".primary-button.full"), 0, "不应显示「校验」");
         // 文档 §2：登录用户可查看规则摘要、版本和规则源健康状态。
@@ -228,9 +478,9 @@ describe("应用壳导航", () => {
       await withPage(async (page) => {
         await withRole(page, "admin");
         assert.equal(await page.count(".rule-edit-button"), 1, "初始应有写入口");
-        await page.eval(`window.localStorage.setItem('sentinel.session', 'view')`);
-        await page.goto(`${E2E_BASE_URL}/#/faults`);
-        await page.goto(`${E2E_BASE_URL}/#/rules?app=order-service&range=1h`);
+        await page.eval(`window.localStorage.setItem('sentinel.mock.role', 'view')`);
+        await gotoDashboard(page, `${E2E_BASE_URL}/#/faults`);
+        await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=order-service&range=1h`);
         await page.waitFor(`document.querySelector('.rules-layout') !== null`, { label: "规则页" });
         assert.equal(await page.count(".rule-edit-button"), 0, "切到只读后写入口应消失");
       });
@@ -239,7 +489,7 @@ describe("应用壳导航", () => {
 
   it("登录页不套应用壳", async () => {
     await withPage(async (page) => {
-      await page.goto(`${E2E_BASE_URL}/#/login`);
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/login`);
       await page.waitFor(`!!document.querySelector('body')`, { label: "登录页" });
       assert.equal(await page.count(".topbar"), 0, "登录页不应出现应用壳顶栏");
       assert.equal(await page.count(".demo-banner"), 0, "登录页不应出现示例回放横幅");
@@ -250,7 +500,7 @@ describe("应用壳导航", () => {
 describe("筛选上下文写入 URL", () => {
   it("切换时间窗口写回 URL 并影响标签", async () => {
     await withPage(async (page) => {
-      await page.goto(`${E2E_BASE_URL}/#/overview?app=all&range=1h`);
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/overview?app=all&range=1h`);
       await page.waitFor(`!!document.querySelector('.page-overview')`, { label: "总览" });
 
       // 总览页的 combobox 顺序实测为：0 语言 / 1 环境 / 2 应用 / 3 时间范围。
@@ -268,7 +518,7 @@ describe("筛选上下文写入 URL", () => {
 
   it("非法 range 被丢弃，界面不出现未匹配值", async () => {
     await withPage(async (page) => {
-      await page.goto(`${E2E_BASE_URL}/#/overview?app=all&range=bogus`);
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/overview?app=all&range=bogus`);
       await page.waitFor(`!!document.querySelector('.page-overview')`, { label: "总览" });
       const labels = await page.eval(
         `[...document.querySelectorAll('button[role="combobox"]')].map(b => b.textContent.trim())`,
@@ -287,7 +537,7 @@ describe("筛选上下文写入 URL", () => {
       // `#/applications?app=all` 是合法的可分享形态（深链可直达），但应用页是
       // `single` 粒度，不接受「全部应用」：下拉框必须落到一个真实应用，
       // 否则匹配不到任何选项而退化成占位符。URL 保留 app=all 是既有行为。
-      await page.goto(`${E2E_BASE_URL}/#/applications?app=all&range=1h`);
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/applications?app=all&range=1h`);
       await page.waitFor(`!!document.querySelector('.page-applications')`, { label: "应用页" });
       const appLabel = await page.eval(
         `[...document.querySelectorAll('button[role="combobox"]')][2].textContent.trim()`,
@@ -304,9 +554,9 @@ describe("系统管理 tab 受控于 URL", () => {
   for (const tab of TABS) {
     it(`切到 ${tab} 写回 view 参数并渲染对应面板`, async () => {
       await withPage(async (page) => {
-        await page.goto(`${E2E_BASE_URL}/#/system`);
+        await gotoDashboard(page, `${E2E_BASE_URL}/#/system`);
         await page.waitFor(`!!document.querySelector('.page-system')`, { label: "系统管理页" });
-        await page.goto(`${E2E_BASE_URL}/#/system?view=${tab}`);
+        await gotoDashboard(page, `${E2E_BASE_URL}/#/system?view=${tab}`);
         await page.waitFor(`!!document.querySelector('.page-system')`, { label: "系统管理页" });
         // 面板内容必须真的换掉，而不是 tab 高亮变了内容没变
         const body = await page.text(".page-system");
@@ -317,6 +567,126 @@ describe("系统管理 tab 受控于 URL", () => {
 });
 
 describe("规则工作台筛选", () => {
+  it("只读用例之后的新用例从独立管理员演示状态开始", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=order-service`);
+      await page.eval(`localStorage.setItem('sentinel.mock.role', 'view')`);
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=order-service`);
+      assert.equal(await page.count(".rule-edit-button"), 0);
+    });
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=order-service`);
+      assert.equal(await page.count(".rule-edit-button"), 1);
+      assert.equal(await page.eval(`localStorage.getItem('sentinel.mock.role')`), null);
+    });
+  });
+  it("参数例外编辑保留焦点，删除相邻行不丢另一行的草稿，表单标识不进入 JSON", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=user-service&view=param`);
+      await page.waitFor(`!!document.querySelector('.rule-edit-button')`);
+      await page.click(".rule-edit-button");
+      const input = ".param-item input";
+      await page.click(input);
+      await page.eval(`document.querySelector(${JSON.stringify(input)}).select()`);
+      await page.send("Input.insertText", { text: "java.lang.Long" });
+      await page.waitFor(
+        `document.querySelector(${JSON.stringify(input)})?.value === 'java.lang.Long'`,
+      );
+      assert.ok(
+        await page.eval(
+          `document.activeElement===document.querySelector(${JSON.stringify(input)})`,
+        ),
+      );
+      await page.clickByText("添加例外值", ".param-exceptions-head button");
+      await page.waitFor(`document.querySelectorAll('.param-item').length===2`);
+      await page.clickByText("移除", ".param-item button");
+      await page.waitFor(`document.querySelectorAll('.param-item').length===1`);
+      const preview = await page.eval(
+        `JSON.parse(document.querySelector('.compatibility-json pre').textContent)[0].paramFlowItemList`,
+      );
+      assert.deepEqual(preview, [{ classType: "java.lang.String", object: "", count: 120 }]);
+      assert.ok(!JSON.stringify(preview).includes("formKey"));
+    });
+  });
+  it("数字草稿支持分数与真正清空，清空不会隐式变成零或回到旧值", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=order-service&view=flow`);
+      await page.waitFor(`!!document.querySelector('.rule-edit-button')`);
+      await page.click(".rule-edit-button");
+      const found = await page.eval(`(() => {
+        const label = [...document.querySelectorAll('.rule-inspector label')].find(label=>label.textContent.trim()==='单机阈值');
+        const input = label && document.getElementById(label.htmlFor); if (!input) return false;
+        input.dataset.ruleTest='decimal-field';return true;
+      })()`);
+      assert.ok(found);
+      const input = '[data-rule-test="decimal-field"]',
+        value = `JSON.parse(document.querySelector('.compatibility-json pre').textContent)[0].count`;
+      await page.click(input);
+      await page.eval(`document.querySelector(${JSON.stringify(input)}).select()`);
+      await page.send("Input.insertText", { text: "1.5" });
+      await page.click(".rule-inspector .primary-button.full");
+      await page.waitFor(
+        `${value} === 1.5 && !document.querySelector('.rule-inspector .inline-note.invalid')`,
+      );
+      await page.click(input);
+      await page.eval(`document.querySelector(${JSON.stringify(input)}).select()`);
+      await page.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Backspace",
+        code: "Backspace",
+        windowsVirtualKeyCode: 8,
+      });
+      await page.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Backspace",
+        code: "Backspace",
+        windowsVirtualKeyCode: 8,
+      });
+      await page.click(".rule-inspector .primary-button.full");
+      await page.waitFor(
+        `${value} === '' && document.querySelector(${JSON.stringify(input)})?.getAttribute('aria-invalid') === 'true'`,
+      );
+    });
+  });
+  for (const sample of [
+    { kind: "flow", app: "order-service", label: "单机阈值", invalid: "-1" },
+    { kind: "degrade", app: "order-service", label: "慢调用比例", invalid: "1.2" },
+    { kind: "system", app: "user-service", label: "CPU 使用率阈值", invalid: "1.2" },
+    { kind: "authority", app: "order-service", label: "调用来源列表", invalid: ",," },
+    { kind: "param", app: "user-service", label: "参数索引", invalid: "-1" },
+  ]) {
+    it(`五类表单 ${sample.kind}：原生输入、失焦校验与字段 ARIA 错误一致`, async () => {
+      await withPage(async (page) => {
+        await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=${sample.app}&view=${sample.kind}`);
+        await page.waitFor(`!!document.querySelector('.rule-edit-button')`);
+        await page.click(".rule-edit-button");
+        const found = await page.eval(`(() => {
+          const label = [...document.querySelectorAll('.rule-inspector label')].find(label=>label.textContent.trim() === ${JSON.stringify(sample.label)});
+          const input = label && document.getElementById(label.htmlFor);
+          if (!input) return false;
+          input.dataset.ruleTest = 'invalid-field';return true;
+        })()`);
+        assert.ok(found, `${sample.kind}: missing labeled input ${sample.label}`);
+        const input = '[data-rule-test="invalid-field"]';
+        await page.click(input);
+        await page.eval(`document.querySelector(${JSON.stringify(input)}).select()`);
+        await page.send("Input.insertText", { text: sample.invalid });
+        await page.click(".rule-inspector .primary-button.full");
+        await page.waitFor(
+          `document.querySelector(${JSON.stringify(input)})?.getAttribute('aria-invalid') === 'true'`,
+        );
+        await assertFormGridAlignment(page, ".rule-inspector");
+        await saveFormEvidence(page, `rule-${sample.kind}-error`);
+        assert.ok((await page.count('.rule-inspector [role="alert"]')) >= 1);
+        assert.ok(
+          await page.eval(`(() => {
+          const input = document.querySelector(${JSON.stringify(input)}), ids = (input.getAttribute('aria-describedby') ?? '').split(/\\s+/).filter(Boolean);
+          return ids.length > 0 && ids.every(id=>document.querySelectorAll('[id]').length > 0 && [...document.querySelectorAll('[id]')].filter(element=>element.id===id).length===1);
+        })()`),
+        );
+      });
+    });
+  }
   /**
    * 每类规则**实际存在**的应用。
    *
@@ -338,7 +708,7 @@ describe("规则工作台筛选", () => {
   for (const { kind, app } of KINDS) {
     it(`筛选 ${kind}（${app}）写回 view 并把目录收敛到该类型`, async () => {
       await withPage(async (page) => {
-        await page.goto(`${E2E_BASE_URL}/#/rules?app=${app}&range=1h&view=${kind}`);
+        await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=${app}&range=1h&view=${kind}`);
         await page.waitFor(`!!document.querySelector('.rules-layout')`, { label: "规则工作台" });
 
         const rows = await page.count(".rules-layout tbody tr");
@@ -351,7 +721,7 @@ describe("规则工作台筛选", () => {
     await withPage(async (page) => {
       // order-service 没有 System 规则。正确行为是空目录 + 明确空态，
       // 而不是显示 user-service 的 system-user-service 那条。
-      await page.goto(`${E2E_BASE_URL}/#/rules?app=order-service&range=1h&view=system`);
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=order-service&range=1h&view=system`);
       await page.waitFor(`!!document.querySelector('.rules-layout')`, { label: "规则工作台" });
       const rows = await page.count(".rules-layout tbody tr");
       assert.equal(rows, 0, "order-service 下不应出现 System 规则行");
@@ -375,7 +745,7 @@ describe("规则工作台筛选", () => {
    */
   it("切回「全部类型」应清掉 URL 里的 view", async () => {
     await withPage(async (page) => {
-      await page.goto(`${E2E_BASE_URL}/#/rules?app=order-service&range=1h&view=flow`);
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=order-service&range=1h&view=flow`);
       await page.waitFor(`!!document.querySelector('.rules-layout')`, { label: "规则工作台" });
 
       // 先切到另一个类型，确认切换本身有效
@@ -403,7 +773,7 @@ describe("规则工作台筛选", () => {
 
   it("非法 view 回落到全部类型，不产生空目录", async () => {
     await withPage(async (page) => {
-      await page.goto(`${E2E_BASE_URL}/#/rules?app=order-service&range=1h&view=bogus`);
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=order-service&range=1h&view=bogus`);
       await page.waitFor(`!!document.querySelector('.rules-layout')`, { label: "规则工作台" });
       const rows = await page.count(".rules-layout tbody tr");
       assert.ok(rows > 1, `非法 view 应回落到全部类型（多行），实际 ${rows} 行`);
@@ -423,7 +793,7 @@ describe("规则工作台筛选", () => {
    */
   it("深链到已筛选类型时，检视器应选中该类型下的一条真实规则", async () => {
     await withPage(async (page) => {
-      await page.goto(`${E2E_BASE_URL}/#/rules?app=order-service&range=1h&view=degrade`);
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=order-service&range=1h&view=degrade`);
       await page.waitFor(`!!document.querySelector('.rules-layout')`, { label: "规则工作台" });
 
       const rows = await page.count(".rules-layout tbody tr");
@@ -446,26 +816,432 @@ describe("规则工作台筛选", () => {
   it("检视器空态文案不得复用搜索框 placeholder", async () => {
     await withPage(async (page) => {
       // 搜索到空，是触发空态的合法路径
-      await page.goto(`${E2E_BASE_URL}/#/rules?app=order-service&range=1h`);
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/rules?app=order-service&range=1h`);
       await page.waitFor(`!!document.querySelector('.rules-layout')`, { label: "规则工作台" });
       const placeholder = await page.eval(
         `[...document.querySelectorAll('input')].map(i => i.placeholder).find(Boolean) ?? ''`,
       );
       assert.ok(placeholder, "前提：应能取到搜索框 placeholder");
 
-      await page.type(".rules-layout input[type='search'], .rules-layout input", "zzzz-no-such-rule");
+      await page.type(
+        ".rules-layout input[type='search'], .rules-layout input",
+        "zzzz-no-such-rule",
+      );
       // 按面板定位：`.rules-layout .empty` 会同时命中目录面板和检视器，
       // 两者是独立的两块，必须用 nth-child 区分，否则断言到的是另一块。
-      await page.waitFor(
-        `!!document.querySelector('.rules-layout > *:nth-child(1) .empty')`,
-        { label: "搜索无结果时目录空态出现" },
-      );
+      await page.waitFor(`!!document.querySelector('.rules-layout > *:nth-child(1) .empty')`, {
+        label: "搜索无结果时目录空态出现",
+      });
       const emptyText = await page.text(".rules-layout > *:nth-child(1) .empty");
       assert.notEqual(
         emptyText.trim(),
         `${placeholder}：0`,
         `空态文案不能是搜索框 placeholder 加计数：「${emptyText}」`,
       );
+    });
+  });
+});
+
+describe("F0 账号与空数据回归", () => {
+  it("创建账号 → 角色绑定 → 启停 → 跨页返回保留同一份状态", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/accounts`);
+      await page.waitFor(`!!document.querySelector('.identity-table')`);
+      await page.clickByText("新增账号");
+      await page.waitFor(`!!document.querySelector('dialog[open]')`);
+      await page.type("dialog[open] input[autocomplete='username']", "f0-regression");
+      await page.type("dialog[open] input[type='password']", "Synthetic-only-Password-42");
+      await page.clickByText("创建账号", "dialog[open] button");
+      await page.waitFor(
+        `document.querySelector('.identity-table').textContent.includes('f0-regression')`,
+      );
+      assert.equal(await page.count("dialog[open]"), 0);
+
+      const rowSelector = () =>
+        `[...document.querySelectorAll('.identity-table tr')].find(row => row.textContent.includes('f0-regression'))`;
+      await page.eval(`(${rowSelector()}).querySelector('button').click()`);
+      await page.waitFor(`!!document.querySelector('.identity-account-summary')`);
+      assert.match(await page.text(".identity-account-summary"), /f0-regression/);
+      // Astryx 的 radio item 是 div，不是 label；仍走真实鼠标派发。
+      await page.clickByText("管理员", ".role-options .astryx-radio-list-item");
+      await page.waitFor(`document.querySelector('.role-options input[value="admin"]').checked`);
+      await page.clickByText("返回账户维护");
+      await page.waitFor(`!!document.querySelector('.identity-table')`);
+      assert.match(await page.eval(`(${rowSelector()}).textContent`), /管理员/);
+      await page.clickByText("停用", ".identity-table tr:last-child button");
+      await page.waitFor(`(${rowSelector()}).textContent.includes('已停用')`);
+      await page.eval(`location.hash = '#/change-password?account=invalid-account'`);
+      await page.waitFor(
+        `!!document.querySelector('.page-change-password .empty') && !document.querySelector('[data-route-state="loading"]')`,
+      );
+      await page.clickByText("返回账户维护");
+      await page.waitFor(`!!document.querySelector('.identity-table')`);
+      const finalRow = await page.eval(`(${rowSelector()}).textContent`);
+      assert.match(finalRow, /管理员/);
+      assert.match(finalRow, /已停用/);
+    });
+  });
+
+  for (const route of ["roles", "change-password"]) {
+    it(`${route}: 显式未知账号不会误选管理员，缺省目标仍可操作`, async () => {
+      await withPage(async (page) => {
+        await gotoDashboard(page, `${E2E_BASE_URL}/#/${route}?account=missing-account`);
+        await page.waitFor(`!!document.querySelector('.page-${route} .empty')`);
+        assert.equal(await page.count(".role-options, .password-form"), 0);
+        assert.match(await page.text(`.page-${route} .empty`), /没有可操作的账号/);
+        await page.eval(`location.hash = '#/${route}'`);
+        await page.waitFor(`!!document.querySelector('.role-options, .password-form')`);
+      });
+    });
+  }
+
+  it("同一角色页面收到不同深链目标后，不沿用旧账号", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/roles?account=account-view`);
+      await page.waitFor(`!!document.querySelector('.identity-account-summary')`);
+      assert.match(await page.text(".identity-account-summary"), /viewer/);
+      await page.eval(`location.hash = '#/roles?account=account-admin'`);
+      await page.waitFor(
+        `document.querySelector('.identity-account-summary')?.textContent.includes('admin')`,
+      );
+      await page.eval(`location.hash = '#/roles?account=missing-account'`);
+      await page.waitFor(`!!document.querySelector('.page-roles .empty')`);
+      assert.equal(await page.count(".role-options"), 0);
+    });
+  });
+
+  for (const hash of [
+    "#/roles?account=account-admin",
+    "#/system?view=roles&account=account-admin",
+  ]) {
+    it(`${hash}: 账号选择写回 URL，返回原目标不会残留上次选择`, async () => {
+      await withPage(async (page) => {
+        await gotoDashboard(page, `${E2E_BASE_URL}/${hash}`);
+        await page.waitFor(`!!document.querySelector('.identity-account-summary')`);
+        // 0 是页头语言；身份选择器在独立 roles 页和 system roles tab 都是第 1 个。
+        await selectOption(page, 1, "viewer");
+        // hash 写入先于 React 处理 hashchange；同时等待目标内容，不能只等 URL。
+        await page.waitFor(
+          `location.hash.includes('account=account-view') && document.querySelector('.identity-account-summary')?.textContent.includes('viewer')`,
+        );
+        assert.match(await page.text(".identity-account-summary"), /viewer/);
+        if (hash.includes("system")) assert.match(await page.hash(), /system.*view=roles/);
+        await page.eval(`location.hash = ${JSON.stringify(hash)}`);
+        await page.waitFor(
+          `document.querySelector('.identity-account-summary')?.textContent.includes('admin')`,
+        );
+      });
+    });
+  }
+
+  it("显式未知应用显示空态且可以重新选择，不显示其它应用详情", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/applications?app=missing-app`);
+      await page.waitFor(`!!document.querySelector('.page-applications .empty')`);
+      assert.match(await page.text(".page-applications .empty"), /未找到所选应用/);
+      assert.equal(await page.count(".app-hero, .instance-layout"), 0);
+      assert.ok((await page.count(".filters button[role='combobox']")) > 0);
+    });
+  });
+
+});
+
+describe("F1 启动与路由边界", () => {
+  for (const route of [
+    "overview",
+    "applications",
+    "rules",
+    "realtime",
+    "faults",
+    "system",
+    "accounts",
+    "roles",
+    "change-password",
+    "login",
+    "setup",
+  ]) {
+    it(`${route}: 控件 label/ARIA 引用仍指向唯一的真实元素`, async () => {
+      await withPage(async (page) => {
+        await gotoDashboard(page, `${E2E_BASE_URL}/#/${route}?app=order-service`);
+        const broken = await page.eval(`(() => {
+          const failures = [];
+          for (const element of document.querySelectorAll('[for], [aria-labelledby], [aria-describedby]')) {
+            for (const attribute of ['for', 'aria-labelledby', 'aria-describedby']) {
+              for (const id of (element.getAttribute(attribute) ?? '').split(/\\s+/).filter(Boolean)) {
+                if (document.querySelectorAll('#' + CSS.escape(id)).length !== 1) failures.push({ attribute, id });
+              }
+            }
+          }
+          return failures;
+        })()`);
+        assert.deepEqual(broken, []);
+      });
+    });
+  }
+
+  it("未知非空路由显示恢复入口；首页仍按默认总览展示", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/missing-page`);
+      assert.match(await page.text('[data-route-state="not-found"]'), /找不到这个页面/);
+      await page.clickByText("返回总览");
+      await page.waitFor(
+        `location.hash.startsWith('#/overview') && !!document.querySelector('.overview-top')`,
+      );
+    });
+  });
+
+  async function mountBoundaryProbe(page, mode) {
+    await gotoDashboard(page, `${E2E_BASE_URL}/#/accounts`);
+    await page.eval(`(async () => {
+      const React = (await import('/node_modules/.vite/deps/react.js')).default;
+      const { createRoot } = (await import('/node_modules/.vite/deps/react-dom_client.js')).default;
+      const { RouteBoundary } = await import('/src/app/router/RouteBoundary.tsx');
+      const container = document.createElement('section'); container.id = 'f1-route-probe'; document.body.append(container);
+      const caught = []; const root = createRoot(container, { onCaughtError: error => caught.push(error.name) });
+      let calls = 0, release;
+      const flags = { crashes: ${mode === "render"} };
+      function Page() { if (flags.crashes) throw new Error('private-error-message'); return React.createElement('output', {}, 'ready'); }
+      const loader = () => {
+        calls++;
+        if (${mode === "deferred"}) return new Promise(resolve => { release = () => resolve({ default: Page }); });
+        if (${mode === "reject"} && calls === 1) return Promise.reject(new Error('private-chunk-error'));
+        return Promise.resolve({ default: Page });
+      };
+      const healthyLoader = () => Promise.resolve({ default: () => React.createElement('output', {}, 'changed-route') });
+      let homeCalls = 0, reloadCalls = 0;
+      const render = (key = 'first', selectedLoader = loader) => root.render(React.createElement(RouteBoundary, { loader: selectedLoader, resetKey: key, pageProps: {}, onHome() { homeCalls++; }, onReload() { reloadCalls++; } }));
+      window.__f1 = { flags, caught, release: () => release(), calls: () => calls, homeCalls: () => homeCalls, reloadCalls: () => reloadCalls, render, change: () => render('other', healthyLoader), clean: () => { root.unmount(); container.remove(); } };
+      render();
+    })()`);
+  }
+
+  it("异步加载显示状态；完成后不会无限重新加载", async () => {
+    await withPage(async (page) => {
+      await mountBoundaryProbe(page, "deferred");
+      await page.waitFor(
+        `!!document.querySelector('#f1-route-probe [data-route-state="loading"]')`,
+      );
+      await page.eval(`window.__f1.release()`);
+      await page.waitFor(
+        `document.querySelector('#f1-route-probe output')?.textContent === 'ready'`,
+      );
+      assert.equal(await page.eval(`window.__f1.calls()`), 1);
+      await page.eval(`window.__f1.clean()`);
+    });
+  });
+
+  it("chunk 失败可重试；不泄露异常正文且不破坏外壳", async () => {
+    await withPage(async (page) => {
+      await mountBoundaryProbe(page, "reject");
+      await page.waitFor(`!!document.querySelector('#f1-route-probe [role="alert"]')`);
+      assert.doesNotMatch(await page.text("#f1-route-probe"), /private-chunk-error/);
+      assert.ok(
+        await page.eval(
+          `!!document.querySelector('.topbar') && !!document.querySelector('.identity-table')`,
+        ),
+      );
+      await page.clickByText("重试加载", "#f1-route-probe button");
+      await page.waitFor(
+        `document.querySelector('#f1-route-probe output')?.textContent === 'ready'`,
+      );
+      assert.equal(await page.eval(`window.__f1.calls()`), 2);
+      assert.equal(await page.eval(`window.__f1.caught.length`), 1);
+      await page.eval(`window.__f1.clean()`);
+    });
+  });
+
+  it("页面异常可恢复；改换路由也清除旧错误状态", async () => {
+    await withPage(async (page) => {
+      await mountBoundaryProbe(page, "render");
+      await page.waitFor(`!!document.querySelector('#f1-route-probe [role="alert"]')`);
+      assert.doesNotMatch(await page.text("#f1-route-probe"), /private-error-message/);
+      await page.eval(`window.__f1.flags.crashes = false`);
+      await page.clickByText("重试加载", "#f1-route-probe button");
+      await page.waitFor(
+        `document.querySelector('#f1-route-probe output')?.textContent === 'ready'`,
+      );
+      await page.eval(`window.__f1.flags.crashes = true; window.__f1.render('crashed')`);
+      await page.waitFor(`!!document.querySelector('#f1-route-probe [role="alert"]')`);
+      await page.eval(`window.__f1.change()`);
+      await page.waitFor(
+        `document.querySelector('#f1-route-probe output')?.textContent === 'changed-route'`,
+      );
+      await page.eval(`window.__f1.clean()`);
+    });
+  });
+
+  it("重载必须显式触发；当前首页失败时返回首页也能清除旧错误边界", async () => {
+    await withPage(async (page) => {
+      await mountBoundaryProbe(page, "render");
+      await page.waitFor(`!!document.querySelector('#f1-route-probe [role="alert"]')`);
+      assert.equal(await page.eval(`window.__f1.reloadCalls()`), 0);
+      await page.clickByText("重新载入应用", "#f1-route-probe button");
+      assert.equal(await page.eval(`window.__f1.reloadCalls()`), 1);
+      await page.eval(`window.__f1.flags.crashes = false`);
+      await page.clickByText("返回总览", "#f1-route-probe button");
+      await page.waitFor(
+        `document.querySelector('#f1-route-probe output')?.textContent === 'ready'`,
+      );
+      assert.equal(await page.eval(`window.__f1.homeCalls()`), 1);
+      await page.eval(`window.__f1.clean()`);
+    });
+  });
+
+  it("StrictMode 与 Provider 重渲染保持服务身份，不重复覆盖账号状态", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/accounts`);
+      await page.eval(`(async () => {
+        const React = (await import('/node_modules/.vite/deps/react.js')).default;
+        const { createRoot } = (await import('/node_modules/.vite/deps/react-dom_client.js')).default;
+        const { AppProviders } = await import('/src/app/providers/AppProviders.tsx');
+        const { ProviderProbe } = await import('/tests/e2e/probes/ProviderProbe.tsx');
+        const { accountStore } = await import('/src/features/identity/state/accountStore.ts');
+        const original = accountStore.getSnapshot();
+        const container = document.createElement('section'); container.id = 'f1-provider-probe'; document.body.append(container);
+        const root = createRoot(container); const services = [];
+        const onSnapshot = service => services.push(service);
+        const render = value => root.render(React.createElement(React.StrictMode, {}, React.createElement(AppProviders, {}, React.createElement(ProviderProbe, { value, onSnapshot }))));
+        window.__f1Providers = { render, same: () => services.every(service => service === services[0]), snapshotSame: () => accountStore.getSnapshot() === original, clean: () => { root.unmount(); container.remove(); } };
+        render('first');
+      })()`);
+      await page.waitFor(
+        `document.querySelector('#f1-provider-probe output')?.textContent === 'first'`,
+      );
+      await page.eval(`window.__f1Providers.render('second')`);
+      await page.waitFor(
+        `document.querySelector('#f1-provider-probe output')?.textContent === 'second'`,
+      );
+      assert.ok(
+        await page.eval(`window.__f1Providers.same() && window.__f1Providers.snapshotSame()`),
+      );
+      await page.eval(`window.__f1Providers.clean()`);
+    });
+  });
+});
+
+describe("F2 React 资源生命周期", () => {
+  it("规则草稿在首次 commit 就对应新类别，切空与返回不会复活已丢弃的编辑态", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/rules`);
+      await page.eval(`(async () => {
+        const React = (await import('/node_modules/.vite/deps/react.js')).default;
+        const {createRoot} = (await import('/node_modules/.vite/deps/react-dom_client.js')).default;
+        const {RuleWorkbenchProbe,RULE_FIXTURES} = await import('/tests/e2e/probes/RuleWorkbenchProbe.tsx');
+        const container = document.createElement('section');container.id='rules-state-probe';document.body.append(container);
+        const root=createRoot(container),commits=[],onCommit=commit=>commits.push(commit);
+        const render=(kind,empty=false)=>root.render(React.createElement(React.StrictMode,{},React.createElement(RuleWorkbenchProbe,{entries:empty?[]:RULE_FIXTURES,kind,onCommit})));
+        window.__ruleProbe={commits,render,clean:()=>{root.unmount();container.remove();}};
+        render('flow');
+      })()`);
+      const snapshot = `JSON.parse(document.querySelector('#rules-state-probe output').textContent)`;
+      await page.waitFor(`${snapshot}.draftKind === 'flow'`);
+      await page.click("#rules-state-probe button");
+      await page.waitFor(`${snapshot}.editing`);
+      await page.eval(`window.__ruleProbe.render('degrade')`);
+      await page.waitFor(`${snapshot}.draftKind === 'degrade' && !${snapshot}.editing`);
+      await page.eval(`window.__ruleProbe.render('flow',true)`);
+      await page.waitFor(`${snapshot}.draftKind === null && ${snapshot}.selectedKind === null`);
+      await page.eval(`window.__ruleProbe.render('flow')`);
+      await page.waitFor(`${snapshot}.draftKind === 'flow' && !${snapshot}.editing`);
+      assert.ok(
+        await page.eval(`window.__ruleProbe.commits.every(c=>c.selectedKind===c.draftKind)`),
+      );
+      await page.eval(`window.__ruleProbe.clean()`);
+    });
+  });
+  it("路由所有者换默认身份/目录不串缓存；push/replace/back 与诊断上下文一致", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/overview`);
+      await page.eval(`(async () => {
+        const React = (await import('/node_modules/.vite/deps/react.js')).default;
+        const {createRoot} = (await import('/node_modules/.vite/deps/react-dom_client.js')).default;
+        const {NavigationProbe} = await import('/tests/e2e/probes/NavigationProbe.tsx');
+        const container = document.createElement('section'); container.id='f2-navigation-probe';document.body.append(container);
+        const root=createRoot(container), render=options => root.render(React.createElement(React.StrictMode, {}, React.createElement(NavigationProbe,{options})));
+        window.__f2Navigation={render,clean:()=>{root.unmount();container.remove();}};
+        render({applicationScopeIds:['order-service'],defaultAccountId:'first-owner'});
+      })()`);
+      const snapshot = `JSON.parse(document.querySelector('#f2-navigation-probe output').textContent)`;
+      await page.waitFor(`${snapshot}.accountId === 'first-owner'`);
+      await page.eval(
+        `window.__f2Navigation.render({applicationScopeIds:['payment-service'],defaultAccountId:'second-owner'})`,
+      );
+      await page.waitFor(`${snapshot}.accountId === 'second-owner'`);
+      const initialLength = await page.eval(`history.length`);
+      await page.click('#f2-navigation-probe [data-action="push"]');
+      await page.waitFor(
+        `${snapshot}.context.eventId === 'event-1' && ${snapshot}.context.instanceId === 'order-1'`,
+      );
+      assert.equal(await page.eval(`history.length`), initialLength + 1);
+      assert.equal(
+        await page.eval(`${snapshot}.context.resource`),
+        "POST /api/orders?status=ready",
+      );
+      await page.click('#f2-navigation-probe [data-action="replace"]');
+      await page.waitFor(`${snapshot}.context.search === 'qps > 200'`);
+      assert.equal(await page.eval(`history.length`), initialLength + 1);
+      await page.click('#f2-navigation-probe [data-action="clear"]');
+      await page.waitFor(
+        `${snapshot}.view === '' && !${snapshot}.context.instanceId && !${snapshot}.context.eventId`,
+      );
+      assert.equal(await page.eval(`${snapshot}.context.environmentId`), "prod");
+      await page.click('#f2-navigation-probe [data-action="cross"]');
+      await page.waitFor(`${snapshot}.route === 'applications' && ${snapshot}.view === ''`);
+      await page.eval(`history.back()`);
+      await page.waitFor(`${snapshot}.route === 'rules'`);
+      await page.eval(`history.back()`);
+      await page.waitFor(
+        `${snapshot}.context.instanceId === 'order-1' && ${snapshot}.context.search === 'qps > 200'`,
+      );
+      await page.eval(`window.__f2Navigation.clean()`);
+    });
+  });
+  it("StrictMode 清理、换查询取消和卸载后迟到响应不会覆盖新状态", async () => {
+    await withPage(async (page) => {
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/accounts`);
+      await page.eval(`(async () => {
+        const React = (await import('/node_modules/.vite/deps/react.js')).default;
+        const { createRoot } = (await import('/node_modules/.vite/deps/react-dom_client.js')).default;
+        const { QueryLifecycleProbe, createQueryResource } = await import('/tests/e2e/probes/QueryLifecycleProbe.tsx');
+        const reads = [], commits = [], resource = createQueryResource({
+          keyOf: query => JSON.stringify([query.session, query.application]),
+          classify: () => 'ready',
+          read: (query, signal) => new Promise(resolve => reads.push({ query, signal, resolve })),
+        });
+        const container = document.createElement('section'); container.id = 'f2-resource-probe'; document.body.append(container);
+        const root = createRoot(container);
+        const onCommit = (query, snapshot) => commits.push({query, data: 'data' in snapshot ? snapshot.data : null});
+        const render = query => root.render(React.createElement(React.StrictMode, {}, React.createElement(QueryLifecycleProbe, { resource, query, onCommit })));
+        window.__f2 = { reads, commits, resource, render, unmount: () => root.unmount(), clean: () => container.remove() };
+        render({session: 'first-session', application: 'orders'});
+      })()`);
+      await page.waitFor(`window.__f2.reads.length === 2 && window.__f2.reads[0].signal.aborted`);
+      await page.eval(`window.__f2.reads[1].resolve(['orders'])`);
+      await page.waitFor(
+        `document.querySelector('#f2-resource-probe output')?.textContent.includes('"data":["orders"]')`,
+      );
+      await page.eval(`window.__f2.render({session: 'next-session', application: 'payments'})`);
+      await page.waitFor(
+        `window.__f2.reads.length === 3 && document.querySelector('#f2-resource-probe output')?.textContent === '{"status":"loading","data":null}'`,
+      );
+      await page.eval(
+        `window.__f2.reads[0].resolve(['late-old-session']); window.__f2.reads[2].resolve(['payments'])`,
+      );
+      await page.waitFor(
+        `document.querySelector('#f2-resource-probe output')?.textContent === '{"status":"ready","data":["payments"]}'`,
+      );
+      assert.ok(
+        await page.eval(
+          `window.__f2.commits.filter(item => item.query.session === 'next-session').every(item => item.data === null || !item.data.includes('orders'))`,
+        ),
+      );
+      await page.eval(`window.__f2.render({session: 'next-session', application: 'pending'})`);
+      await page.waitFor(`window.__f2.reads.length === 4`);
+      await page.eval(`window.__f2.unmount()`);
+      assert.ok(await page.eval(`window.__f2.reads[3].signal.aborted`));
+      await page.eval(`window.__f2.reads[3].resolve(['after-unmount'])`);
+      assert.equal(await page.eval(`window.__f2.resource.getSnapshot().status`), "idle");
+      await page.eval(`window.__f2.resource.dispose(); window.__f2.clean()`);
     });
   });
 });
@@ -505,7 +1281,7 @@ describe("多语言", () => {
 
   it("切到 English 后导航文案随之切换", async () => {
     await withPage(async (page) => {
-      await page.goto(`${E2E_BASE_URL}/#/overview?app=all&range=1h`);
+      await gotoDashboard(page, `${E2E_BASE_URL}/#/overview?app=all&range=1h`);
       await page.waitFor(`!!document.querySelector('.main-nav')`, { label: "导航" });
       await selectOption(page, 0, "English");
       await page.waitFor(
@@ -535,7 +1311,7 @@ describe("多语言", () => {
     for (const { name, hash } of LOCALIZED_PAGES) {
       it(`切到 ${locale} 后「${name}」页标题不含中文`, async () => {
         await withPage(async (page) => {
-          await page.goto(`${E2E_BASE_URL}/${hash}`);
+          await gotoDashboard(page, `${E2E_BASE_URL}/${hash}`);
           await page.waitFor(`!!document.querySelector('.app-shell')`, { label: "壳层" });
           // 记录切换前的中文数：已经是 0 的页面（如 faults / rules）这条断言形同虚设，
           // 顺带确认确实存在标题，避免选择器写错导致恒真。
@@ -567,7 +1343,7 @@ describe("多语言", () => {
     for (const { name, hash } of LOCALIZED_PAGES.filter((p) => p.name !== "系统管理")) {
       it(`切到 ${locale} 后「${name}」筛选条不含中文`, async () => {
         await withPage(async (page) => {
-          await page.goto(`${E2E_BASE_URL}/${hash}`);
+          await gotoDashboard(page, `${E2E_BASE_URL}/${hash}`);
           await page.waitFor(`!!document.querySelector('.filters')`, { label: "筛选条" });
           const before = await page.eval(FILTERS_CJK);
           assert.ok(before >= 0, `未取到「${name}」筛选条，选择器可能失效`);
@@ -581,3 +1357,4 @@ describe("多语言", () => {
     }
   }
 });
+import { artifactDirectory } from "./artifacts.mjs";

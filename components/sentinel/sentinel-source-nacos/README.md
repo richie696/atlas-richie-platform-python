@@ -13,6 +13,8 @@ Alibaba Sentinel + Resilience4j.
 **M6.1.7 — Nacos 3.x polling implementation.** `NacosRuleSource` uses
 the async `nacos-sdk-python` 3.x API, with a bounded polling loop as its
 correctness path, 5-way error classification, and idempotent `aclose()`.
+Its pure codec also exposes `encode_rule_snapshot` for lossless, typed
+projection into the five configured JSON data-ids; it does not publish.
 
 | Sub-task | Status |
 | -------- | ------ |
@@ -23,6 +25,7 @@ correctness path, 5-way error classification, and idempotent `aclose()`.
 | M6.1.5 idempotent `aclose()` + redaction | ✅ done |
 | M6.1.6 contract suite + Nacos tests | ✅ done |
 | M6.1.7 Nacos 3.x SDK + polling | ✅ done |
+| M6.1.8 pure five-kind snapshot encoder (no publish) | ✅ done |
 
 ## Dependency isolation (M6.1.1 hard constraint)
 
@@ -116,6 +119,17 @@ The wheel reads 5 Nacos data-ids, derived from `data_id_prefix`:
 | authority   | `<data_id_prefix>-authority-rules.json`       |
 
 Use `config.data_id_for(rule_type)` to get the exact data-id string.
+
+### Pure rule encoding
+
+`encode_rule_snapshot(snapshot, config=config)` returns all five data-id
+contents as deterministic compact JSON strings. The encoder rejects values
+that this Nacos profile cannot represent losslessly. It performs no network
+I/O and does not call `publish_config`; callers still need an authorized,
+conditional write and read-back workflow before treating a candidate as
+published. The codec round-trip proves compatibility with this Python
+codec only; it is not Java `sentinel-datasource-nacos` interoperability
+evidence.
 
 ### Lifecycle (M6.1.3)
 

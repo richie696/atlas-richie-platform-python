@@ -170,7 +170,7 @@ Agent Reporting 或 Token Server。Feature 页面 → feature gateway/store →
 
 设计模式候选是 **Adapter**：Nacos Admin API 和 Consul KV 的键、条件写与错误语义不同，需由各自适配器映射到管理服务拥有的最小发布契约。这不是仅换一个 URL 的薄包装；收益是页面/发布用例不依赖具体 SDK，代价是不能抹平 Nacos 与 Consul 的原生并发保证。发布、校验、回读和生效跟踪仍由普通用例编排，不因有多个步骤就额外发明通用工作流框架。编码前要对两实现运行同一份成功、冲突、离线、权限、回读不一致和关闭资源契约测试；厂商特有能力另外测试。模式选择属于后续代码详细设计评审，本草案不构成代码实施签字。
 
-Nacos 3 使用 `namespaceId + groupName + dataId`，控制台写入走配置管理 Admin API；Consul 使用 KV key，写入使用 `ModifyIndex` 条件更新。控制台自己的规则版本 `(epoch, revision, checksum)` 与配置中心原生版本/索引是两层身份，不能跨厂商按字符串比较。Nacos 3 Admin 发布文档未列出等价的条件写参数，因此发布前重读并比较基线，发现外部修改即阻断、要求用户重新合并；同时尽量将常规写权限收敛到管理服务。此措施**不提供**与 Consul CAS 等价的跨外部写者原子保证，产品不得作此承诺。
+Nacos 3 使用 `namespaceId + groupName + dataId`，Consul 使用 KV key；两者由 provider adapter 隐藏其键与版本语义。控制台自己的规则版本 `(epoch, revision, checksum)` 与配置中心原生版本/索引是两层身份，不能跨厂商按字符串比较。Nacos Admin HTTP 发布没有条件写参数；`nacos-sdk-python` 3.x 的 gRPC 配置发布 API 暴露 `cas_md5`，因此候选实现必须走该 SDK CAS 路径，不能用 Admin HTTP 预读 MD5 后无条件发布。Nacos SDK CAS 尚未接入 Console，也未完成目标地址 pinning/TLS identity、首次创建、冲突、回读和真实服务器验证前，不得报告 Nacos 发布可用。Consul 继续使用精确 `ModifyIndex` CAS。
 
 发布状态必须分别展示「已验证」「配置中心写入成功」「回读一致」「N 个实例已加载、M 个未知/落后」「完成/部分生效/失败」。实例真正生效需要可信的应用版本回执及在线实例口径，不能仅凭配置中心返回成功或监听器存在推断。回滚是把旧快照作为一个新版本发布。历史记录、草稿和审计的可靠性按所选后端和管理侧存储能力说明；不能把 Consul KV 伪装成与 Nacos 历史/灰度完全对等。
 
@@ -185,7 +185,7 @@ Nacos 3 使用 `namespaceId + groupName + dataId`，控制台写入走配置管�
 
 以“国庆大促保护方案”为例：先从日常版本建立草稿并修改所有必要规则 → 校验后固化为 `promo-version` → 创建 `2026-09-30T19:00:00+08:00` 至 `2026-09-30T23:30:00+08:00` 的计划，`restore_version_id` 明确为日常版本 → 开始时完整写入 `promo-version`，结束时完整写入日常版本。两次写入都要回读并等待实例版本回执；“计划已触发”不等于“所有实例已生效”。
 
-调度器属于独立管理服务，不属于浏览器、RuleSource 或业务应用进程。它必须持久化计划和执行状态、基于 `(plan_id, action, target_version_id)` 做幂等执行、服务重启后恢复未完成任务，并在每次写入前重新读取配置中心的基准版本。若发现计划外的外部修改，计划进入 `blocked_by_conflict`，不覆盖新配置；需要运维人员基于当前版本重新合并或明确取消计划。Nacos 的发布没有等价 Consul CAS 的原子条件写时，仍遵守 §5 的重读/比较/阻断策略，不能承诺绝对的外部并发排他性。
+调度器属于独立管理服务，不属于浏览器、RuleSource 或业务应用进程。它必须持久化计划和执行状态、基于 `(plan_id, action, target_version_id)` 做幂等执行、服务重启后恢复未完成任务，并在每次写入前重新读取配置中心的基准版本。若发现计划外的外部修改，计划进入 `blocked_by_conflict`，不覆盖新配置；需要运维人员基于当前版本重新合并或明确取消计划。Nacos 的执行只有在 SDK gRPC CAS adapter 对目标版本原子比较并写入后才可继续；否则计划必须 fail-closed，不以重读/比较/阻断模拟 CAS。
 
 线上规则内容仍只存在 Nacos/Consul；管理服务可以使用可靠数据库保存**版本元数据、草稿、计划、执行记录和审计**，但该数据库不是运行时 RuleSnapshot 的直接规则源，也不能让应用从它加载规则。当前 1.0 中 Cluster Token Server 的额度修改需重启才能生效，因此版本页必须单独标记“配置已切换，目标实例待重启”，不能把计划完成显示为热更新完成。
 

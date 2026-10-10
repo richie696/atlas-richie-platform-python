@@ -1,3 +1,6 @@
+import rulesStyles from "./Rules.module.scss";
+import presentationStyles from "../../../shared/ui/styles/Presentation.module.scss";
+import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 /**
  * 规则目录面板。
  *
@@ -12,9 +15,11 @@ import { Panel } from "../../../shared/ui/Panel";
 import { Select } from "../../../shared/ui/Select";
 import { Status } from "../../../shared/ui/Status";
 import { TextField } from "../../../shared/ui/TextField";
-import { RULE_KIND_ALL, RULE_SOURCE, type RuleKind, type RuleKindFilter } from "../model/ruleKinds";
-import type { RuleTypeCopyMap } from "../model/ruleMessages";
-import type { RuleWorkbenchEntry } from "../state/useRuleWorkbench";
+import { RULE_KINDS, RULE_KIND_ALL, RULE_SOURCE, type RuleKindFilter } from "../model/ruleKinds";
+import type { RuleTypeCopyMap } from "../i18n/ruleMessages";
+import type { RuleWorkbenchEntry } from "../editor/ruleEntry";
+
+const styleModules = [rulesStyles, presentationStyles] as const;
 
 export interface RuleCatalogPanelProps {
   readonly entries: readonly RuleWorkbenchEntry[];
@@ -22,8 +27,6 @@ export interface RuleCatalogPanelProps {
   readonly search: string;
   readonly kindFilter: RuleKindFilter;
   readonly types: RuleTypeCopyMap;
-  /** 面板副标题模板，接收目录条数。 */
-  readonly detailLabel: string;
   readonly searchLabel: string;
   readonly allTypesLabel: string;
   readonly columnHeaders: readonly string[];
@@ -41,7 +44,6 @@ export function RuleCatalogPanel({
   search,
   kindFilter,
   types,
-  detailLabel,
   searchLabel,
   allTypesLabel,
   columnHeaders,
@@ -55,17 +57,18 @@ export function RuleCatalogPanel({
   return (
     <Panel
       title={t("rules.catalog")}
-      subtitle={t(detailLabel, { count: entries.length })}
+      subtitle={t("rules.catalogDetail", { count: entries.length })}
       action={
-        <div className="rule-filters">
-          <TextField
-            label={searchLabel}
-            isLabelHidden
-            placeholder={searchLabel}
-            value={search}
-            onChange={onSearch}
-            className="search"
-          />
+        <div className={scopedClasses(styleModules, "rule-filters")}>
+          <div className={scopedClasses(styleModules, "search")}>
+            <TextField
+              label={searchLabel}
+              isLabelHidden
+              placeholder={searchLabel}
+              value={search}
+              onChange={onSearch}
+            />
+          </div>
           <Select
             label={allTypesLabel}
             isLabelHidden
@@ -73,7 +76,7 @@ export function RuleCatalogPanel({
             onChange={onKindFilter}
             options={[
               { value: RULE_KIND_ALL, label: allTypesLabel },
-              ...(Object.keys(types) as RuleKind[]).map((kind) => ({
+              ...RULE_KINDS.map((kind) => ({
                 value: kind,
                 label: types[kind].label,
               })),
@@ -87,13 +90,13 @@ export function RuleCatalogPanel({
         rows={entries.map((entry) => (
           <tr
             key={entry.id}
-            className={selectedId === entry.id ? "selected" : ""}
+            className={scopedClasses(styleModules, selectedId === entry.id ? "selected" : "")}
             onClick={() => onSelect(entry)}
           >
             <td>
               <ActionButton
                 type="button"
-                className="resource-button"
+                className={scopedClasses(styleModules, "resource-button")}
                 onClick={() => onSelect(entry)}
               >
                 {entry.resource}
@@ -113,7 +116,9 @@ export function RuleCatalogPanel({
           </tr>
         ))}
       />
-      {entries.length === 0 && <div className="empty">{emptyLabel}</div>}
+      {entries.length === 0 && (
+        <div className={scopedClasses(styleModules, "empty")}>{emptyLabel}</div>
+      )}
     </Panel>
   );
 }

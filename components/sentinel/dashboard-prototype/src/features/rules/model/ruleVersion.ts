@@ -49,13 +49,6 @@ export interface RuleVersion {
   readonly checksum: string;
 }
 
-/** 版本状态到状态标签色的映射。 */
-export const VERSION_STATE_TONE: Readonly<Record<VersionState, string>> = Object.freeze({
-  [VERSION_STATE.Active]: "healthy",
-  [VERSION_STATE.Scheduled]: "blue",
-  [VERSION_STATE.Superseded]: "info",
-});
-
 /**
  * 生效计划。
  *
@@ -75,30 +68,4 @@ export interface ActivationPlan {
   readonly timeZone: string;
   readonly state: "pending" | "triggered" | "completed" | "blocked_by_conflict" | "cancelled";
   readonly blockedReason?: string;
-}
-
-/**
- * 版本面板使用的文案集合。
- *
- * 放在 model 层而不是 UI 文件里：`RuleWorkbenchMessages` 需要引用它，
- * 否则 model 会反向依赖 ui。
- */
-export interface VersionPlanCopy {
-  readonly title: string;
-  readonly subtitle: string;
-  readonly createVersion: string;
-  /** 点击创建版本后的演示提示之一。 */
-  readonly previewOnly: string;
-  /** 演示提示之一：版本不可变。 */
-  readonly immutable: string;
-  /** 各状态标签，键与 {@link VERSION_STATE} 一致。 */
-  readonly active: string;
-  readonly scheduled: string;
-  readonly superseded: string;
-  readonly plannedWindow: string;
-  readonly timeZone: string;
-  readonly returnTo: string;
-  readonly publishedAt: string;
-  readonly noEnd: string;
-  readonly effectiveWindow: string;
 }

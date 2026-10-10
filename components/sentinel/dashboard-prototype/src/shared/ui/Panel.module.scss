@@ -1,0 +1,47 @@
+// Private presentation ownership; colors are supplied by the selected skin.
+.panel {
+  background: linear-gradient(
+    150deg,
+    var(--sentinel-color-panel-background),
+    var(--sentinel-color-panel-background-2)
+  );
+  border: 1px solid var(--sentinel-color-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 30px var(--sentinel-color-panel-box-shadow);
+}
+.panel {
+  min-width: 0;
+  margin-bottom: 18px;
+  overflow: hidden;
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 57px;
+  padding: 13px 17px;
+  border-bottom: 1px solid var(--sentinel-color-border);
+  flex-wrap: wrap;
+  > div:first-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+.panel-head h2 {
+  font-size: 17px;
+  line-height: 1.3;
+  margin: 0;
+  color: var(--sentinel-color-panel-head-color-2);
+  font-weight: 690;
+}
+.panel-head p {
+  font-size: 11px;
+  color: var(--sentinel-color-panel-head-color-3);
+  margin: 4px 0 0;
+}
+@media (max-width: 560px) {
+  .panel-head {
+    align-items: flex-start;
+  }
+}

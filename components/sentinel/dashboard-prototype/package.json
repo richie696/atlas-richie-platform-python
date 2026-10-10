@@ -3,15 +3,41 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  },
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
-    "build": "vite build && node scripts/prepare-sites-build.mjs",
+    "lint": "eslint src tests/e2e/probes --max-warnings=0",
+    "format": "prettier --write src tests/e2e/probes vite.config.mjs tsconfig.json eslint.config.mjs",
+    "format:check": "prettier --check src tests/e2e/probes vite.config.mjs tsconfig.json eslint.config.mjs",
+    "test:logic": "node --test tests/logic/run.mjs",
+    "test:logic:focused": "node scripts/test/run-focused.mjs logic",
+    "test:http": "node --test tests/http/run.mjs",
+    "test:http:focused": "node scripts/test/run-focused.mjs http",
+    "contract:generate": "node scripts/contracts/export-console.mjs",
+    "contract:check": "node scripts/contracts/export-console.mjs --check",
+    "test:lint": "node --test tests/lint/hooks.test.mjs",
+    "test:architecture": "node --test tests/architecture/*.test.mjs",
+    "test:browser-tools": "node --test tests/e2e/cdp.test.mjs tests/e2e/artifacts.test.mjs",
+    "test:visual-tools": "node --test tests/visual/dom-normalization.test.mjs tests/visual/compare.test.mjs",
+    "test:i18n-tools": "node --test tests/i18n/source-keys.test.mjs tests/i18n/catalog.test.mjs tests/i18n/audit.test.mjs tests/i18n/dynamic-callsite-coverage.test.mjs",
+    "test:verification-tools": "node --test tests/verification/*.test.mjs",
+    "verify": "node scripts/verify.mjs --static-only",
+    "check:fast": "npm run typecheck && npm run format:check && npm run lint && npm run contract:check",
+    "check:full": "npm run typecheck && npm run format:check && npm run lint && npm run test:lint && npm run test:architecture && npm run test:logic && npm run test:http && npm run contract:check && npm run test:browser-tools && npm run test:visual-tools && npm run test:i18n-tools && npm run test:verification-tools && npm run i18n:check && npm run build && npm run build:demo && npm run test:build-profiles && npm run test:sites",
+    "check": "npm run check:fast",
+    "check:milestone": "npm run check:full",
+    "build": "vite build && node scripts/build/bundle-report.mjs dist/client && node scripts/prepare-sites-build.mjs",
+    "build:console-assets": "npm run build && node scripts/package-console-assets.mjs",
+    "build:demo": "vite build --mode demo && node scripts/build/bundle-report.mjs dist/demo/client",
     "preview": "vite preview",
     "test:sites": "node --test tests/sites-worker.test.mjs",
+    "test:build-profiles": "node --test tests/build-profile.test.mjs tests/build-path.test.mjs",
     "i18n:audit": "node tests/i18n/audit.mjs",
     "i18n:probe": "node tests/i18n/probe-cjk.mjs",
-    "test:e2e": "node --check tests/e2e/app.e2e.test.mjs && node --check tests/e2e/cdp.mjs && node --test --test-concurrency=1 tests/e2e/app.e2e.test.mjs",
+    "test:e2e": "node --check tests/e2e/dialog.e2e.test.mjs && node --check tests/e2e/cdp.mjs && node --test --test-concurrency=1 tests/e2e/access.e2e.test.mjs tests/e2e/account-management.e2e.test.mjs tests/e2e/app-authentication.e2e.test.mjs tests/e2e/applications-http.e2e.test.mjs tests/e2e/authentication.e2e.test.mjs tests/e2e/charts.e2e.test.mjs tests/e2e/dashboard-shell.e2e.test.mjs tests/e2e/dialog.e2e.test.mjs tests/e2e/faults-http.e2e.test.mjs tests/e2e/feedback.e2e.test.mjs tests/e2e/fleet-http.e2e.test.mjs tests/e2e/incident-observation.e2e.test.mjs tests/e2e/initialization.e2e.test.mjs tests/e2e/instance-observation.e2e.test.mjs tests/e2e/login-entry.e2e.test.mjs tests/e2e/monitoring.e2e.test.mjs tests/e2e/navigation-guard.e2e.test.mjs tests/e2e/observation.e2e.test.mjs tests/e2e/password.e2e.test.mjs tests/e2e/realtime-http.e2e.test.mjs tests/e2e/responsive.e2e.test.mjs tests/e2e/rule-deployment.e2e.test.mjs tests/e2e/rule-directory.e2e.test.mjs tests/e2e/rule-set-http.e2e.test.mjs tests/e2e/rule-workspace.e2e.test.mjs tests/e2e/setup.e2e.test.mjs tests/e2e/source-registration.e2e.test.mjs tests/e2e/system-http.e2e.test.mjs tests/e2e/system-observation.e2e.test.mjs",
     "i18n:check": "node tests/i18n/keycheck.mjs"
   },
   "dependencies": {
@@ -27,12 +53,25 @@
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-i18next": "^17.0.15",
-    "vite": "6.4.2"
+    "vite": "6.4.2",
+    "zod": "4.6.5"
   },
   "devDependencies": {
+    "@babel/core": "^8.0.6",
+    "@babel/eslint-parser": "^8.0.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "esbuild": "^0.25.12",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "msw": "3.0.2",
     "prettier": "^3.9.6",
+    "sass": "1.105.1",
     "typescript": "^7.0.2"
+  },
+  "msw": {
+    "workerDirectory": [
+      "public"
+    ]
   }
 }

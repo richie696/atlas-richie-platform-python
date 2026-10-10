@@ -34,10 +34,25 @@ import { setTimeout as delay } from "node:timers/promises";
 const CHROME =
   process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
+/** Prevent a known-unstable Edge host from being launched by the CDP suite. */
+export function assertSupportedBrowserExecutable(executable) {
+  const normalized = executable.replaceAll("\\", "/");
+  const microsoftEdgePath =
+    /(?:^|\/)(?:microsoft[- ]edge(?:[- ](?:beta|dev|canary|stable))?|msedge(?:-sxs)?)(?:\.app|\.exe)?(?:\/|$)/i;
+
+  if (microsoftEdgePath.test(normalized)) {
+    throw new Error(
+      "Microsoft Edge is blocked for CDP tests because this host crashes during startup; configure CHROME_BIN with Google Chrome or Chromium.",
+    );
+  }
+  return executable;
+}
+
 /** 等待文件出现并返回内容；用于读取 Chrome 自选的调试端口。 */
-async function waitForFile(file, timeoutMs = 15000) {
+async function waitForFile(file, timeoutMs = 15000, failure = () => null) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (failure()) throw failure();
     if (existsSync(file)) {
       const text = readFileSync(file, "utf8").trim();
       if (text) return text;
@@ -55,15 +70,17 @@ async function waitForFile(file, timeoutMs = 15000) {
  * 用扁平会话（`flatten: true`）：每条命令带 `sessionId` 直接路由到目标页，
  * 不需要自己维护 targetId -> socket 的多路复用树。单页场景下这层复杂度不划算。
  */
-class Connection {
+export class Connection {
   #socket;
   #nextId = 1;
   #pending = new Map();
   #listeners = new Set();
   #closed = false;
+  #timeoutMs;
 
-  constructor(socket) {
+  constructor(socket, { timeoutMs = 20000 } = {}) {
     this.#socket = socket;
+    this.#timeoutMs = timeoutMs;
     socket.addEventListener("message", (event) => this.#onMessage(event.data));
     socket.addEventListener("close", () => {
       this.#closed = true;
@@ -71,6 +88,7 @@ class Connection {
         reject(new Error("CDP 连接已关闭"));
       }
       this.#pending.clear();
+      this.#listeners.clear();
     });
   }
 
@@ -98,8 +116,14 @@ class Connection {
     const payload = { id, method, params };
     if (sessionId) payload.sessionId = sessionId;
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
-      this.#socket.send(JSON.stringify(payload));
+      const timeout = setTimeout(() => {
+        this.#pending.delete(id);
+        reject(new Error(`CDP command timed out: ${method}`));
+      }, this.#timeoutMs);
+      const settle = callback => value => { clearTimeout(timeout); callback(value); };
+      this.#pending.set(id, { resolve: settle(resolve), reject: settle(reject) });
+      try { this.#socket.send(JSON.stringify(payload)); }
+      catch(error) { this.#pending.delete(id); clearTimeout(timeout); reject(error); }
     });
   }
 
@@ -110,6 +134,9 @@ class Connection {
 
   close() {
     this.#closed = true;
+    for (const { reject } of this.#pending.values()) reject(new Error("CDP connection closed"));
+    this.#pending.clear();
+    this.#listeners.clear();
     try {
       this.#socket.close();
     } catch {
@@ -177,11 +204,12 @@ class Page {
       const off = this.#connection.on((message) => {
         if (message.sessionId !== this.#sessionId) return;
         if (message.method === "Page.loadEventFired") {
+          clearTimeout(timer);
           off();
           resolve();
         }
       });
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         off();
         resolve();
       }, timeoutMs);
@@ -326,7 +354,13 @@ class Page {
   async clickByText(text, selector = "button, a, [role='tab'], [role='button'], label, [role='option']") {
     await this.#clickResolved(
       `[...document.querySelectorAll(${JSON.stringify(selector)})]
-         .find((n) => (n.textContent ?? "").trim().includes(${JSON.stringify(text)})) ?? null`,
+         .find((n) => {
+           const rect = n.getBoundingClientRect();
+           const style = getComputedStyle(n);
+           return (n.textContent ?? "").trim().includes(${JSON.stringify(text)}) &&
+             rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" &&
+             style.display !== "none" && style.pointerEvents !== "none";
+         }) ?? null`,
       `文字为「${text}」的 ${selector}`,
     );
   }
@@ -466,9 +500,10 @@ class Page {
  * 下次 `npm run dev` 的端口探测和后续基线捕获都会受干扰。
  */
 export async function launchBrowser({ viewport = { width: 1280, height: 900 } } = {}) {
+  const browserExecutable = assertSupportedBrowserExecutable(CHROME);
   const userDataDir = mkdtempSync(path.join(tmpdir(), "sen-e2e-"));
   const child = spawn(
-    CHROME,
+    browserExecutable,
     [
       "--headless=new",
       "--disable-gpu",
@@ -487,12 +522,38 @@ export async function launchBrowser({ viewport = { width: 1280, height: 900 } } 
 
   // Chrome 崩溃时立刻抛错，而不是等到端口超时后给出误导性的连接错误。
   let crashed = null;
-  child.on("exit", (code) => {
-    crashed = new Error(`Chrome 提前退出，code=${code}`);
+  let closing = false, diagnostics = "";
+  child.stdout.resume();
+  child.stderr.on("data", chunk => { diagnostics = (diagnostics + chunk).slice(-4096); });
+  child.on("error", error => { crashed = error; });
+  child.on("exit", (code, signal) => {
+    if (!closing) crashed = new Error(`Chrome 提前退出，code=${code}, signal=${signal}; ${diagnostics}`);
   });
 
+  async function stopChild() {
+    closing = true;
+    const exited = () => child.exitCode !== null || child.signalCode !== null;
+    const awaitExit = async (timeoutMs) => {
+      if (exited()) return;
+      await new Promise(resolve => {
+        const done = () => { clearTimeout(timer); child.off("exit", done); resolve(); };
+        const timer = setTimeout(done, timeoutMs);
+        child.once("exit", done);
+      });
+    };
+    if (!exited()) child.kill("SIGTERM");
+    await awaitExit(2000);
+    if (!exited()) child.kill("SIGKILL");
+    await awaitExit(1000);
+    child.stdout.destroy(); child.stderr.destroy(); child.unref();
+    // Only the explicitly created disposable profile is eligible for cleanup.
+    if (exited() && path.basename(userDataDir).startsWith("sen-e2e-")) {
+      try { rmSync(userDataDir, { recursive: true, force: true }); } catch { /* recoverable temp residue */ }
+    }
+  }
+
   try {
-    const activePort = await waitForFile(path.join(userDataDir, "DevToolsActivePort"));
+    const activePort = await waitForFile(path.join(userDataDir, "DevToolsActivePort"), 15000, () => crashed);
     const port = activePort.split("\n")[0].trim();
     const response = await fetch(`http://127.0.0.1:${port}/json/version`);
     const { webSocketDebuggerUrl } = await response.json();
@@ -542,28 +603,14 @@ export async function launchBrowser({ viewport = { width: 1280, height: 900 } } 
       },
       async close() {
         connection.close();
-        child.kill("SIGTERM");
-        // 给 Chrome 一点时间落盘 profile，避免强杀留下损坏的 user-data-dir。
-        await delay(150);
-        if (!child.killed) child.kill("SIGKILL");
-        // 子进程句柄默认持有事件循环。不 unref 的话 `node --test` 跑完全部用例后
-        // 会一直等 Chrome 退出——实测每轮多挂约 19 秒。
-        child.unref();
-        // 只清理本工具自己创建的临时 profile；前缀不符就放弃，绝不误删别处。
-        if (path.basename(userDataDir).startsWith("sen-e2e-")) {
-          try {
-            rmSync(userDataDir, { recursive: true, force: true });
-          } catch {
-            // 临时目录清理失败不应让测试失败。
-          }
-        }
+        await stopChild();
       },
       get crashed() {
         return crashed;
       },
     };
   } catch (error) {
-    child.kill("SIGKILL");
+    await stopChild();
     throw crashed ?? error;
   }
 }

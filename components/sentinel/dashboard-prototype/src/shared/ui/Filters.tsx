@@ -1,3 +1,6 @@
+import filtersStyles from "./Filters.module.scss";
+import presentationStyles from "./styles/Presentation.module.scss";
+import { scopedClasses } from "./styles/scopedClasses";
 import type { ReactNode } from "react";
 
 import { useTranslation } from "react-i18next";
@@ -6,8 +9,10 @@ import {
   TIME_RANGES,
   TIME_RANGE_LABEL_KEY,
   type TimeRangeId,
-} from "../../app/router/route.constants";
+} from "../types/navigation";
 import { Select } from "./Select";
+
+const styleModules = [filtersStyles, presentationStyles] as const;
 
 /**
  * 跨页共用的筛选条（环境 / 应用 / 时间范围）。
@@ -84,7 +89,7 @@ export function Filters({
   }));
 
   return (
-    <div className="filters">
+    <div className={scopedClasses(styleModules, "filters")}>
       <Select
         label={text.environment}
         value={text.production}
@@ -95,7 +100,11 @@ export function Filters({
         label={text.application}
         value={appId}
         onChange={setAppId}
-        options={all ? [{ value: ALL_APPLICATIONS, label: text.allApplications }, ...appOptions] : appOptions}
+        options={
+          all
+            ? [{ value: ALL_APPLICATIONS, label: text.allApplications }, ...appOptions]
+            : appOptions
+        }
       />
       {showRange && (
         <Select<TimeRangeId>
@@ -106,8 +115,8 @@ export function Filters({
         />
       )}
       {extra}
-      <span className="sample-age">
-        <i className="live-dot" /> {text.sample}
+      <span className={scopedClasses(styleModules, "sample-age")}>
+        <i className={scopedClasses(styleModules, "live-dot")} /> {text.sample}
       </span>
     </div>
   );

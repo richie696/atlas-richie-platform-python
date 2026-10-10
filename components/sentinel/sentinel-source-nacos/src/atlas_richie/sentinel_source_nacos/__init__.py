@@ -68,7 +68,12 @@ conventions listed above (full data-id via
 
 from __future__ import annotations
 
-from .codec import NacosCodecError, NacosDecodeError
+from .codec import (
+    NacosCodecError,
+    NacosDecodeError,
+    NacosEncodeError,
+    encode_rule_snapshot,
+)
 from .config import (
     NacosAuth,
     NacosRuleSourceConfig,
@@ -91,6 +96,8 @@ __all__ = [
     # M6.1.3 (done): 5 类 rule data-id → RuleSnapshot 解码
     "NacosCodecError",
     "NacosDecodeError",
+    "NacosEncodeError",
+    "encode_rule_snapshot",
     # M6.1.3 - M6.1.5 (done): 完整生命周期 + 错误分类 + aclose
     "NacosRuleSource",
 ]

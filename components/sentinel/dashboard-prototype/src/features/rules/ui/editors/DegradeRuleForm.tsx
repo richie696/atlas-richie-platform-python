@@ -1,3 +1,5 @@
+import rulesStyles from "../Rules.module.scss";
+import { scopedClasses } from "../../../../shared/ui/styles/scopedClasses";
 /**
  * DegradeRule 表单。
  *
@@ -8,11 +10,14 @@
  *
  * 慢调用比例策略额外要求 `slowRatioThreshold` 取值区间 (0, 1]。
  */
-import { RuleInput, RuleSelect } from "../fields/RuleFields";
-import type { DegradeRuleDraft } from "../../model/ruleDraft";
+import { RuleInput, RuleSelect, type RuleFieldError } from "../fields/RuleFields";
+import { FormGrid } from "../../../../shared/ui/FormGrid";
+import { parseNumericDraft, type DegradeRuleDraft } from "../../editor/ruleDraft";
 import { SentinelCode } from "../../model/ruleKinds";
-import { localizedOptions } from "../../model/ruleOptions";
-import type { RuleFieldCopy, RuleOptionCopy, RuleTypeCopy } from "../../model/ruleMessages";
+import { localizedOptions } from "../../i18n/localizedOptions";
+import type { RuleFieldCopy, RuleOptionCopy, RuleTypeCopy } from "../../i18n/ruleMessages";
+
+const styleModules = [rulesStyles] as const;
 
 export interface DegradeRuleFormProps {
   readonly draft: DegradeRuleDraft;
@@ -21,6 +26,7 @@ export interface DegradeRuleFormProps {
   readonly fields: RuleFieldCopy;
   readonly options: RuleOptionCopy;
   readonly onChange: (next: DegradeRuleDraft) => void;
+  readonly errorFor: RuleFieldError;
 }
 
 export function DegradeRuleForm({
@@ -30,20 +36,24 @@ export function DegradeRuleForm({
   fields,
   options,
   onChange,
+  errorFor,
 }: DegradeRuleFormProps) {
   const update = (patch: Partial<DegradeRuleDraft>) => onChange({ ...draft, ...patch });
-  const updateNumber = (field: keyof DegradeRuleDraft, value: string) =>
-    update({ [field]: value === "" ? "" : Number(value) } as Partial<DegradeRuleDraft>);
+  const updateNumber = (
+    field: "count" | "timeWindow" | "minRequestAmount" | "statIntervalMs" | "slowRatioThreshold",
+    value: string,
+  ) => update({ [field]: parseNumericDraft(value) });
   const isSlowRequest = draft.grade === SentinelCode.DEGRADE_SLOW_REQUEST_RATIO;
 
   return (
-    <div className="rule-form">
-      <p className="form-description">{typeCopy.description}</p>
-      <div className="rule-form-grid">
+    <div className={scopedClasses(styleModules, "rule-form")}>
+      <p className={scopedClasses(styleModules, "form-description")}>{typeCopy.description}</p>
+      <FormGrid className="rule-form-grid">
         <RuleInput
           label={fields.resourceName.label}
           hint={fields.resourceName.hint}
           value={draft.resource}
+          error={errorFor("resource")}
           onChange={(value) => update({ resource: value })}
           disabled={disabled}
         />
@@ -51,6 +61,7 @@ export function DegradeRuleForm({
           label={fields.circuitStrategy.label}
           hint={fields.circuitStrategy.hint}
           value={draft.grade}
+          error={errorFor("grade")}
           options={localizedOptions("degrade", options)}
           onChange={(value) => update({ grade: value })}
           disabled={disabled}
@@ -59,6 +70,7 @@ export function DegradeRuleForm({
           label={fields.circuitThreshold.label}
           hint={fields.circuitThreshold.hint}
           value={draft.count}
+          error={errorFor("count")}
           onChange={(value) => updateNumber("count", value)}
           disabled={disabled}
           numeric
@@ -67,6 +79,7 @@ export function DegradeRuleForm({
           label={fields.breakDuration.label}
           hint={fields.breakDuration.hint}
           value={draft.timeWindow}
+          error={errorFor("timeWindow")}
           onChange={(value) => updateNumber("timeWindow", value)}
           disabled={disabled}
           numeric
@@ -75,6 +88,7 @@ export function DegradeRuleForm({
           label={fields.minimumRequests.label}
           hint={fields.minimumRequests.hint}
           value={draft.minRequestAmount}
+          error={errorFor("minRequestAmount")}
           onChange={(value) => updateNumber("minRequestAmount", value)}
           disabled={disabled}
           numeric
@@ -83,6 +97,7 @@ export function DegradeRuleForm({
           label={fields.statisticWindow.label}
           hint={fields.statisticWindow.hint}
           value={draft.statIntervalMs}
+          error={errorFor("statIntervalMs")}
           onChange={(value) => updateNumber("statIntervalMs", value)}
           disabled={disabled}
           numeric
@@ -92,12 +107,13 @@ export function DegradeRuleForm({
             label={fields.slowCallRatio.label}
             hint={fields.slowCallRatio.hint}
             value={draft.slowRatioThreshold ?? ""}
+            error={errorFor("slowRatioThreshold")}
             onChange={(value) => updateNumber("slowRatioThreshold", value)}
             disabled={disabled}
             numeric
           />
         )}
-      </div>
+      </FormGrid>
     </div>
   );
 }

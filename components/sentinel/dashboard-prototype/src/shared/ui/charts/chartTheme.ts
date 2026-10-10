@@ -3,20 +3,22 @@
  *
  * 中文
  * ----
- * Nivo 的主题**只接受具体颜色值**，不吃 CSS 自定义属性：SVG 呈现属性不是 CSS 声明，
- * `fill="var(--chart-qps)"` 不会解析。因此适配器在这里把 token 读成真实色值再交给
+ * SVG 可以解析 CSS 自定义属性；但 Nivo 的 JavaScript 配色/插值流程需要具体颜色值。
+ * 因此适配器在这里把 token 读成真实色值再交给
  * Nivo，让「产品皮肤拥有图表配色」这件事有一个明确归属，而不是散落在
  * `TrendChart` 的 `theme` 对象和三个页面手传的 `color="#ff7778"` 里。
  *
  * 读不到值时（无 DOM 的环境）回落到 {@link FALLBACK_CHART_TOKENS}，其数值与
- * `styles.css` 的 `:root` 定义逐字一致，因此回落不会改变渲染结果。
+ * `core/styles/skins/_dark.scss` 的默认皮肤定义逐字一致。
  *
- * 新增序列时：先在 `styles.css` 的 `:root` 登记 `--chart-<name>`，再在
- * {@link CHART_SERIES_COLOR} 登记取值映射，不要在页面里直接写十六进制色值。
+ * 新增序列时：先在 `core/styles/skins/_dark.scss` 登记 `--chart-<name>`，再在
+ * {@link CSS_VAR_BY_SERIES} 登记取值映射，不要在页面里直接写十六进制色值。
  */
 
 /** 一条图表序列对应的语义色键。键名与指标语义对应，不与具体色值绑定。 */
-export type ChartSeriesColor = "primary" | "secondary" | "danger";
+import type { ChartSeriesColor } from "../../types/charts";
+
+export type { ChartSeriesColor } from "../../types/charts";
 
 /** 图表使用的全部语义色。 */
 export interface ChartTokens {
@@ -39,8 +41,8 @@ export interface ChartTokens {
   readonly series: Readonly<Record<ChartSeriesColor, string>>;
 }
 
-/** 无 DOM 环境下的回退值，与 `styles.css` 的 `:root` 定义一致。 */
-const FALLBACK_CHART_TOKENS: ChartTokens = Object.freeze({
+/** 无 DOM 环境下的回退值，与选定暗色皮肤一致；不代表动态皮肤已完成。 */
+export const FALLBACK_CHART_TOKENS: ChartTokens = Object.freeze({
   axisText: "#8499a8",
   axisLine: "transparent",
   gridLine: "#2a3c47",
@@ -57,8 +59,8 @@ const FALLBACK_CHART_TOKENS: ChartTokens = Object.freeze({
   }),
 });
 
-const CSS_VAR_BY_TOKEN: Readonly<Record<keyof Omit<ChartTokens, "series">, string>> =
-  Object.freeze({
+const CSS_VAR_BY_TOKEN: Readonly<Record<keyof Omit<ChartTokens, "series">, string>> = Object.freeze(
+  {
     axisText: "--chart-axis-text",
     axisLine: "--chart-axis-line",
     gridLine: "--chart-grid-line",
@@ -68,7 +70,8 @@ const CSS_VAR_BY_TOKEN: Readonly<Record<keyof Omit<ChartTokens, "series">, strin
     tooltipText: "--chart-tooltip-text",
     annotationLine: "--chart-annotation-line",
     annotationText: "--chart-annotation-text",
-  });
+  },
+);
 
 const CSS_VAR_BY_SERIES: Readonly<Record<ChartSeriesColor, string>> = Object.freeze({
   primary: "--chart-series-primary",
@@ -76,10 +79,8 @@ const CSS_VAR_BY_SERIES: Readonly<Record<ChartSeriesColor, string>> = Object.fre
   danger: "--chart-series-danger",
 });
 
-/** 读一次并缓存：主题值在同一页面生命周期内不变，避免每帧都触发样式重算。 */
-let cache: ChartTokens | null = null;
-
-function readTokens(): ChartTokens {
+/** Effect boundary: resolve the already-installed skin, never during chart rendering. */
+export function readChartTokens(): ChartTokens {
   if (typeof window === "undefined" || !window.getComputedStyle) return FALLBACK_CHART_TOKENS;
   const style = window.getComputedStyle(document.documentElement);
   const readVar = (name: string, fallback: string): string => {
@@ -106,17 +107,6 @@ function readTokens(): ChartTokens {
   });
 }
 
-/** 当前生效的图表 token。 */
-export function chartTokens(): ChartTokens {
-  cache ??= readTokens();
-  return cache;
-}
-
-/** 仅供测试或主题切换后失效缓存使用。 */
-export function resetChartTokenCache(): void {
-  cache = null;
-}
-
 /** Nivo 需要的最小主题形状。避免为它引入整个类型依赖。 */
 export interface ChartTheme {
   readonly axis: {
@@ -127,7 +117,9 @@ export interface ChartTheme {
     };
   };
   readonly grid: { readonly line: { readonly stroke: string; readonly strokeWidth: number } };
-  readonly crosshair: { readonly line: { readonly stroke: string; readonly strokeOpacity: number } };
+  readonly crosshair: {
+    readonly line: { readonly stroke: string; readonly strokeOpacity: number };
+  };
   readonly tooltip: {
     readonly container: {
       readonly background: string;
@@ -139,9 +131,8 @@ export interface ChartTheme {
   };
 }
 
-/** 由 token 构建 Nivo 主题。切主题时刷新样式后需配合 {@link resetChartTokenCache}。 */
-export function buildChartTheme(): ChartTheme {
-  const tokens = chartTokens();
+/** Pure Nivo theme projection from the skin owner's immutable snapshot. */
+export function buildChartTheme(tokens: ChartTokens): ChartTheme {
   return {
     axis: {
       domain: { line: { stroke: tokens.axisLine } },
@@ -165,7 +156,7 @@ export function buildChartTheme(): ChartTheme {
 }
 
 /** 发布变更标记线的样式，读同一份 token。 */
-export function annotationStyle(): {
+export function annotationStyle(tokens: ChartTokens): {
   readonly stroke: string;
   readonly strokeWidth: number;
   readonly strokeDasharray: string;
@@ -173,7 +164,6 @@ export function annotationStyle(): {
   readonly fontSize: number;
   readonly fontWeight: number;
 } {
-  const tokens = chartTokens();
   return {
     stroke: tokens.annotationLine,
     strokeWidth: 1.5,

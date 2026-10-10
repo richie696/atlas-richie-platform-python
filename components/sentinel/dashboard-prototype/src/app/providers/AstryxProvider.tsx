@@ -1,6 +1,8 @@
-import { Theme } from "@astryxdesign/core/theme";
-import { neutralTheme } from "@astryxdesign/theme-neutral/built";
+import { InternationalizationProvider } from "@astryxdesign/core/i18n";
 import type { ReactNode } from "react";
+import { useLocale } from "../i18n/locales";
+import { getLoadedAstryxLocaleCatalog } from "../i18n/astryxLocaleCatalogs";
+import { ChartThemeProvider } from "../../shared/ui/charts/ChartThemeProvider";
 
 import "@astryxdesign/core/reset.css";
 import "@astryxdesign/core/astryx.css";
@@ -11,12 +13,20 @@ type AstryxProviderProps = {
 };
 
 /**
- * Owns the once-per-application Astryx theme boundary.
+ * Owns the once-per-application Astryx locale boundary.
  *
- * Astryx supplies accessible primitive behavior and its neutral token base;
- * Sentinel's own SCSS remains responsible for product colors, density and
- * operational dashboard surfaces.
+ * The prebuilt neutral theme stylesheet and root data attributes are applied
+ * statically. Astryx's runtime Theme provider also bundles its theme compiler,
+ * which is unnecessary for this application because it does not create or
+ * switch runtime themes. Sentinel's SCSS remains responsible for product
+ * colors, density and operational dashboard surfaces.
  */
 export function AstryxProvider({ children }: AstryxProviderProps) {
-  return <Theme theme={neutralTheme} mode="dark">{children}</Theme>;
+  const locale = useLocale();
+  const messages = getLoadedAstryxLocaleCatalog(locale);
+  return (
+    <InternationalizationProvider locale={locale} messages={messages}>
+      <ChartThemeProvider revision="sentinel-dark">{children}</ChartThemeProvider>
+    </InternationalizationProvider>
+  );
 }

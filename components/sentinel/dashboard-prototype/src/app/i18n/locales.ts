@@ -3,8 +3,8 @@
  *
  * 中文
  * ----
- * 语言是**本机偏好**：不进 URL，也不进配置中心。放进 URL 会让「把只读视图发给同事」
- * 变成「把只读**权限**发给同事」，而权限必须由服务端裁决。
+ * 语言是**本机偏好**：本产品不把它放进观察范围 URL 或配置中心。共享视图沿用
+ * 接收者的语言偏好；语言不是权限事实，访问能力始终由服务端裁决。
  *
  * 持久化用 `localStorage`。i18next 自带 `@i18next/browser-languagedetector` 能做这件事，
  * 但那会多一个运行时依赖，而需求只有「存一个 locale code + 首屏读它」——自己写
@@ -75,14 +75,10 @@ export function useLocale(): Locale {
 }
 
 /** 切换界面语言并持久化。非法值回落到默认语言。 */
-export function useLocaleSetter(): (next: string) => void {
-  const { i18n } = useTranslation();
-  return useCallback(
-    (next: string) => {
-      const resolved = resolveLocale(next);
-      writeStoredLocale(resolved);
-      void i18n.changeLanguage(resolved);
-    },
-    [i18n],
-  );
+export function useLocaleSetter(): (next: string) => Promise<void> {
+  return useCallback(async (next: string) => {
+    const resolved = resolveLocale(next);
+    const { changeLocale } = await import("./changeLocale");
+    await changeLocale(resolved, writeStoredLocale);
+  }, []);
 }

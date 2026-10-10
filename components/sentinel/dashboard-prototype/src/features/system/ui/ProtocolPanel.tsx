@@ -1,3 +1,6 @@
+import systemStyles from "./System.module.scss";
+import presentationStyles from "../../../shared/ui/styles/Presentation.module.scss";
+import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 /**
  * 「协议与版本」面板：控制面/观测面/决策面的边界说明 + 交付形态状态。
  *
@@ -15,12 +18,11 @@ import {
 } from "@phosphor-icons/react";
 
 import { Panel } from "../../../shared/ui/Panel";
-import {
-  DELIVERY_STATUS_ITEMS,
-  PROTOCOL_BOUNDARIES,
-  type ProtocolBoundaryId,
-} from "../model/systemStatus";
+import { DELIVERY_STATUS_ITEMS, PROTOCOL_BOUNDARIES } from "../presentation/systemPresentation";
+import { type ProtocolBoundaryId } from "../model/systemStatus";
 import { useTranslation } from "react-i18next";
+
+const styleModules = [systemStyles, presentationStyles] as const;
 
 /** 边界 id → 图标。图标是呈现细节，留在 UI 层。 */
 const PROTOCOL_ICONS: Readonly<Record<ProtocolBoundaryId, typeof Activity>> = Object.freeze({
@@ -32,7 +34,7 @@ const PROTOCOL_ICONS: Readonly<Record<ProtocolBoundaryId, typeof Activity>> = Ob
 export function ProtocolPanel() {
   const { t } = useTranslation();
   return (
-    <div className="system-grid">
+    <div className={scopedClasses(styleModules, "system-grid")}>
       <Panel
         title={t("system.protocol.boundaryTitle")}
         subtitle={t("system.protocol.boundarySubtitle")}
@@ -40,7 +42,7 @@ export function ProtocolPanel() {
         {PROTOCOL_BOUNDARIES.map((boundary) => {
           const Icon = PROTOCOL_ICONS[boundary.id];
           return (
-            <div className="protocol" key={boundary.id}>
+            <div className={scopedClasses(styleModules, "protocol")} key={boundary.id}>
               <Icon size={23} />
               <div>
                 <b>{t(boundary.nameKey)}</b>
@@ -55,12 +57,12 @@ export function ProtocolPanel() {
         subtitle={t("system.protocol.deliverySubtitle")}
       >
         {DELIVERY_STATUS_ITEMS.map((item) => (
-          <div className="key-value" key={item.id}>
+          <div className={scopedClasses(styleModules, "key-value")} key={item.id}>
             <span>{t(item.labelKey)}</span>
             <b>{t(item.valueKey)}</b>
           </div>
         ))}
-        <div className="inline-note">
+        <div className={scopedClasses(styleModules, "inline-note")}>
           <Info size={16} /> {t("system.protocol.note")}
         </div>
       </Panel>

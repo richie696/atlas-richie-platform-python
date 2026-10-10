@@ -1,6 +1,9 @@
 # Dashboard 原型改写方案（框架接入 + 数据契约 + 改造清单）
 
-> 状态：方向已定（React 最终实现 + 独立控制台 Console API），改造按 §8 分阶段执行中。
+> 完成状态：未全部完成。
+> 历史材料：正文记录 2026-10-05 的改写方案，部分“未实现”描述、底座版本和 Translator 方案已被后续源码替代，不代表当前事实。
+> 执行顺序于 2026-10-07 调整：先完成前端结构/页面，再统一 HTTP Mock，最后 Python 实现与真实联调；§8 不再作为当前执行顺序。
+> 当前唯一执行清单：[前后端现状与推进清单](../../docs/process/R-DASHBOARD-前后端现状与推进清单.md)；当前结构事实见 [职责对照](REACT_REFACTOR_MAP.md)。旧 endpoint/DTO 示例不是另一套已冻结协议。
 > 日期：2026-10-05。
 > 依据：`richie696-react-library@1.0.1` 源码 + `REACT_CODING_STANDARD` / `REACT_PROJECT_SKELETON` /
 > `RICHIE_FOUNDATION_USAGE` / `modern-react-ui-design` / `react-coding-standard`，

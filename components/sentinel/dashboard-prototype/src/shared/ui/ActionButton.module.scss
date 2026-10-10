@@ -1,0 +1,40 @@
+// Private presentation ownership; colors are supplied by the selected skin.
+.primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+  border-radius: 5px;
+  padding: 10px 15px;
+  font-size: 12px;
+  font-weight: 750;
+}
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+  border-radius: 5px;
+  padding: 10px 15px;
+  font-size: 12px;
+  font-weight: 750;
+}
+.primary-button {
+  background: var(--sentinel-color-primary-button-background);
+  border: 1px solid var(--sentinel-color-primary-button-border);
+  color: var(--sentinel-color-primary-button-color);
+  box-shadow: 0 2px 13px var(--sentinel-color-primary-button-box-shadow);
+}
+.primary-button:hover {
+  background: var(--sentinel-color-primary-button-background-2);
+}
+.secondary-button {
+  background: var(--sentinel-color-secondary-button-background);
+  color: var(--sentinel-color-secondary-button-color);
+  border: 1px solid var(--sentinel-color-secondary-button-border);
+}
+.secondary-button:hover {
+  background: var(--sentinel-color-secondary-button-background-2);
+}

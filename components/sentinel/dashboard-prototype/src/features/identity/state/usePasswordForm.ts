@@ -10,8 +10,8 @@
  *
  * - `submit()` **不翻译**，只返回结构化结论（`accepted` 或具体 `issue`），由页面把
  *   消息键与参数翻译成文案；
- * - 校验失败时**不动表单**，用户不必重输；校验通过才清空三个字段——这与旧实现一致，
- *   因为密码是写入式凭证，提交后必须从 UI 状态移除。
+ * - 本地校验不清空字段；服务端确认成功后由页面显式 clear()。
+ *   失败保留可修正输入；卸载时释放表单状态，不写浏览器存储。
  *
  * 本 Hook 不发请求。当前密码是否正确、会话是否失效都由服务端判定。
  */
@@ -26,27 +26,25 @@ import {
 
 /** 一次提交的结论。`accepted` 表示本地校验通过，可以交给服务端。 */
 export type PasswordSubmitResult =
-  | { readonly status: "accepted" }
-  | { readonly status: "invalid"; readonly issue: PasswordIssue };
+  { readonly status: "accepted" } | { readonly status: "invalid"; readonly issue: PasswordIssue };
 
 export interface PasswordForm {
   readonly values: PasswordChangeDraft;
   setCurrent: (value: string) => void;
   setNext: (value: string) => void;
   setConfirm: (value: string) => void;
-  /** 执行本地校验；通过时清空表单。 */
+  /** 本地校验，不代表服务端提交成功。 */
   submit: () => PasswordSubmitResult;
+  /** 确认成功或主动离开后清除临时凭证。 */
+  clear: () => void;
 }
 
 export function usePasswordForm(): PasswordForm {
   const [values, setValues] = useState<PasswordChangeDraft>(EMPTY_PASSWORD_CHANGE);
 
-  const setField = useCallback(
-    (field: keyof PasswordChangeDraft, value: string) => {
-      setValues((current) => ({ ...current, [field]: value }));
-    },
-    [],
-  );
+  const setField = useCallback((field: keyof PasswordChangeDraft, value: string) => {
+    setValues((current) => ({ ...current, [field]: value }));
+  }, []);
 
   const setCurrent = useCallback((value: string) => setField("current", value), [setField]);
   const setNext = useCallback((value: string) => setField("next", value), [setField]);
@@ -55,9 +53,9 @@ export function usePasswordForm(): PasswordForm {
   const submit = useCallback((): PasswordSubmitResult => {
     const issues = validatePasswordChange(values);
     if (issues.length > 0) return { status: "invalid", issue: issues[0] };
-    setValues(EMPTY_PASSWORD_CHANGE);
     return { status: "accepted" };
   }, [values]);
 
-  return { values, setCurrent, setNext, setConfirm, submit };
+  const clear = useCallback(() => setValues(EMPTY_PASSWORD_CHANGE), []);
+  return { values, setCurrent, setNext, setConfirm, submit, clear };
 }

@@ -1,3 +1,5 @@
+import presentationStyles from "../../../shared/ui/styles/Presentation.module.scss";
+import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 /**
  * 首屏四张摘要卡。
  *
@@ -13,7 +15,17 @@
  * 由 HTTP QPS 推算（`DASHBOARD_CONTROL_PLANE.md` §3「业务吞吐」行）。
  */
 import { NumberCard } from "../../../shared/ui/NumberCard";
-import type { RealtimeSummaryCard } from "../model/realtime";
+
+const styleModules = [presentationStyles] as const;
+
+/** One already-formatted metric summary for the read-only monitoring surface. */
+export interface RealtimeSummaryCard {
+  readonly label: string;
+  readonly value: string;
+  readonly unit: string;
+  readonly note: string;
+  readonly tone: string;
+}
 
 export interface RealtimeSummaryCardsProps {
   readonly cards: readonly RealtimeSummaryCard[];
@@ -21,7 +33,7 @@ export interface RealtimeSummaryCardsProps {
 
 export function RealtimeSummaryCards({ cards }: RealtimeSummaryCardsProps) {
   return (
-    <div className="number-grid">
+    <div className={scopedClasses(styleModules, "number-grid")}>
       {cards.map((card) => (
         <NumberCard
           key={card.label}

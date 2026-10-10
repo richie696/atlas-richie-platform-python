@@ -1,0 +1,1 @@
+function f(o,c){const e=Array.from(o),r=Array.from(c);for(let t=0;t<Math.min(e.length,r.length);t++){const n=e[t].codePointAt(0)-r[t].codePointAt(0);if(n!==0)return n}return e.length-r.length}export{f as c};

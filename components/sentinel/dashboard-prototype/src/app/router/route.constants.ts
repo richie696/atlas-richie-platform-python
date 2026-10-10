@@ -1,3 +1,25 @@
+import {
+  ROUTE,
+  TIME_RANGES,
+  ALL_APPLICATIONS,
+  MAX_NAVIGATION_CURSOR_LENGTH,
+  type RouteId,
+  type TimeRangeId,
+  type NavigationContext,
+} from "../../shared/types/navigation";
+import type { TranslationKey } from "../../shared/types/translation";
+export {
+  ROUTE,
+  TIME_RANGE,
+  TIME_RANGES,
+  TIME_RANGE_LABEL_KEY,
+  TIME_RANGE_MS,
+  ALL_APPLICATIONS,
+  type RouteId,
+  type TimeRangeId,
+  type NavigationContext,
+} from "../../shared/types/navigation";
+
 /**
  * Dashboard 路由静态地址的唯一来源。
  *
@@ -23,33 +45,17 @@
  * network access so routing, navigation, guards and tests can share it.
  */
 
-/** 稳定路由标识。值即 URL path 段，便于人工阅读和排障。 */
-export const ROUTE = Object.freeze({
-  Overview: "overview",
-  Applications: "applications",
-  Rules: "rules",
-  Realtime: "realtime",
-  Faults: "faults",
-  System: "system",
-  Accounts: "accounts",
-  Roles: "roles",
-  ChangePassword: "change-password",
-  Login: "login",
-  Setup: "setup",
-} as const);
-
-/** {@link ROUTE} 的值联合。 */
-export type RouteId = (typeof ROUTE)[keyof typeof ROUTE];
-
 /**
  * 进入路由的前置条件。
  *
- * - `none`：任何访客可达。
+ * - `public`：任何访客可达。
  * - `session`：需要已登录会话；未登录时守卫重定向到 {@link ROUTE.Login}。
+ * - `metrics`：需要带有指标查看能力的会话。
+ * - `admin`：需要管理员会话。
  * - `setup`：仅在服务端尚未初始化时开放。初始化成功后服务端关闭该窗口，
  *   守卫必须把深链重定向到 {@link ROUTE.Login}（见 `AGENTS.md` 一次性 setup 约束）。
  */
-export type RouteAccess = "none" | "session" | "setup";
+export type RouteAccess = "public" | "setup" | "session" | "metrics" | "admin";
 
 /**
  * 路由的应用筛选粒度。
@@ -83,7 +89,7 @@ export interface RouteEntry {
   /** 主导航排序位；非导航路由为 `null`。 */
   readonly order: number | null;
   /** 界面文案键；由 `core/i18n` 解析，缺键时回退而非显示协议键。 */
-  readonly i18nKey: string;
+  readonly i18nKey: TranslationKey;
 }
 
 const entry = (
@@ -92,7 +98,7 @@ const entry = (
   appFilter: RouteAppFilter,
   inMainNav: boolean,
   order: number | null,
-  i18nKey: string,
+  i18nKey: TranslationKey,
 ): RouteEntry =>
   Object.freeze({
     id,
@@ -106,22 +112,30 @@ const entry = (
 
 /** 全部路由的静态表，顺序与 {@link ROUTE} 声明顺序一致。 */
 export const ROUTES: readonly RouteEntry[] = Object.freeze([
-  entry(ROUTE.Overview, "session", "fleet", true, 0, "shell.nav.overview"),
-  entry(ROUTE.Applications, "session", "single", true, 1, "shell.nav.applications"),
-  entry(ROUTE.Rules, "session", "single", true, 2, "shell.nav.rules"),
-  entry(ROUTE.Realtime, "session", "fleet", true, 3, "shell.nav.realtime"),
-  entry(ROUTE.Faults, "session", "fleet", true, 4, "shell.nav.faults"),
-  entry(ROUTE.System, "session", "fleet", true, 5, "shell.nav.system"),
-  entry(ROUTE.Accounts, "session", "fleet", false, null, "shell.nav.accounts"),
-  entry(ROUTE.Roles, "session", "fleet", false, null, "shell.nav.roles"),
+  entry(ROUTE.Overview, "metrics", "fleet", true, 0, "shell.nav.overview"),
+  // The authorized observation catalog owns available applications; this page must not
+  // fabricate a single-app default from the retired assembly fixture list.
+  entry(ROUTE.Applications, "metrics", "fleet", true, 1, "shell.nav.applications"),
+  // Rule bindings form a directory across apps; selecting one remains explicit within the page.
+  entry(ROUTE.Rules, "metrics", "fleet", true, 2, "shell.nav.rules"),
+  entry(ROUTE.Realtime, "metrics", "fleet", true, 3, "shell.nav.realtime"),
+  entry(ROUTE.Faults, "metrics", "fleet", true, 4, "shell.nav.faults"),
+  entry(ROUTE.System, "admin", "fleet", true, 5, "shell.nav.system"),
+  entry(ROUTE.Accounts, "admin", "fleet", false, null, "shell.nav.accounts"),
+  entry(ROUTE.Roles, "admin", "fleet", false, null, "shell.nav.roles"),
   entry(ROUTE.ChangePassword, "session", "fleet", false, null, "shell.nav.changePassword"),
-  entry(ROUTE.Login, "none", "fleet", false, null, "shell.nav.login"),
+  entry(ROUTE.Login, "public", "fleet", false, null, "shell.nav.login"),
   entry(ROUTE.Setup, "setup", "fleet", false, null, "shell.nav.setup"),
 ]);
 
 const ROUTE_BY_ID: ReadonlyMap<RouteId, RouteEntry> = new Map(
   ROUTES.map((item) => [item.id, item]),
 );
+
+/** Runtime guard for local destinations received through an untrusted URL. */
+export function isRouteId(value: unknown): value is RouteId {
+  return typeof value === "string" && ROUTES.some((item) => item.id === value);
+}
 
 /** 主导航路由的有序 id 元组。类型是 `const`，供下游做 `Extract` 穷尽检查。 */
 export const MAIN_NAVIGATION_IDS = Object.freeze([
@@ -136,84 +150,40 @@ export const MAIN_NAVIGATION_IDS = Object.freeze([
 /** 主导航路由 id 联合；用于让图标表在编译期与导航表保持一致。 */
 export type MainNavRouteId = (typeof MAIN_NAVIGATION_IDS)[number];
 
+/** Runtime guard for a route that owns a primary navigation icon. */
+export function isMainNavRouteId(value: RouteId): value is MainNavRouteId {
+  return MAIN_NAVIGATION_IDS.some((id) => id === value);
+}
+
 /** 主导航条目，已按展示顺序排好。 */
 export const MAIN_NAVIGATION: readonly RouteEntry[] = Object.freeze(
-  ROUTES.filter((item) => item.inMainNav).sort(
-    (a, b) => (a.order ?? 0) - (b.order ?? 0),
-  ),
+  ROUTES.filter((item) => item.inMainNav).sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
 );
 
 /** 未知路由的回落目标。宁可显示总览，也不渲染未受控视图。 */
 export const FALLBACK_ROUTE: RouteId = ROUTE.Overview;
 
-/**
- * 可分享的时间窗口标识。
- *
- * 中文
- * ----
- * 原实现把中文字面量（"最近 15 分钟"）直接当状态值，并在六个页面里用 `===` 比较。
- * 展示文案属于 i18n 资源，一旦切换语言，状态值与比较条件会同时失效。这里改为稳定
- * 协议值，标签由 {@link TIME_RANGE_LABEL_KEY} 指向语言资源。
- */
-export const TIME_RANGE = Object.freeze({
-  Last15Minutes: "15m",
-  Last1Hour: "1h",
-} as const);
-
-/** {@link TIME_RANGE} 的值联合。 */
-export type TimeRangeId = (typeof TIME_RANGE)[keyof typeof TIME_RANGE];
-
-/** 时间窗口的文案键；协议值与展示文案分离。 */
-export const TIME_RANGE_LABEL_KEY: Readonly<Record<TimeRangeId, string>> = Object.freeze({
-  [TIME_RANGE.Last15Minutes]: "shell.range.last15Minutes",
-  [TIME_RANGE.Last1Hour]: "shell.range.last1Hour",
-});
-
-/** 全部可选时间窗口，保持与语言资源一一对应。 */
-export const TIME_RANGES: readonly TimeRangeId[] = Object.freeze([
-  TIME_RANGE.Last15Minutes,
-  TIME_RANGE.Last1Hour,
-]);
-
-/** 时间窗口的毫秒跨度。图表与查询共用，避免各处重复换算。 */
-export const TIME_RANGE_MS: Readonly<Record<TimeRangeId, number>> = Object.freeze({
-  [TIME_RANGE.Last15Minutes]: 15 * 60 * 1000,
-  [TIME_RANGE.Last1Hour]: 60 * 60 * 1000,
-});
-
-/**
- * 序列化为 URL query 的导航上下文。
- *
- * 这些值决定页面看到什么数据，因此必须可分享、可刷新恢复，且不进入规则草稿、
- * 配置中心或审计事件。
- */
-export interface NavigationContext {
-  /** 选中的应用 id；`all` 表示不限定应用。 */
-  readonly appId?: string;
-  /** 选中的时间窗口。 */
-  readonly range?: TimeRangeId;
-  /** 身份页正在操作的账号 id。 */
-  readonly accountId?: string;
-  /**
-   * 路由内的子视图标识（系统管理的 tab 等）。
-   *
-   * 用稳定 id 而不是展示文案：文案会随语言与改版变化，进了 URL 就等于把展示层
-   * 绑进深链。合法值集合由**拥有该视图的 feature** 校验（见
-   * `features/system/model/systemStatus.ts` 的 `resolveSystemTab`），路由边界不认识
-   * 任何页面的具体 tab，因此只做「非空字符串」这一层解析。
-   */
-  readonly view?: string;
-}
-
 const CONTEXT_KEYS = Object.freeze({
+  returnTo: "returnTo",
+  environmentId: "env",
   appId: "app",
   range: "range",
+  from: "from",
+  to: "to",
   accountId: "account",
   view: "view",
+  instanceId: "instance",
+  resource: "resource",
+  eventId: "event",
+  incidentSeverity: "severity",
+  incidentCategory: "category",
+  incidentCursor: "cursor",
+  versionId: "version",
+  publicationId: "publication",
+  bindingId: "binding",
+  metricScope: "scope",
+  search: "q",
 } as const);
-
-/** 全局不限定应用的哨兵值。它是协议值，不是展示文案。 */
-export const ALL_APPLICATIONS = "all";
 
 /**
  * 构造路由的静态地址，可附带导航上下文。
@@ -230,8 +200,19 @@ export function pathFor(route: RouteId, context: NavigationContext = {}): string
   }
   const search = new URLSearchParams();
   for (const [field, key] of Object.entries(CONTEXT_KEYS)) {
+    if (field === "returnTo" && route !== ROUTE.Login) continue;
+    if (
+      route !== ROUTE.Faults &&
+      (field === "incidentSeverity" || field === "incidentCategory" || field === "incidentCursor")
+    )
+      continue;
     const value = context[field as keyof NavigationContext];
-    if (typeof value === "string" && value.length > 0) search.set(key, value);
+    if (
+      typeof value === "string" &&
+      value.length > 0 &&
+      (field !== "incidentCursor" || value.length <= MAX_NAVIGATION_CURSOR_LENGTH)
+    )
+      search.set(key, value);
   }
   const query = search.toString();
   return query ? `${known.path}?${query}` : known.path;
@@ -239,6 +220,8 @@ export function pathFor(route: RouteId, context: NavigationContext = {}): string
 
 /** {@link pathFor} 的解析结果。 */
 export interface ParsedRoute {
+  /** Explicit nonempty paths outside the catalog are not silently treated as overview. */
+  readonly notFound: boolean;
   /** 已校验的路由 id。 */
   readonly route: RouteId;
   /** 已校验的导航上下文；未提供的字段缺省。 */
@@ -259,23 +242,61 @@ const isTimeRange = (value: string): value is TimeRangeId =>
  */
 export function routeFromPath(hash: string): ParsedRoute {
   const withoutHash = hash.replace(/^#\/?/, "");
-  const [rawPath, rawQuery = ""] = withoutHash.split("?", 2);
-  const route = (ROUTES.find((item) => item.id === rawPath)?.id ?? FALLBACK_ROUTE);
+  const separator = withoutHash.indexOf("?");
+  const rawPath = separator < 0 ? withoutHash : withoutHash.slice(0, separator);
+  const rawQuery = separator < 0 ? "" : withoutHash.slice(separator + 1);
+  const route = ROUTES.find((item) => item.id === rawPath)?.id ?? FALLBACK_ROUTE;
 
   const search = new URLSearchParams(rawQuery);
   const appId = search.get(CONTEXT_KEYS.appId);
   const range = search.get(CONTEXT_KEYS.range);
+  const from = search.get(CONTEXT_KEYS.from);
+  const to = search.get(CONTEXT_KEYS.to);
   const accountId = search.get(CONTEXT_KEYS.accountId);
   const view = search.get(CONTEXT_KEYS.view);
+  const environmentId = search.get(CONTEXT_KEYS.environmentId);
+  const instanceId = search.get(CONTEXT_KEYS.instanceId);
+  const resource = search.get(CONTEXT_KEYS.resource);
+  const eventId = search.get(CONTEXT_KEYS.eventId);
+  const incidentSeverity = search.get(CONTEXT_KEYS.incidentSeverity);
+  const incidentCategory = search.get(CONTEXT_KEYS.incidentCategory);
+  const incidentCursor = search.get(CONTEXT_KEYS.incidentCursor);
+  const versionId = search.get(CONTEXT_KEYS.versionId);
+  const publicationId = search.get(CONTEXT_KEYS.publicationId);
+  const bindingId = search.get(CONTEXT_KEYS.bindingId);
+  const metricScope = search.get(CONTEXT_KEYS.metricScope);
+  const query = search.get(CONTEXT_KEYS.search);
+  const returnTo = search.get(CONTEXT_KEYS.returnTo);
+  const validReturnTo = route === ROUTE.Login && isRouteId(returnTo) ? returnTo : undefined;
 
   return {
     route,
+    notFound: !!rawPath && !ROUTES.some((item) => item.id === rawPath),
     context: {
+      ...(validReturnTo ? { returnTo: validReturnTo } : {}),
+      ...(environmentId ? { environmentId } : {}),
       ...(appId ? { appId } : {}),
       ...(range && isTimeRange(range) ? { range } : {}),
+      ...(from ? { from } : {}),
+      ...(to ? { to } : {}),
       ...(accountId ? { accountId } : {}),
       // `view` 的合法值由拥有它的 feature 判定，这里只保证它是个非空字符串。
       ...(view ? { view } : {}),
+      ...(instanceId ? { instanceId } : {}),
+      ...(resource ? { resource } : {}),
+      ...(eventId ? { eventId } : {}),
+      ...(route === ROUTE.Faults && incidentSeverity ? { incidentSeverity } : {}),
+      ...(route === ROUTE.Faults && incidentCategory ? { incidentCategory } : {}),
+      ...(route === ROUTE.Faults &&
+      incidentCursor &&
+      incidentCursor.length <= MAX_NAVIGATION_CURSOR_LENGTH
+        ? { incidentCursor }
+        : {}),
+      ...(versionId ? { versionId } : {}),
+      ...(publicationId ? { publicationId } : {}),
+      ...(bindingId ? { bindingId } : {}),
+      ...(metricScope ? { metricScope } : {}),
+      ...(query ? { search: query } : {}),
     },
   };
 }
@@ -307,24 +328,4 @@ export function resolveAppIdForRoute(
   if (appFilterFor(route) === "fleet") return appId;
   if (appId !== ALL_APPLICATIONS) return appId;
   return availableAppIds[0];
-}
-
-/**
- * 依据当前状态解析实际应展示的路由。
- *
- * 中文
- * ----
- * 这是守卫的唯一决策点：未登录一律去登录页；setup 只在服务端报告未初始化时可达。
- * 守卫不做网络请求——会话与初始化状态由 `core/session` 提供快照。
- */
-export function resolveAccessibleRoute(
-  requested: RouteId,
-  session: { readonly authenticated: boolean; readonly initialized: boolean },
-): RouteId {
-  const access = accessFor(requested);
-  if (access === "none") return requested;
-  if (access === "setup") {
-    return session.initialized ? ROUTE.Login : requested;
-  }
-  return session.authenticated ? requested : ROUTE.Login;
 }

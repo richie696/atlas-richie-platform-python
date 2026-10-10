@@ -13,7 +13,6 @@ export {
   type SessionCapability,
 } from "./capabilities";
 export {
-  DEFAULT_SESSION,
   SessionProvider,
   useCan,
   useSession,

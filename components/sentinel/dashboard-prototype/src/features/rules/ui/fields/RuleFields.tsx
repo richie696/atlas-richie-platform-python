@@ -7,13 +7,16 @@
  * 字段包装、五类分支表单和集群流控子表单。这里把它们拆到独立文件，让每个文件的
  * 变化原因单一：字段包装只关心「用什么控件承载一个值」。
  *
- * 三个组件都**不引入新 DOM**：渲染的控件与类名与原实现逐字一致，视觉基线不变。
+ * 数字框允许清空与分数；字段错误通过 Astryx status/ARIA 显示，不穿透组件内置样式。
  */
 import { CheckboxField } from "../../../../shared/ui/CheckboxField";
 import { NumberField } from "../../../../shared/ui/NumberField";
 import { Select } from "../../../../shared/ui/Select";
 import { TextField } from "../../../../shared/ui/TextField";
-import type { RuleOption } from "../../model/ruleOptions";
+import type { RuleOption } from "../../i18n/localizedOptions";
+
+/** Field-level projection; policy codes are translated outside the controls. */
+export type RuleFieldError = (path: string) => string | undefined;
 
 /** 文本 / 数字输入的统一包装。`numeric` 决定底层控件。 */
 export interface RuleInputProps {
@@ -23,6 +26,8 @@ export interface RuleInputProps {
   readonly onChange: (value: string) => void;
   readonly disabled?: boolean;
   readonly numeric?: boolean;
+  readonly error?: string;
+  readonly step?: number | null;
 }
 
 export function RuleInput({
@@ -32,9 +37,20 @@ export function RuleInput({
   onChange,
   disabled,
   numeric = false,
+  error,
+  step = null,
 }: RuleInputProps) {
   return numeric ? (
-    <NumberField label={label} hint={hint} value={value} onChange={onChange} disabled={disabled} />
+    <NumberField
+      label={label}
+      hint={hint}
+      value={value}
+      onChange={onChange}
+      disabled={disabled}
+      error={error}
+      step={step}
+      allowEmpty
+    />
   ) : (
     <TextField
       label={label}
@@ -42,6 +58,7 @@ export function RuleInput({
       value={String(value ?? "")}
       onChange={onChange}
       disabled={disabled}
+      error={error}
     />
   );
 }
@@ -50,21 +67,34 @@ export function RuleInput({
 export interface RuleSelectProps {
   readonly label: string;
   readonly hint?: string;
-  readonly value: number;
+  readonly value: number | "";
   readonly options: readonly RuleOption[];
   readonly onChange: (value: number) => void;
   readonly disabled?: boolean;
+  readonly error?: string;
 }
 
-export function RuleSelect({ label, hint, value, options, onChange, disabled }: RuleSelectProps) {
+export function RuleSelect({
+  label,
+  hint,
+  value,
+  options,
+  onChange,
+  disabled,
+  error,
+}: RuleSelectProps) {
   return (
     <Select
       label={label}
       hint={hint}
       value={String(value)}
-      onChange={(next) => onChange(Number(next))}
-      options={options.map((option) => ({ value: option.value, label: option.label }))}
+      onChange={(next) => {
+        const choice = options.find((option) => String(option.value) === next);
+        if (choice) onChange(choice.value);
+      }}
+      options={options.map((option) => ({ value: String(option.value), label: option.label }))}
       disabled={disabled}
+      error={error}
     />
   );
 }

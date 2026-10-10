@@ -1,3 +1,5 @@
+import rulesStyles from "../Rules.module.scss";
+import { scopedClasses } from "../../../../shared/ui/styles/scopedClasses";
 /**
  * AuthorityRule 表单。
  *
@@ -7,10 +9,13 @@
  * 的结果相反，因此模式说明由语言包 `types.authority.description` 提供，表单不自行
  * 解释，避免与配置中心的实际语义脱节。
  */
-import { RuleInput, RuleSelect } from "../fields/RuleFields";
-import type { AuthorityRuleDraft } from "../../model/ruleDraft";
-import { localizedOptions } from "../../model/ruleOptions";
-import type { RuleFieldCopy, RuleOptionCopy, RuleTypeCopy } from "../../model/ruleMessages";
+import { RuleInput, RuleSelect, type RuleFieldError } from "../fields/RuleFields";
+import { FormGrid } from "../../../../shared/ui/FormGrid";
+import type { AuthorityRuleDraft } from "../../editor/ruleDraft";
+import { localizedOptions } from "../../i18n/localizedOptions";
+import type { RuleFieldCopy, RuleOptionCopy, RuleTypeCopy } from "../../i18n/ruleMessages";
+
+const styleModules = [rulesStyles] as const;
 
 export interface AuthorityRuleFormProps {
   readonly draft: AuthorityRuleDraft;
@@ -19,6 +24,7 @@ export interface AuthorityRuleFormProps {
   readonly fields: RuleFieldCopy;
   readonly options: RuleOptionCopy;
   readonly onChange: (next: AuthorityRuleDraft) => void;
+  readonly errorFor: RuleFieldError;
 }
 
 export function AuthorityRuleForm({
@@ -28,17 +34,19 @@ export function AuthorityRuleForm({
   fields,
   options,
   onChange,
+  errorFor,
 }: AuthorityRuleFormProps) {
   const update = (patch: Partial<AuthorityRuleDraft>) => onChange({ ...draft, ...patch });
 
   return (
-    <div className="rule-form">
-      <p className="form-description">{typeCopy.description}</p>
-      <div className="rule-form-grid">
+    <div className={scopedClasses(styleModules, "rule-form")}>
+      <p className={scopedClasses(styleModules, "form-description")}>{typeCopy.description}</p>
+      <FormGrid className="rule-form-grid">
         <RuleInput
           label={fields.resourceName.label}
           hint={fields.resourceName.hint}
           value={draft.resource}
+          error={errorFor("resource")}
           onChange={(value) => update({ resource: value })}
           disabled={disabled}
         />
@@ -46,6 +54,7 @@ export function AuthorityRuleForm({
           label={fields.authorityMode.label}
           hint={fields.authorityMode.hint}
           value={draft.strategy}
+          error={errorFor("strategy")}
           options={localizedOptions("authority", options)}
           onChange={(value) => update({ strategy: value })}
           disabled={disabled}
@@ -54,10 +63,11 @@ export function AuthorityRuleForm({
           label={fields.originList.label}
           hint={fields.originList.hint}
           value={draft.limitApp}
+          error={errorFor("limitApp")}
           onChange={(value) => update({ limitApp: value })}
           disabled={disabled}
         />
-      </div>
+      </FormGrid>
     </div>
   );
 }

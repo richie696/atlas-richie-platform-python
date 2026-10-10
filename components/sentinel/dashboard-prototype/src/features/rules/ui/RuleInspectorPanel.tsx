@@ -1,3 +1,7 @@
+import presentationStyles from "../../../shared/ui/styles/Presentation.module.scss";
+import rulesStyles from "./Rules.module.scss";
+import actionButtonStyles from "../../../shared/ui/ActionButton.module.scss";
+import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 /**
  * 规则检视器：展示选中规则的元信息、兼容 JSON 预览与校验反馈。
  *
@@ -12,21 +16,26 @@ import { SESSION_CAPABILITY, useCan } from "../../../core/session";
 
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { Panel } from "../../../shared/ui/Panel";
-import { RULE_TYPE_META, type RuleKind } from "../model/ruleKinds";
-import type { RuleDraft } from "../model/ruleDraft";
-import type { RuleWorkbenchMessages } from "../model/ruleMessages";
-import type { RuleValidationState, RuleWorkbenchEntry } from "../state/useRuleWorkbench";
+import { RULE_TYPE_META } from "../model/ruleKinds";
+import type { TypedRuleDraft } from "../editor/ruleDraft";
+import type { RuleWorkbenchMessages } from "../i18n/ruleMessages";
+import type { RuleValidationState } from "../editor/ruleEditing";
+import type { RuleWorkbenchEntry } from "../editor/ruleEntry";
 import { RuleEditor } from "./RuleEditor";
+import { RULE_ISSUE_MESSAGES } from "../i18n/ruleIssueMessages";
+import { ruleDraftPreview } from "../presentation/ruleDraftPreview";
+
+const styleModules = [presentationStyles, rulesStyles, actionButtonStyles] as const;
 
 export interface RuleInspectorPanelProps {
   readonly entry: RuleWorkbenchEntry | null;
-  readonly draft: RuleDraft;
+  readonly draft: TypedRuleDraft | null;
   readonly editing: boolean;
   readonly validation: RuleValidationState;
   readonly messages: RuleWorkbenchMessages;
   readonly scopes: Readonly<Record<string, string>>;
   readonly t: (path: string, values?: Record<string, string | number>) => string;
-  readonly onDraftChange: (draft: RuleDraft) => void;
+  readonly onDraftChange: (draft: TypedRuleDraft) => void;
   readonly onBeginEditing: () => void;
   readonly onValidate: () => void;
 }
@@ -39,9 +48,7 @@ function feedbackText(
   if (validation.status === "passed") return { text: t("rules.validationPassed"), tone: "passed" };
   if (validation.status === "failed") {
     return {
-      text: validation.issues
-        .map((issue) => t(issue.key, issue.params as Record<string, string | number> | undefined))
-        .join(" "),
+      text: validation.issues.map((issue) => t(RULE_ISSUE_MESSAGES[issue.code])).join(" "),
       tone: "failed",
     };
   }
@@ -62,15 +69,15 @@ export function RuleInspectorPanel({
 }: RuleInspectorPanelProps) {
   const canWrite = useCan(SESSION_CAPABILITY.RulesWrite);
   const feedback = feedbackText(validation, t);
-  const typeCopy = entry ? messages.types[entry.ruleType as RuleKind] : null;
+  const typeCopy = entry ? messages.types[entry.ruleType] : null;
 
-  if (!entry || !typeCopy) {
+  if (!entry || !typeCopy || !draft) {
     // 空态说明「当前筛选下没有规则」，不是「搜索框里没有输入」。
     // 旧实现复用了 `t("rules.search")`（搜索框 placeholder）再拼一个「：0」，
     // 渲染出来是「搜索资源或策略：0」，语义完全对不上。
     return (
       <Panel title={t("rules.details")} subtitle={t("rules.detailDescription")}>
-        <div className="empty">{t("rules.noMatchingRule")}</div>
+        <div className={scopedClasses(styleModules, "empty")}>{t("rules.noMatchingRule")}</div>
       </Panel>
     );
   }
@@ -79,38 +86,38 @@ export function RuleInspectorPanel({
     <Panel
       title={editing ? t("rules.draft") : t("rules.details")}
       subtitle={editing ? t("rules.draftDescription") : t("rules.detailDescription")}
-      className="rule-inspector"
+      className={scopedClasses(styleModules, "rule-inspector")}
     >
-      <div className="key-value">
+      <div className={scopedClasses(styleModules, "key-value")}>
         <span>{t("rules.resource")}</span>
         <b>{entry.resource}</b>
       </div>
-      <div className="key-value">
+      <div className={scopedClasses(styleModules, "key-value")}>
         <span>{t("rules.provider")}</span>
         <b>{entry.provider}</b>
       </div>
-      <div className="key-value">
+      <div className={scopedClasses(styleModules, "key-value")}>
         <span>{t("rules.baseline")}</span>
         <b>{entry.version}</b>
       </div>
-      <div className="key-value">
+      <div className={scopedClasses(styleModules, "key-value")}>
         <span>{t("rules.scope")}</span>
         <b>{t("rules.scopeExample", { scope: scopes[entry.scope] })}</b>
       </div>
-      <div className="key-value">
+      <div className={scopedClasses(styleModules, "key-value")}>
         <span>{t("rules.compatibilityType")}</span>
         <b>{RULE_TYPE_META[entry.ruleType].className}</b>
       </div>
-      <div className="divider" />
-      <div className="rule-format-header">
-        <div className="rule-format-copy">
+      <div className={scopedClasses(styleModules, "divider")} />
+      <div className={scopedClasses(styleModules, "rule-format-header")}>
+        <div className={scopedClasses(styleModules, "rule-format-copy")}>
           <b>{t("rules.configuration", { type: typeCopy.label })}</b>
           <span>{typeCopy.description}</span>
         </div>
         {canWrite && !editing && (
           <ActionButton
             type="button"
-            className="rule-edit-button"
+            className={scopedClasses(styleModules, "rule-edit-button")}
             variant="secondary"
             size="sm"
             onClick={onBeginEditing}
@@ -120,30 +127,47 @@ export function RuleInspectorPanel({
         )}
       </div>
       <RuleEditor
-        kind={entry.ruleType}
-        draft={draft}
+        rule={draft}
         editable={editing}
         messages={messages}
         onChange={onDraftChange}
+        errorFor={(path) =>
+          validation.status === "failed"
+            ? validation.issues
+                .filter((issue) => issue.path === path)
+                .map((issue) => t(RULE_ISSUE_MESSAGES[issue.code]))
+                .join(" ") || undefined
+            : undefined
+        }
       />
-      <div className="compatibility-json">
+      <div className={scopedClasses(styleModules, "compatibility-json")}>
         <div>
           <b>{t("rules.configPreview")}</b>
           <span>{t("rules.jsonArray", { name: RULE_TYPE_META[entry.ruleType].configName })}</span>
         </div>
-        <pre>{JSON.stringify([draft], null, 2)}</pre>
+        <pre>{JSON.stringify([ruleDraftPreview(draft)], null, 2)}</pre>
       </div>
       {feedback && (
-        <div className={`inline-note ${feedback.tone === "passed" ? "" : "invalid"}`}>
+        <div
+          role={feedback.tone === "passed" ? "status" : "alert"}
+          className={scopedClasses(
+            styleModules,
+            `inline-note ${feedback.tone === "passed" ? "" : "invalid"}`,
+          )}
+        >
           {feedback.text}
         </div>
       )}
       {canWrite && (
-        <ActionButton type="button" className="primary-button full" onClick={onValidate}>
+        <ActionButton
+          type="button"
+          className={scopedClasses(styleModules, "primary-button full")}
+          onClick={onValidate}
+        >
           <FloppyDisk size={16} /> {t("rules.validate")}
         </ActionButton>
       )}
-      <p className="nonproduction">{t("rules.notProduction")}</p>
+      <p className={scopedClasses(styleModules, "nonproduction")}>{t("rules.notProduction")}</p>
     </Panel>
   );
 }

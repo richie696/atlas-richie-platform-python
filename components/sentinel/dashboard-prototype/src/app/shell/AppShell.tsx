@@ -1,3 +1,4 @@
+import styles from "./AppShell.module.scss";
 import type { ReactNode } from "react";
 
 export type AppShellProps = {
@@ -12,12 +13,18 @@ export type AppShellProps = {
  * Stable shell anatomy for Dashboard pages. Feature pages own their content;
  * this component owns only the application chrome and landmark structure.
  */
-export function AppShell({ header, banner, children, contentClassName = "", footer }: AppShellProps) {
+export function AppShell({
+  header,
+  banner,
+  children,
+  contentClassName = "",
+  footer,
+}: AppShellProps) {
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${styles["app-shell"]}`}>
       {header}
       {banner}
-      <main className={`content ${contentClassName}`}>{children}</main>
+      <main className={`content ${styles.content} ${contentClassName}`}>{children}</main>
       {footer}
     </div>
   );

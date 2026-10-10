@@ -1,6 +1,10 @@
 {
   "overview.attention.appsRunning": "{{count}} 个应用运行中，",
+  "overview.attention.appsRunning_one": "{{count}} 个应用运行中，",
+  "overview.attention.appsRunning_other": "{{count}} 个应用运行中，",
   "overview.attention.needsAttention": "{{count}} 个需要关注",
+  "overview.attention.needsAttention_one": "{{count}} 个需要关注",
+  "overview.attention.needsAttention_other": "{{count}} 个需要关注",
   "overview.attention.viewApps": "查看异常应用",
   "overview.infra.component.ruleDelivery": "规则版本下发",
   "overview.infra.demoOnly": "均为演示状态",
@@ -28,13 +32,10 @@
   "overview.table.subtitle": "按应用聚合的关键指标，点击应用可进入实例矩阵。",
   "overview.table.title": "应用运行状态",
   "overview.table.viewAll": "查看全部应用",
-  "overview.trend.afterRelease": "发布后",
-  "overview.trend.beforeRelease": "发布前",
   "overview.trend.blockedTitle": "请求拦截率（Blocked Rate）",
   "overview.trend.qpsTitle": "总 HTTP QPS（次/秒）",
-  "overview.trend.sampleWindow": "14:17–14:32 · 示例窗口",
-  "overview.trend.sharedWindow": "上下图共用时间范围；蓝色虚线标注一次示例规则发布。",
+  "overview.trend.selectedWindow": "当前筛选时间范围",
+  "overview.trend.sharedWindow": "两张图使用相同的筛选时间范围。",
   "overview.trend.title": "全局流量与防护趋势",
-  "overview.trend.tpsNote": "TPS 暂无接入 · 不与 QPS 混用",
-  "overview.trend.windowExcludesRelease": "当前窗口不含 14:02 发布时点；切换到{{longer}}查看发布前后对比。"
+  "overview.trend.tpsNote": "TPS 暂无接入 · 不与 QPS 混用"
 }

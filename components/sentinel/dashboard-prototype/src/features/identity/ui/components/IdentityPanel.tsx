@@ -1,3 +1,5 @@
+import identityStyles from "../Identity.module.scss";
+import { scopedClasses } from "../../../../shared/ui/styles/scopedClasses";
 /**
  * 身份页面的面板外壳。
  *
@@ -14,6 +16,8 @@ import type { ReactNode } from "react";
 
 import { Panel } from "../../../../shared/ui/Panel";
 
+const styleModules = [identityStyles] as const;
+
 export type IdentityPanelProps = {
   readonly title: string;
   readonly subtitle?: string;
@@ -22,7 +26,11 @@ export type IdentityPanelProps = {
 
 export function IdentityPanel({ title, subtitle, children }: IdentityPanelProps) {
   return (
-    <Panel title={title} subtitle={subtitle} className="identity-panel">
+    <Panel
+      title={title}
+      subtitle={subtitle}
+      className={scopedClasses(styleModules, "identity-panel")}
+    >
       {children}
     </Panel>
   );

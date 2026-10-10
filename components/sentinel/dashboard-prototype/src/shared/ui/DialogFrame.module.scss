@@ -1,0 +1,21 @@
+// Private presentation ownership; colors are supplied by the selected skin.
+.dialog-frame {
+  /* Use the Sentinel surface instead of Astryx's neutral showcase surface. */
+  background: var(--sentinel-color-surface-base);
+  border: 1px solid var(--sentinel-color-dialog-frame-border);
+  border-radius: 14px;
+  color: var(--sentinel-color-dialog-frame-color);
+  box-shadow: 0 24px 70px var(--sentinel-color-dialog-frame-box-shadow);
+}
+.dialog-frame::backdrop {
+  background: var(--sentinel-color-dialog-frame-background);
+  backdrop-filter: blur(5px);
+}
+.dialog-frame-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  min-width: 0;
+}

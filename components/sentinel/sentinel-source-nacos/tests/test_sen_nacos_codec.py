@@ -42,7 +42,9 @@ from atlas_richie.sentinel.rules.system import SystemRule, SystemStrategy
 from atlas_richie.sentinel_source_nacos.codec import (
     NacosCodecError,
     NacosDecodeError,
+    NacosEncodeError,
     decode_rule_snapshot,
+    encode_rule_snapshot,
 )
 from atlas_richie.sentinel_source_nacos.config import (
     NacosRuleSourceConfig,
@@ -127,6 +129,147 @@ class TestDecodeSuccess:
         assert rule.scope is FlowScope.DIRECT
         assert rule.selector.pattern == "/api/orders"
         assert rule.selector.kind is SelectorKind.EXACT
+
+
+class TestEncodeSnapshot:
+    """Snapshot rules map deterministically to all five Nacos data ids."""
+
+    def test_five_rule_kinds_encode_and_decode_without_loss(
+        self, config: NacosRuleSourceConfig, rule_version: RuleVersion
+    ) -> None:
+        ids = _ids(config)
+        source = {
+            ids["flow"]: json.dumps(
+                [
+                    {
+                        "id": "flow-1",
+                        "resource": "orders/...",
+                        "priority": 7,
+                        "grade": 1,
+                        "count": 25,
+                        "controlBehavior": 2,
+                        "scope": 2,
+                        "scopeReference": "orders.lookup",
+                        "maxQueueingTimeMs": 300,
+                        "warmUpPeriodSec": 0,
+                    }
+                ]
+            ),
+            ids["degrade"]: json.dumps(
+                [
+                    {
+                        "id": "degrade-1",
+                        "resource": "/catalog/*",
+                        "priority": 4,
+                        "grade": 0,
+                        "count": 180,
+                        "timeWindow": 5000,
+                        "exceptionRatio": 0.25,
+                        "errorCountThreshold": 8,
+                        "slowCallThresholdMs": 180,
+                        "slowRatioThreshold": 0.3,
+                        "minRequestAmount": 12,
+                        "statIntervalMs": 2000,
+                        "recoveryTimeout": 3,
+                    }
+                ]
+            ),
+            ids["param_flow"]: json.dumps(
+                [
+                    {
+                        "id": "param-1",
+                        "resource": "/orders",
+                        "priority": 2,
+                        "grade": 1,
+                        "paramKeyType": 2,
+                        "paramIdx": 1,
+                        "paramKey": "x-tenant",
+                        "extractorId": "tenant-header",
+                        "count": 5,
+                        "controlIntervalMs": 750,
+                        "maxQueueingTimeMs": 50,
+                        "idleTtlMs": 6000,
+                        "overflow": False,
+                    }
+                ]
+            ),
+            ids["system"]: json.dumps(
+                [
+                    {
+                        "id": "system-1",
+                        "priority": 1,
+                        "strategy": 0,
+                        "highestSystemLoad": 0.85,
+                        "avgLoad": 2.5,
+                        "maxRt": 40,
+                        "qps": 300,
+                        "minRt": 5,
+                        "maxThread": 600,
+                    }
+                ]
+            ),
+            ids["authority"]: json.dumps(
+                [
+                    {
+                        "id": "authority-1",
+                        "resource": "/admin",
+                        "priority": 6,
+                        "limitApp": "console",
+                        "strategy": 1,
+                        "origins": ["trusted", "internal"],
+                        "defaultDeny": False,
+                    }
+                ]
+            ),
+        }
+        snapshot, warnings = decode_rule_snapshot(source, rule_version, config=config)
+
+        assert warnings == []
+        encoded = encode_rule_snapshot(snapshot, config=config)
+        assert set(encoded) == set(ids.values())
+        assert encoded == encode_rule_snapshot(snapshot, config=config)
+
+        decoded, round_trip_warnings = decode_rule_snapshot(
+            encoded, rule_version, config=config
+        )
+        assert round_trip_warnings == []
+        assert dict(decoded.rules) == dict(snapshot.rules)
+
+    def test_rejects_unrepresentable_flow_behavior_pair(
+        self, config: NacosRuleSourceConfig, rule_version: RuleVersion
+    ) -> None:
+        rule = FlowRule(
+            rule_id="flow-incompatible",
+            selector=ResourceSelector.exact("/orders"),
+            priority=0,
+            grade=FlowGrade.QPS,
+            threshold=10,
+            behavior=FlowBehavior.WARM_UP,
+            control=FlowControl.REJECT,
+        )
+        snapshot = RuleSnapshot(rule_version, {rule.rule_id: rule})
+
+        with pytest.raises(NacosEncodeError) as exc_info:
+            encode_rule_snapshot(snapshot, config=config)
+        assert exc_info.value.data_id == config.data_id_for("flow")
+        assert exc_info.value.rule_id == rule.rule_id
+
+    def test_rejects_non_finite_json_values(
+        self, config: NacosRuleSourceConfig, rule_version: RuleVersion
+    ) -> None:
+        rule = FlowRule(
+            rule_id="flow-nan",
+            selector=ResourceSelector.exact("/orders"),
+            priority=0,
+            grade=FlowGrade.QPS,
+            threshold=float("nan"),
+            behavior=FlowBehavior.REJECT,
+            control=FlowControl.REJECT,
+        )
+        snapshot = RuleSnapshot(rule_version, {rule.rule_id: rule})
+
+        with pytest.raises(NacosEncodeError):
+            encode_rule_snapshot(snapshot, config=config)
 
     def test_degrade_decode(self, config: NacosRuleSourceConfig, rule_version: RuleVersion) -> None:
         ids = _ids(config)

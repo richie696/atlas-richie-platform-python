@@ -7,9 +7,9 @@
  *
  * 1. 只 grep **带引号的中文字符串字面量**，漏掉 JSX 裸文本（`<h3>观测事实</h3>`）
  *    和模板字符串（`` `${n} 个应用` ``）。overview 因此被报成 5 条，实际 18 条。
- * 2. 把 `i18n/locales.ts` 和 `fixtures/*.ts` 也算进去。前者中文本该存在，
- *    后者是**演示数据内容**（事件标题、观测事实），按 `core/i18n/types.ts` 的
- *    归属规则**有意不迁**。
+ * 2. 把语言资源和 API/mock 场景数据也算进去。语言资源本来就包含中文；场景数据中的
+ *    环境、规则名称、自由文本和结构化观测事实是内容，不是 UI 文案，不能强行改写成
+ *    翻译键。`app/api` 因而从视图层扫描中排除；feature fixtures 本来不在视图根目录内。
  *
  * 两个错误方向相反，抵消之后总数看着"差不多"，于是没人发现。
  *
@@ -23,8 +23,9 @@
  *   枚举的中文形态是界面文案；而自由叙述（事件标题、观测结论）是数据。
  *   两者在源码里长得一模一样，只能逐条看。
  *
- * 排除的目录：`fixtures/`（演示数据，按 `core/i18n/types.ts` 的归属规则有意不译）
- * 与 `i18n/`（语言包本身，中文本该在那里）。
+ * 排除的目录：`app/api/`（Console wire contract 与中心化 mock 场景数据）以及
+ * `i18n/`（语言包本身，中文本该在那里）。自由文本必须按内容显示；只有封闭的事件
+ * code/category/severity 等领域变体映射到翻译 key。
  *
  * 排除的注释行：strip 后以 `*`、`//`、`/*`、`/**` 开头。行尾注释会被剥掉。
  *
@@ -54,11 +55,7 @@ const CJK = /[\u4e00-\u9fff]/;
  * 即使它被反引号包着。JS 解析器不管它出现在什么位置，会就地结束块注释。
  */
 function isComment(trimmed) {
-  return (
-    trimmed.startsWith("*") ||
-    trimmed.startsWith("//") ||
-    trimmed.startsWith("/*")
-  );
+  return trimmed.startsWith("*") || trimmed.startsWith("//") || trimmed.startsWith("/*");
   // 注意：JSX 块注释（`{/*`）**故意不在这里处理**——它需要跨行状态，
   // 而 `isComment` 是单行判断。先在这里返回的话，状态机永远设不上，
   // 多行注释的中间行就会被当成界面文案报出来。
@@ -74,11 +71,13 @@ const VIEW_ROOTS = [
   join(SRC, "shared", "ui"),
   ...featureDirs.map((dir) => join(dir, "ui")),
 ];
+/** API contracts and mock seed values are business data, not strings rendered as UI copy. */
+const VIEW_EXCLUDED_DIRECTORIES = new Set([join(SRC, "app", "api")]);
 
 /** 视图层之下的读模型与状态：中文可能是枚举标签（要迁），也可能是数据（不迁）。 */
 const MODEL_LAYERS = ["model", "state"];
 
-function collectFiles(dir) {
+function collectFiles(dir, excludedDirectories = new Set()) {
   const out = [];
   let entries;
   try {
@@ -88,8 +87,9 @@ function collectFiles(dir) {
   }
   for (const entry of entries) {
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...collectFiles(full));
-    else if (/\.tsx?$/.test(entry.name)) out.push(full);
+    if (entry.isDirectory()) {
+      if (!excludedDirectories.has(full)) out.push(...collectFiles(full, excludedDirectories));
+    } else if (/\.tsx?$/.test(entry.name)) out.push(full);
   }
   return out;
 }
@@ -117,7 +117,10 @@ function stripTrailingComment(line) {
 /** 收集一个目录下的 CJK 命中，按「视图层 / 读模型层」两级归类。 */
 function scan(roots, layer) {
   for (const root of roots) {
-    for (const file of collectFiles(root)) {
+    for (const file of collectFiles(
+      root,
+      layer === "view" ? VIEW_EXCLUDED_DIRECTORIES : undefined,
+    )) {
       const rel = relative(SRC, file).replaceAll("\\", "/");
       const feature = rel.startsWith("app/")
         ? "app"
@@ -165,14 +168,19 @@ function scan(roots, layer) {
  * 它们不是可翻译文案，留在源码里，审计不该把它们当成遗漏。
  */
 function isLocaleDisplayName(trimmed) {
-  return trimmed === '{ code: "zh-CN", label: "简体中文" },'
-    || trimmed === '{ code: "en-US", label: "English" },'
-    || trimmed === '{ code: "ja-JP", label: "日本語" },';
+  return (
+    trimmed === '{ code: "zh-CN", label: "简体中文" },' ||
+    trimmed === '{ code: "en-US", label: "English" },' ||
+    trimmed === '{ code: "ja-JP", label: "日本語" },'
+  );
 }
 
 const byFeature = new Map();
 scan(VIEW_ROOTS, "view");
-scan(featureDirs.flatMap((dir) => MODEL_LAYERS.map((l) => join(dir, l))), "model");
+scan(
+  featureDirs.flatMap((dir) => MODEL_LAYERS.map((l) => join(dir, l))),
+  "model",
+);
 
 const order = [...byFeature.keys()].sort((a, b) => {
   const x = byFeature.get(a);
@@ -183,9 +191,7 @@ const totalView = order.reduce((s, k) => s + byFeature.get(k).view.hits, 0);
 const totalModel = order.reduce((s, k) => s + byFeature.get(k).model.hits, 0);
 
 if (process.argv.includes("--summary")) {
-  console.log(
-    `${"feature".padEnd(14)}${"视图层".padStart(7)}${"读模型层".padStart(10)}   说明`,
-  );
+  console.log(`${"feature".padEnd(14)}${"视图层".padStart(7)}${"读模型层".padStart(10)}   说明`);
   console.log("─".repeat(56));
   for (const key of order) {
     const { view, model } = byFeature.get(key);
@@ -216,8 +222,7 @@ for (const key of order) {
     for (const line of model.lines) console.log(line);
   }
 }
+console.log(`\n合计 ${totalView + totalModel} 处（视图层 ${totalView} + 读模型层 ${totalModel}）`);
 console.log(
-  `\n合计 ${totalView + totalModel} 处（视图层 ${totalView} + 读模型层 ${totalModel}）`,
+  "app/api/ wire 与 mock 场景内容不作为界面文案；i18n/ 是语言资源本身，feature fixtures 不在视图扫描目录中。",
 );
-console.log("fixtures/ 与 i18n/ 不计入：前者是演示数据，后者是文案包本身。");
-

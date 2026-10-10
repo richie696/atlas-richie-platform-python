@@ -1,0 +1,323 @@
+// Private application chrome. Semantic hook classes remain for migration tests, not CSS ownership.
+.app-shell {
+  min-height: 100vh;
+}
+.topbar {
+  height: 60px;
+  display: flex;
+  align-items: stretch;
+  gap: 25px;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--sentinel-color-border);
+  background: var(--sentinel-color-header-background);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  box-shadow: 0 5px 22px var(--sentinel-color-header-shadow);
+  min-width: 0;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 20px;
+  font-weight: 650;
+  white-space: nowrap;
+  letter-spacing: -0.03em;
+}
+.brand strong {
+  color: var(--sentinel-color-accent);
+  font-weight: 700;
+}
+.brand-mark {
+  color: var(--sentinel-color-accent);
+  display: grid;
+  place-items: center;
+}
+.main-nav {
+  display: flex;
+  align-items: stretch;
+  gap: 11px;
+  margin-left: 24px;
+  min-width: 0;
+}
+.main-nav button {
+  display: flex;
+  /*
+   * Astryx buttons use a compact intrinsic height by default.  The main
+   * navigation is a full-height topbar slot, so let each tab fill that slot
+   * while keeping its label/icon centered by the flex alignment above.
+   */
+  height: 100%;
+  min-height: 0;
+  gap: 7px;
+  align-items: center;
+  padding: 0 13px;
+  color: var(--sentinel-color-nav-text);
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  white-space: nowrap;
+}
+.main-nav button:hover {
+  color: var(--sentinel-color-nav-hover-text);
+  background: var(--sentinel-color-nav-hover-background);
+}
+.main-nav button:global(.active) {
+  color: var(--sentinel-color-accent);
+  border-color: var(--sentinel-color-accent);
+  font-weight: 650;
+}
+.main-nav button svg {
+  display: none;
+}
+.header-info {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 19px;
+  font-size: 12px;
+  color: var(--sentinel-color-header-text);
+  white-space: nowrap;
+  flex: none;
+}
+.locale-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--sentinel-color-locale-label);
+  font-size: 11px;
+}
+.browser-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.header-info .clock {
+  padding-left: 18px;
+  border-left: 1px solid var(--sentinel-color-border);
+}
+.avatar {
+  display: grid;
+  place-items: center;
+  background: var(--sentinel-color-avatar-background);
+  border: 1px solid var(--sentinel-color-avatar-border);
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+}
+.user-menu {
+  position: relative;
+  flex: none;
+}
+.user-menu-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 10px);
+  right: 0;
+  display: grid;
+  gap: 8px;
+  width: min(280px, calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid var(--sentinel-color-border);
+  border-radius: var(--sentinel-radius-panel, 12px);
+  background: var(--sentinel-color-panel-background, var(--sentinel-color-header-background));
+  box-shadow: 0 12px 32px var(--sentinel-color-header-shadow);
+  white-space: normal;
+}
+.user-menu-identity {
+  display: grid;
+  gap: 3px;
+  padding: 4px 6px 10px;
+  border-bottom: 1px solid var(--sentinel-color-border);
+}
+.user-menu-username {
+  overflow-wrap: anywhere;
+  color: var(--sentinel-color-header-text);
+  font-size: 14px;
+  font-weight: 650;
+}
+.user-menu-role {
+  color: var(--sentinel-color-locale-label);
+  font-size: 12px;
+}
+.user-menu-action {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 8px;
+}
+.demo-banner {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 32px;
+  background: var(--sentinel-color-demo-background);
+  border-bottom: 1px solid var(--sentinel-color-demo-border);
+  color: var(--sentinel-color-demo-text);
+  font-size: 12px;
+}
+.demo-banner svg {
+  flex: none;
+  color: var(--sentinel-color-accent);
+}
+.content {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 24px 28px 38px;
+}
+
+// Route-specific shell spacing is owned here, not by a global feature selector.
+.content:global(.page-overview),
+.content:global(.page-applications) {
+  padding-top: 13px;
+}
+.footer {
+  display: flex;
+  justify-content: space-between;
+  padding: 16px 30px;
+  border-top: 1px solid var(--sentinel-color-border);
+  color: var(--sentinel-color-footer-text);
+  font-size: 11px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+// Do not clip translated navigation or push the account action outside the viewport.
+@media (max-width: 1500px) {
+  .topbar {
+    height: auto;
+    min-height: 60px;
+    flex-wrap: wrap;
+    column-gap: 16px;
+    row-gap: 0;
+  }
+  .brand,
+  .header-info {
+    min-height: 56px;
+  }
+  .main-nav {
+    order: 3;
+    width: 100%;
+    height: 44px;
+    margin-left: 0;
+    overflow-x: auto;
+    gap: 6px;
+  }
+  .main-nav button {
+    flex: none;
+  }
+  .clock {
+    display: none;
+  }
+}
+
+@media (max-width: 1250px) {
+  .topbar {
+    gap: 12px;
+    padding: 0 18px;
+  }
+  .main-nav {
+    margin-left: 0;
+    gap: 0;
+  }
+  .main-nav button {
+    padding: 0 9px;
+    font-size: 12px;
+  }
+  .brand {
+    font-size: 17px;
+  }
+  .clock {
+    display: none;
+  }
+  .content {
+    padding: 20px 18px;
+  }
+}
+
+@media (max-width: 850px) {
+  .topbar {
+    height: auto;
+    min-height: 56px;
+    flex-wrap: wrap;
+    gap: 0;
+    position: static;
+  }
+  .brand {
+    height: 52px;
+  }
+  .header-info {
+    height: auto;
+    min-height: 44px;
+    width: 100%;
+    gap: 12px;
+    justify-content: space-between;
+    padding-block: 4px;
+    flex-wrap: wrap;
+  }
+  .main-nav {
+    order: 3;
+    width: 100%;
+    height: 42px;
+    overflow: auto;
+    justify-content: space-between;
+  }
+  .main-nav button {
+    flex: none;
+  }
+  .main-nav button svg {
+    display: inline;
+  }
+  .demo-banner {
+    padding: 8px 18px;
+  }
+}
+
+@media (max-width: 560px) {
+  .topbar {
+    padding: 0 12px;
+  }
+  .brand {
+    font-size: 16px;
+  }
+  .header-info {
+    gap: 7px;
+  }
+  .locale-control {
+    min-width: 0;
+  }
+  .locale-control > span {
+    display: none;
+  }
+  .browser-status {
+    font-size: 11px;
+    white-space: normal;
+  }
+  .main-nav {
+    justify-content: flex-start;
+    gap: 7px;
+  }
+  .main-nav button {
+    padding: 0 6px;
+    font-size: 11px;
+  }
+  .main-nav button svg {
+    display: none;
+  }
+  .demo-banner {
+    font-size: 11px;
+  }
+  .content {
+    padding: 16px 12px 30px;
+  }
+  .footer {
+    padding: 15px 12px;
+  }
+  .footer span {
+    display: none;
+  }
+}

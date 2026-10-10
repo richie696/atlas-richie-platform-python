@@ -21,7 +21,7 @@
  */
 import { useCallback, useMemo } from "react";
 
-import { ALL_APPLICATIONS, ROUTE, type TimeRangeId } from "../../../app/router/route.constants";
+import { ALL_APPLICATIONS, ROUTE, type TimeRangeId } from "../../../shared/types/navigation";
 import type { Navigate } from "../../../shared/types/dashboard";
 import {
   attentionDrilldownAppId,
@@ -50,7 +50,7 @@ export interface FleetOverview {
   readonly applicationRows: readonly ApplicationSummary[];
   /** 筛选下拉的候选集。 */
   readonly appOptions: readonly { readonly id: string; readonly label: string }[];
-  /** 当前时间窗口。趋势面板据此决定「示例窗口」还是发布前后对比。 */
+  /** 当前时间窗口；它本身不能证明存在发布事件或发布前后对比样本。 */
   readonly window: TimeRangeId;
   /** 异常摘要与表格区共用的下钻目标应用 id。 */
   readonly drilldownAppId: string;

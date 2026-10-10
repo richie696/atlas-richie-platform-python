@@ -1,0 +1,79 @@
+// Astryx 0.6.1 markup dependencies live here, not in feature styles.
+// Field.tsx: visible label/help, control, optional detached status are direct children.
+// Full-row slots contain exactly one Field. Do not use this contract with hidden labels.
+.sentinel-form-fields > .astryx-field,
+.sentinel-form-fields > .sentinel-form-slot > .astryx-field {
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  row-gap: var(--sentinel-space-1);
+  min-width: 0;
+  padding-block-end: var(--sentinel-space-2);
+}
+.sentinel-form-fields > .sentinel-form-slot > .astryx-field {
+  grid-row: 1 / -1;
+}
+.sentinel-form-fields .astryx-field > :nth-child(2) {
+  align-self: start;
+}
+// The official input wrapper already draws its keyboard/focus-within border.
+// Suppress only the nested native input outline, not the wrapper's focus indicator.
+.astryx-text-field input:focus-visible,
+.astryx-number-input input:focus-visible {
+  outline: none;
+  outline-offset: 0;
+}
+.astryx-button svg {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+// Astryx Button has two text spans. This explicit presentation slot lets event rows
+// use a grid without scattering wrapper-sensitive selectors throughout features.
+.sentinel-event-trigger > span > span {
+  display: contents;
+}
+
+// Public Astryx layout slots used by shared DialogFrame and identity selector sizing.
+.dialog-frame .astryx-layout {
+  width: 100%;
+  min-width: 0;
+}
+.dialog-frame .astryx-layout-header > div {
+  /* DialogHeader's close action and title use negative compensation margins.
+     Restore the frame's header inset so neither one escapes the surface. */
+  box-sizing: border-box;
+  padding: 14px 22px 12px;
+}
+.dialog-frame .astryx-layout-header h2 {
+  color: var(--sentinel-color-dialog-frame-color-2);
+}
+.dialog-frame .astryx-layout-header .astryx-text {
+  color: var(--sentinel-color-text-muted);
+}
+.dialog-frame .astryx-layout-header button[aria-label] {
+  color: var(--sentinel-color-dialog-frame-color-3);
+}
+.dialog-frame .astryx-layout-header button[aria-label]:hover {
+  color: var(--sentinel-color-accent);
+  background: var(--sentinel-color-dialog-frame-background-2);
+}
+.dialog-frame .astryx-layout-content {
+  padding: 20px 22px 24px;
+  background: var(--sentinel-color-dialog-frame-background-3);
+}
+.dialog-frame .astryx-layout-footer {
+  border-block-start-color: var(--sentinel-color-border);
+  background: var(--sentinel-color-dialog-frame-background-4);
+}
+.dialog-frame .astryx-layout-footer > div {
+  padding: 14px 22px;
+}
+.identity-select > .astryx-field {
+  width: 100%;
+}
+[data-console-table-scroll] {
+  // Public Table transformScrollWrapper htmlProps identifies the actual vendor-owned scroller.
+  overscroll-behavior-inline: contain;
+  scroll-padding-inline: 12px;
+}

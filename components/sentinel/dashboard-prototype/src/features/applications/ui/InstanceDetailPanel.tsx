@@ -1,3 +1,6 @@
+import presentationStyles from "../../../shared/ui/styles/Presentation.module.scss";
+import applicationsStyles from "./Applications.module.scss";
+import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 /**
  * 选中实例的详情面板：采集层级切换 + 双轴指标图 + 当前流控规则入口。
  *
@@ -11,7 +14,7 @@
  * 两处 JSX 里。
  */
 import { InfoIcon as Info } from "@phosphor-icons/react";
-import type { Translate } from "../../../app/i18n/types";
+import type { Translate, TranslationKey } from "../../../shared/types/translation";
 
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { LinkButton } from "../../../shared/ui/LinkButton";
@@ -23,6 +26,9 @@ import { INSTANCE_SCOPES, type InstanceRecord, type InstanceScope } from "../mod
 import { useTranslation } from "react-i18next";
 
 import { isScopeSupported } from "../model/instancePolicy";
+import { instanceStatusLabelKey } from "../presentation/instanceStatus";
+
+const styleModules = [presentationStyles, applicationsStyles] as const;
 
 /**
  * 采集层级的展示标签。
@@ -30,7 +36,7 @@ import { isScopeSupported } from "../model/instancePolicy";
  * 文案属于 UI 层，不进协议常量。阶段 1.3 建立统一语言资源后，这里由 `t()` 取代；
  * 层级本身已经是协议值，换语言不会再影响状态判断。
  */
-const SCOPE_LABEL_KEY: Readonly<Record<InstanceScope, string>> = Object.freeze({
+const SCOPE_LABEL_KEY: Readonly<Record<InstanceScope, TranslationKey>> = Object.freeze({
   host: "applications.scope.host",
   container: "applications.scope.container",
   process: "applications.scope.process",
@@ -68,8 +74,13 @@ export function InstanceDetailPanel({
   const { t } = useTranslation();
   if (!instance) {
     return (
-      <Panel title={t("applications.detail.title")} subtitle={t("applications.detail.emptySubtitle")}>
-        <div className="empty">{t("applications.detail.emptyBody")}</div>
+      <Panel
+        title={t("applications.detail.title")}
+        subtitle={t("applications.detail.emptySubtitle")}
+      >
+        <div className={scopedClasses(styleModules, "empty")}>
+          {t("applications.detail.emptyBody")}
+        </div>
       </Panel>
     );
   }
@@ -79,12 +90,12 @@ export function InstanceDetailPanel({
       title={instance.id}
       subtitle={t("applications.detail.subtitle", { host: instance.host, id: instance.id })}
       action={
-        <div className="segments">
+        <div className={scopedClasses(styleModules, "segments")}>
           {INSTANCE_SCOPES.map((name) => (
             <ActionButton
               type="button"
               key={name}
-              className={scope === name ? "active" : ""}
+              className={scopedClasses(styleModules, scope === name ? "active" : "")}
               onClick={() => onScopeChange(name)}
             >
               {t(SCOPE_LABEL_KEY[name])}
@@ -92,19 +103,20 @@ export function InstanceDetailPanel({
           ))}
         </div>
       }
-      className="detail-panel"
+      className={scopedClasses(styleModules, "detail-panel")}
     >
-      <div className="detail-status">
-        <Status tone={instance.status}>{instance.statusLabel}</Status>
+      <div className={scopedClasses(styleModules, "detail-status")}>
+        <Status tone={instance.status}>{t(instanceStatusLabelKey(instance))}</Status>
         <span>{scopeStatusText(scope, t)}</span>
       </div>
       {isScopeSupported(scope) ? (
         <>
           <h3>
-            {t("applications.detail.usage")} {" "}
+            {t("applications.detail.usage")}{" "}
             <small>
-              <i className="dot-blue" /> CPU　
-              <i className="dot-amber" /> {t("applications.detail.memory")}
+              <i className={scopedClasses(styleModules, "dot-blue")} /> CPU　
+              <i className={scopedClasses(styleModules, "dot-amber")} />{" "}
+              {t("applications.detail.memory")}
             </small>
           </h3>
           <Trend
@@ -118,8 +130,9 @@ export function InstanceDetailPanel({
           <h3>
             {t("applications.detail.http")}
             <small>
-              <i className="dot-blue" /> QPS　
-              <i className="dot-red" /> {t("applications.detail.blockedRate")}
+              <i className={scopedClasses(styleModules, "dot-blue")} /> QPS　
+              <i className={scopedClasses(styleModules, "dot-red")} />{" "}
+              {t("applications.detail.blockedRate")}
             </small>
           </h3>
           <Trend
@@ -133,12 +146,11 @@ export function InstanceDetailPanel({
           />
         </>
       ) : (
-        <div className="scope-empty">
-          <Info size={20} />{" "}
-          {t("applications.detail.scopeNote")}
+        <div className={scopedClasses(styleModules, "scope-empty")}>
+          <Info size={20} /> {t("applications.detail.scopeNote")}
         </div>
       )}
-      <div className="detail-rule">
+      <div className={scopedClasses(styleModules, "detail-rule")}>
         <b>{t("applications.detail.currentRule")}</b>
         <span>{t("applications.detail.ruleThreshold")}</span>
         <LinkButton onClick={onViewRules}>{t("applications.action.viewRules")}</LinkButton>

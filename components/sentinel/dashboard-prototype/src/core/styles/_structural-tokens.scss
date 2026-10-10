@@ -1,0 +1,31 @@
+// Structure is independent of color skin. Modules consume these semantic custom properties.
+:root {
+  --sentinel-font-body: Inter, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --sentinel-space-1: 4px;
+  --sentinel-space-2: 8px;
+  --sentinel-space-3: 12px;
+  --sentinel-space-4: 16px;
+  --sentinel-space-5: 20px;
+  --sentinel-space-6: 24px;
+  --sentinel-space-8: 32px;
+  --sentinel-radius-control: 8px;
+  --sentinel-radius-panel: 10px;
+  --sentinel-radius-dialog: 14px;
+  --sentinel-type-body-size: 14px;
+  --sentinel-type-body-leading: 1.5;
+  --sentinel-motion-fast: 150ms;
+  --sentinel-layout-min-width: 320px;
+  --sentinel-layer-navigation: 20;
+  --sentinel-navigation-scroll-offset: 72px;
+}
+
+@media (max-width: 1500px) {
+  :root {
+    --sentinel-navigation-scroll-offset: 112px;
+  }
+}
+@media (max-width: 850px) {
+  :root {
+    --sentinel-navigation-scroll-offset: 12px;
+  }
+}

@@ -1,6 +1,11 @@
+import dialogFrameStyles from "./DialogFrame.module.scss";
+import { scopedClasses } from "./styles/scopedClasses";
 import { Dialog, DialogHeader, type DialogPurpose } from "@astryxdesign/core/Dialog";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
+import { useFocusTrap } from "@astryxdesign/core/hooks";
 import type { ReactNode } from "react";
+
+const styleModules = [dialogFrameStyles] as const;
 
 type DialogFrameProps = {
   /** Whether the modal is currently presented. */
@@ -19,10 +24,12 @@ type DialogFrameProps = {
   purpose?: DialogPurpose;
   /** Preferred surface width in CSS pixels or a CSS length. */
   width?: number | string;
-  /** Maximum body height before the content slot scrolls. */
+  /** Maximum surface height; only the body scrolls when content exceeds this bound. */
   maxHeight?: number | string;
   /** Optional hook for feature-specific styling on the dialog surface. */
   className?: string;
+  /** An issued command is unresolved: suppress dismissal until its owner confirms the outcome. */
+  isBusy?: boolean;
 };
 
 /**
@@ -43,24 +50,38 @@ export function DialogFrame({
   width = 620,
   maxHeight = "90dvh",
   className,
+  isBusy = false,
 }: DialogFrameProps) {
+  // Native modality makes the background inert, but Chromium still moves Tab
+  // to browser chrome at the boundary. Reuse the vendor's public Tab-cycle hook;
+  // omit onEscape so Dialog remains the sole dismissal/return-focus owner.
+  const { containerRef } = useFocusTrap<HTMLDialogElement>({ isActive: isOpen });
+  const requestOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen && isBusy) return;
+    onOpenChange(nextOpen);
+  };
   return (
     <Dialog
+      ref={containerRef}
       isOpen={isOpen}
-      onOpenChange={onOpenChange}
-      purpose={purpose}
+      onOpenChange={requestOpenChange}
+      purpose={isBusy ? "required" : purpose}
+      aria-busy={isBusy}
       width={width}
       maxHeight={maxHeight}
       padding={0}
-      className={className ? `dialog-frame ${className}` : "dialog-frame"}
+      className={scopedClasses(
+        styleModules,
+        className ? `dialog-frame ${className}` : "dialog-frame",
+      )}
     >
       <Layout
-        height="auto"
+        height="fill"
         header={
           <DialogHeader
             title={title}
             subtitle={subtitle}
-            onOpenChange={onOpenChange}
+            onOpenChange={isBusy ? undefined : requestOpenChange}
             hasDivider
           />
         }
@@ -71,7 +92,7 @@ export function DialogFrame({
         }
         footer={
           <LayoutFooter hasDivider padding={3}>
-            <div className="dialog-frame-actions">{actions}</div>
+            <div className={scopedClasses(styleModules, "dialog-frame-actions")}>{actions}</div>
           </LayoutFooter>
         }
       />

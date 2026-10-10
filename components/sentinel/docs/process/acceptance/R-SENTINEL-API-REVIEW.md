@@ -193,6 +193,17 @@
 | `SentinelDashboard` | loopback + admin token + audit log |
 | `run(host, port)` | 起 HTTP server |
 
+### 2.5 `atlas_richie.sentinel_source_nacos` (additive M6.1.8)
+
+| Symbol | 备注 |
+| ------ | ---- |
+| `encode_rule_snapshot(snapshot, *, config)` | 纯函数；将五类 Sentinel rule values 映射到完整、确定性的 Nacos data-id JSON；无法无损表达则拒绝；不触网络、不发布 |
+| `NacosEncodeError` | `NacosCodecError` 子类；只携带 `data_id` 与 `rule_id`，不包含规则正文/凭证/网络信息 |
+
+该增量只增加 `sentinel-source-nacos` extension 的编码入口，不改变主包
+`atlas_richie.sentinel.*` 锁定 API，也不改变 `NacosRuleSource` 生命周期/签名。
+它不是 validation receipt、CAS 或 publication API；真实配置源写入仍需独立授权实现与验收。
+
 ---
 
 ## 3. Public API 不变量(API review 重点)

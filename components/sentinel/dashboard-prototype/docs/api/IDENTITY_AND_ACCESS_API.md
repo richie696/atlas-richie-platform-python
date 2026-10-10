@@ -1,5 +1,13 @@
 # Sentinel Dashboard 控制面初始化与身份 API 契约（V1 草案）
 
+> **历史草案，仅保留决策沿革，不是当前 API 实现规范。** 本文的路由、bootstrap phase、
+> token/cookie 选择、账号操作和初始化数据模型均早于当前 feature Port/Console API，
+> 与现有端点可能冲突；不得据此新增或实现 Python 路由。当前唯一 wire 收敛入口是
+> [Console API 契约 §9](../../../docs/CONSOLE_API_CONTRACT.md)，生成 schema 为
+> [console-api.openapi.json](../../../docs/protocol/console-api.openapi.json)。页面需求以
+> [Dashboard 页面能力与接口设计](../../../docs/Dashboard页面能力与接口设计.md) 为准；
+> 实现事实以 `src/features/*/api/*Endpoints.ts` 与 Python `sentinel_console/api/` 为准。
+
 本契约服务于 Dashboard 与 Python 管理后台之间的控制面。Dashboard 浏览器不直接连接 Nacos/Consul，也不持久化或回显密码、密码哈希、访问令牌、数据库口令或初始化密钥。规则源可使用部署凭证引用、一次性直接录入的凭证，或不启用认证；后两者均由后台在 TLS 请求中接收并按受保护安装配置处理。所有写操作由后台再次鉴权、校验并审计；前端路由隐藏只是交互优化，不是安全边界。
 
 Dashboard 已不是单纯的配置中心编辑器。它是 Sentinel 的管理控制面：配置中心持有**当前生效规则**，关系数据库持有**控制面事实**，指标/事件由 Agent Reporting 与后续指标存储承担。

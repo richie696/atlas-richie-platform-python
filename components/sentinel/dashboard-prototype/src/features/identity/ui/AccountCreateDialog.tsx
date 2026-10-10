@@ -1,3 +1,6 @@
+import actionButtonStyles from "../../../shared/ui/ActionButton.module.scss";
+import identityStyles from "./Identity.module.scss";
+import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 /**
  * 新建账号对话框。
  *
@@ -15,9 +18,10 @@ import { useId, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { DialogFrame } from "../../../shared/ui/DialogFrame";
-import { Select } from "../../../shared/ui/Select";
-import { TextField } from "../../../shared/ui/TextField";
-import { IDENTITY_ROLES, validateAccountDraft, type AccountDraft } from "../model/account";
+import { validateAccountDraft, type AccountDraft } from "../model/account";
+import { AccountFields } from "./components/AccountFields";
+
+const styleModules = [actionButtonStyles, identityStyles] as const;
 
 type AccountCreateForm = AccountDraft;
 
@@ -58,10 +62,6 @@ export function AccountCreateDialog({
     onOpenChange(true);
   };
 
-  const updateDraft = <K extends keyof AccountCreateForm>(key: K, value: AccountCreateForm[K]) => {
-    setDraft((current) => ({ ...current, [key]: value }));
-  };
-
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const issues = validateAccountDraft(draft);
@@ -85,39 +85,30 @@ export function AccountCreateDialog({
       subtitle={t("accountDialog.subtitle")}
       actions={
         <>
-          <ActionButton className="secondary-button" type="button" onClick={close}>
+          <ActionButton
+            className={scopedClasses(styleModules, "secondary-button")}
+            type="button"
+            onClick={close}
+          >
             {t("accountDialog.action.cancel")}
           </ActionButton>
-          <ActionButton className="primary-button" type="submit" form={formId}>
+          <ActionButton
+            className={scopedClasses(styleModules, "primary-button")}
+            type="submit"
+            form={formId}
+          >
             {t("accountDialog.action.create")}
           </ActionButton>
         </>
       }
     >
-      <form id={formId} className="account-dialog-form" onSubmit={submit}>
-        <TextField
-          label={t("accountDialog.field.username")}
-          value={draft.username}
-          onChange={(value) => updateDraft("username", value)}
-          autoComplete="username"
-        />
-        <TextField
-          label={t("accountDialog.field.password")}
-          type="password"
-          autoComplete="new-password"
-          value={draft.password}
-          onChange={(value) => updateDraft("password", value)}
-        />
-        <Select
-          label={t("accountDialog.field.role")}
-          value={draft.roleId}
-          onChange={(value) => updateDraft("roleId", value)}
-          options={IDENTITY_ROLES.map((role) => ({
-            value: role.id,
-            label: t(role.labelKey),
-          }))}
-        />
-        <p className="account-dialog-password-note">
+      <form
+        id={formId}
+        className={scopedClasses(styleModules, "account-dialog-form")}
+        onSubmit={submit}
+      >
+        <AccountFields draft={draft} onChange={setDraft} />
+        <p className={scopedClasses(styleModules, "account-dialog-password-note")}>
           {t("accountDialog.passwordHint")}
         </p>
       </form>

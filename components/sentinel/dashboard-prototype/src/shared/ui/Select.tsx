@@ -1,6 +1,12 @@
+import selectStyles from "./Select.module.scss";
+import { scopedClasses } from "./styles/scopedClasses";
 import { Selector } from "@astryxdesign/core/Selector";
+import { resolveChoiceValue } from "./valueSelection";
 
-export type SelectOption = string | { value: string | number; label: string };
+const styleModules = [selectStyles] as const;
+
+export type SelectOption<Value extends string = string> =
+  Value | { readonly value: Value; readonly label: string };
 
 /**
  * Astryx `Selector` 的 Dashboard 适配层。
@@ -15,11 +21,12 @@ export type SelectProps<V extends string = string> = {
   readonly label: string;
   readonly value: V;
   readonly onChange: (value: V) => void;
-  readonly options: ReadonlyArray<SelectOption>;
+  readonly options: readonly SelectOption<NoInfer<V>>[];
   readonly hint?: string;
   readonly disabled?: boolean;
   readonly className?: string;
   readonly isLabelHidden?: boolean;
+  readonly error?: string;
 };
 
 export function Select<V extends string = string>({
@@ -31,22 +38,28 @@ export function Select<V extends string = string>({
   disabled = false,
   className,
   isLabelHidden = false,
+  error,
 }: SelectProps<V>) {
   const selectorOptions = options.map((item) =>
-    typeof item === "string" ? item : { value: String(item.value), label: item.label },
+    typeof item === "string" ? item : { value: item.value, label: item.label },
   );
-  // Astryx Selector 的值域是 string。协议值类型（如 TimeRangeId）在这里一次性收窄，
-  // 上层 onChange 仍拿到 V，避免每个调用点各写一次转型。
+  // Only identities from the provided catalog may cross the vendor string boundary.
   return (
     <Selector
-      className={className ?? "select-control"}
+      width="100%"
+      className={scopedClasses(styleModules, className ?? "select-control")}
       label={label}
       isLabelHidden={isLabelHidden}
       description={hint}
       value={value}
       options={selectorOptions}
-      onChange={onChange as (value: string) => void}
+      onChange={(candidate) => {
+        const next = resolveChoiceValue(options, candidate);
+        if (next !== undefined) onChange(next);
+      }}
       isDisabled={disabled}
+      status={error ? { type: "error", message: error } : undefined}
+      statusVariant="detached"
       variant="input"
       renderValue={(option) => option.label ?? option.value}
     />

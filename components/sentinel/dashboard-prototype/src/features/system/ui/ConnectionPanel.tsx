@@ -1,3 +1,5 @@
+import presentationStyles from "../../../shared/ui/styles/Presentation.module.scss";
+import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 /**
  * 「连接与采集」面板：顶部四个概览数字 + 连接与能力状态表。
  *
@@ -18,15 +20,17 @@ import { NumberCard } from "../../../shared/ui/NumberCard";
 import { Panel } from "../../../shared/ui/Panel";
 import { Status } from "../../../shared/ui/Status";
 import type { Navigate } from "../../../shared/types/dashboard";
-import { ROUTE } from "../../../app/router/route.constants";
+import { ROUTE } from "../../../shared/types/navigation";
 import {
   CONNECTION_HEADERS,
   CONNECTION_STATE_LABEL_KEY,
   connectionStatusTone,
   type ConnectionStatus,
   type ConnectionSummaryCard,
-} from "../model/systemStatus";
+} from "../presentation/systemPresentation";
 import { useTranslation } from "react-i18next";
+
+const styleModules = [presentationStyles] as const;
 
 export interface ConnectionPanelProps {
   readonly cards: readonly ConnectionSummaryCard[];
@@ -38,7 +42,7 @@ export function ConnectionPanel({ cards, connections, navigate }: ConnectionPane
   const { t } = useTranslation();
   return (
     <>
-      <div className="number-grid">
+      <div className={scopedClasses(styleModules, "number-grid")}>
         {cards.map((card) => (
           <NumberCard
             key={card.label}
@@ -50,10 +54,7 @@ export function ConnectionPanel({ cards, connections, navigate }: ConnectionPane
           />
         ))}
       </div>
-      <Panel
-        title={t("system.connection.title")}
-        subtitle={t("system.connection.subtitle")}
-      >
+      <Panel title={t("system.connection.title")} subtitle={t("system.connection.subtitle")}>
         {/* 列头复制成可变数组是 `DataTable` 的 props 形状要求；model 侧保持只读。 */}
         <Table
           heads={CONNECTION_HEADERS.map((key) => t(key))}
@@ -75,7 +76,7 @@ export function ConnectionPanel({ cards, connections, navigate }: ConnectionPane
           ))}
         />
       </Panel>
-      <div className="bottom-note">
+      <div className={scopedClasses(styleModules, "bottom-note")}>
         <Info size={18} /> {t("system.connection.note")}
         <LinkButton onClick={() => navigate(ROUTE.Rules)}>
           {t("system.connection.action.openRules")}

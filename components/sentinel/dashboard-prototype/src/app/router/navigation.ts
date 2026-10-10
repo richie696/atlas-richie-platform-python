@@ -22,10 +22,19 @@ import {
 import type { Icon } from "@phosphor-icons/react";
 
 import {
+  accessFor,
+  isMainNavRouteId,
   MAIN_NAVIGATION,
+  ROUTE,
   type MainNavRouteId,
   type RouteId,
 } from "./route.constants";
+import {
+  decideControlPlaneAccess,
+  type ControlPlaneAccessState,
+  type SessionIdentity,
+} from "../../features/identity/authentication";
+import type { TranslationKey } from "../../shared/types/translation";
 
 /** 每个主导航路由的图标。缺项或多项都会导致类型检查失败。 */
 export const NAVIGATION_ICONS: Readonly<Record<MainNavRouteId, Icon>> = Object.freeze({
@@ -41,12 +50,52 @@ export const NAVIGATION_ICONS: Readonly<Record<MainNavRouteId, Icon>> = Object.f
 export function navigationItemsWithIcons(): readonly {
   readonly id: RouteId;
   readonly path: string;
-  readonly i18nKey: string;
+  readonly access: import("./route.constants").RouteAccess;
+  readonly i18nKey: TranslationKey;
   readonly icon: Icon;
 }[] {
   return MAIN_NAVIGATION.map((item) => {
-    // MAIN_NAVIGATION 与 MAIN_NAVIGATION_IDS 出自同一张静态表，主导航 id 必然在图标表中。
-    const icon = NAVIGATION_ICONS[item.id as MainNavRouteId];
-    return { id: item.id, path: item.path, i18nKey: item.i18nKey, icon };
+    if (!isMainNavRouteId(item.id)) throw new Error("Invalid primary navigation route");
+    const icon = NAVIGATION_ICONS[item.id];
+    return { id: item.id, path: item.path, access: item.access, i18nKey: item.i18nKey, icon };
   });
+}
+
+/** Keep administrator destinations out of the viewer shell without replacing route guards. */
+export function navigationItemsForAccess(canAdminister: boolean): readonly {
+  readonly id: RouteId;
+  readonly path: string;
+  readonly access: import("./route.constants").RouteAccess;
+  readonly i18nKey: TranslationKey;
+  readonly icon: Icon;
+}[] {
+  return navigationItemsWithIcons().filter((item) => item.access !== "admin" || canAdminister);
+}
+
+/** Send the session shortcut to an authorized destination for the resolved role. */
+export function sessionShortcutRoute(canAdminister: boolean): RouteId {
+  return canAdminister ? ROUTE.Accounts : ROUTE.ChangePassword;
+}
+
+/** Preserve the one-time setup form only while rechecking a previously confirmed open gate. */
+export function mayPreserveAuthorizedSetupRoute(access: ControlPlaneAccessState): boolean {
+  return (
+    access.phase === "checking" &&
+    access.previousFacts?.kind === "uninitialized" &&
+    access.previousFacts.setupAvailable &&
+    access.previousFacts.operatorAuthorized
+  );
+}
+
+/** Re-authorize a local return destination against the newly confirmed identity. */
+export function routeAfterAuthentication(
+  returnTo: RouteId | undefined,
+  identity: SessionIdentity,
+): RouteId {
+  if (!returnTo || returnTo === ROUTE.Login || returnTo === ROUTE.Setup) return ROUTE.Overview;
+  const decision = decideControlPlaneAccess(accessFor(returnTo), {
+    phase: "resolved",
+    facts: { kind: "authenticated", identity },
+  });
+  return decision.kind === "allow" ? returnTo : ROUTE.Overview;
 }

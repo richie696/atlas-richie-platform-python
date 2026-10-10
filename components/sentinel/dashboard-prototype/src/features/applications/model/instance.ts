@@ -10,18 +10,17 @@
  * 旧实现的三个问题
  * --------------
  * 1. `scope` 状态直接存中文（`"容器"`）：按钮文案变成了状态值本身，换语言时状态与比较
- *    条件一起失效。这里改为协议值（`host` / `container` / `process`），标签由 UI 提供。
+ *    条件一起失效。这里改为协议值（`host` / `container` / `process`），标签由 presentation 提供。
  * 2. 记录形状没有类型：实例状态是 `string`，`row.status !== "healthy"` 这种判断散在
  *    组件里，写错一个字不会报错。这里把健康等级收敛为字面量联合。
- * 3. 只有一个应用有实例数据，这个事实被写成两处 `app.id === "order-service"` 字面量
- *    比较。现在是具名协议常量 + `instancePolicy.hasInstanceSamples`。
+ * 3. 实例集合来自当前环境与应用的目录查询，不在领域模型里绑定某个演示应用。
  *
  * 关于字段名与口径（为什么与 `REWRITE_PLAN.md` §4.2 不完全一致）
  * ----------------------------------------------------
  * §4.2 的目标字段是 `cpuUsageRatio` / `memoryUsedBytes` / `rtP95Ms` / `blockedRatePercent`，
  * CPU 与内存为 0..1 比率。当前原型渲染的是**百分数整数**（矩阵单元格里直接输出 `92%`），
- * 状态文案也由数据自带。本轮只做代码结构改造、视觉基线必须逐字节不变，因此字段名与取值
- * 口径随数据原样保留；接入 Console API 时由 `applications.mapper` 一次性映射到 §4.2 的
+ * 状态标签由实例观测的数值事实映射到三语语言资源。本轮只做代码结构改造、视觉基线必须逐字节不变，
+ * 因此字段名与取值口径随数据原样保留；接入 Console API 时由 `applications.mapper` 一次性映射到 §4.2 的
  * 正式字段，不在 UI 层散落口径换算。
  */
 
@@ -64,12 +63,6 @@ export const INSTANCE_SCOPES: readonly InstanceScope[] = Object.freeze([
 /** 详情面板默认展示的层级。原型只有容器级采样数据，见 `isScopeSupported`。 */
 export const DEFAULT_INSTANCE_SCOPE = INSTANCE_SCOPE.Container;
 
-/** 唯一有实例示例数据的应用。其余应用不伪造实例数据。 */
-export const APP_WITH_INSTANCE_SAMPLES = "order-service";
-
-/** 实例矩阵默认选中的实例。旧实现是 `ORDER_INSTANCES[4]` 这个下标，与实例 id 无关。 */
-export const DEFAULT_SELECTED_INSTANCE_ID = "order-5";
-
 /** 资源压力阈值（百分数）。CPU 与内存共用同一门槛。 */
 export const RESOURCE_PRESSURE_PERCENT = 80;
 
@@ -87,8 +80,6 @@ export interface InstanceRecord {
   /** 所属宿主机。分组键。 */
   readonly host: string;
   readonly status: HealthLevel;
-  /** 状态标签。阶段 1.3 迁入语言资源后由 `status` 派生，不再由数据自带。 */
-  readonly statusLabel: string;
   readonly cpu: number;
   readonly memory: number;
   readonly qps: number;
@@ -114,8 +105,6 @@ export interface ApplicationRecord {
   readonly id: string;
   readonly label: string;
   readonly state: HealthLevel;
-  /** 状态标签。与实例同理，阶段 1.3 后由语言资源提供。 */
-  readonly stateLabel: string;
   /** 已生效规则的实例数。 */
   readonly running: number;
   /** 实例总数。 */

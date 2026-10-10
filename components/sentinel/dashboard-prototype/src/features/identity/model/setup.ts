@@ -1,3 +1,27 @@
+import {
+  RULE_SOURCE,
+  RULE_SOURCES,
+  RULE_SOURCE_AUTHENTICATION,
+  RULE_SOURCE_AUTHENTICATION_MODES,
+  validateConfigurationSource,
+  type RuleSourceKind,
+  type RuleSourceAuthenticationMode,
+  type RuleSourceCredentials,
+  type ConfigurationSourceDraft,
+  type SourceConfigurationIssue,
+} from "../../../shared/model/configurationSource";
+export {
+  RULE_SOURCE,
+  RULE_SOURCES,
+  RULE_SOURCE_AUTHENTICATION,
+  RULE_SOURCE_AUTHENTICATION_MODES,
+  isRuleSourceEndpoint,
+} from "../../../shared/model/configurationSource";
+export type {
+  RuleSourceKind,
+  RuleSourceAuthenticationMode,
+  RuleSourceCredentials,
+} from "../../../shared/model/configurationSource";
 /**
  * 首次初始化的协议值、步骤定义与每步校验。
  *
@@ -27,20 +51,10 @@ export const CONTROL_PLANE_DATABASE = Object.freeze({
 export type ControlPlaneDatabaseKind =
   (typeof CONTROL_PLANE_DATABASE)[keyof typeof CONTROL_PLANE_DATABASE];
 
-/**
- * 单个数据库选项的元数据。
- *
- * `id` 是 API 契约值；`label` 是展示文案，永远不能反过来当协议值使用。`usage` 说明
- * 该选项是否允许用于生产集群。
- */
+/** Supported storage semantics; visual labels live in presentation/setupPresentation. */
 export interface ControlPlaneDatabase {
   readonly id: ControlPlaneDatabaseKind;
-  /** 产品名（PostgreSQL / MySQL / SQLite），是**数据**不翻译。 */
-  readonly label: string;
-  /** 说明的语言键。 */
-  readonly descriptionKey: string;
   readonly defaultPort: string;
-  /** SQLite 为 false：它不需要主机、端口和账号。 */
   readonly requiresNetworkConfiguration: boolean;
   readonly usage: "production" | "local-development";
 }
@@ -49,110 +63,23 @@ export interface ControlPlaneDatabase {
 export const CONTROL_PLANE_DATABASES: readonly ControlPlaneDatabase[] = Object.freeze([
   {
     id: CONTROL_PLANE_DATABASE.PostgreSql,
-    label: "PostgreSQL",
-    descriptionKey: "setup.option.postgres.description",
     defaultPort: "5432",
     requiresNetworkConfiguration: true,
     usage: "production",
   },
   {
     id: CONTROL_PLANE_DATABASE.MySql,
-    label: "MySQL",
-    descriptionKey: "setup.option.mysql.description",
     defaultPort: "3306",
     requiresNetworkConfiguration: true,
     usage: "production",
   },
   {
     id: CONTROL_PLANE_DATABASE.Sqlite,
-    label: "SQLite",
-    descriptionKey: "setup.option.sqlite.description",
     defaultPort: "",
     requiresNetworkConfiguration: false,
     usage: "local-development",
   },
-] satisfies readonly ControlPlaneDatabase[]);
-
-/** 规则来源（配置中心）的协议值。 */
-export const RULE_SOURCE = Object.freeze({
-  Nacos: "nacos",
-  Consul: "consul",
-} as const);
-
-/** {@link RULE_SOURCE} 的值联合。 */
-export type RuleSourceKind = (typeof RULE_SOURCE)[keyof typeof RULE_SOURCE];
-
-/** 规则来源的展示文案。`id` 是协议值，`label` 只用于界面。 */
-export interface RuleSourceOption {
-  readonly id: RuleSourceKind;
-  /** 产品名（Nacos / Consul），是**数据**不翻译。 */
-  readonly label: string;
-  readonly descriptionKey: string;
-}
-
-/**
- * 可登记的规则来源。
- *
- * 两者同为**规则事实来源**，都不是账户或审计存储。选项文案原先内联在页面 JSX 的
- * `options` 数组里，与数据库选项的写法不一致；提到这里后「支持哪些来源」成为一处
- * 可枚举的领域事实。
- */
-export const RULE_SOURCE_OPTIONS: readonly RuleSourceOption[] = Object.freeze([
-  {
-    id: RULE_SOURCE.Nacos,
-    label: "Nacos",
-    descriptionKey: "setup.option.nacos.description",
-  },
-  {
-    id: RULE_SOURCE.Consul,
-    label: "Consul",
-    descriptionKey: "setup.option.consul.description",
-  },
-] satisfies readonly RuleSourceOption[]);
-
-/** 后台在初始化时取得规则来源凭证的方式。 */
-export const RULE_SOURCE_AUTHENTICATION = Object.freeze({
-  CredentialReference: "credential-reference",
-  Direct: "direct",
-  None: "none",
-} as const);
-
-/** {@link RULE_SOURCE_AUTHENTICATION} 的值联合。 */
-export type RuleSourceAuthenticationMode =
-  (typeof RULE_SOURCE_AUTHENTICATION)[keyof typeof RULE_SOURCE_AUTHENTICATION];
-
-/** 单个认证方式的展示契约。 */
-export interface RuleSourceAuthenticationOption {
-  readonly id: RuleSourceAuthenticationMode;
-  /** 功能名的语言键（「使用部署凭证引用」是界面措辞，不是协议值）。 */
-  readonly labelKey: string;
-  readonly descriptionKey: string;
-}
-
-/**
- * 规则来源的认证方式选项。
- *
- * `direct` 是有意保留的：受控内网部署确实需要。浏览器只能通过 TLS 提交一次这些值，
- * 后台必须脱敏并只持久化受保护的配置——它不是浏览器侧的密钥仓库。
- */
-export const RULE_SOURCE_AUTHENTICATION_OPTIONS: readonly RuleSourceAuthenticationOption[] =
-  Object.freeze([
-    {
-      id: RULE_SOURCE_AUTHENTICATION.CredentialReference,
-      labelKey: "setup.option.credentialReference.label",
-      descriptionKey: "setup.option.credentialReference.description",
-    },
-    {
-      id: RULE_SOURCE_AUTHENTICATION.Direct,
-      labelKey: "setup.option.direct.label",
-      descriptionKey: "setup.option.direct.description",
-    },
-    {
-      id: RULE_SOURCE_AUTHENTICATION.None,
-      labelKey: "setup.option.none.label",
-      descriptionKey: "setup.option.none.description",
-    },
-  ] satisfies readonly RuleSourceAuthenticationOption[]);
+]);
 
 /** 初始化步骤的协议值。顺序即向导推进顺序。 */
 export const SETUP_STEP = Object.freeze({
@@ -165,50 +92,8 @@ export const SETUP_STEP = Object.freeze({
 /** {@link SETUP_STEP} 的值联合。 */
 export type SetupStepId = (typeof SETUP_STEP)[keyof typeof SETUP_STEP];
 
-/** 单个初始化步骤的元数据。 */
-export interface SetupStep {
-  readonly id: SetupStepId;
-  /** 步骤名的语言键。 */
-  readonly labelKey: string;
-  readonly descriptionKey: string;
-}
-
 /** 一次性初始化的检查点。这些是引导阶段，不是规则来源状态。 */
-export const INITIALIZATION_STEPS: readonly SetupStep[] = Object.freeze([
-  {
-    id: SETUP_STEP.Storage,
-    labelKey: "setup.step.database.label",
-    descriptionKey: "setup.step.database.description",
-  },
-  {
-    id: SETUP_STEP.Admin,
-    labelKey: "setup.step.admin.label",
-    descriptionKey: "setup.step.admin.description",
-  },
-  {
-    id: SETUP_STEP.Sources,
-    labelKey: "setup.step.source.label",
-    descriptionKey: "setup.step.source.description",
-  },
-  {
-    id: SETUP_STEP.Complete,
-    labelKey: "setup.step.finish.label",
-    descriptionKey: "setup.step.finish.description",
-  },
-] satisfies readonly SetupStep[]);
-
-/**
- * 直接填写模式下的规则来源凭证。
- *
- * 全部字段都是**写入式**：页面不回显、不写入浏览器存储，提交后由后台脱敏保存。字段
- * 集合覆盖两种来源，因此同时存在 `username`/`password` 与 `consulToken`。
- */
-export interface RuleSourceCredentials {
-  readonly reference: string;
-  readonly username: string;
-  readonly password: string;
-  readonly consulToken: string;
-}
+export const SETUP_STEPS: readonly SetupStepId[] = Object.freeze(Object.values(SETUP_STEP));
 
 /** 内置管理员表单。初始账号名固定为 `admin`，密码由用户设置。 */
 export interface SetupAdminDraft {
@@ -267,14 +152,62 @@ export const INITIAL_SETUP_DRAFT: SetupDraft = Object.freeze({
 
 /** 初始化校验的消息键。翻译发生在 UI 层。 */
 export type SetupIssueKey =
+  | "setup.required"
+  | "setup.databaseRequired"
+  | "setup.databasePortInvalid"
+  | "setup.sourceAddressInvalid"
   | "setup.adminRequired"
   | "setup.adminPasswordMismatch"
   | "setup.credentialReferenceRequired"
   | "setup.nacosCredentialsRequired"
   | "setup.consulTokenRequired";
 
-/** 一条初始化问题。 */
-export type SetupIssue = IdentityIssue<SetupIssueKey>;
+/** Setup form field owners used to connect pure validation results to accessible inputs. */
+export const SETUP_FIELD = Object.freeze({
+  DatabaseHost: "database.host",
+  DatabaseName: "database.name",
+  DatabaseUsername: "database.username",
+  DatabasePassword: "database.password",
+  DatabasePort: "database.port",
+  AdminUsername: "admin.username",
+  AdminPassword: "admin.password",
+  AdminConfirm: "admin.confirm",
+  SourceAddress: "source.address",
+  CredentialReference: "source.credentials.reference",
+  NacosUsername: "source.credentials.nacosUsername",
+  NacosPassword: "source.credentials.nacosPassword",
+  ConsulToken: "source.credentials.consulToken",
+} as const);
+
+export type SetupField = (typeof SETUP_FIELD)[keyof typeof SETUP_FIELD];
+
+/** A local validation issue with an optional field owner for inline feedback. */
+export type SetupIssue = IdentityIssue<SetupIssueKey> & { readonly field?: SetupField };
+
+/** Resolve a setup field to its owning wizard step; fields without an owner stay on the current step. */
+export function setupStepForField(field: SetupField): SetupStepId {
+  switch (field) {
+    case SETUP_FIELD.DatabaseHost:
+    case SETUP_FIELD.DatabaseName:
+    case SETUP_FIELD.DatabaseUsername:
+    case SETUP_FIELD.DatabasePassword:
+    case SETUP_FIELD.DatabasePort:
+      return SETUP_STEP.Storage;
+    case SETUP_FIELD.AdminUsername:
+    case SETUP_FIELD.AdminPassword:
+    case SETUP_FIELD.AdminConfirm:
+      return SETUP_STEP.Admin;
+    case SETUP_FIELD.SourceAddress:
+    case SETUP_FIELD.CredentialReference:
+    case SETUP_FIELD.NacosUsername:
+    case SETUP_FIELD.NacosPassword:
+    case SETUP_FIELD.ConsulToken:
+      return SETUP_STEP.Sources;
+  }
+}
+
+/** Network storage uses an explicit TCP port, not a URL/DSN or permissive numeric coercion. */
+export const DATABASE_PORT_RANGE = Object.freeze({ min: 1, max: 65535 });
 
 /** 返回数据库种类的元数据；未知值回落到首个生产选项。 */
 export function controlPlaneDatabaseFor(
@@ -286,36 +219,21 @@ export function controlPlaneDatabaseFor(
   );
 }
 
-/** 返回规则来源的展示文案；未知值回落到 Nacos。 */
-export function ruleSourceFor(sourceKind: RuleSourceKind): RuleSourceOption {
-  return (
-    RULE_SOURCE_OPTIONS.find((source) => source.id === sourceKind) ?? RULE_SOURCE_OPTIONS[0]
-  );
-}
-
 /** 收窄任意字符串为受支持的数据库种类。替代旧实现的 `value as ControlPlaneDatabaseKind`。 */
-export function isControlPlaneDatabaseKind(
-  value: string,
-): value is ControlPlaneDatabaseKind {
-  return (CONTROL_PLANE_DATABASES as readonly { id: string }[]).some(
-    (database) => database.id === value,
-  );
+export function isControlPlaneDatabaseKind(value: string): value is ControlPlaneDatabaseKind {
+  return CONTROL_PLANE_DATABASES.some((database) => database.id === value);
 }
 
 /** 收窄任意字符串为受支持的规则来源。替代旧实现的 `value as RuleSourceKind`。 */
 export function isRuleSourceKind(value: string): value is RuleSourceKind {
-  return (RULE_SOURCE_OPTIONS as readonly { id: string }[]).some(
-    (source) => source.id === value,
-  );
+  return RULE_SOURCES.some((source) => source === value);
 }
 
 /** 收窄任意字符串为受支持的认证方式。替代 `value as RuleSourceAuthenticationMode`。 */
 export function isRuleSourceAuthenticationMode(
   value: string,
 ): value is RuleSourceAuthenticationMode {
-  return (RULE_SOURCE_AUTHENTICATION_OPTIONS as readonly { id: string }[]).some(
-    (option) => option.id === value,
-  );
+  return RULE_SOURCE_AUTHENTICATION_MODES.some((mode) => mode === value);
 }
 
 /**
@@ -325,47 +243,115 @@ export function isRuleSourceAuthenticationMode(
  * 凭证是否齐备。连接可达性、端口占用、来源连通性和内置管理员唯一性由服务端在真正
  * 执行初始化时判定。
  *
- * 步骤本身没有可校验字段（`complete` 只是确认页），因此返回空问题列表。
+ * `complete` 重新检查全部步骤，不让从旧状态或其它入口到达确认页绕过校验。
  */
-export function validateSetupStep(
-  stepId: SetupStepId,
-  draft: SetupDraft,
-): readonly SetupIssue[] {
-  if (stepId === SETUP_STEP.Admin) {
-    if (!draft.admin.username.trim() || draft.admin.password.length < PASSWORD_MIN_LENGTH) {
+export function validateSetupStep(stepId: SetupStepId, draft: SetupDraft): readonly SetupIssue[] {
+  if (stepId === SETUP_STEP.Complete)
+    return [SETUP_STEP.Storage, SETUP_STEP.Admin, SETUP_STEP.Sources].flatMap((step) =>
+      validateSetupStep(step, draft),
+    );
+  if (
+    stepId === SETUP_STEP.Storage &&
+    controlPlaneDatabaseFor(draft.databaseKind).requiresNetworkConfiguration
+  ) {
+    const requiredIssues: SetupIssue[] = [];
+    if (!draft.database.host.trim())
+      requiredIssues.push({ key: "setup.required", field: SETUP_FIELD.DatabaseHost });
+    if (!draft.database.name.trim())
+      requiredIssues.push({ key: "setup.required", field: SETUP_FIELD.DatabaseName });
+    if (!draft.database.username.trim())
+      requiredIssues.push({ key: "setup.required", field: SETUP_FIELD.DatabaseUsername });
+    if (!draft.database.password)
+      requiredIssues.push({ key: "setup.required", field: SETUP_FIELD.DatabasePassword });
+    if (requiredIssues.length > 0) return requiredIssues;
+    const port = Number(draft.databasePort);
+    if (
+      !/^\d+$/.test(draft.databasePort) ||
+      !Number.isSafeInteger(port) ||
+      port < DATABASE_PORT_RANGE.min ||
+      port > DATABASE_PORT_RANGE.max
+    )
       return [
         {
-          key: "setup.adminRequired",
-          params: { min: PASSWORD_MIN_LENGTH },
+          key: "setup.databasePortInvalid",
+          params: DATABASE_PORT_RANGE,
+          field: SETUP_FIELD.DatabasePort,
         },
       ];
-    }
-    if (draft.admin.password !== draft.admin.confirm) {
-      return [{ key: "setup.adminPasswordMismatch" }];
-    }
+  }
+  if (stepId === SETUP_STEP.Admin) {
+    const issues: SetupIssue[] = [];
+    if (!draft.admin.username.trim())
+      issues.push({ key: "setup.required", field: SETUP_FIELD.AdminUsername });
+    if (draft.admin.password.length < PASSWORD_MIN_LENGTH)
+      issues.push({
+        key: "setup.adminRequired",
+        params: { min: PASSWORD_MIN_LENGTH },
+        field: SETUP_FIELD.AdminPassword,
+      });
+    if (draft.admin.password !== draft.admin.confirm)
+      issues.push({ key: "setup.adminPasswordMismatch", field: SETUP_FIELD.AdminConfirm });
+    if (issues.length > 0) return issues;
   }
 
   if (stepId === SETUP_STEP.Sources) {
-    if (
-      draft.sourceAuthenticationMode === RULE_SOURCE_AUTHENTICATION.CredentialReference &&
-      !draft.sourceCredentials.reference.trim()
-    ) {
-      return [{ key: "setup.credentialReferenceRequired" }];
-    }
-    if (draft.sourceAuthenticationMode === RULE_SOURCE_AUTHENTICATION.Direct) {
-      const hasCredentials =
-        draft.sourceKind === RULE_SOURCE.Nacos
-          ? Boolean(draft.sourceCredentials.username.trim() && draft.sourceCredentials.password)
-          : Boolean(draft.sourceCredentials.consulToken);
-      if (!hasCredentials) {
+    const issues = validateConfigurationSource(setupConfigurationSource(draft));
+    return issues.flatMap((issue): SetupIssue[] => {
+      if (issue === "endpoint-invalid")
+        return [{ key: SOURCE_ISSUE_TO_SETUP_ISSUE[issue], field: SETUP_FIELD.SourceAddress }];
+      if (issue === "reference-required")
         return [
-          draft.sourceKind === RULE_SOURCE.Nacos
-            ? { key: "setup.nacosCredentialsRequired" }
-            : { key: "setup.consulTokenRequired" },
+          { key: SOURCE_ISSUE_TO_SETUP_ISSUE[issue], field: SETUP_FIELD.CredentialReference },
         ];
-      }
-    }
+      if (issue === "nacos-credentials-required")
+        return [
+          ...(!draft.sourceCredentials.username.trim()
+            ? [{ key: "setup.required" as const, field: SETUP_FIELD.NacosUsername }]
+            : []),
+          ...(!draft.sourceCredentials.password
+            ? [{ key: "setup.required" as const, field: SETUP_FIELD.NacosPassword }]
+            : []),
+        ];
+      if (issue === "consul-token-required")
+        return [{ key: SOURCE_ISSUE_TO_SETUP_ISSUE[issue], field: SETUP_FIELD.ConsulToken }];
+      return [{ key: SOURCE_ISSUE_TO_SETUP_ISSUE[issue] }];
+    });
   }
 
   return [];
 }
+
+/**
+ * Return a new setup draft with submitted/credential material removed.
+ *
+ * The account name, database location, provider and namespace remain available
+ * for harmless UI context; database login name/password, source credentials,
+ * and administrator password/confirmation are cleared. The input snapshot is
+ * never mutated.
+ */
+export function clearSetupSecrets(draft: SetupDraft): SetupDraft {
+  return {
+    ...draft,
+    database: { ...draft.database, username: "", password: "" },
+    sourceCredentials: INITIAL_SETUP_DRAFT.sourceCredentials,
+    admin: { ...draft.admin, password: "", confirm: "" },
+  };
+}
+
+/** Translate setup's form shape to the shared pure source capability, not a second validation implementation. */
+export function setupConfigurationSource(draft: SetupDraft): ConfigurationSourceDraft {
+  return {
+    provider: draft.sourceKind,
+    endpoint: draft.source.address,
+    location: draft.source.namespace,
+    authentication: draft.sourceAuthenticationMode,
+    credentials: draft.sourceCredentials,
+  };
+}
+const SOURCE_ISSUE_TO_SETUP_ISSUE: Readonly<Record<SourceConfigurationIssue, SetupIssueKey>> = {
+  "endpoint-invalid": "setup.sourceAddressInvalid",
+  "reference-required": "setup.credentialReferenceRequired",
+  "nacos-credentials-required": "setup.nacosCredentialsRequired",
+  "consul-token-required": "setup.consulTokenRequired",
+  "unsupported-configuration": "setup.sourceAddressInvalid",
+};

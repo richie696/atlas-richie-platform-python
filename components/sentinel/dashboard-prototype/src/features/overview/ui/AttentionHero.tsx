@@ -1,3 +1,7 @@
+import presentationStyles from "../../../shared/ui/styles/Presentation.module.scss";
+import introStyles from "../../../shared/ui/Intro.module.scss";
+import actionButtonStyles from "../../../shared/ui/ActionButton.module.scss";
+import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 /**
  * 总览首屏的异常摘要。
  *
@@ -14,10 +18,12 @@
 import { ArrowRightIcon as ArrowRight, WarningIcon as Warning } from "@phosphor-icons/react";
 
 import { ActionButton } from "../../../shared/ui/ActionButton";
-import { ROUTE } from "../../../app/router/route.constants";
+import { ROUTE } from "../../../shared/types/navigation";
 import { useTranslation } from "react-i18next";
 import type { Navigate } from "../../../shared/types/dashboard";
 import type { FleetAttention } from "../model/overview";
+
+const styleModules = [presentationStyles, introStyles, actionButtonStyles] as const;
 
 export interface AttentionHeroProps {
   readonly attention: FleetAttention;
@@ -29,12 +35,12 @@ export interface AttentionHeroProps {
 export function AttentionHero({ attention, appId, navigate }: AttentionHeroProps) {
   const { t } = useTranslation();
   return (
-    <div className="alert-hero">
-      <span className="alert-icon">
+    <div className={scopedClasses(styleModules, "alert-hero")}>
+      <span className={scopedClasses(styleModules, "alert-icon")}>
         <Warning size={27} weight="fill" />
       </span>
       <div>
-        <span className="eyebrow">NEEDS ATTENTION</span>
+        <span className={scopedClasses(styleModules, "eyebrow")}>NEEDS ATTENTION</span>
         <h2>
           {t("overview.attention.appsRunning", { count: attention.totalApps })}
           <em>{t("overview.attention.needsAttention", { count: attention.attentionCount })}</em>
@@ -43,7 +49,7 @@ export function AttentionHero({ attention, appId, navigate }: AttentionHeroProps
       </div>
       <ActionButton
         type="button"
-        className="primary-button"
+        className={scopedClasses(styleModules, "primary-button")}
         onClick={() => navigate(ROUTE.Applications, { appId })}
       >
         {t("overview.attention.viewApps")} <ArrowRight size={16} />

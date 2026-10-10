@@ -1,0 +1,36 @@
+.content {
+  padding: var(--sentinel-space-4);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sentinel-space-4);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sentinel-space-2);
+}
+.correlation {
+  display: grid;
+  justify-items: start;
+  gap: var(--sentinel-space-2);
+  min-width: 12rem;
+  overflow-wrap: anywhere;
+}
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: var(--sentinel-space-4);
+  margin: 0;
+  div {
+    min-width: 0;
+  }
+  dt {
+    color: var(--sentinel-color-text-muted);
+  }
+  dd {
+    margin: 4px 0 0;
+    overflow-wrap: anywhere;
+  }
+}

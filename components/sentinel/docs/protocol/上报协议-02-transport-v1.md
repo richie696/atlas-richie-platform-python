@@ -1,8 +1,8 @@
 # Atlas Richie 上报协议 (V1)
 
 > **Protocol**: `atlas-richie-agent-reporting`
-> **Version**: 1.0 (Frozen)
-> **Status**: Frozen — 5-owner 签收完成 (2026-09-13)
+> **Version**: 1.0 (Transport 草案)
+> **Status**: 待 transport 冻结与 owner 签字
 > **Date**: 2026-09-13
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0

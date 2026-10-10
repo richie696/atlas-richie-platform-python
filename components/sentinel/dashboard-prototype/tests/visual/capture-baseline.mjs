@@ -9,8 +9,8 @@
  *
  * 1. **归一化 DOM**：class 名决定实际样式，因此 DOM 归一化后逐字节相等，可以证明
  *    「这次改动没有动到影响渲染的结构与类名」，并且容易定位到差异元素。
- * 2. **整页 PNG**：证明「像素级渲染结果一致」。Chrome headless 截图是确定性的
- *    （同一 URL 连续两次捕获 md5 相同），因此可直接用内容摘要比较。
+ * 2. **整页 PNG**：按 png-diff 的比例与通道差容差比较，保留真实错位而允许
+ *    跨 Chrome 进程的微小字形栅格化抖动；不只比较文件摘要。
  *
  * **两个信号必须分开看。** DOM 相等但 PNG 不等 = 纯 CSS 层的回归：结构没动，
  * 但布局坏了。真实踩过的坑：Astryx `Button` 在 children 外包了一层盒子，
@@ -21,7 +21,9 @@
  * - Vite 注入的 HMR 脚本与 style 标签内容；
  * - `data-backend-node-id`（Astryx 每次渲染重新生成）；
  * - `data-pressable-container`（Astryx 在 hydration 之后才补，捕获时机相关）；
- * - SVG `id` / `clip-path`（Nivo 生成的随机实例 id）。
+ * - React 自动控件/图表实例 id（按首次出现编号，保留 id/label/ARIA/SVG 引用关系）。
+ * 业务自行指定的 id 和 SVG 引用仍保留；仅比较不含 raw-dom 的历史快照时使用
+ * 明示证据限制的旧归一化路径，不能声称旧快照验证了引用完整性。
  * stylex 生成的 `x…` class 名**保留**，因为它们决定实际样式。
  *
  * 用法：
@@ -42,6 +44,7 @@ import { fileURLToPath } from "node:url";
 
 import { launchBrowser } from "../e2e/cdp.mjs";
 import { DEFAULT_TOLERANCE, diffPng } from "./png-diff.mjs";
+import { normalizeDom, normalizeLegacyDom } from "./dom-normalization.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -58,7 +61,7 @@ const BASE_URL = process.env.BASE_URL ?? "http://localhost:5173";
  */
 const APP_READY = `(() => {
   const root = document.getElementById("root");
-  return !!root && root.children.length > 0;
+  return !!root && root.children.length > 0 && !root.querySelector('[data-route-state="loading"]');
 })()`;
 /**
  * 采集矩阵。
@@ -138,7 +141,7 @@ const ACCEPT_RENDER = process.env.ACCEPT_RENDER
  *
  * 中文
  * ----
- * DOM 等价是本工具的主硬约束，渲染 diff 只是附加信号。因此有意的结构或文案变更
+ * DOM 与像素是独立门禁；两者都不能替代交互正确性。有意的结构或文案变更
  * （例如登录页加一句演示账号说明）必须能被显式记录，而不是靠「换个基线目录」
  * 让它变绿——后者是静默的，而静默重新基线化会让人以为这次变更从未发生。
  *
@@ -175,28 +178,6 @@ function selectedCases() {
   return ONLY ? CASES.filter((item) => ONLY.has(item.name)) : CASES;
 }
 
-/** 抹掉与展示无关的渲染期噪声；stylex 的 x… class 名必须保留。 */
-function normalizeDom(html) {
-  return html
-    // Vite HMR 注入的脚本与样式内容含随机 token
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
-    // Astryx 每次渲染重新生成的节点标识
-    .replace(/\sdata-backend-node-id="[^"]*"/g, "")
-    // Astryx 在 hydration / 首次交互**之后**才补上的可交互容器标记。
-    // 同一份代码连抓两次，一次有、一次没有（实测），因此它是捕获时机噪声而不是
-    // 结构差异——留着会让基线偶发误报，而误报会让人开始忽略这个工具的信号。
-    // 与 `data-backend-node-id` 同类：不参与样式，也不改变 DOM 结构。
-    .replace(/\sdata-pressable-container="[^"]*"/g, "")
-    // Nivo / SVG 生成的实例级 id
-    .replace(/\sid="[^"]*"/g, ' id="_"')
-    .replace(/url\(#[^)]*\)/g, "url(#_)")
-    .replace(/\sclip-path="[^"]*"/g, ' clip-path="url(#_)"')
-    // 压缩空白，避免纯格式差异造成误报
-    .replace(/\s+/g, " ")
-    .replace(/> </g, "><")
-    .trim();
-}
 
 /**
  * 截一张图并等到**渲染收敛**。
@@ -245,7 +226,9 @@ async function captureCase(page, testCase, outDir) {
   await page.goto(url);
   await page.waitFor(APP_READY, { label: testCase.name });
   await page.waitForStableLayout();
-  const dom = normalizeDom(await page.html());
+  const raw = await page.html();
+  writeFileSync(path.join(outDir, `${testCase.name}.raw-dom`), raw, "utf8");
+  const dom = normalizeDom(raw);
   writeFileSync(path.join(outDir, `${testCase.name}.html`), dom, "utf8");
 
   const shot = await captureSettled(page, testCase, outDir);
@@ -273,12 +256,14 @@ async function capture(outDir) {
       const settle = result.converged
         ? `settle=${result.attempts}`
         : `⚠ 未收敛(重试 ${result.attempts} 次)`;
-      process.stdout.write(`  ✓ ${result.name.padEnd(24)} dom=${result.bytes}B  ${settle}\n`);
+      process.stdout.write(`  ${result.failed || !result.converged ? "✗" : "✓"} ${result.name.padEnd(24)} dom=${result.bytes}B  ${settle}\n`);
     }
   } finally {
     // 不关页面的话 CDP WebSocket 与 Chrome 进程句柄会一直持有事件循环。
     await browser.close();
   }
+  const incomplete = results.filter(result => result.failed || !result.converged);
+  if (incomplete.length > 0) throw new Error(`Capture incomplete: ${incomplete.map(result => result.name).join(", ")}`);
   return results.length;
 }
 
@@ -302,7 +287,7 @@ function renderDigest(filePath) {
 }
 
 /**
- * 比较两��截图的渲染结果。
+ * 比较两张截图的渲染结果。
  *
  * 不直接比摘要：抗锯齿与字体栅格化在跨进程 Chrome 启动之间有极少量抖动
  * （实测同一页面两次捕获最多 89 像素 / 0.0077% / 最大通道差 44），而真实布局
@@ -311,7 +296,7 @@ function renderDigest(filePath) {
  */
 function compareRender(name, basePng, newPng) {
   if (!existsSync(basePng) || !existsSync(newPng)) {
-    return { state: "无基线截图", failure: null };
+    return { state: "截图缺失", failure: { reason: "基线或当前 PNG 缺失，不能证明渲染一致" } };
   }
   if (renderDigest(basePng) === renderDigest(newPng)) {
     return { state: "渲染一致", failure: null };
@@ -353,7 +338,8 @@ function compare(baseDir, newDir) {
   if (caseNames.length === 0) throw new Error(`基线目录没有 .html 快照: ${baseDir}`);
 
   const failures = [];
-  const accepted = [];
+  const acceptedDom = [];
+  const acceptedRender = [];
   let domEqual = 0;
   let renderEqual = 0;
 
@@ -369,12 +355,17 @@ function compare(baseDir, newDir) {
       continue;
     }
 
-    const baseline = readFileSync(baseHtml, "utf8");
-    const candidate = readFileSync(newHtml, "utf8");
+    // Apply the same noise policy to older captures without rewriting them.
+    const baseRaw = path.join(baseDir, `${name}.raw-dom`), newRaw = path.join(newDir, `${name}.raw-dom`);
+    const rawAvailable = existsSync(baseRaw) && existsSync(newRaw);
+    const normalize = rawAvailable ? normalizeDom : normalizeLegacyDom;
+    const baseline = normalize(readFileSync(rawAvailable ? baseRaw : baseHtml, "utf8"));
+    const candidate = normalize(readFileSync(rawAvailable ? newRaw : newHtml, "utf8"));
+    if (!rawAvailable) process.stdout.write(`  历史快照 ${name}: 旧 ID 已被抹掉，DOM 检查不证明原始 ID/ARIA；当前关系另由浏览器用例验证\n`);
     const domOk = baseline === candidate;
     const domAccepted = !domOk && ACCEPT_DOM.has(name);
     if (domOk) domEqual += 1;
-    else if (domAccepted) accepted.push(name);
+    else if (domAccepted) acceptedDom.push(name);
     else failures.push({ name, reason: "DOM 不等价", ...firstDifference(baseline, candidate) });
 
     // DOM 相等但渲染不同 = 纯 CSS 层回归。这是最容易漏掉的一类。
@@ -382,7 +373,7 @@ function compare(baseDir, newDir) {
     if (render.failure) {
       failures.push({ name, reason: render.failure.reason });
     } else if (render.accepted) {
-      accepted.push(name);
+      acceptedRender.push(name);
     } else if (render.state.startsWith("渲染一致")) {
       renderEqual += 1;
     }
@@ -405,8 +396,11 @@ function compare(baseDir, newDir) {
   process.stdout.write(
     `\n用例 ${caseNames.length} 个 · DOM 等价 ${domEqual} 个 · 渲染一致 ${renderEqual} 个`,
   );
-  if (accepted.length > 0) {
-    process.stdout.write(` · 已声明接受的渲染变化: ${accepted.join(", ")}`);
+  if (acceptedDom.length > 0) {
+    process.stdout.write(` · 已声明接受的 DOM 变化: ${acceptedDom.join(", ")}（${DOM_CHANGE_REASON}）`);
+  }
+  if (acceptedRender.length > 0) {
+    process.stdout.write(` · 已声明接受的渲染变化: ${acceptedRender.join(", ")}`);
   }
   process.stdout.write("\n");
   if (failures.length > 0) {

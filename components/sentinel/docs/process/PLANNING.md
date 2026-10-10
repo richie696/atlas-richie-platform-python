@@ -1217,6 +1217,12 @@ TPS 必须有业务事务埋点，p95/p99 必须有可聚合 RT 分布数据，�
     type (`NacosCallbackParams` push 路径用), 1.x 1.0 兼容。
   - [x] M6.1.7d 真实验收 5 场景: 写 `tests/integration/` (环境变量、认证 config-read
     readiness、namespace 隔离、真 SDK publish/get)，真 Nacos 3.2.3 五场景全通过。
+  - [x] M6.1.8 为 Dashboard 规则候选校验/发布准备纯 Nacos profile 编码器：新增
+    `encode_rule_snapshot`，将五类 Sentinel 规则映射到完整 data-id JSON；仅接受可无损
+    表达的字段组合，非有限数值、未知规则或 flow behavior/control 不匹配必须拒绝。
+    编码器不依赖 SDK、不触网络、不 publish；API 增量与验收范围见
+    `process/acceptance/R-SENTINEL-M6.1.8-NACOS-RULE-ENCODE.md`。这不代表 Nacos
+    CAS/发布/回读或 Dashboard Console 装配完成。
 - **真实验收**：使用真实或协议兼容 Nacos 服务完成首次加载、一次合法更新、一次无效
   更新、连接中断并恢复、Source 关闭五种场景。无效更新和断线期间旧规则仍生效；不能用
   mock callback 或 SDK fake 宣称完成。M6.1.7 后, 走 polling 架构, 5 场景中"合法

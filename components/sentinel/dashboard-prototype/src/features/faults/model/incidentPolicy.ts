@@ -10,7 +10,7 @@
  * 却只能通过渲染页面来验证；而且计数取自「未按级别过滤」的结果这件事没有任何注释，
  * 后来者很容易顺手改成用过滤后的列表——那样「切到只看信息」时严重事件数就会变成 0。
  */
-import { ALL_APPLICATIONS, TIME_RANGE, type TimeRangeId } from "../../../app/router/route.constants";
+import { ALL_APPLICATIONS, TIME_RANGE, type TimeRangeId } from "../../../shared/types/navigation";
 import {
   INCIDENT_CATEGORY,
   INCIDENT_SEVERITY,
@@ -41,9 +41,8 @@ export function scopeIncidents(
   events: readonly IncidentEvent[],
   scope: IncidentScope,
 ): readonly IncidentEvent[] {
-  const windowStart = scope.range === TIME_RANGE.Last15Minutes
-    ? secondsOfDay(LAST_15M_WINDOW_START)
-    : null;
+  const windowStart =
+    scope.range === TIME_RANGE.Last15Minutes ? secondsOfDay(LAST_15M_WINDOW_START) : null;
   return events.filter((event) => {
     if (scope.appId !== ALL_APPLICATIONS && event.appId !== scope.appId) return false;
     if (windowStart === null) return true;

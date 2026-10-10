@@ -12,8 +12,12 @@
  * 校验结果用**结构化问题**（消息键 + 插值参数）而不是已翻译字符串：翻译发生在 UI 层，
  * 参数（`min`）由常量注入，界面文案不需要重复「12」这个魔法值。
  */
+import { WRITE_ONLY_SECRET_MAX_LENGTH } from "../../../shared/model/secretLimits";
+
 /** 密码最小长度。新建账号、改密与初始化内置管理员共用这一条。 */
 export const PASSWORD_MIN_LENGTH = 12;
+/** 密码最大长度，与写入式凭证的 UTF-16 wire 边界共用。 */
+export const PASSWORD_MAX_LENGTH = WRITE_ONLY_SECRET_MAX_LENGTH;
 
 /**
  * 身份 feature 各表单校验共用的**结构化问题**形状。
@@ -29,7 +33,8 @@ export interface IdentityIssue<K extends string> {
 }
 
 /** 密码校验的消息键。 */
-export type PasswordIssueKey = "password.tooShort" | "password.mismatch";
+export type PasswordIssueKey =
+  "password.currentRequired" | "password.tooShort" | "password.tooLong" | "password.mismatch";
 
 /** 一条密码问题。 */
 export type PasswordIssue = IdentityIssue<PasswordIssueKey>;
@@ -54,11 +59,16 @@ export const EMPTY_PASSWORD_CHANGE: PasswordChangeDraft = Object.freeze({
  * 只做**本地语义校验**：长度与两次输入是否一致。当前密码是否正确、是否会话失效，
  * 属于服务端判断，前端不得代替。
  */
-export function validatePasswordChange(
-  draft: PasswordChangeDraft,
-): readonly PasswordIssue[] {
+export function validatePasswordChange(draft: PasswordChangeDraft): readonly PasswordIssue[] {
+  if (!draft.current) return [{ key: "password.currentRequired" }];
+  if (draft.current.length > PASSWORD_MAX_LENGTH) {
+    return [{ key: "password.tooLong", params: { max: PASSWORD_MAX_LENGTH } }];
+  }
   if (draft.next.length < PASSWORD_MIN_LENGTH) {
     return [{ key: "password.tooShort", params: { min: PASSWORD_MIN_LENGTH } }];
+  }
+  if (draft.next.length > PASSWORD_MAX_LENGTH) {
+    return [{ key: "password.tooLong", params: { max: PASSWORD_MAX_LENGTH } }];
   }
   if (draft.next !== draft.confirm) {
     return [{ key: "password.mismatch" }];

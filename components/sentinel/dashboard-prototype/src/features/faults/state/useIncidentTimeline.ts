@@ -18,12 +18,8 @@
  */
 import { useMemo, useState } from "react";
 
-import type { TimeRangeId } from "../../../app/router/route.constants";
-import {
-  SEVERITY_FILTER_ALL,
-  type IncidentEvent,
-  type SeverityFilter,
-} from "../model/incident";
+import type { TimeRangeId } from "../../../shared/types/navigation";
+import { SEVERITY_FILTER_ALL, type IncidentEvent, type SeverityFilter } from "../model/incident";
 import {
   countIncidents,
   filterBySeverity,

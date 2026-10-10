@@ -1,42 +1,62 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { ReactFrameworkProvider } from "@richie696/react-framework-react";
 import { App } from "./App";
-import { AstryxProvider } from "./app/providers/AstryxProvider";
-import "./app/i18n/config"; // i18next 初始化（副作用导入）
-import { SessionProvider } from "./core/session";
-import { ConsoleGatewayProvider } from "./core/api/GatewayProvider";
-import { fixtureGateway } from "./core/api/fixtureGateway";
-import "./styles.css";
-
-const frameworkOptions = Object.freeze({
-  baseUrl: window.location.origin,
-  showLoading: false,
-});
+import { AppProviders } from "./app/providers/AppProviders";
+import "./core/styles/index.scss";
+import { resolveConsoleRuntimeConfiguration } from "./core/api/runtime/consoleRuntimeConfiguration";
+import { startConsoleInterception } from "./core/api/runtime/startConsoleInterception";
+import { bootstrapConsoleApplication } from "./core/api/runtime/bootstrapConsoleApplication";
+import { createConsoleServices } from "./app/providers/consoleServices";
+import { i18nReady } from "./app/i18n/config";
+import { loadAstryxLocaleCatalog } from "./app/i18n/astryxLocaleCatalogs";
+import { readStoredLocale } from "./app/i18n/locales";
 
 const rootElement = document.getElementById("root");
 
 if (!rootElement) {
   throw new Error("Dashboard root element is missing.");
 }
+const root = rootElement;
 
-createRoot(rootElement).render(
-  <React.StrictMode>
-    <ReactFrameworkProvider options={frameworkOptions}>
-        {/*
-          SessionProvider 持有当前演示身份与它的能力快照。门禁默认给全量能力，
-          因此界面与门禁落地前逐像素相同；切换到只读身份才隐藏写入口。
-          详见 `core/session/SessionProvider.tsx`。
-        */}
-        <SessionProvider>
-          {/* 控制面服务就绪后，把 gateway 换成 `new HttpConsoleGateway({ baseUrl })`。
-              页面不感知实现，它们只通过 `useConsoleGateway()` 取。 */}
-          <ConsoleGatewayProvider gateway={fixtureGateway}>
-            <AstryxProvider>
-              <App />
-            </AstryxProvider>
-          </ConsoleGatewayProvider>
-        </SessionProvider>
-    </ReactFrameworkProvider>
-  </React.StrictMode>,
-);
+async function bootstrap(): Promise<void> {
+  await i18nReady;
+  await loadAstryxLocaleCatalog(readStoredLocale());
+  const runtime = resolveConsoleRuntimeConfiguration(
+    {
+      mode: import.meta.env.VITE_CONSOLE_MODE,
+      apiBaseUrl: import.meta.env.VITE_CONSOLE_API_BASE_URL,
+    },
+    window.location.origin,
+    __SENTINEL_CONSOLE_BUILD_PROFILE__,
+  );
+  await bootstrapConsoleApplication(runtime, {
+    startInterception: async (configuration) => {
+      if (__SENTINEL_CONSOLE_BUILD_PROFILE__ !== "demo") return;
+      if (configuration.mode === "mock") {
+        const { APP_CONSOLE_MOCK_HANDLERS } = await import("./app/api/mockConsoleHandlers");
+        await startConsoleInterception(configuration, APP_CONSOLE_MOCK_HANDLERS);
+        return;
+      }
+      await startConsoleInterception(configuration);
+    },
+    createServices: createConsoleServices,
+    mount: (services) => {
+      window.addEventListener("pagehide", services.dispose, { once: true });
+      createRoot(root).render(
+        <React.StrictMode>
+          <AppProviders runtime={runtime} services={services}>
+            <App />
+          </AppProviders>
+        </React.StrictMode>,
+      );
+    },
+  });
+}
+
+void bootstrap().catch(() => {
+  const failure = document.createElement("p");
+  failure.setAttribute("role", "alert");
+  failure.textContent =
+    "Sentinel Dashboard could not establish its configured Console request boundary. No API request was sent.";
+  root.replaceChildren(failure);
+});

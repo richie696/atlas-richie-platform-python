@@ -18,11 +18,10 @@
  */
 import { useMemo, useState } from "react";
 
-import type { TimeRangeId } from "../../../app/router/route.constants";
+import type { TimeRangeId } from "../../../shared/types/navigation";
 import type { MetricPoint } from "../../../shared/types/dashboard";
 import {
   DEFAULT_INSTANCE_SCOPE,
-  DEFAULT_SELECTED_INSTANCE_ID,
   type ApplicationRecord,
   type HostGroup,
   type InstanceRecord,
@@ -34,7 +33,6 @@ import {
   findApplication,
   findInstance,
   groupByHost,
-  hasInstanceSamples,
 } from "../model/instancePolicy";
 
 /** 空序列的稳定引用，避免在无选中实例时每次 render 造新数组。 */
@@ -85,14 +83,14 @@ export interface InstanceMatrix {
 
 export function useInstanceMatrix(options: UseInstanceMatrixOptions): InstanceMatrix {
   const { applications, instances, appId, range, readSeries } = options;
-  const [selectedId, setSelectedId] = useState<string>(DEFAULT_SELECTED_INSTANCE_ID);
+  // Selection must come from an explicit user action; never pick a demo row implicitly.
+  const [selectedId, setSelectedId] = useState<string>("");
   const [anomaliesOnly, setAnomaliesOnly] = useState(false);
   const [scope, setScope] = useState<InstanceScope>(DEFAULT_INSTANCE_SCOPE);
 
   const app = useMemo(() => findApplication(applications, appId), [appId, applications]);
-  // 依据**解析后的应用**判断是否有实例数据，而不是 URL 里的原始 id：`app` 不校验
-  // 合法性，未知 id 会回落到首个应用，此时摘要与提示仍应按回落后的应用判断。
-  const hasSamples = app ? hasInstanceSamples(app.id) : false;
+  // 未知应用保持空态，不能回落到其它应用冒充请求目标。
+  const hasSamples = app !== null && instances.length > 0;
   const visible = useMemo(
     () => filterInstances(instances, { anomaliesOnly }),
     [anomaliesOnly, instances],
@@ -100,12 +98,10 @@ export function useInstanceMatrix(options: UseInstanceMatrixOptions): InstanceMa
   const hosts = useMemo(() => groupByHost(visible), [visible]);
   const anomalyCount = useMemo(() => countAnomalous(instances), [instances]);
 
-  // 回落顺序：选中项 → 默认实例 → 空。见文件头「选中实例从完整目录解析」。
+  // 明确选择的未知实例不得回落到其它实例；空选择也保持空态。
   const selected = useMemo(
-    () =>
-      findInstance(instances, selectedId) ??
-      findInstance(instances, DEFAULT_SELECTED_INSTANCE_ID),
-    [instances, selectedId],
+    () => (app ? findInstance(instances, selectedId) : null),
+    [app, instances, selectedId],
   );
 
   const series = useMemo(

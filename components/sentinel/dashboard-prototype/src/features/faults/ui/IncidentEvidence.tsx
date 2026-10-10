@@ -1,3 +1,6 @@
+import presentationStyles from "../../../shared/ui/styles/Presentation.module.scss";
+import faultsStyles from "./Faults.module.scss";
+import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 /**
  * 事件证据面板。
  *
@@ -16,7 +19,10 @@ import { LinkButton } from "../../../shared/ui/LinkButton";
 import { Panel } from "../../../shared/ui/Panel";
 import { useTranslation } from "react-i18next";
 import { Status } from "../../../shared/ui/Status";
-import { SEVERITY_LABEL_KEY, type IncidentEvent } from "../model/incident";
+import { SEVERITY_LABEL_KEY } from "../presentation/incidentLabels";
+import { type IncidentEvent } from "../model/incident";
+
+const styleModules = [presentationStyles, faultsStyles] as const;
 
 export interface IncidentEvidenceProps {
   /** 当前选中的事件；`null` 表示没有可展示的事件。 */
@@ -30,7 +36,7 @@ export function IncidentEvidence({ event, onOpenApplication }: IncidentEvidenceP
   if (!event) {
     return (
       <Panel title={t("faults.evidence.title")} subtitle={t("faults.evidence.emptySubtitle")}>
-        <div className="empty">{t("faults.evidence.empty")}</div>
+        <div className={scopedClasses(styleModules, "empty")}>{t("faults.evidence.empty")}</div>
       </Panel>
     );
   }
@@ -38,30 +44,30 @@ export function IncidentEvidence({ event, onOpenApplication }: IncidentEvidenceP
     <Panel
       title={t("faults.evidence.title")}
       subtitle={t("faults.evidence.subtitle")}
-      className="event-detail"
+      className={scopedClasses(styleModules, "event-detail")}
     >
-      <Status tone={event.severity}>
-        {t(SEVERITY_LABEL_KEY[event.severity])}
-      </Status>
+      <Status tone={event.severity}>{t(SEVERITY_LABEL_KEY[event.severity])}</Status>
       <h2>{event.title}</h2>
-      <div className="key-value">
+      <div className={scopedClasses(styleModules, "key-value")}>
         <span>{t("faults.evidence.occurredAt")}</span>
-        <b>{event.date} {event.at}</b>
+        <b>
+          {event.date} {event.at}
+        </b>
       </div>
-      <div className="key-value">
+      <div className={scopedClasses(styleModules, "key-value")}>
         <span>{t("faults.evidence.affectedApp")}</span>
         <b>{event.appId}</b>
       </div>
-      <div className="key-value">
+      <div className={scopedClasses(styleModules, "key-value")}>
         <span>{t("faults.evidence.relatedInstance")}</span>
         <b>{event.instanceId}</b>
       </div>
-      <div className="divider" />
+      <div className={scopedClasses(styleModules, "divider")} />
       <h3>{t("faults.evidence.observed")}</h3>
       <p>{event.observedFact}</p>
       <h3>{t("faults.evidence.suggested")}</h3>
       <p>{event.suggestedAction}</p>
-      <div className="inline-note">
+      <div className={scopedClasses(styleModules, "inline-note")}>
         <Info size={16} /> {t("faults.evidence.noCausality")}
       </div>
       <LinkButton onClick={() => onOpenApplication(event.appId)}>

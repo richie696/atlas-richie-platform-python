@@ -1,3 +1,6 @@
+import faultsStyles from "./Faults.module.scss";
+import presentationStyles from "../../../shared/ui/styles/Presentation.module.scss";
+import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 /**
  * 事件时间线面板。
  *
@@ -15,13 +18,10 @@ import { ActionButton } from "../../../shared/ui/ActionButton";
 import { Panel } from "../../../shared/ui/Panel";
 import { Select } from "../../../shared/ui/Select";
 import { useTranslation } from "react-i18next";
-import {
-  CATEGORY_LABEL_KEY,
-  SEVERITY_FILTER_LABEL_KEY,
-  SEVERITY_FILTER_ORDER,
-  type IncidentEvent,
-  type SeverityFilter,
-} from "../model/incident";
+import { CATEGORY_LABEL_KEY, SEVERITY_FILTER_LABEL_KEY } from "../presentation/incidentLabels";
+import { SEVERITY_FILTER_ORDER, type IncidentEvent, type SeverityFilter } from "../model/incident";
+
+const styleModules = [faultsStyles, presentationStyles] as const;
 
 export interface IncidentTimelineProps {
   /** 当前作用域 + 级别过滤后的事件，按时间倒序。 */
@@ -51,19 +51,25 @@ export function IncidentTimeline({
           isLabelHidden
           value={severity}
           onChange={onSeverityChange}
-          options={SEVERITY_FILTER_ORDER.map((value) => ({ value, label: t(SEVERITY_FILTER_LABEL_KEY[value]) }))}
+          options={SEVERITY_FILTER_ORDER.map((value) => ({
+            value,
+            label: t(SEVERITY_FILTER_LABEL_KEY[value]),
+          }))}
         />
       }
     >
-      <div className="events">
+      <div className={scopedClasses(styleModules, "events")}>
         {events.map((item) => (
           <ActionButton
             type="button"
-            className={`event ${selectedId === item.id ? "active" : ""}`}
+            className={scopedClasses(
+              styleModules,
+              `event sentinel-event-trigger ${selectedId === item.id ? "active" : ""}`,
+            )}
             key={item.id}
             onClick={() => onSelect(item.id)}
           >
-            <i className={`event-dot ${item.severity}`} />
+            <i className={scopedClasses(styleModules, `event-dot ${item.severity}`)} />
             <span>{item.at}</span>
             <div>
               <b>{item.title}</b>
@@ -76,7 +82,7 @@ export function IncidentTimeline({
         ))}
       </div>
       {events.length === 0 && (
-        <div className="empty">{t("faults.timeline.empty")}</div>
+        <div className={scopedClasses(styleModules, "empty")}>{t("faults.timeline.empty")}</div>
       )}
     </Panel>
   );

@@ -1,0 +1,46 @@
+// Private presentation ownership; colors are supplied by the selected skin.
+.trend {
+  width: 100%;
+  min-width: 0;
+}
+
+.plot {
+  width: 100%;
+  min-width: 0;
+}
+.chart-empty {
+  display: grid;
+  place-content: center;
+  height: 100%;
+  margin: 0;
+  color: var(--sentinel-color-text-muted);
+}
+.chart-tooltip {
+  padding: 10px;
+}
+.chart-observations {
+  margin: 8px 0 0;
+  color: var(--sentinel-color-text-muted);
+  font-size: 12px;
+  summary {
+    cursor: pointer;
+    overflow-wrap: anywhere;
+  }
+}
+.chart-table-scroll {
+  overflow: auto;
+  max-height: 240px;
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th,
+  td {
+    text-align: start;
+    padding: 6px 8px;
+  }
+  caption {
+    text-align: start;
+    padding: 8px;
+  }
+}

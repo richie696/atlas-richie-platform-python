@@ -1,9 +1,9 @@
-"""Nacos data-id → :class:`RuleSnapshot` 解码 (M6.1.3)。
+"""Nacos data-id 与 :class:`RuleSnapshot` 之间的纯规则转换。
 
 中文
 ----
-**职责**: 把 Nacos 配置中心返回的 5 个 data-id 原始 JSON (每个对应一种
-rule) 解码成主包 :class:`RuleSnapshot` 格式。
+**职责**: 在 Nacos 五类 data-id JSON 与主包 :class:`RuleSnapshot` 之间
+执行纯数据转换；本模块不负责网络读写。
 
 **不**做的事:
 
@@ -99,7 +99,8 @@ class NacosCodecError(Exception):
     ----
     公开异常树根; 子类:
 
-    - :class:`NacosDecodeError` — JSON 解析 / 字段缺失 / 类型错
+- :class:`NacosDecodeError` — JSON 解析 / 字段缺失 / 类型错
+- :class:`NacosEncodeError` — Sentinel 规则无法无损表示为 Nacos wire
 
     公开理由: extension 测试可以 ``pytest.raises`` 验证字段缺失 /
     类型错映射到 DECODE 分类。
@@ -112,7 +113,7 @@ class NacosCodecError(Exception):
     mapping.
     """
 
-    nacos_error: NacosSourceError
+    nacos_error: NacosSourceError | None = None
 
     def __init__(self, message: str, *, data_id: str | None = None) -> None:
         super().__init__(message)
@@ -124,6 +125,14 @@ class NacosDecodeError(NacosCodecError):
     """JSON 解析 / 字段缺失 / 类型错 (M6.1.4 → DECODE)。"""
 
     nacos_error = NacosSourceError.DECODE
+
+
+class NacosEncodeError(NacosCodecError):
+    """A Sentinel rule cannot be represented losslessly by the Nacos profile."""
+
+    def __init__(self, message: str, *, data_id: str, rule_id: str) -> None:
+        super().__init__(message, data_id=data_id)
+        self.rule_id = rule_id
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +276,233 @@ _SYSTEM_STRATEGY_INT = {0: "direct", 1: "adaptive_capacity"}
 _PARAM_FLOW_SOURCE_INT = {
     0: "positional", 1: "keyword", 2: "header", 3: "query", 4: "cookie", 5: "custom",
 }
+_FLOW_GRADE_WIRE = {FlowGrade.CONCURRENCY: 0, FlowGrade.QPS: 1}
+_FLOW_CONTROL_WIRE = {
+    FlowControl.REJECT: 0,
+    FlowControl.WARM_UP: 1,
+    FlowControl.QUEUE: 2,
+}
+_FLOW_SCOPE_WIRE = {
+    FlowScope.DIRECT: 0,
+    FlowScope.ORIGIN: 1,
+    FlowScope.ASSOCIATED_RESOURCE: 2,
+    FlowScope.CALL_PATH: 3,
+}
+_DEGRADE_STRATEGY_WIRE = {
+    DegradeStrategy.SLOW_CALL_RATIO: 0,
+    DegradeStrategy.ERROR_RATIO: 1,
+    DegradeStrategy.ERROR_COUNT: 2,
+    DegradeStrategy.SLOW_CALL_COUNT: 3,
+}
+_AUTHORITY_STRATEGY_WIRE = {
+    AuthorityStrategy.ALLOW_LIST: 0,
+    AuthorityStrategy.DENY_LIST: 1,
+}
+_AUTHORITY_UNUSED_LIMIT_APP = "default"
+_SYSTEM_STRATEGY_WIRE = {
+    SystemStrategy.DIRECT: 0,
+    SystemStrategy.ADAPTIVE_CAPACITY: 1,
+}
+_PARAM_FLOW_PROFILE_GRADE = 1
+_PARAM_FLOW_SOURCE_WIRE = {
+    ParameterSource.POSITIONAL: 0,
+    ParameterSource.KEYWORD: 1,
+    ParameterSource.HEADER: 2,
+    ParameterSource.QUERY: 3,
+    ParameterSource.COOKIE: 4,
+    ParameterSource.CUSTOM: 5,
+}
+
+
+def encode_rule_snapshot(
+    snapshot: RuleSnapshot,
+    *,
+    config: NacosRuleSourceConfig,
+) -> Mapping[str, str]:
+    """Encode a complete snapshot into the five deterministic Nacos JSON values.
+
+    The returned mapping is keyed by configured data-id. Unsupported or
+    lossy values fail closed; no network or Nacos SDK call is performed.
+    """
+    grouped: dict[str, list[dict[str, object]]] = {
+        _RULE_TYPE_FLOW: [],
+        _RULE_TYPE_DEGRADE: [],
+        _RULE_TYPE_PARAM_FLOW: [],
+        _RULE_TYPE_SYSTEM: [],
+        _RULE_TYPE_AUTHORITY: [],
+    }
+    for mapping_id, rule in snapshot.rules.items():
+        supported_rule_types = (
+            FlowRule,
+            DegradeRule,
+            ParamFlowRule,
+            SystemRule,
+            AuthorityRule,
+        )
+        if not isinstance(rule, supported_rule_types):
+            raise NacosEncodeError(
+                "snapshot contains an unsupported rule value",
+                data_id=config.data_id_for(_RULE_TYPE_FLOW),
+                rule_id=str(mapping_id),
+            )
+        if rule.rule_id != mapping_id:
+            kind = _rule_type(rule)
+            raise NacosEncodeError(
+                "snapshot mapping identity does not match the rule identity",
+                data_id=config.data_id_for(kind),
+                rule_id=rule.rule_id,
+            )
+        kind = _rule_type(rule)
+        grouped[kind].append(_encode_rule(rule, config.data_id_for(kind)))
+
+    encoded: dict[str, str] = {}
+    for kind, rules in grouped.items():
+        rules.sort(key=lambda item: str(item["id"]))
+        data_id = config.data_id_for(kind)
+        try:
+            encoded[data_id] = json.dumps(
+                rules,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        except (TypeError, ValueError) as exc:
+            raise NacosEncodeError(
+                "snapshot contains a value outside the Nacos JSON profile",
+                data_id=data_id,
+                rule_id="snapshot",
+            ) from exc
+    return encoded
+
+
+def _rule_type(
+    rule: FlowRule | DegradeRule | ParamFlowRule | SystemRule | AuthorityRule,
+) -> str:
+    match rule:
+        case FlowRule():
+            return _RULE_TYPE_FLOW
+        case DegradeRule():
+            return _RULE_TYPE_DEGRADE
+        case ParamFlowRule():
+            return _RULE_TYPE_PARAM_FLOW
+        case SystemRule():
+            return _RULE_TYPE_SYSTEM
+        case AuthorityRule():
+            return _RULE_TYPE_AUTHORITY
+    raise TypeError("unsupported rule value")
+
+
+def _encode_rule(
+    rule: FlowRule | DegradeRule | ParamFlowRule | SystemRule | AuthorityRule,
+    data_id: str,
+) -> dict[str, object]:
+    match rule:
+        case FlowRule():
+            if rule.behavior is not _decode_flow_behavior(rule.control):
+                raise _encode_error(
+                    rule, data_id, "Nacos stores flow behavior and control together"
+                )
+            body: dict[str, object] = {
+                "id": rule.rule_id,
+                "resource": rule.selector.pattern,
+                "priority": rule.priority,
+                "grade": _FLOW_GRADE_WIRE[rule.grade],
+                "count": rule.threshold,
+                "controlBehavior": _FLOW_CONTROL_WIRE[rule.control],
+                "scope": _FLOW_SCOPE_WIRE[rule.scope],
+                "maxQueueingTimeMs": rule.max_queueing_time_ms,
+                "warmUpPeriodSec": rule.warm_up_period_sec,
+            }
+            if rule.scope_reference is not None:
+                body["scopeReference"] = rule.scope_reference
+            return body
+        case DegradeRule():
+            count = (
+                rule.slow_call_threshold_ms
+                if rule.strategy
+                in (DegradeStrategy.SLOW_CALL_RATIO, DegradeStrategy.SLOW_CALL_COUNT)
+                else rule.error_count_threshold
+            )
+            return {
+                "id": rule.rule_id,
+                "resource": rule.selector.pattern,
+                "priority": rule.priority,
+                "grade": _DEGRADE_STRATEGY_WIRE[rule.strategy],
+                "count": count,
+                "timeWindow": rule.recovery_timeout_ms,
+                "exceptionRatio": rule.error_ratio_threshold,
+                "errorCountThreshold": rule.error_count_threshold,
+                "slowCallThresholdMs": rule.slow_call_threshold_ms,
+                "slowRatioThreshold": rule.slow_call_ratio_threshold,
+                "minRequestAmount": rule.minimum_request_count,
+                "statIntervalMs": rule.stat_window_ms,
+                "recoveryTimeout": rule.half_open_probe_count,
+            }
+        case ParamFlowRule():
+            return {
+                "id": rule.rule_id,
+                "resource": rule.selector.pattern,
+                "priority": rule.priority,
+                "grade": _PARAM_FLOW_PROFILE_GRADE,
+                "paramKeyType": _PARAM_FLOW_SOURCE_WIRE[rule.source],
+                "paramIdx": rule.arg_index,
+                "paramKey": rule.arg_key,
+                "extractorId": rule.extractor_id,
+                "count": rule.threshold,
+                "controlIntervalMs": rule.stat_window_ms,
+                "maxQueueingTimeMs": rule.max_distinct_values,
+                "idleTtlMs": rule.idle_ttl_ms,
+                "overflow": rule.overflow_error,
+            }
+        case SystemRule():
+            body = {
+                "id": rule.rule_id,
+                "priority": rule.priority,
+                "strategy": _SYSTEM_STRATEGY_WIRE[rule.strategy],
+                "minRt": rule.min_stable_rt_ms,
+                "maxThread": rule.max_concurrent_adaptive,
+            }
+            optional_fields = (
+                ("highestSystemLoad", rule.max_cpu_usage),
+                ("avgLoad", rule.max_load),
+                ("maxRt", rule.max_event_loop_lag_ms),
+                ("qps", rule.max_in_flight_qps),
+            )
+            body.update(
+                {name: value for name, value in optional_fields if value is not None}
+            )
+            return body
+        case AuthorityRule():
+            return {
+                "id": rule.rule_id,
+                "resource": rule.selector.pattern,
+                "priority": rule.priority,
+                "limitApp": _AUTHORITY_UNUSED_LIMIT_APP,
+                "strategy": _AUTHORITY_STRATEGY_WIRE[rule.strategy],
+                "origins": list(rule.origins),
+                "defaultDeny": rule.default_deny_unresolved,
+            }
+    raise _encode_error(rule, data_id, "snapshot contains an unsupported rule value")
+
+
+def _decode_flow_behavior(control: FlowControl) -> FlowBehavior:
+    match control:
+        case FlowControl.REJECT:
+            return FlowBehavior.REJECT
+        case FlowControl.WARM_UP:
+            return FlowBehavior.WARM_UP
+        case FlowControl.QUEUE:
+            return FlowBehavior.REJECT
+
+
+def _encode_error(rule: object, data_id: str, message: str) -> NacosEncodeError:
+    rule_id = getattr(rule, "rule_id", "unknown")
+    return NacosEncodeError(
+        message,
+        data_id=data_id,
+        rule_id=str(rule_id),
+    )
 
 
 def _decode_flow(data_id: str, items: list[dict[str, Any]]) -> dict[str, FlowRule]:
@@ -649,5 +885,7 @@ def decode_rule_snapshot(
 __all__ = [
     "NacosCodecError",
     "NacosDecodeError",
+    "NacosEncodeError",
     "decode_rule_snapshot",
+    "encode_rule_snapshot",
 ]

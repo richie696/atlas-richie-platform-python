@@ -1,3 +1,6 @@
+import actionButtonStyles from "../../../shared/ui/ActionButton.module.scss";
+import rulesStyles from "./Rules.module.scss";
+import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 /**
  * 规则集版本时间线。
  *
@@ -15,12 +18,11 @@ import { useState } from "react";
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { Panel } from "../../../shared/ui/Panel";
 import { Status } from "../../../shared/ui/Status";
-import {
-  VERSION_STATE,
-  VERSION_STATE_TONE,
-  type RuleVersion,
-  type VersionPlanCopy,
-} from "../model/ruleVersion";
+import { VERSION_STATE, type RuleVersion } from "../model/ruleVersion";
+import { VERSION_STATE_TONE } from "../presentation/versionPresentation";
+import { type VersionPlanCopy } from "../i18n/versionPlanCopy";
+
+const styleModules = [actionButtonStyles, rulesStyles] as const;
 
 export interface VersionPlanProps {
   readonly versions: readonly RuleVersion[];
@@ -37,35 +39,33 @@ export function VersionPlan({ versions, copy }: VersionPlanProps) {
       action={
         <ActionButton
           type="button"
-          className="secondary-button"
+          className={scopedClasses(styleModules, "secondary-button")}
           onClick={() => setMessage(`${copy.previewOnly} ${copy.immutable}`)}
         >
           {copy.createVersion}
         </ActionButton>
       }
-      className="version-plan-panel"
+      className={scopedClasses(styleModules, "version-plan-panel")}
     >
-      <div className="version-plan-list">
+      <div className={scopedClasses(styleModules, "version-plan-list")}>
         {versions.map((version) => (
           <article
-            className={`version-plan version-${version.state}`}
+            className={scopedClasses(styleModules, `version-plan version-${version.state}`)}
             key={version.id}
           >
-            <div className="version-marker" aria-hidden="true" />
-            <div className="version-main">
-              <div className="version-heading">
+            <div className={scopedClasses(styleModules, "version-marker")} aria-hidden="true" />
+            <div className={scopedClasses(styleModules, "version-main")}>
+              <div className={scopedClasses(styleModules, "version-heading")}>
                 <b>{version.name}</b>
                 <code>{version.id}</code>
-                <Status tone={VERSION_STATE_TONE[version.state]}>
-                  {copy[version.state]}
-                </Status>
+                <Status tone={VERSION_STATE_TONE[version.state]}>{copy[version.state]}</Status>
               </div>
               <span>
                 {version.summary} · {version.source} · {version.checksum}
               </span>
             </div>
             {version.state === VERSION_STATE.Scheduled ? (
-              <div className="version-window">
+              <div className={scopedClasses(styleModules, "version-window")}>
                 <span>
                   {copy.plannedWindow} · {copy.timeZone}
                 </span>
@@ -77,20 +77,18 @@ export function VersionPlan({ versions, copy }: VersionPlanProps) {
                 </small>
               </div>
             ) : (
-              <div className="version-window">
+              <div className={scopedClasses(styleModules, "version-window")}>
                 <span>{copy.publishedAt}</span>
                 <b>{version.publishedAt}</b>
                 <small>
-                  {version.state === VERSION_STATE.Active
-                    ? copy.noEnd
-                    : copy.effectiveWindow}
+                  {version.state === VERSION_STATE.Active ? copy.noEnd : copy.effectiveWindow}
                 </small>
               </div>
             )}
           </article>
         ))}
       </div>
-      {message && <div className="version-note">{message}</div>}
+      {message && <div className={scopedClasses(styleModules, "version-note")}>{message}</div>}
     </Panel>
   );
 }

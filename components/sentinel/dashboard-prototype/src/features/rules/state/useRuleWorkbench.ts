@@ -16,48 +16,26 @@
  * - **校验反馈**是草稿的派生结论，由命令触发而不是由字段改动触发；用户继续编辑时
  *   反馈立即失效，否则会显示针对旧内容的结论。
  *
- * 本 Hook 不发请求，也不做校验之外的领域判断。接入 Console API 后，规则目录与草稿
- * 的读取会由 feature gateway 提供，本 Hook 的命令签名保持不变。
+ * 本 Hook 不发请求。真实草稿保存、冲突与导航保护需接入 feature 用例，不能把当前
+ * 单条本地草稿合同称为已经完成的 Console 工作流。
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
-import { ALL_APPLICATIONS, type TimeRangeId } from "../../../app/router/route.constants";
-import { RULE_KIND_ALL, type RuleKind, type RuleKindFilter } from "../model/ruleKinds";
-import { cloneRule, type RuleDraft } from "../model/ruleDraft";
-import { filterRuleCatalog, validateRuleDraft, type RuleCatalogEntry } from "../model/rulePolicy";
+import { ALL_APPLICATIONS, type TimeRangeId } from "../../../shared/types/navigation";
+import type { RuleKindFilter } from "../model/ruleKinds";
+import type { TypedRuleDraft } from "../editor/ruleDraft";
+import type { RuleWorkbenchEntry } from "../editor/ruleEntry";
+import {
+  createDraftSession,
+  resolveDraftSession,
+  editDraftSession,
+  type RuleDraftSession,
+  type RuleValidationState,
+} from "../editor/ruleEditing";
+import { filterRuleCatalog, validateRuleDraft } from "../editor/rulePolicy";
 
 /** 校验反馈的两种状态。`idle` 表示尚未执行校验，而不是「校验通过」。 */
-export type RuleValidationState =
-  | { readonly status: "idle" }
-  | { readonly status: "passed" }
-  | { readonly status: "failed"; readonly issues: ReturnType<typeof validateRuleDraft> };
-
-/** 目录条目 + 草稿快照。一条规则在目录和编辑器之间共享同一份内容。 */
-/**
- * 目录条目的展示摘要。
- *
- * 中文
- * ----
- * 这里只列**确实被渲染**的字段。曾经还有 `kind`（"流量控制"）与 `status`
- * （"生效中"）两个字段，它们在界面上零消费——目录的类型列用 `types[ruleType].label`
- * 从协议值派生，状态列用 `activeLabel`；两处中文字面量于是永远不出现，却让
- * 「界面上有多少中文」这个问题无法靠读代码回答。
- *
- * 同理，`kind` 与 `status` 都不该是数据：规则类型已是 `ruleType`（协议枚举），
- * 版本状态由 `versions` 区块单独呈现。留在 fixture 里只会让人以为它们参与渲染，
- * 也让翻译永远漏掉它们。
- *
- * `scope` / `threshold` / `provider` / `version` 则**在用**：分别是生效范围示例、
- * 目录阈值列、配置来源标签与版本号。
- */
-export interface RuleWorkbenchEntry extends RuleCatalogEntry {
-  readonly threshold: string;
-  readonly scope: string;
-  readonly provider: string;
-  readonly version: string;
-  /** 写回配置中心的兼容内容。 */
-  readonly sentinelRule: RuleDraft;
-}
+export type { RuleValidationState } from "../editor/ruleEditing";
 
 export interface UseRuleWorkbenchOptions {
   /** 目录全集。生产实现来自 gateway；原型阶段由 fixture 提供。 */
@@ -86,7 +64,7 @@ export interface RuleWorkbench {
   /** 当前选中的目录条目；筛选后可能为空。 */
   readonly selected: RuleWorkbenchEntry | null;
   /** 编辑器正在编辑的草稿副本。 */
-  readonly draft: RuleDraft;
+  readonly draft: TypedRuleDraft | null;
   /** 是否处于编辑态。 */
   readonly editing: boolean;
   readonly validation: RuleValidationState;
@@ -98,7 +76,7 @@ export interface RuleWorkbench {
   /** 切换选中项：丢弃草稿、退出编辑态、清空校验反馈。 */
   select: (entry: RuleWorkbenchEntry) => void;
   /** 字段改动：更新草稿并进入编辑态，校验反馈失效。 */
-  patchDraft: (next: RuleDraft) => void;
+  patchDraft: (next: TypedRuleDraft) => void;
   /** 显式进入编辑态（示例草稿按钮 / 编辑草稿按钮）。 */
   beginEditing: () => void;
   /** 执行本地语义校验。 */
@@ -116,15 +94,10 @@ export function useRuleWorkbench(options: UseRuleWorkbenchOptions): RuleWorkbenc
    * 只存 id、不存条目：条目是 `visible` 的派生结果，存下来就成了第二份真相。
    * 初值用 `null` 而不是 `entries[0].id`——旧实现在这里取目录全集的第一项，
    * 而第一项的类型与当前筛选无关。深链 `view=degrade` 时该条目必然被滤掉，
-   * 于是 `selected` 恒为 `null`，检视器永远落在空态。改由下面的 effect 在
-   * 首次可见集确定后收敛。
+   * 于是 `selected` 恒为 `null`。现在从可见集派生目标，再解析其草稿会话。
    */
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<RuleDraft>(() =>
-    entries[0] ? cloneRule(entries[0].sentinelRule) : ({} as RuleDraft),
-  );
-  const [editing, setEditing] = useState(false);
-  const [validation, setValidation] = useState<RuleValidationState>({ status: "idle" });
+  const [storedSession, setSession] = useState<RuleDraftSession | null>(null);
 
   const visible = useMemo(
     () =>
@@ -148,7 +121,7 @@ export function useRuleWorkbench(options: UseRuleWorkbenchOptions): RuleWorkbenc
    *    而不是「目录里有东西但右侧是空的」。
    * 2. 筛选/搜索变化后旧选中项消失时，落到新的第一条；筛选结果为空时才真的
    *    没有选中项，此时检视器展示空态。
-   * 3. `draft` 与 `selected` 的对应关系由 `draftFor` 保持：`selected` 一旦改变，
+   * 3. `draft` 与 `selected` 的对应关系由 `resolveDraftSession` 保持：`selected` 一旦改变，
    *    草稿随之换成对应内容，不存在「草稿还留着上一条规则」的窗口。
    */
   const effectiveId = visible.some((entry) => entry.id === selectedId)
@@ -160,48 +133,46 @@ export function useRuleWorkbench(options: UseRuleWorkbenchOptions): RuleWorkbenc
     [effectiveId, visible],
   );
 
-  // 收敛后的选中项变化时，草稿必须跟着换成同一份内容。
-  // 放在 effect 而不是渲染期写 state：渲染期写会触发 React 的「渲染中更新」警告。
-  useEffect(() => {
-    if (!selected) return;
-    setSelectedId(selected.id);
-    setDraft(cloneRule(selected.sentinelRule));
-    setEditing(false);
-    setValidation({ status: "idle" });
-    // `selected` 每次可见集变化都是新引用；只依赖它的 id 与内容，
-    // 避免用户编辑草稿时被反复重置（editing/draft 不在依赖里）。
-  }, [selected?.id, selected?.sentinelRule]);
+  // Derive the exact target before commit: no post-render Effect and no empty object assertion.
+  const session = useMemo(
+    () => resolveDraftSession(selected, storedSession),
+    [selected, storedSession],
+  );
+  // Conditional adjustment of this component's own state follows React's documented pattern.
+  // Reset before children commit so discarded drafts cannot resurface. No external effect here.
+  if (session !== storedSession) setSession(session);
 
   const select = useCallback((entry: RuleWorkbenchEntry) => {
     setSelectedId(entry.id);
-    setDraft(cloneRule(entry.sentinelRule));
-    setEditing(false);
-    setValidation({ status: "idle" });
+    setSession(createDraftSession(entry));
   }, []);
 
-  const patchDraft = useCallback((next: RuleDraft) => {
-    setDraft(next);
-    setEditing(true);
-    setValidation({ status: "idle" });
-  }, []);
+  const patchDraft = useCallback(
+    (next: TypedRuleDraft) => {
+      if (session) setSession(editDraftSession(session, next));
+    },
+    [session],
+  );
 
   const beginEditing = useCallback(() => {
-    setEditing(true);
-    setValidation({ status: "idle" });
-  }, []);
+    if (session) setSession({ ...session, editing: true, validation: { status: "idle" } });
+  }, [session]);
 
   const runValidation = useCallback(() => {
-    if (!selected) return;
-    const issues = validateRuleDraft(selected.ruleType as RuleKind, draft);
-    setValidation(issues.length > 0 ? { status: "failed", issues } : { status: "passed" });
-  }, [draft, selected]);
+    if (!session) return;
+    const issues = validateRuleDraft(session.rule);
+    setSession({
+      ...session,
+      validation: issues.length > 0 ? { status: "failed", issues } : { status: "passed" },
+    });
+  }, [session]);
 
   return {
     visible,
     selected,
-    draft,
-    editing,
-    validation,
+    draft: session?.rule ?? null,
+    editing: session?.editing ?? false,
+    validation: session?.validation ?? { status: "idle" },
     search,
     kindFilter: options.kindFilter,
     setSearch,

@@ -12,7 +12,7 @@
  *
  * - 协议值（角色 id、账号状态、能力名）在这里定义成常量对象，值即 API 契约值。
  * - 角色目录属于领域常量（授权只有两种角色），因此留在 model；**账号列表是示例数据**，
- *   已迁到 `features/identity/fixtures/identityFixtures.ts`。
+ *   仅在 identity feature 的 Mock fixture 中定义，不属于领域目录。
  * - 校验返回**结构化问题**（消息键 + 参数），翻译由 UI 层完成；这样「管理员密码是否
  *   够长」这种领域判断不再被绑死在界面语言上。
  */
@@ -51,11 +51,8 @@ export type IdentityCapability = SessionCapability;
 /** 单个角色的定义。`permissions` 是 {@link IDENTITY_CAPABILITY} 的子集。 */
 export interface IdentityRole {
   readonly id: IdentityRoleId;
-  /** 名称与说明的**语言键**。译文在 `features/identity/i18n/locales.ts`。 */
-  readonly labelKey: string;
-  readonly descriptionKey: string;
   /** 能力码（协议值，不翻译）。 */
-  readonly permissions: readonly string[];
+  readonly permissions: readonly IdentityCapability[];
 }
 
 /**
@@ -93,18 +90,23 @@ export interface LoginCredentials {
   readonly password: string;
 }
 
+/**
+ * Return the account lookup form shared with the Python Console contract.
+ * Display values preserve case and compatibility characters; only identity
+ * comparisons use ECMAScript trim, NFKC normalization, and locale-neutral lowercasing.
+ */
+export function canonicalizeAccountUsername(value: string): string {
+  return value.trim().normalize("NFKC").toLowerCase();
+}
+
 /** 角色目录。顺序即界面选项顺序。 */
 export const IDENTITY_ROLES: readonly IdentityRole[] = Object.freeze([
   {
     id: IDENTITY_ROLE.Admin,
-    labelKey: "roles.role.admin.title",
-    descriptionKey: "roles.role.admin.description",
     permissions: [IDENTITY_CAPABILITY.MetricsView, IDENTITY_CAPABILITY.RulesWrite],
   },
   {
     id: IDENTITY_ROLE.View,
-    labelKey: "roles.role.view.title",
-    descriptionKey: "roles.role.view.description",
     permissions: [IDENTITY_CAPABILITY.MetricsView],
   },
 ] satisfies readonly IdentityRole[]);
@@ -123,7 +125,7 @@ export function roleFor(roleId: IdentityRoleId): IdentityRole {
  * 只需决定如何处理非法值（本 feature 一律保持原状态）。
  */
 export function isIdentityRoleId(value: string): value is IdentityRoleId {
-  return (IDENTITY_ROLES as readonly { id: string }[]).some((role) => role.id === value);
+  return IDENTITY_ROLES.some((role) => role.id === value);
 }
 
 /** 状态切换命令的纯计算：启用 ⇄ 停用。 */
@@ -148,7 +150,8 @@ export function toAccountSummary(
 }
 
 /** 新建账号表单校验的消息键。翻译发生在 UI 层。 */
-export type AccountDraftIssueKey = "account.credentialsRequired" | "account.passwordTooShort";
+export type AccountDraftIssueKey =
+  "account.credentialsRequired" | "account.passwordTooShort" | "account.invalidRole";
 
 /** 登录表单校验的消息键。 */
 export type LoginIssueKey = "account.loginRequired";
@@ -170,14 +173,13 @@ export function validateAccountDraft(draft: AccountDraft): readonly AccountDraft
   if (draft.password.length < PASSWORD_MIN_LENGTH) {
     return [{ key: "account.passwordTooShort", params: { min: PASSWORD_MIN_LENGTH } }];
   }
+  if (!isIdentityRoleId(draft.roleId)) return [{ key: "account.invalidRole" }];
   return [];
 }
 
 /** 登录表单的本地必填校验。凭证正确性只能由服务端判断。 */
-export function validateLoginCredentials(
-  credentials: LoginCredentials,
-): readonly LoginIssue[] {
-  if (!credentials.username || !credentials.password) {
+export function validateLoginCredentials(credentials: LoginCredentials): readonly LoginIssue[] {
+  if (!credentials.username.trim() || !credentials.password) {
     return [{ key: "account.loginRequired" }];
   }
   return [];

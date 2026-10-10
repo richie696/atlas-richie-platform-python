@@ -1,3 +1,7 @@
+import applicationsStyles from "./Applications.module.scss";
+import statusStyles from "../../../shared/ui/Status.module.scss";
+import presentationStyles from "../../../shared/ui/styles/Presentation.module.scss";
+import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 /**
  * 实例健康矩阵面板。
  *
@@ -18,10 +22,13 @@ import { CheckboxField } from "../../../shared/ui/CheckboxField";
 import { DataTable as Table } from "../../../shared/ui/DataTable";
 import { Panel } from "../../../shared/ui/Panel";
 import { Status } from "../../../shared/ui/Status";
-import { formatInstanceNumber } from "../model/instanceFormat";
+import { formatLocaleNumber } from "../../../shared/presentation/formatLocaleNumber";
 import { isBlockingRateAlert, isUnderResourcePressure } from "../model/instancePolicy";
 import type { HostGroup, InstanceRecord } from "../model/instance";
+import { instanceStatusLabelKey } from "../presentation/instanceStatus";
 import { useTranslation } from "react-i18next";
+
+const styleModules = [applicationsStyles, statusStyles, presentationStyles] as const;
 
 /** 列顺序即渲染顺序，也决定宿主机表头行的 `colSpan`。 */
 const INSTANCE_MATRIX_HEADS = [
@@ -48,7 +55,11 @@ export interface InstanceMatrixPanelProps {
 
 /** 资源使用率条。`tone` 决定颜色语义，宽度由调用方给的百分数决定。 */
 function Usage({ value, tone = "blue" }: { value: number; tone?: string }) {
-  return <span className="usage"><i className={`usage-${tone}`} style={{ width: `${value}%` }} /></span>;
+  return (
+    <span className={scopedClasses(styleModules, "usage")}>
+      <i className={scopedClasses(styleModules, `usage-${tone}`)} style={{ width: `${value}%` }} />
+    </span>
+  );
 }
 
 /**
@@ -69,18 +80,63 @@ function HostRows({
   setSelectedId: (id: string) => void;
 }) {
   const [open, setOpen] = useState(true);
-  const { t } = useTranslation();
-  return <>
-    <tr className="host-row"><td colSpan={INSTANCE_MATRIX_HEADS.length}><ActionButton type="button" onClick={() => setOpen(!open)}><CaretDown size={14} className={open ? "" : "rotated"} /> {host} <span>({rows.length}{t("applications.matrix.hostCountUnit")}</span></ActionButton></td></tr>
-    {open && rows.map((row) => <tr key={row.id} className={`instance-row ${selectedId === row.id ? "selected" : ""} ${row.status !== "healthy" ? row.status : ""}`} onClick={() => setSelectedId(row.id)}>
-      <td><ActionButton type="button" onClick={() => setSelectedId(row.id)}>{row.id}</ActionButton></td>
-      <td><Status tone={row.status}>{row.statusLabel}</Status></td>
-      <td>{row.cpu}% <Usage value={row.cpu} tone={isUnderResourcePressure(row.cpu) ? "red" : "blue"} /></td>
-      <td>{row.memory}% <Usage value={row.memory} tone={isUnderResourcePressure(row.memory) ? "amber" : "blue"} /></td>
-      <td>{formatInstanceNumber(row.qps)}</td><td>{row.rt} ms</td>
-      <td className={isBlockingRateAlert(row.blocked) ? "red" : ""}>{row.blocked.toFixed(2)}%</td><td>{row.version}</td>
-    </tr>)}
-  </>;
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? i18n.language;
+  return (
+    <>
+      <tr className={scopedClasses(styleModules, "host-row")}>
+        <td colSpan={INSTANCE_MATRIX_HEADS.length}>
+          <ActionButton type="button" onClick={() => setOpen(!open)}>
+            <CaretDown size={14} className={scopedClasses(styleModules, open ? "" : "rotated")} />{" "}
+            {host}{" "}
+            <span>
+              ({rows.length}
+              {t("applications.matrix.hostCountUnit")}
+            </span>
+          </ActionButton>
+        </td>
+      </tr>
+      {open &&
+        rows.map((row) => (
+          <tr
+            key={row.id}
+            className={scopedClasses(
+              styleModules,
+              `instance-row ${selectedId === row.id ? "selected" : ""} ${row.status !== "healthy" ? row.status : ""}`,
+            )}
+            onClick={() => setSelectedId(row.id)}
+          >
+            <td>
+              <ActionButton type="button" onClick={() => setSelectedId(row.id)}>
+                {row.id}
+              </ActionButton>
+            </td>
+            <td>
+              <Status tone={row.status}>{t(instanceStatusLabelKey(row))}</Status>
+            </td>
+            <td>
+              {row.cpu}%{" "}
+              <Usage value={row.cpu} tone={isUnderResourcePressure(row.cpu) ? "red" : "blue"} />
+            </td>
+            <td>
+              {row.memory}%{" "}
+              <Usage
+                value={row.memory}
+                tone={isUnderResourcePressure(row.memory) ? "amber" : "blue"}
+              />
+            </td>
+            <td>{formatLocaleNumber(row.qps, locale)}</td>
+            <td>{row.rt} ms</td>
+            <td
+              className={scopedClasses(styleModules, isBlockingRateAlert(row.blocked) ? "red" : "")}
+            >
+              {row.blocked.toFixed(2)}%
+            </td>
+            <td>{row.version}</td>
+          </tr>
+        ))}
+    </>
+  );
 }
 
 export function InstanceMatrixPanel({
@@ -100,9 +156,14 @@ export function InstanceMatrixPanel({
         filter: t(anomaliesOnly ? "applications.matrix.anomaliesOnly" : "applications.matrix.all"),
       })}
       action={
-        <CheckboxField label={t("applications.matrix.anomaliesOnly")} checked={anomaliesOnly} onChange={onAnomaliesOnlyChange} className="checkbox" />
+        <CheckboxField
+          label={t("applications.matrix.anomaliesOnly")}
+          checked={anomaliesOnly}
+          onChange={onAnomaliesOnlyChange}
+          className={scopedClasses(styleModules, "checkbox")}
+        />
       }
-      className="instance-panel"
+      className={scopedClasses(styleModules, "instance-panel")}
     >
       <Table
         heads={INSTANCE_MATRIX_HEADS.map((key) => t(key))}
@@ -115,7 +176,7 @@ export function InstanceMatrixPanel({
             setSelectedId={onSelectInstance}
           />
         ))}
-        className="instances-table"
+        className={scopedClasses(styleModules, "instances-table")}
       />
     </Panel>
   );

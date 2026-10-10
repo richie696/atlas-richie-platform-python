@@ -1,0 +1,15 @@
+// Private presentation ownership; colors are supplied by the selected skin.
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 0;
+  color: var(--sentinel-color-accent);
+  font-size: 12px;
+  font-weight: 650;
+  padding: 3px;
+}
+.link-button:hover {
+  text-decoration: underline;
+}

@@ -11,7 +11,6 @@
  * 既无法单测，也无法被第二个消费者复用。现在它们都是具名纯函数。
  */
 import {
-  APP_WITH_INSTANCE_SAMPLES,
   BLOCKED_RATE_ALERT_PERCENT,
   HEALTH_LEVEL,
   INSTANCE_SCOPE,
@@ -96,11 +95,6 @@ export function findApplication(
   id: string,
 ): ApplicationRecord | null {
   return applications.find((item) => item.id === id) ?? null;
-}
-
-/** 该应用是否有实例示例数据。只有一个应用有，详见 `APP_WITH_INSTANCE_SAMPLES`。 */
-export function hasInstanceSamples(appId: string): boolean {
-  return appId === APP_WITH_INSTANCE_SAMPLES;
 }
 
 /**
