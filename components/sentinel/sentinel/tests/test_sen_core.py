@@ -384,6 +384,9 @@ class EntryReverseReleaseTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(s_after.enter_calls, [])
         # node's lease must still be released (only collected lease).
         self.assertEqual(global_releases, ["slot@100"])
+        self.assertEqual(s_node.completion_calls, [OutcomeKind.BLOCKED])
+        self.assertEqual(s_flow.completion_calls, [])
+        self.assertEqual(s_after.completion_calls, [])
         # flow's lease does not exist (raise before returning), so no release.
         self.assertEqual(s_flow.release_calls, [])
 

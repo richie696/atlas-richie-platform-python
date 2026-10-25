@@ -21,19 +21,29 @@ from .sink import MetricSink, NoopMetricSink
 from .sliding_window import SlidingWindow
 from .snapshot import (
     ALLOWED_LABEL_KEYS,
+    DEFAULT_RT_HISTOGRAM_BOUNDS_NS,
+    MAX_RT_HISTOGRAM_BOUND_COUNT,
+    LatencyHistogram,
     MetricLabelKey,
     MetricSnapshot,
+    latency_histogram_bucket_index,
     make_label,
+    validate_rt_histogram_bounds,
 )
 
 __all__ = [
-    "SlidingWindow",
-    "MetricRegistry",
-    "MetricSnapshot",
-    "MetricLabelKey",
     "ALLOWED_LABEL_KEYS",
-    "make_label",
+    "DEFAULT_RT_HISTOGRAM_BOUNDS_NS",
+    "MAX_RT_HISTOGRAM_BOUND_COUNT",
+    "LatencyHistogram",
+    "MetricLabelKey",
+    "MetricRegistry",
     "MetricSink",
+    "MetricSnapshot",
     "NoopMetricSink",
     "ResourceCardinalityExceededEvent",
+    "SlidingWindow",
+    "latency_histogram_bucket_index",
+    "make_label",
+    "validate_rt_histogram_bounds",
 ]

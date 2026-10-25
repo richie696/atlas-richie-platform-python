@@ -74,7 +74,8 @@ class Outcome:
       SentinelBlockedError,``CANCELLED`` 时 ``asyncio.CancelledError``,
       ``SUCCEEDED`` / ``ADMITTED`` 时为 ``None``)
     - `result` — 业务返回值(``SUCCEEDED`` 时设置,其它场景为 ``None``)
-    - `elapsed_ns` — entry 耗时(纳秒,``Engine.entry()`` 退出时记录)
+    - `elapsed_ns` — entry 单调时钟耗时(纳秒,从 Slot 检查开始到
+      lease 释放完成;拒绝时从检查开始到拒绝处理完成)
     - `trace_id` — 与 ``SentinelContext.trace_id`` 一致,方便关联
 
     English
@@ -87,7 +88,8 @@ class Outcome:
       ``SentinelBlockedError`` subclass, ``CANCELLED`` =
       ``asyncio.CancelledError``, ``SUCCEEDED`` / ``ADMITTED`` = ``None``).
     - ``result`` — business return value (``SUCCEEDED`` only).
-    - ``elapsed_ns`` — entry wall time in nanoseconds.
+    - ``elapsed_ns`` — monotonic entry duration in nanoseconds, from
+      Slot admission checks through lease release (or rejection handling).
     - ``trace_id`` — same as ``SentinelContext.trace_id`` for correlation.
     """
 

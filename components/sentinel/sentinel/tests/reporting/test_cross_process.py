@@ -1,11 +1,12 @@
-"""M6.5 跨进程验收测试 (M6.5 父任务 "真实验收" 段).
+"""M6.5 Reporter + Fake Collector integration simulation.
 
 中文
 ----
-PLANNING §M6.5 真实验收: 两个独立 Agent 进程向真实 Collector 上报;
-注入重复、乱序、断线和重启后, 聚合结果不双计数, Reporter 也未阻塞
-受保护请求. 验收 demo 只证明协议和 collector, 不宣称已交付聚合
-Dashboard / Web UI.
+PLANNING §M6.5 historical acceptance record: this suite uses multiple
+Reporter objects in one test process and a fake asyncio HTTP Collector.
+It exercises the reporting wire path and controlled dedup/recovery behavior,
+but does not prove OS-level process isolation or a production/cross-language
+Collector deployment. It does not deliver an aggregated Dashboard / Web UI.
 
 测试范围:
 
@@ -23,22 +24,19 @@ Dashboard / Web UI.
    返回 (M6.5.3 决策)
 
 实施方式: 1 个 fake Collector (asyncio HTTP server, 含 dedup 逻辑)
-+ 2 个 AgentReporter (同进程, 不同 identity), 模拟"两个独立 Agent
-进程"; 跨进程语义 (instance_id / startup_epoch 隔离) 由 identity
-dataclass 保证, 不依赖 OS 进程隔离.
++ 多个 AgentReporter / 手动 transport (同进程, 不同 identity).
+该 suite 明确不模拟 OS 进程隔离或真实 Collector 部署.
 
 English
 --------
-M6.5 cross-process verification: two independent Agent processes report
-to a real Collector; inject duplicate, out-of-order, disconnect, and
-restart scenarios; verify Collector dedupes correctly and Reporter
-does NOT block protected request paths.
+M6.5 Reporter and fake Collector integration simulation. Multiple
+Reporter objects in one test process exercise duplicate, out-of-order,
+disconnect, and restart behavior against an asyncio test server. This is
+not evidence of OS-level process isolation or a production Collector.
 
 Implementation: 1 fake Collector (asyncio HTTP server with dedup logic)
-+ 2 AgentReporter instances (same process, different identity),
-simulating "two independent Agent processes". Cross-process semantics
-(instance_id / startup_epoch isolation) are enforced by the identity
-dataclass, not by OS process isolation.
++ multiple AgentReporter/manual transport instances (same process, different
+identities). Identity separation is tested; process isolation is not.
 """
 from __future__ import annotations
 
@@ -47,7 +45,6 @@ import time
 import unittest
 import uuid
 from dataclasses import replace
-from typing import Any
 
 from atlas_richie.contracts.reporting.v1 import (
     PROTOCOL_VERSION,
@@ -60,11 +57,9 @@ from atlas_richie.contracts.reporting.v1 import (
     ReportingEventKind,
     decode_batch,
     encode_ack,
-    encode_batch,
     encode_error_envelope,
 )
 from atlas_richie.contracts.reporting.v1.codec import ReportingErrorCode
-
 from atlas_richie.sentinel.reporting import (
     AgentReporter,
     AgentReporterConfig,
@@ -78,6 +73,8 @@ from atlas_richie.sentinel.reporting.config import (
 )
 from atlas_richie.sentinel.reporting.reporter import _build_envelope_template
 from atlas_richie.sentinel.reporting.transport import ReportingTransport
+
+_REPORTING_REQUEST_TARGET = b"/reporting/v1/events"
 
 
 TEST_TOKEN = "0123456789abcdef"
@@ -149,7 +146,7 @@ class _FakeCollector:
     """M6.5 跨进程验收用 fake Collector.
 
     模拟 Java/Go 真实 Collector 行为:
-    - 接收 POST /atlas-richie/reporting/v1/envelopes
+    - 接收 POST /reporting/v1/events (transport V1 draft)
     - 按 (instance_id, startup_epoch, sequence) 去重
     - 返回 AckEnvelope (含 max_contiguous_sequence + duplicate_count)
     """
@@ -159,6 +156,7 @@ class _FakeCollector:
         self.sequences_by_instance: dict[tuple[str, int], set[int]] = {}
         self.duplicate_count = 0
         self.request_count = 0
+        self.request_targets: list[bytes] = []
         self._server: asyncio.AbstractServer | None = None
         self.port: int = 0
 
@@ -224,6 +222,11 @@ class _FakeCollector:
             status_line = await reader.readline()
             if not status_line:
                 return
+            request_parts = status_line.split()
+            if len(request_parts) != 3:
+                raise ValueError("malformed HTTP request line")
+            request_target = request_parts[1]
+            self.request_targets.append(request_target)
             headers: dict[bytes, bytes] = {}
             while True:
                 line = await reader.readline()
@@ -235,6 +238,15 @@ class _FakeCollector:
             cl = headers.get(b"content-length")
             body = await reader.readexactly(int(cl)) if cl else b""
             self.request_count += 1
+            if request_target != _REPORTING_REQUEST_TARGET:
+                response = (
+                    b"HTTP/1.1 404 Not Found\r\n"
+                    b"Content-Length: 0\r\n"
+                    b"Connection: close\r\n\r\n"
+                )
+                writer.write(response)
+                await writer.drain()
+                return
             # 鉴权 (协议 §5.1 X-Atlas-Reporting-Token)
             token = headers.get(X_ATLAS_REPORTING_TOKEN_HEADER.lower().encode())
             if token is None or token.decode() != TEST_TOKEN:
@@ -400,6 +412,13 @@ class MultiReporterIsolationTest(unittest.IsolatedAsyncioTestCase):
                 r2.emit(_make_event(rule_id="r2-rule-3"))
                 self.assertTrue(
                     await collector.wait_for_envelope_count(6, timeout=3.0)
+                )
+                self.assertTrue(collector.request_targets)
+                self.assertTrue(
+                    all(
+                        target == _REPORTING_REQUEST_TARGET
+                        for target in collector.request_targets
+                    )
                 )
                 self.assertEqual(collector.duplicate_count, 0)
                 # 至少 2 个 instance 各 3 个

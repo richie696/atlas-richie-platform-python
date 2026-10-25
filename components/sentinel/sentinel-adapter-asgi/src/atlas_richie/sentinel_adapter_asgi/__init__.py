@@ -56,19 +56,26 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Mapping
+from typing import Any, Awaitable, Callable, Mapping, Protocol
 
 from atlas_richie.sentinel.engine import SentinelEngine
 from atlas_richie.sentinel.model import (
-    Resource, ResourceKind, TrafficType, SentinelContext,
+    Resource,
+    ResourceKind,
+    TrafficType,
+    SentinelContext,
     InvocationArguments,
 )
 from atlas_richie.sentinel.slots.authority import (
-    AuthoritySlot, DenyByDefaultOriginResolver, UntrustedHeaderOriginResolver,
+    AuthoritySlot,
+    DenyByDefaultOriginResolver,
+    UntrustedHeaderOriginResolver,
 )
 from atlas_richie.sentinel.ports.system_metric_sampler import DefaultSystemMetricSampler
 from atlas_richie.sentinel.slots.system import SystemSlot
+from .http_metrics import ASGIHttpMetrics, ASGIHttpMetricsSnapshot
 
 # ASGI types
 Scope = dict
@@ -76,6 +83,12 @@ Message = dict
 Receive = Callable[[], Awaitable[Message]]
 Send = Callable[[Message], Awaitable[None]]
 ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
+
+
+class _CompletedHttpMetricRecorder(Protocol):
+    """Minimal local capability consumed by the ASGI middleware."""
+
+    def record_completed_request(self, *, duration_ns: int) -> None: ...
 
 
 # 简单 path-to-resource-name 模板(默认): "METHOD path"
@@ -166,6 +179,7 @@ class SentinelASGIMiddleware:
     engine: SentinelEngine
     naming: ResourceNamingStrategy = default_resource_name
     origin_resolver: Callable[[Scope], str | None] = default_origin_from_scope
+    http_metrics: _CompletedHttpMetricRecorder | None = None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
@@ -175,6 +189,47 @@ class SentinelASGIMiddleware:
             # websocket 等非 http 不限流,直接透传
             await self.app(scope, receive, send)
             return
+        response_send = send
+        if self.http_metrics is not None:
+            started_at_ns = time.perf_counter_ns()
+            response_completed = False
+            response_started = False
+            response_expects_trailers = False
+            http_metrics = self.http_metrics
+
+            async def send_with_metrics(message: Message) -> None:
+                nonlocal response_completed, response_started, response_expects_trailers
+                await send(message)
+                message_type = message.get("type")
+                if message_type == "http.response.start":
+                    response_started = True
+                    response_expects_trailers = bool(message.get("trailers", False))
+                    return
+
+                body_finished = (
+                    message_type == "http.response.body"
+                    and not message.get("more_body", False)
+                    and not response_expects_trailers
+                )
+                pathsend_finished = (
+                    message_type == "http.response.pathsend"
+                    and not response_expects_trailers
+                )
+                trailers_finished = (
+                    message_type == "http.response.trailers"
+                    and not message.get("more_trailers", False)
+                    and response_expects_trailers
+                )
+                if (
+                    not response_completed
+                    and response_started
+                    and (body_finished or pathsend_finished or trailers_finished)
+                ):
+                    response_completed = True
+                    duration_ns = max(0, time.perf_counter_ns() - started_at_ns)
+                    http_metrics.record_completed_request(duration_ns=duration_ns)
+
+            response_send = send_with_metrics
         # 构造 resource
         name = self.naming(scope)
         resource = Resource(
@@ -198,12 +253,12 @@ class SentinelASGIMiddleware:
             await entry.__aenter__()
         except Exception:
             # BLOCKED / SentinelError → 503
-            await self._send_503(send)
+            await self._send_503(response_send)
             return
         # 透传到下游 app;__aexit__ 必须拿到真实异常才能记 CANCELLED /
         # FAILED outcome
         try:
-            await self.app(scope, receive, send)
+            await self.app(scope, receive, response_send)
         except asyncio.CancelledError:
             # 客户端断连
             await self._send_client_disconnect(send)
@@ -225,25 +280,27 @@ class SentinelASGIMiddleware:
             await entry.__aexit__(None, None, None)
 
     async def _send_503(self, send: Send) -> None:
-        await send({
-            "type": "http.response.start",
-            "status": 503,
-            "headers": [(b"content-type", b"text/plain")],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": b"sentinel: blocked",
-            "more_body": False,
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 503,
+                "headers": [(b"content-type", b"text/plain")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"sentinel: blocked",
+                "more_body": False,
+            }
+        )
 
     async def _send_client_disconnect(self, send: Send) -> None:
         # 客户端断连时,response 可能已开始但未完成; 此时不发送任何
         # (ASGI 协议允许 app 在 send 失败时直接退出)
         return None
 
-    async def lifespan(
-        self, scope: Scope, receive: Receive, send: Send
-    ) -> None:
+    async def lifespan(self, scope: Scope, receive: Receive, send: Send) -> None:
         """中文
         ----
         ASGI lifespan 协议;启动时 ``__aenter__`` Engine,关闭时
@@ -271,6 +328,8 @@ class SentinelASGIMiddleware:
 
 
 __all__ = [
+    "ASGIHttpMetrics",
+    "ASGIHttpMetricsSnapshot",
     "SentinelASGIMiddleware",
     "default_resource_name",
     "default_origin_from_scope",

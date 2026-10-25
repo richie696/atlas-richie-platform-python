@@ -503,9 +503,7 @@ def _build_envelope_template(
             revision=event.revision if event.revision is not None else 0,
             checksum=_normalize_checksum(event.checksum),
         )
-        return build_rule_source_activated(
-            identity=identity, sequence=0, fact=fact
-        )
+        return build_rule_source_activated(identity=identity, sequence=0, fact=fact)
     if kind is ReportingEventKind.RULE_SOURCE_STALE:
         fact = SourceHealthFact(
             source_id=event.source_id or "",

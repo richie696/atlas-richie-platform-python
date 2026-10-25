@@ -68,12 +68,19 @@ import time
 from typing import Any, AsyncIterator, Callable
 from urllib.error import HTTPError, URLError
 
-from atlas_richie.sentinel.rules.snapshot import RuleSnapshot, RuleVersion
+from atlas_richie.sentinel.rules.snapshot import (
+    RuleSnapshot,
+    RuleTargetProvenance,
+    RuleVersion,
+)
 from atlas_richie.sentinel.source.rule_source import SnapshotRuleSource
 
-from .codec import NacosCodecError, decode_rule_snapshot
+from .codec import (
+    NacosCodecError,
+    decode_managed_rule_snapshot,
+    decode_rule_snapshot,
+)
 from .config import NacosRuleSourceConfig, NacosSourceError, NacosSourceState
-
 
 _logger = logging.getLogger("atlas_richie.sentinel_source_nacos")
 
@@ -228,6 +235,7 @@ class _NacosAdapter:
         # 注入点: 测试用 fake service
         if client_factory is None:
             from v2.nacos import NacosConfigService  # 顶层 lazy import
+
             client_factory = NacosConfigService.create_config_service
         self._client_factory = client_factory
         self._client: Any | None = None
@@ -301,8 +309,8 @@ class _NacosAdapter:
         errors: list[tuple[str, NacosSourceError, str]] = []
 
         # M6.1.7: SDK 3.2.0 用 ConfigParam + async get_config
-        from v2.nacos.config.model.config_param import ConfigParam
         from v2.nacos import NacosException
+        from v2.nacos.config.model.config_param import ConfigParam
 
         for rule_type, data_id in _all_data_ids(cfg):
             try:
@@ -327,8 +335,7 @@ class _NacosAdapter:
                 elif code in (400, 404) or "404" in msg or "not found" in msg.lower():
                     errors.append((data_id, NacosSourceError.NOT_FOUND, msg))
                 elif (
-                    isinstance(code, int)
-                    and 500 <= code <= 599
+                    isinstance(code, int) and 500 <= code <= 599
                 ) or "get access token failed" in msg.casefold():
                     errors.append((data_id, NacosSourceError.NETWORK, msg))
                 else:
@@ -343,13 +350,9 @@ class _NacosAdapter:
                 continue
             except HTTPError as e:
                 if e.code in (401, 403):
-                    errors.append(
-                        (data_id, NacosSourceError.AUTH, f"nacos {e.code}")
-                    )
+                    errors.append((data_id, NacosSourceError.AUTH, f"nacos {e.code}"))
                 elif e.code == 404:
-                    errors.append(
-                        (data_id, NacosSourceError.NOT_FOUND, "nacos 404")
-                    )
+                    errors.append((data_id, NacosSourceError.NOT_FOUND, "nacos 404"))
                 else:
                     errors.append(
                         (data_id, NacosSourceError.NETWORK, f"nacos http {e.code}")
@@ -370,19 +373,25 @@ class _NacosAdapter:
             #   - EMPTY:    服务端有这条配置但内容是空 ("" / "[]" / "null")
             if content is None:
                 errors.append(
-                    (data_id, NacosSourceError.NOT_FOUND, "nacos missing (None content)")
+                    (
+                        data_id,
+                        NacosSourceError.NOT_FOUND,
+                        "nacos missing (None content)",
+                    )
                 )
                 continue
             if content == "" or content.strip() in ("[]", "null"):
                 # "" 或 "[]" / "null" → EMPTY (PLANNING: "[]" 也算 EMPTY, 保留 last-known-good)
-                errors.append(
-                    (data_id, NacosSourceError.EMPTY, "nacos empty content")
-                )
+                errors.append((data_id, NacosSourceError.EMPTY, "nacos empty content"))
                 continue
             if not content.strip():
                 # 纯空白
                 errors.append(
-                    (data_id, NacosSourceError.EMPTY, "nacos empty (whitespace) content")
+                    (
+                        data_id,
+                        NacosSourceError.EMPTY,
+                        "nacos empty (whitespace) content",
+                    )
                 )
                 continue
             result[data_id] = content
@@ -444,6 +453,10 @@ class NacosRuleSource(SnapshotRuleSource):
 
         # 观测
         self._last_yielded_version: RuleVersion | None = None
+        self._last_yielded_provenance: tuple[RuleTargetProvenance, ...] = ()
+        self._managed_epoch = time.time_ns()
+        self._managed_revision = 0
+        self._managed_checksum: str | None = None
         self._last_error: NacosSourceError | None = None
         self._last_error_message: str | None = None
         self._error_counts: dict[NacosSourceError, int] = {
@@ -499,12 +512,16 @@ class NacosRuleSource(SnapshotRuleSource):
         if new_state is not self._state:
             _logger.debug(
                 "nacos source %r state: %s -> %s",
-                self.source_id, self._state.value, new_state.value,
+                self.source_id,
+                self._state.value,
+                new_state.value,
             )
             self._state = new_state
 
     def _set_error(
-        self, error: NacosSourceError, raw_message: str | None = None,
+        self,
+        error: NacosSourceError,
+        raw_message: str | None = None,
     ) -> None:
         redacted = _redact(raw_message or "", self._config) if raw_message else None
         self._last_error = error
@@ -513,7 +530,9 @@ class NacosRuleSource(SnapshotRuleSource):
         if redacted:
             _logger.warning(
                 "nacos source %r: %s — %s",
-                self.source_id, error.value, redacted,
+                self.source_id,
+                error.value,
+                redacted,
             )
 
     def _clear_error(self) -> None:
@@ -533,7 +552,9 @@ class NacosRuleSource(SnapshotRuleSource):
 
     # --- 拉取 + 解码 + 错误分类 ---
 
-    async def _load_snapshot(self) -> tuple[RuleSnapshot | None, list[NacosSourceError]]:
+    async def _load_snapshot(
+        self,
+    ) -> tuple[RuleSnapshot | None, list[NacosSourceError]]:
         """拉 5 个 data_id → 解码 → (snapshot, warnings)。
 
         错误分类:
@@ -567,21 +588,79 @@ class NacosRuleSource(SnapshotRuleSource):
             await self._adapter.reset_after_network_error()
             return None, [NacosSourceError.NETWORK]
 
-        # NOT_FOUND / EMPTY / DECODE — 生成 snapshot, 标记 STALE
+        if self._config.managed_bindings is not None and errors:
+            for _, err, msg in errors:
+                self._set_error(err, msg)
+            self._set_state(NacosSourceState.STALE)
+            return None, [errors[0][1]]
+
+        # NOT_FOUND / EMPTY / DECODE — legacy profile keeps its historical
+        # warning/snapshot behavior. Managed profile rejects these above.
         try:
-            snapshot, warnings = decode_rule_snapshot(
-                data_ids_content,
-                RuleVersion(
-                    epoch=int(time.time()),
-                    revision=self._reconnect_attempt,
-                    checksum=hashlib.sha256(
-                        ("\n".join(
-                            f"{k}={v}" for k, v in sorted(data_ids_content.items())
-                        )).encode("utf-8")
-                    ).hexdigest(),
-                ),
-                config=self._config,
-            )
+            if self._config.managed_bindings is None:
+                snapshot, warnings = decode_rule_snapshot(
+                    data_ids_content,
+                    RuleVersion(
+                        epoch=int(time.time()),
+                        revision=self._reconnect_attempt,
+                        checksum=hashlib.sha256(
+                            (
+                                "\n".join(
+                                    f"{k}={v}"
+                                    for k, v in sorted(data_ids_content.items())
+                                )
+                            ).encode("utf-8")
+                        ).hexdigest(),
+                    ),
+                    config=self._config,
+                )
+            else:
+                snapshot = decode_managed_rule_snapshot(
+                    data_ids_content,
+                    RuleVersion(
+                        epoch=self._managed_epoch,
+                        revision=self._managed_revision,
+                        checksum="0" * 64,
+                    ),
+                    config=self._config,
+                )
+                self._validate_managed_sequence(snapshot.provenance)
+                managed_checksum = hashlib.sha256(
+                    "\n".join(
+                        "|".join(
+                            (
+                                item.binding_id,
+                                item.publication_id,
+                                item.target_version_id,
+                                str(item.publication_sequence),
+                                item.rule_kind.value,
+                                item.profile_id,
+                                item.payload_sha256,
+                            )
+                        )
+                        for item in sorted(
+                            snapshot.provenance, key=lambda value: value.binding_id
+                        )
+                    ).encode("utf-8")
+                ).hexdigest()
+                if (
+                    self._managed_checksum is not None
+                    and managed_checksum != self._managed_checksum
+                ):
+                    self._managed_revision += 1
+                self._managed_checksum = managed_checksum
+                snapshot = RuleSnapshot(
+                    version=RuleVersion(
+                        epoch=self._managed_epoch,
+                        revision=self._managed_revision,
+                        checksum=managed_checksum,
+                    ),
+                    rules=snapshot.rules,
+                    applied_at_ns=0,
+                    source_id=snapshot.source_id,
+                    provenance=snapshot.provenance,
+                )
+                warnings = []
         except NacosCodecError as e:
             self._set_error(NacosSourceError.DECODE, str(e))
             self._set_state(NacosSourceState.STALE)
@@ -595,6 +674,27 @@ class NacosRuleSource(SnapshotRuleSource):
             self._set_state(NacosSourceState.READY)
             self._clear_error()
         return snapshot, warnings
+
+    def _validate_managed_sequence(
+        self, candidate: tuple[RuleTargetProvenance, ...]
+    ) -> None:
+        """Reject delayed managed targets before they can replace active state."""
+        accepted = {item.binding_id: item for item in self._last_yielded_provenance}
+        for item in candidate:
+            previous = accepted.get(item.binding_id)
+            if previous is None:
+                continue
+            if item.publication_sequence < previous.publication_sequence:
+                raise NacosCodecError(
+                    "managed Nacos target has a stale publication sequence",
+                )
+            if (
+                item.publication_sequence == previous.publication_sequence
+                and item != previous
+            ):
+                raise NacosCodecError(
+                    "managed Nacos target conflicts at an existing publication sequence",
+                )
 
     # --- 公开: snapshots() 异步迭代器 (M6.1.7 polling 模式) ---
 
@@ -620,6 +720,7 @@ class NacosRuleSource(SnapshotRuleSource):
         if snapshot is not None:
             # 仅在 caller 实际取得 snapshot 的 yield 路径推进公开版本。
             self._last_yielded_version = snapshot.version
+            self._last_yielded_provenance = snapshot.provenance
             yield snapshot
         if self._closed:
             return
@@ -641,6 +742,7 @@ class NacosRuleSource(SnapshotRuleSource):
                 return
             # 候选快照直到此处才成为 caller 实际收到的版本。
             self._last_yielded_version = next_snapshot.version
+            self._last_yielded_provenance = next_snapshot.provenance
             yield next_snapshot
 
     async def _wait_for_next_snapshot(self) -> RuleSnapshot | None:
@@ -713,7 +815,9 @@ class NacosRuleSource(SnapshotRuleSource):
             delay = self._backoff_seconds()
             _logger.info(
                 "nacos source %r: retrying after %.2fs (attempt %d)",
-                self.source_id, delay, self._reconnect_attempt,
+                self.source_id,
+                delay,
+                self._reconnect_attempt,
             )
             await self._sleep_with_cancel(delay)
         return None, []

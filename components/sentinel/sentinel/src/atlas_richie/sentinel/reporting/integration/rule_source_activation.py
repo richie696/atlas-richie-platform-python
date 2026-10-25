@@ -105,6 +105,7 @@ def install_activation_subscriber(
     1.0 internal helper: Reporter users don't call directly (default
     integration path). For tests.
     """
+
     def _on_activation(fact: RuleSourceActivation) -> None:
         event = activation_to_event(fact)
         try:

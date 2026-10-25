@@ -138,9 +138,7 @@ class AgentReporterSupervisor:
             RuntimeError: 重复 start / state 不为 CREATED
         """
         if self._state != "CREATED":
-            raise RuntimeError(
-                f"supervisor already started (state={self._state})"
-            )
+            raise RuntimeError(f"supervisor already started (state={self._state})")
         # 1. 构造 outbox + transport
         self._transport = ReportingTransport(config=self._config)
         outbox = ReportingOutbox(

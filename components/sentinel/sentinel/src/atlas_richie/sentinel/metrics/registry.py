@@ -13,8 +13,11 @@
 - **无 3rd-party 依赖**:纯 dict + counter
 - **overflow 策略**:单 label 组合的 entry 数超过 ``max_samples`` 时
   停止累加(防 memory 爆炸),但仍保留最后一个 snapshot 可读
-- **sink 解耦**:snapshot 通过 ``MetricSink.emit`` 异步触发;M1.4 默认
-  ``NoopMetricSink``
+- **sink 解耦**:每次更新后同步调用 ``MetricSink.emit``;Sink 只能执行
+  有界本地入队,不得执行网络/数据库 IO;M1.4 默认 ``NoopMetricSink``
+- **线程模型**:Engine 在所属 asyncio event loop 的线程内写入注册表。
+  ``record`` 与 ``iter_snapshots`` 不保证并发线程安全;返回的不可变
+  ``MetricSnapshot`` 创建后可跨线程读取。
 
 English
 --------
@@ -34,25 +37,39 @@ Design points:
 - **Overflow policy** — when entry count for one label combination
   exceeds ``max_samples``, accumulation stops (memory bound) but the
   last snapshot is still readable.
-- **Sink decoupled** — snapshot emission via ``MetricSink.emit``;
-  M1.4 default ``NoopMetricSink``."""
+- **Sink decoupled** — ``MetricSink.emit`` is called synchronously after
+  each update. A sink may only perform bounded local enqueueing; it must
+  not perform network or database I/O. M1.4 defaults to
+  ``NoopMetricSink``.
+- **Thread model** — the Engine writes the registry on its owning
+  ``asyncio`` event-loop thread. ``record`` and ``iter_snapshots`` are
+  not safe to run concurrently from multiple threads. An immutable
+  ``MetricSnapshot`` may be read across threads after it is created."""
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from types import MappingProxyType
 from typing import Mapping
 
 from ..model.outcome import OutcomeKind
 from ..model.resource import Resource
 from .sink import MetricSink, NoopMetricSink
-from .snapshot import ALLOWED_LABEL_KEYS, MetricSnapshot, make_label
+from .snapshot import (
+    ALLOWED_LABEL_KEYS,
+    DEFAULT_RT_HISTOGRAM_BOUNDS_NS,
+    LatencyHistogram,
+    MetricSnapshot,
+    latency_histogram_bucket_index,
+    make_label,
+    validate_rt_histogram_bounds,
+)
 
 
 # 4 计数器 + 1 RT 总和(per label tuple)
 @dataclass(slots=True)
 class _Counter:
+    event_count: int = 0
     admitted: int = 0
     blocked: int = 0
     succeeded: int = 0
@@ -60,8 +77,16 @@ class _Counter:
     cancelled: int = 0
     rt_total_ns: int = 0
     rt_count: int = 0
+    rt_min_ns: int | None = None
+    rt_max_ns: int | None = None
+    rt_bucket_counts: list[int] = field(default_factory=list)
 
-    def record(self, outcome: OutcomeKind, rt_ns: int) -> None:
+    def record(
+        self,
+        outcome: OutcomeKind,
+        rt_ns: int,
+        latency_bucket_bounds_ns: tuple[int, ...],
+    ) -> None:
         """中文
         ----
         累加一个 entry;``rt_ns`` 仅在 SUCCEEDED / FAILED 时有意义。
@@ -71,20 +96,35 @@ class _Counter:
         Accumulate one entry; ``rt_ns`` is meaningful only for
         SUCCEEDED / FAILED.
         """
+        self.event_count += 1
         if outcome is OutcomeKind.SUCCEEDED:
+            self.admitted += 1
             self.succeeded += 1
-            self.rt_total_ns += rt_ns
-            self.rt_count += 1
+            self._record_latency(rt_ns, latency_bucket_bounds_ns)
         elif outcome is OutcomeKind.FAILED:
+            self.admitted += 1
             self.failed += 1
-            self.rt_total_ns += rt_ns
-            self.rt_count += 1
+            self._record_latency(rt_ns, latency_bucket_bounds_ns)
         elif outcome is OutcomeKind.CANCELLED:
+            self.admitted += 1
             self.cancelled += 1
         elif outcome is OutcomeKind.BLOCKED:
             self.blocked += 1
         elif outcome is OutcomeKind.ADMITTED:
             self.admitted += 1
+
+    def _record_latency(
+        self, rt_ns: int, latency_bucket_bounds_ns: tuple[int, ...]
+    ) -> None:
+        if not self.rt_bucket_counts:
+            self.rt_bucket_counts = [0] * (len(latency_bucket_bounds_ns) + 1)
+        self.rt_bucket_counts[
+            latency_histogram_bucket_index(latency_bucket_bounds_ns, rt_ns)
+        ] += 1
+        self.rt_total_ns += rt_ns
+        self.rt_count += 1
+        self.rt_min_ns = rt_ns if self.rt_min_ns is None else min(self.rt_min_ns, rt_ns)
+        self.rt_max_ns = rt_ns if self.rt_max_ns is None else max(self.rt_max_ns, rt_ns)
 
 
 @dataclass(slots=True)
@@ -136,21 +176,38 @@ class MetricRegistry:
             ...
     """
 
-    __slots__ = ("_counters", "sink", "max_samples", "_overflow_fired")
+    __slots__ = (
+        "_counters",
+        "_latency_bucket_bounds_ns",
+        "_noop_sink",
+        "_overflow_fired",
+        "max_samples",
+        "sink",
+    )
 
     def __init__(
         self,
         *,
         sink: MetricSink | None = None,
         max_samples: int = 1_000_000,
+        latency_bucket_bounds_ns: tuple[int, ...] = DEFAULT_RT_HISTOGRAM_BOUNDS_NS,
     ) -> None:
         if max_samples <= 0:
             raise ValueError(f"max_samples must be positive (got {max_samples})")
         # Key = tuple of (key, value) sorted by key; immutable + hashable
         self._counters: dict[tuple[tuple[str, str], ...], _Counter] = {}
-        self.sink: MetricSink = sink or NoopMetricSink()
+        self._noop_sink = NoopMetricSink()
+        self.sink: MetricSink = sink if sink is not None else self._noop_sink
         self.max_samples = max_samples
         self._overflow_fired: bool = False
+        self._latency_bucket_bounds_ns = validate_rt_histogram_bounds(
+            latency_bucket_bounds_ns
+        )
+
+    @property
+    def latency_bucket_bounds_ns(self) -> tuple[int, ...]:
+        """Return the immutable histogram boundaries owned by this registry."""
+        return self._latency_bucket_bounds_ns
 
     def _key(self, label: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
         # Whitelist check (defense-in-depth)
@@ -185,14 +242,19 @@ class MetricRegistry:
         ``extra_label`` can only add whitelisted keys; primarily for
         Metric / Rule events to attach rule_kind / block_reason
         (constructed by caller via ``snapshot.make_label``).
+        When a non-noop sink is configured, it receives the updated
+        cumulative snapshot synchronously; that sink must enqueue only in
+        bounded local memory, reject at capacity, and avoid network/database
+        I/O. A brief wait for an in-memory mutex is permitted; no wait-free
+        or hard-realtime guarantee is made.
         """
         base = make_label(resource=resource)
+        if isinstance(rt_ns, bool) or not isinstance(rt_ns, int) or rt_ns < 0:
+            raise ValueError("rt_ns must be a non-negative integer")
         if extra_label:
             for k in extra_label:
                 if k not in ALLOWED_LABEL_KEYS:
-                    raise ValueError(
-                        f"extra_label key {k!r} not in whitelist"
-                    )
+                    raise ValueError(f"extra_label key {k!r} not in whitelist")
             merged = {**base, **extra_label}
         else:
             merged = base
@@ -206,16 +268,11 @@ class MetricRegistry:
             counter = _Counter()
             self._counters[key] = counter
         # Also bound per-label accumulation (total samples for this key)
-        total = (
-            counter.admitted
-            + counter.blocked
-            + counter.succeeded
-            + counter.failed
-            + counter.cancelled
-        )
-        if total >= self.max_samples:
+        if counter.event_count >= self.max_samples:
             return
-        counter.record(outcome, rt_ns)
+        counter.record(outcome, rt_ns, self._latency_bucket_bounds_ns)
+        if self.sink is not self._noop_sink:
+            self.sink.emit(self._snapshot_for(key, counter, time.time_ns()))
 
     def _fire_overflow(self) -> None:
         if not self._overflow_fired:
@@ -225,6 +282,7 @@ class MetricRegistry:
             # (M1.5 加 event 订阅)
             # 这里只 print warning 到 stderr 不污染 stdout
             import sys
+
             print(
                 f"MetricRegistry: resource cardinality exceeded "
                 f"max_samples={self.max_samples}",
@@ -241,27 +299,41 @@ class MetricRegistry:
         Return immutable snapshot list of all (label, counter) pairs.
         """
         now = time.time_ns()
-        snaps: list[MetricSnapshot] = []
-        for key, counter in self._counters.items():
-            label = dict(key)
-            avg_rt = (
-                counter.rt_total_ns // counter.rt_count
-                if counter.rt_count > 0
-                else 0
-            )
-            snaps.append(
-                MetricSnapshot(
-                    at_ns=now,
-                    labels=label,
-                    admitted=counter.admitted,
-                    blocked=counter.blocked,
-                    succeeded=counter.succeeded,
-                    failed=counter.failed,
-                    cancelled=counter.cancelled,
-                    avg_rt_ns=avg_rt,
-                )
-            )
-        return snaps
+        return [
+            self._snapshot_for(key, counter, now)
+            for key, counter in self._counters.items()
+        ]
+
+    def _snapshot_for(
+        self,
+        key: tuple[tuple[str, str], ...],
+        counter: _Counter,
+        at_ns: int,
+    ) -> MetricSnapshot:
+        """Build one immutable cumulative snapshot for an updated label set."""
+        histogram = LatencyHistogram(
+            boundaries_ns=self._latency_bucket_bounds_ns,
+            bucket_counts=tuple(counter.rt_bucket_counts)
+            if counter.rt_bucket_counts
+            else (0,) * (len(self._latency_bucket_bounds_ns) + 1),
+            sample_count=counter.rt_count,
+            total_ns=counter.rt_total_ns,
+            min_ns=counter.rt_min_ns,
+            max_ns=counter.rt_max_ns,
+        )
+        return MetricSnapshot(
+            at_ns=at_ns,
+            labels=dict(key),
+            admitted=counter.admitted,
+            blocked=counter.blocked,
+            succeeded=counter.succeeded,
+            failed=counter.failed,
+            cancelled=counter.cancelled,
+            avg_rt_ns=(
+                counter.rt_total_ns // counter.rt_count if counter.rt_count > 0 else 0
+            ),
+            latency_histogram=histogram,
+        )
 
     def emit_all(self) -> None:
         """中文

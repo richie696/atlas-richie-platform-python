@@ -193,6 +193,7 @@ class ReportingTransport:
         if self._closed:
             raise RuntimeError("transport is closed")
         from atlas_richie.contracts.reporting.v1 import encode_batch
+
         body: bytes = encode_batch(batch)
         last_exc: BaseException | None = None
         attempts = 0
@@ -212,7 +213,12 @@ class ReportingTransport:
                 delay_s = _RETRY_DELAYS_NS[attempt] / 1_000_000_000
                 # 抖动: ± jitter_ns, 但不能小于 0
                 import random
-                jitter_s = (random.randint(0, self._jitter_ns) / 1_000_000_000) if self._jitter_ns > 0 else 0.0
+
+                jitter_s = (
+                    (random.randint(0, self._jitter_ns) / 1_000_000_000)
+                    if self._jitter_ns > 0
+                    else 0.0
+                )
                 await self._sleeper(max(0.0, delay_s + jitter_s))
         # 不可达 (for 循环总会 raise 或 return)
         raise ReporterConnectionError(
@@ -238,13 +244,20 @@ class ReportingTransport:
             # 2. 拼 HTTP request (auth_value 已在 §0 渲染过)
             request: bytes = (
                 b"POST " + _REPORTING_PATH + b" " + _HTTP_VERSION + b"\r\n"
-                b"Host: " + self._host.encode("ascii") + b":" + str(self._port).encode("ascii") + b"\r\n"
+                b"Host: "
+                + self._host.encode("ascii")
+                + b":"
+                + str(self._port).encode("ascii")
+                + b"\r\n"
                 b"Content-Type: " + _CONTENT_TYPE + b"\r\n"
                 b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n"
                 b"Connection: close\r\n"
-                b"" + X_ATLAS_REPORTING_TOKEN_HEADER.encode("ascii") + b": " + auth_value.encode("utf-8") + b"\r\n"
-                b"\r\n"
-                + body
+                b""
+                + X_ATLAS_REPORTING_TOKEN_HEADER.encode("ascii")
+                + b": "
+                + auth_value.encode("utf-8")
+                + b"\r\n"
+                b"\r\n" + body
             )
             # 3. 写请求 (request_timeout 覆盖整个 send 阶段)
             try:
@@ -313,7 +326,11 @@ class ReportingTransport:
             except Exception as e:  # noqa: BLE001 (decode 抛 ReportingProtocolError)
                 # 200 + 错 body → 协议错 (跟 M6.3 决策一致)
                 code = getattr(e, "code", None)
-                code_str = code.value if hasattr(code, "value") else str(code or "PROTOCOL_ERROR")
+                code_str = (
+                    code.value
+                    if hasattr(code, "value")
+                    else str(code or "PROTOCOL_ERROR")
+                )
                 raise ReporterProtocolError(
                     f"failed to decode 200 ack: {e}",
                     code=code_str,
@@ -343,9 +360,7 @@ class ReportingTransport:
                 err = decode_error_envelope(body)
             except Exception:
                 err = None
-            code_str = (
-                err.error_code if err is not None else f"HTTP_{status_code}"
-            )
+            code_str = err.error_code if err is not None else f"HTTP_{status_code}"
             raise ReporterProtocolError(
                 f"server returned 4xx: {status_code} {err.message if err else ''}",
                 code=code_str,
@@ -357,9 +372,7 @@ class ReportingTransport:
                 err = decode_error_envelope(body)
             except Exception:
                 err = None
-            code_str = (
-                err.error_code if err is not None else f"HTTP_{status_code}"
-            )
+            code_str = err.error_code if err is not None else f"HTTP_{status_code}"
             raise ReporterConnectionError(
                 f"server returned 5xx: {status_code} {err.message if err else ''}",
                 code=code_str,
@@ -397,9 +410,7 @@ async def _read_http_response(
     except (ConnectionError, asyncio.IncompleteReadError) as e:
         raise ReporterConnectionError(f"read status line failed: {e}") from e
     if not status_line or not status_line.endswith(b"\r\n"):
-        raise ReporterConnectionError(
-            f"invalid status line (no CRLF): {status_line!r}"
-        )
+        raise ReporterConnectionError(f"invalid status line (no CRLF): {status_line!r}")
     status_line = status_line.rstrip(b"\r\n")
     # 2. headers
     headers: dict[bytes, bytes] = {}
@@ -411,14 +422,10 @@ async def _read_http_response(
         if not line or line == b"\r\n":
             break
         if not line.endswith(b"\r\n"):
-            raise ReporterConnectionError(
-                f"header line missing CRLF: {line!r}"
-            )
+            raise ReporterConnectionError(f"header line missing CRLF: {line!r}")
         line = line.rstrip(b"\r\n")
         if b":" not in line:
-            raise ReporterConnectionError(
-                f"header line missing colon: {line!r}"
-            )
+            raise ReporterConnectionError(f"header line missing colon: {line!r}")
         k, _, v = line.partition(b":")
         headers[k.strip().lower()] = v.strip()
     # 3. body — 优先 Content-Length
@@ -431,9 +438,7 @@ async def _read_http_response(
                 f"invalid Content-Length: {content_length_bytes!r}"
             ) from e
         if content_length < 0:
-            raise ReporterConnectionError(
-                f"negative Content-Length: {content_length}"
-            )
+            raise ReporterConnectionError(f"negative Content-Length: {content_length}")
         if content_length > _MAX_RESPONSE_BYTES:
             raise ReporterConnectionError(
                 f"Content-Length {content_length} exceeds "

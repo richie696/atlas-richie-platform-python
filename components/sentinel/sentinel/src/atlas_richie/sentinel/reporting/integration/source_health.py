@@ -81,9 +81,7 @@ def _kind_from_health_class(health_class: str) -> str:
     if health_class == "degraded":
         return ReportingEventKind.RULE_SOURCE_DEGRADED.value
     if health_class == "healthy":
-        raise ValueError(
-            "healthy is default state; no event to emit (避免 noise)"
-        )
+        raise ValueError("healthy is default state; no event to emit (避免 noise)")
     raise ValueError(
         f"health_class must be one of {{stale, degraded, healthy}}, "
         f"got {health_class!r}"
@@ -127,6 +125,7 @@ def install_source_health_subscriber(
     ``Callable[[SourceHealthChange], None]``, called by the caller
     (e.g. RuleSourceSupervisor) on health change.
     """
+
     def _on_change(change: SourceHealthChange) -> None:
         try:
             event = health_change_to_event(change)

@@ -55,7 +55,11 @@ from ...model.outcome import Outcome, OutcomeKind
 from ...rules.snapshot import RuleSnapshot
 from .._identity import ReporterIdentity
 from ..reporter import AgentReporter, ReportingEvent
-from atlas_richie.contracts.reporting.v1 import ReportingEventKind, ExecResult, ReasonClass
+from atlas_richie.contracts.reporting.v1 import (
+    ReportingEventKind,
+    ExecResult,
+    ReasonClass,
+)
 
 
 # ReasonClass 7 值 (协议 §5.3 frozen)
@@ -231,7 +235,8 @@ def outcome_to_event(outcome: Outcome, snapshot: RuleSnapshot) -> ReportingEvent
         outcome_kind=outcome.kind.value,
         block_reason=str(
             getattr(getattr(outcome, "error", None), "block_reason", None) or ""
-        ) or None,
+        )
+        or None,
         error_message=error_message,
         snapshot=snapshot,
     )
@@ -256,6 +261,7 @@ def install_slot_chain_subscriber(
     ``Callable[[Outcome, RuleSnapshot], None]``, called by the
     caller (e.g. business code / Engine exit hook) on entry exit.
     """
+
     def _on_complete(outcome: Outcome, snapshot: RuleSnapshot) -> None:
         try:
             event = outcome_to_event(outcome, snapshot)

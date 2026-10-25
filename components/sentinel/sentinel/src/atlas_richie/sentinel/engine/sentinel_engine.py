@@ -74,6 +74,7 @@ from __future__ import annotations
 import asyncio
 import enum
 import time
+from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from types import TracebackType
@@ -84,11 +85,11 @@ from ..errors import (
     SentinelError,
     SentinelLifecycleError,
 )
+from ..metrics.registry import MetricRegistry
 from ..model.argument import InvocationArguments
 from ..model.context import (
     SentinelContext,
     bind_current_context,
-    current_context,
     reset_current_context,
 )
 from ..model.enums import EngineState
@@ -195,9 +196,17 @@ class SentinelEngine:
     Outcome (state errors are code bugs, not business errors).
     """
 
-    def __init__(self, *, fail_safe: FailSafe = FailSafe.FAIL_CLOSED) -> None:
+    def __init__(
+        self,
+        *,
+        fail_safe: FailSafe = FailSafe.FAIL_CLOSED,
+        metric_registry: MetricRegistry | None = None,
+    ) -> None:
         self._ctx = _EngineContext(fail_safe=fail_safe)
         self._chain = SlotChain()
+        self._metrics = (
+            metric_registry if metric_registry is not None else MetricRegistry()
+        )
         # M1.2 uses an asyncio.Event to serialize state transitions
         # (the Engine is a single-process, single-loop object).
         self._state_lock = asyncio.Lock()
@@ -233,6 +242,21 @@ class SentinelEngine:
     @property
     def fail_safe(self) -> FailSafe:
         return self._ctx.fail_safe
+
+    @property
+    def metrics(self) -> MetricRegistry:
+        """中文
+        ----
+        返回 Engine 持有的指标注册表，用于读取不可变快照。可通过构造参数
+        注入共享/自定义注册表；指标写入失败不会改变 entry 结果。
+
+        English
+        --------
+        Return the Engine-owned registry for reading immutable snapshots.
+        A shared/custom registry may be injected at construction; metric
+        write failures do not alter entry outcomes.
+        """
+        return self._metrics
 
     @property
     def last_error(self) -> BaseException | None:
@@ -825,12 +849,15 @@ class SentinelEngine:
         decremented in the finally block even on the BLOCKED path.
         """
         # Bind context for downstream code that calls current_context()
+        started_at_ns = time.monotonic_ns()
+        lease._started_at_ns = started_at_ns
         token = bind_current_context(context)
         # Store the per-entry token on the lease (NOT on the engine) so
         # concurrent entries in different asyncio.Tasks do not clobber
         # each other's tokens.
         lease._context_token = token
         self._ctx.in_flight += 1
+        completion_notified = False
         try:
             for slot in self._chain.frozen_slots():
                 try:
@@ -845,9 +872,14 @@ class SentinelEngine:
                         resource=resource,
                         kind=OutcomeKind.BLOCKED,
                         error=e,
-                        elapsed_ns=0,
+                        elapsed_ns=time.monotonic_ns() - started_at_ns,
                         trace_id=context.trace_id,
                     )
+                    self._record_metrics(self._ctx.last_outcome)
+                    self._notify_slot_completion(
+                        lease.entered_slots, self._ctx.last_outcome
+                    )
+                    completion_notified = True
                     raise
                 except BaseException as e:
                     # Slot 内部非 Sentinel 异常 — fail_safe 处理
@@ -864,8 +896,27 @@ class SentinelEngine:
                         self._ctx.state = EngineState.FAILED
                         raise
                 else:
-                    lease.push(slot.order, sub_lease)
-        except BaseException:
+                    lease.push(slot, sub_lease)
+        except BaseException as error:
+            # If a Slot implementation fails closed before the entry body is
+            # reached, already-admitted Slots still need a terminal callback
+            # so their accounting can be balanced. SentinelError rejections
+            # are notified in the branch above with their BLOCKED outcome.
+            if lease.entered_slots and not completion_notified:
+                terminal_kind = (
+                    OutcomeKind.CANCELLED
+                    if isinstance(error, asyncio.CancelledError)
+                    else OutcomeKind.FAILED
+                )
+                self._notify_slot_completion(
+                    lease.entered_slots,
+                    Outcome(
+                        resource=resource,
+                        kind=terminal_kind,
+                        elapsed_ns=time.monotonic_ns() - started_at_ns,
+                        trace_id=context.trace_id,
+                    ),
+                )
             # in_flight -1 + contextvars reset;即使 BLOCKED / FAIL_FAST
             # 路径,本方法退出后 __aexit__ 不会被调用,必须自己清理
             self._ctx.in_flight -= 1
@@ -873,6 +924,12 @@ class SentinelEngine:
                 reset_current_context(lease._context_token)
                 lease._context_token = None
             raise
+
+    def _notify_slot_completion(self, slots: list[Slot], outcome: Outcome) -> None:
+        """Notify only Slots that admitted this entry; isolate callbacks."""
+        for slot in slots:
+            with suppress(BaseException):
+                slot.on_entry_complete(outcome)
 
     async def _finalize_entry(
         self,
@@ -888,19 +945,25 @@ class SentinelEngine:
         ----
         Engine 内部: 逆序释放 lease,构造 Outcome,通知 Slot。
 
-        M1.2 占位(M1.3 增加 CancelledError / observers / metrics 路径)。
+        以单调时钟构造 entry RT；耗时包含 Slot 检查、业务执行和 lease
+        释放。指标记录发生在 Outcome 构造后，指标错误不会改变业务结果。
 
         English
         --------
         Engine internal: reversely release leases, build Outcome,
         notify Slots.
 
-        M1.2 placeholder (M1.3 adds CancelledError / observers /
-        metrics paths).
+        Uses a monotonic clock for entry RT, including Slot checks,
+        business execution, and lease release. Metrics are recorded after
+        Outcome construction; metric errors do not change business results.
         """
-        start_ns = time.time_ns()  # rough; M1.3 will instrument properly
         await entry_lease.release_all()
-        elapsed_ns = time.time_ns() - start_ns
+        started_at_ns = entry_lease._started_at_ns
+        elapsed_ns = (
+            time.monotonic_ns() - started_at_ns
+            if started_at_ns is not None
+            else 0
+        )
         # Surface any release error to engine.last_error for observability
         # (release errors are swallowed by EntryLease; we re-raise them
         # to last_error so a downstream metric / health check can see them).
@@ -926,9 +989,9 @@ class SentinelEngine:
                 # Already set during _run_slot_chain_enter; keep
                 self._ctx.last_outcome = self._ctx.last_outcome  # no-op
                 # Notify slots of completion
-                for slot in self._chain.frozen_slots():
-                    with suppress(BaseException):
-                        slot.on_entry_complete(self._ctx.last_outcome)
+                self._notify_slot_completion(
+                    entry_lease.entered_slots, self._ctx.last_outcome
+                )
                 # Reset per-entry context (token lives on the lease)
                 if entry_lease._context_token is not None:
                     reset_current_context(entry_lease._context_token)
@@ -947,15 +1010,25 @@ class SentinelEngine:
             trace_id=context.trace_id,
         )
         self._ctx.last_outcome = outcome
+        self._record_metrics(outcome)
         # Notify slots
-        for slot in self._chain.frozen_slots():
-            with suppress(BaseException):
-                slot.on_entry_complete(outcome)
+        self._notify_slot_completion(entry_lease.entered_slots, outcome)
         # Reset per-entry context (token lives on the lease)
         if entry_lease._context_token is not None:
             reset_current_context(entry_lease._context_token)
             entry_lease._context_token = None
         self._ctx.in_flight -= 1
+
+    def _record_metrics(self, outcome: Outcome) -> None:
+        """Record one terminal outcome without affecting business behavior."""
+        try:
+            self._metrics.record(
+                resource=outcome.resource,
+                outcome=outcome.kind,
+                rt_ns=outcome.elapsed_ns,
+            )
+        except Exception as error:
+            self._ctx.last_error = error
 
 
 # Patch the _EngineContext to add the helper for slot failure handling

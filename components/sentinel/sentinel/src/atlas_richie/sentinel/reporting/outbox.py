@@ -354,7 +354,9 @@ class ReportingOutbox:
                 seq = self._next_sequence
                 self._next_sequence += 1
                 self._buffer.append(
-                    _BufferedItem(envelope=envelope, sequence=seq, size_bytes=size_bytes)
+                    _BufferedItem(
+                        envelope=envelope, sequence=seq, size_bytes=size_bytes
+                    )
                 )
                 self._buffered_bytes += size_bytes
             elif self._policy is OverflowPolicy.DROP_OLDEST:
@@ -366,19 +368,22 @@ class ReportingOutbox:
                 seq = self._next_sequence
                 self._next_sequence += 1
                 self._buffer.append(
-                    _BufferedItem(envelope=envelope, sequence=seq, size_bytes=size_bytes)
+                    _BufferedItem(
+                        envelope=envelope, sequence=seq, size_bytes=size_bytes
+                    )
                 )
                 self._buffered_bytes += size_bytes
             else:  # DROP_NEWEST
                 if len(self._buffer) >= self._max_size:
                     raise OutboxFull(
-                        f"outbox full (max={self._max_size}), "
-                        f"policy=DROP_NEWEST"
+                        f"outbox full (max={self._max_size}), policy=DROP_NEWEST"
                     )
                 seq = self._next_sequence
                 self._next_sequence += 1
                 self._buffer.append(
-                    _BufferedItem(envelope=envelope, sequence=seq, size_bytes=size_bytes)
+                    _BufferedItem(
+                        envelope=envelope, sequence=seq, size_bytes=size_bytes
+                    )
                 )
                 self._buffered_bytes += size_bytes
             # 唤醒可能在等空间的调用方 (DROP_NEWEST / BLOCK_WITH_TIMEOUT
@@ -500,8 +505,7 @@ class ReportingOutbox:
                 )
         # 2. 用 dataclasses.replace 把 sequence 写回 envelope
         envelopes: list[ReportingEnvelope] = [
-            replace(item.envelope, sequence=item.sequence)
-            for item in self._buffer
+            replace(item.envelope, sequence=item.sequence) for item in self._buffer
         ]
         batch = ReportingBatch(
             protocol_version=PROTOCOL_VERSION,
@@ -529,10 +533,7 @@ class ReportingOutbox:
 
 def _now_iso_utc_micro() -> str:
     """ISO 8601 UTC microsecond, 跟 codec 严格 regex 一致."""
-    return (
-        datetime.now(timezone.utc)
-        .strftime("%Y-%m-%dT%H:%M:%S.%f")
-    ) + "Z"
+    return (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")) + "Z"
 
 
 __all__: list[str] = []  # 全部私有, Reporter 内部使用

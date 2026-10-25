@@ -16,6 +16,13 @@ correctness path, 5-way error classification, and idempotent `aclose()`.
 Its pure codec also exposes `encode_rule_snapshot` for lossless, typed
 projection into the five configured JSON data-ids; it does not publish.
 
+An explicit, opt-in managed-publication profile is also available for the
+approved envelope contract. It is not enabled by default and does not change
+legacy native-array consumers. The Console managed publisher/read-back path
+and authenticated runtime-receipt pipeline are still separate acceptance
+gates; this profile alone is not evidence that a publication was delivered to
+or applied by a runtime.
+
 | Sub-task | Status |
 | -------- | ------ |
 | M6.1.1 wheel scaffold + workspace | ✅ done |
@@ -119,6 +126,45 @@ The wheel reads 5 Nacos data-ids, derived from `data_id_prefix`:
 | authority   | `<data_id_prefix>-authority-rules.json`       |
 
 Use `config.data_id_for(rule_type)` to get the exact data-id string.
+
+### Managed publication profile (explicit migration only)
+
+Legacy configurations leave `managed_bindings=None` and continue reading raw
+native JSON arrays. To opt a source into managed publications, configure exactly
+one binding for each of the five rule kinds. Each provider value must then be a
+valid managed envelope for that exact binding/kind/profile; do not migrate only
+some keys while a single source combines all five targets.
+
+```python
+from atlas_richie.contracts.rules.managed_publication.v1 import ManagedRuleKind
+from atlas_richie.sentinel_source_nacos import (
+    NacosManagedRuleBinding,
+    NacosRuleSourceConfig,
+)
+
+config = NacosRuleSourceConfig(
+    source_id="nacos-prod",
+    server_addresses=("nacos.example.com:8848",),
+    namespace="sentinel-prod",
+    group="DEFAULT_GROUP",
+    data_id_prefix="sentinel-rules",
+    managed_bindings=(
+        NacosManagedRuleBinding("flow-binding", ManagedRuleKind.FLOW, "native-flow-v1"),
+        NacosManagedRuleBinding("degrade-binding", ManagedRuleKind.DEGRADE, "native-degrade-v1"),
+        NacosManagedRuleBinding("system-binding", ManagedRuleKind.SYSTEM, "native-system-v1"),
+        NacosManagedRuleBinding("authority-binding", ManagedRuleKind.AUTHORITY, "native-authority-v1"),
+        NacosManagedRuleBinding("param-binding", ManagedRuleKind.PARAM, "native-param-v1"),
+    ),
+)
+```
+
+Within this profile, an envelope containing the exact inner payload `[]` is an
+authoritative empty rule set for that target. Missing, blank, malformed,
+identity-mismatched, or semantically invalid targets reject the whole candidate
+and preserve the caller's last-known-good snapshot. Per-target provenance is
+retained through the repository apply event. Managed mode must only be enabled
+after the target values have been migrated together through the Console's
+conditional publication workflow; this Nacos package does not publish them.
 
 ### Pure rule encoding
 

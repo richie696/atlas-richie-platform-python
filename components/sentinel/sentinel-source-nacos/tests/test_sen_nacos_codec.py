@@ -17,11 +17,17 @@ PLANNING M6.1.3 + M6.1.4 硬约束测试覆盖:
 
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import replace
 from typing import Any
 
 import pytest
-
+from atlas_richie.contracts.rules.managed_publication.v1 import (
+    ManagedRuleKind,
+    ManagedRulePublicationV1,
+    encode_managed_rule_publication,
+)
 from atlas_richie.sentinel.rules.authority import AuthorityRule, AuthorityStrategy
 from atlas_richie.sentinel.rules.degrade import DegradeRule, DegradeStrategy
 from atlas_richie.sentinel.rules.flow import (
@@ -38,19 +44,19 @@ from atlas_richie.sentinel.rules.param_flow import (
 from atlas_richie.sentinel.rules.selector import ResourceSelector, SelectorKind
 from atlas_richie.sentinel.rules.snapshot import RuleSnapshot, RuleVersion
 from atlas_richie.sentinel.rules.system import SystemRule, SystemStrategy
-
 from atlas_richie.sentinel_source_nacos.codec import (
     NacosCodecError,
     NacosDecodeError,
     NacosEncodeError,
+    decode_managed_rule_snapshot,
     decode_rule_snapshot,
     encode_rule_snapshot,
 )
 from atlas_richie.sentinel_source_nacos.config import (
+    NacosManagedRuleBinding,
     NacosRuleSourceConfig,
     NacosSourceError,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -81,6 +87,51 @@ def _ids(config: NacosRuleSourceConfig) -> dict[str, str]:
     }
 
 
+def _managed_config(config: NacosRuleSourceConfig) -> NacosRuleSourceConfig:
+    return replace(
+        config,
+        managed_bindings=tuple(
+            NacosManagedRuleBinding(
+                binding_id=f"binding-{kind.value}",
+                rule_kind=kind,
+                profile_id=f"native-{kind.value}-v1",
+            )
+            for kind in ManagedRuleKind
+        ),
+    )
+
+
+def _managed_contents(config: NacosRuleSourceConfig) -> dict[str, bytes]:
+    assert config.managed_bindings is not None
+    rule_types = {
+        ManagedRuleKind.FLOW: "flow",
+        ManagedRuleKind.DEGRADE: "degrade",
+        ManagedRuleKind.SYSTEM: "system",
+        ManagedRuleKind.AUTHORITY: "authority",
+        ManagedRuleKind.PARAM: "param_flow",
+    }
+    result: dict[str, bytes] = {}
+    for binding in config.managed_bindings:
+        payload = b"[]"
+        if binding.rule_kind is ManagedRuleKind.FLOW:
+            payload = b'[{"id":"flow-1","resource":"/orders","grade":1,"count":10}]'
+        result[config.data_id_for(rule_types[binding.rule_kind])] = (
+            encode_managed_rule_publication(
+                ManagedRulePublicationV1(
+                    binding_id=binding.binding_id,
+                    publication_id=f"publication-{binding.rule_kind.value}",
+                    target_version_id=f"version-{binding.rule_kind.value}",
+                    publication_sequence=1,
+                    rule_kind=binding.rule_kind,
+                    profile_id=binding.profile_id,
+                    payload_sha256=hashlib.sha256(payload).hexdigest(),
+                    rule_payload=payload,
+                )
+            )
+        )
+    return result
+
+
 # ---------------------------------------------------------------------------
 # 5 类正常 JSON 解析
 # ---------------------------------------------------------------------------
@@ -89,15 +140,17 @@ def _ids(config: NacosRuleSourceConfig) -> dict[str, str]:
 class TestDecodeSuccess:
     """5 类 rule data-id 正常 JSON → 主包 rule dataclass。"""
 
-    def test_flow_decode(self, config: NacosRuleSourceConfig, rule_version: RuleVersion) -> None:
+    def test_flow_decode(
+        self, config: NacosRuleSourceConfig, rule_version: RuleVersion
+    ) -> None:
         ids = _ids(config)
         # Java sentinel-datasource-nacos 整数 enum format
         flow_payload = [
             {
                 "resource": "/api/orders",
-                "grade": 1,           # QPS
+                "grade": 1,  # QPS
                 "count": 100,
-                "controlBehavior": 0, # REJECT
+                "controlBehavior": 0,  # REJECT
                 "priority": 10,
             },
         ]
@@ -271,13 +324,15 @@ class TestEncodeSnapshot:
         with pytest.raises(NacosEncodeError):
             encode_rule_snapshot(snapshot, config=config)
 
-    def test_degrade_decode(self, config: NacosRuleSourceConfig, rule_version: RuleVersion) -> None:
+    def test_degrade_decode(
+        self, config: NacosRuleSourceConfig, rule_version: RuleVersion
+    ) -> None:
         ids = _ids(config)
         degrade_payload = [
             {
                 "resource": "/api/pay",
-                "grade": 1,        # ERROR_RATIO
-                "count": 10,       # Java: count; 错误率触发用 exceptionRatio 字段
+                "grade": 1,  # ERROR_RATIO
+                "count": 10,  # Java: count; 错误率触发用 exceptionRatio 字段
                 "timeWindow": 5000,
                 "exceptionRatio": 0.5,
                 "minRequestAmount": 5,
@@ -302,12 +357,14 @@ class TestEncodeSnapshot:
         assert rule.recovery_timeout_ms == 5000
         assert rule.minimum_request_count == 5
 
-    def test_param_flow_decode(self, config: NacosRuleSourceConfig, rule_version: RuleVersion) -> None:
+    def test_param_flow_decode(
+        self, config: NacosRuleSourceConfig, rule_version: RuleVersion
+    ) -> None:
         ids = _ids(config)
         pf_payload = [
             {
                 "resource": "/api/orders/:id",
-                "grade": 1,        # QPS in Java
+                "grade": 1,  # QPS in Java
                 "paramIdx": 0,
                 "count": 50,
                 "paramKeyType": 0,  # POSITIONAL
@@ -331,11 +388,13 @@ class TestEncodeSnapshot:
         assert rule.arg_index == 0
         assert rule.threshold == 50.0
 
-    def test_system_decode(self, config: NacosRuleSourceConfig, rule_version: RuleVersion) -> None:
+    def test_system_decode(
+        self, config: NacosRuleSourceConfig, rule_version: RuleVersion
+    ) -> None:
         ids = _ids(config)
         sys_payload = [
             {
-                "strategy": 0,           # DIRECT
+                "strategy": 0,  # DIRECT
                 "highestSystemLoad": 0.8,
                 "qps": 200.0,
                 "avgLoad": 5.0,
@@ -364,7 +423,9 @@ class TestEncodeSnapshot:
         assert rule.max_load == 5.0
         assert rule.max_event_loop_lag_ms == 50.0
 
-    def test_authority_decode(self, config: NacosRuleSourceConfig, rule_version: RuleVersion) -> None:
+    def test_authority_decode(
+        self, config: NacosRuleSourceConfig, rule_version: RuleVersion
+    ) -> None:
         ids = _ids(config)
         auth_payload = [
             {
@@ -433,9 +494,16 @@ class TestEncodeSnapshot:
 class TestNotFound:
     """缺 1 个 data_id → NOT_FOUND warning, 不抛错。"""
 
-    @pytest.mark.parametrize("missing_rule_type", [
-        "flow", "degrade", "param_flow", "system", "authority",
-    ])
+    @pytest.mark.parametrize(
+        "missing_rule_type",
+        [
+            "flow",
+            "degrade",
+            "param_flow",
+            "system",
+            "authority",
+        ],
+    )
     def test_missing_data_id(
         self,
         config: NacosRuleSourceConfig,
@@ -474,13 +542,16 @@ class TestEmpty:
     本测试只确认 1 个 EMPTY 来源 + 1 个 EMPTY 目标 = 5 个 EMPTY 总数。
     """
 
-    @pytest.mark.parametrize("empty_payload", [
-        b"",
-        "",
-        "[]",
-        "null",
-        "   \n  ",
-    ])
+    @pytest.mark.parametrize(
+        "empty_payload",
+        [
+            b"",
+            "",
+            "[]",
+            "null",
+            "   \n  ",
+        ],
+    )
     def test_empty_content(
         self,
         config: NacosRuleSourceConfig,
@@ -539,6 +610,45 @@ class TestDecodeError:
             decode_rule_snapshot(data, rule_version, config=config)
         assert "no integer" in str(exc_info.value) or "grade" in str(exc_info.value)
 
+    @pytest.mark.parametrize(
+        ("rule_type", "rule"),
+        [
+            ("flow", {"resource": "/x", "grade": True, "count": 1}),
+            (
+                "degrade",
+                {"resource": "/x", "grade": True, "count": 1, "timeWindow": 5},
+            ),
+            ("system", {"strategy": True}),
+            (
+                "authority",
+                {"resource": "/x", "limitApp": "default", "strategy": True},
+            ),
+            (
+                "param_flow",
+                {
+                    "resource": "/x",
+                    "grade": 1,
+                    "paramIdx": 0,
+                    "count": 1,
+                    "paramKeyType": True,
+                },
+            ),
+        ],
+    )
+    def test_boolean_is_not_accepted_as_an_integer_enum(
+        self,
+        config: NacosRuleSourceConfig,
+        rule_version: RuleVersion,
+        rule_type: str,
+        rule: dict[str, Any],
+    ) -> None:
+        ids = _ids(config)
+        data = {ids[kind]: "[]" for kind in ids}
+        data[ids[rule_type]] = json.dumps([rule])
+
+        with pytest.raises(NacosDecodeError):
+            decode_rule_snapshot(data, rule_version, config=config)
+
     def test_invalid_threshold_raises(
         self, config: NacosRuleSourceConfig, rule_version: RuleVersion
     ) -> None:
@@ -596,6 +706,84 @@ class TestDecodeError:
         assert issubclass(NacosDecodeError, Exception)
         # nacos_error 字段映射到 DECODE
         assert NacosDecodeError.nacos_error is NacosSourceError.DECODE
+
+
+class TestManagedRuleSnapshot:
+    """Explicit managed profile decodes a complete five-target snapshot."""
+
+    def test_decodes_five_envelopes_and_authoritative_empty_arrays(
+        self, config: NacosRuleSourceConfig, rule_version: RuleVersion
+    ) -> None:
+        managed_config = _managed_config(config)
+        snapshot = decode_managed_rule_snapshot(
+            _managed_contents(managed_config),
+            rule_version,
+            config=managed_config,
+        )
+
+        assert len(snapshot.provenance) == 5
+        assert len(snapshot.rules) == 1
+        assert snapshot.provenance[0].publication_sequence == 1
+        assert {item.rule_kind.value for item in snapshot.provenance} == {
+            kind.value for kind in ManagedRuleKind
+        }
+
+    def test_managed_binding_rejects_identifier_outside_wire_bounds(self) -> None:
+        with pytest.raises(ValueError, match="managed Nacos binding identity"):
+            NacosManagedRuleBinding(
+                binding_id="not a valid binding",
+                rule_kind=ManagedRuleKind.FLOW,
+                profile_id="native-flow-v1",
+            )
+
+    def test_rejects_native_array_in_managed_profile(
+        self, config: NacosRuleSourceConfig, rule_version: RuleVersion
+    ) -> None:
+        managed_config = _managed_config(config)
+        contents = _managed_contents(managed_config)
+        contents[managed_config.data_id_for("flow")] = b"[]"
+
+        with pytest.raises(NacosDecodeError):
+            decode_managed_rule_snapshot(contents, rule_version, config=managed_config)
+
+    def test_rejects_missing_target_as_one_candidate_failure(
+        self, config: NacosRuleSourceConfig, rule_version: RuleVersion
+    ) -> None:
+        managed_config = _managed_config(config)
+        contents = _managed_contents(managed_config)
+        del contents[managed_config.data_id_for("system")]
+
+        with pytest.raises(NacosDecodeError):
+            decode_managed_rule_snapshot(contents, rule_version, config=managed_config)
+
+    def test_rejects_duplicate_rule_identity_across_targets(
+        self, config: NacosRuleSourceConfig, rule_version: RuleVersion
+    ) -> None:
+        managed_config = _managed_config(config)
+        contents = _managed_contents(managed_config)
+        authority = next(
+            binding
+            for binding in managed_config.managed_bindings or ()
+            if binding.rule_kind is ManagedRuleKind.AUTHORITY
+        )
+        payload = b'[{"id":"flow-1","resource":"/other","limitApp":"x","strategy":0}]'
+        contents[managed_config.data_id_for("authority")] = (
+            encode_managed_rule_publication(
+                ManagedRulePublicationV1(
+                    binding_id=authority.binding_id,
+                    publication_id="publication-authority-2",
+                    target_version_id="version-authority-2",
+                    publication_sequence=2,
+                    rule_kind=ManagedRuleKind.AUTHORITY,
+                    profile_id=authority.profile_id,
+                    payload_sha256=hashlib.sha256(payload).hexdigest(),
+                    rule_payload=payload,
+                )
+            )
+        )
+
+        with pytest.raises(NacosDecodeError, match="duplicate rule identities"):
+            decode_managed_rule_snapshot(contents, rule_version, config=managed_config)
 
 
 # ---------------------------------------------------------------------------
@@ -673,7 +861,9 @@ class TestJavaIntegerEnumCompat:
     ) -> None:
         ids = _ids(config)
         data = {ids[rt]: "[]" for rt in ids}
-        data[ids["flow"]] = '[{"resource":"/x","grade":1,"count":1,"controlBehavior":2}]'
+        data[ids["flow"]] = (
+            '[{"resource":"/x","grade":1,"count":1,"controlBehavior":2}]'
+        )
         snap, _ = decode_rule_snapshot(data, rule_version, config=config)
         rule = next(iter(snap.rules.values()))
         assert rule.control is FlowControl.QUEUE
@@ -684,8 +874,7 @@ class TestJavaIntegerEnumCompat:
         ids = _ids(config)
         data = {ids[rt]: "[]" for rt in ids}
         data[ids["flow"]] = (
-            '[{"resource":"/x","grade":1,"count":1,'
-            '"scope":1,"scopeReference":"appA"}]'
+            '[{"resource":"/x","grade":1,"count":1,"scope":1,"scopeReference":"appA"}]'
         )
         snap, _ = decode_rule_snapshot(data, rule_version, config=config)
         rule = next(iter(snap.rules.values()))
@@ -703,7 +892,9 @@ class TestJavaIntegerEnumCompat:
             '"slowRatioThreshold":0.5}]'
         )
         snap, _ = decode_rule_snapshot(data, rule_version, config=config)
-        assert next(iter(snap.rules.values())).strategy is DegradeStrategy.SLOW_CALL_RATIO
+        assert (
+            next(iter(snap.rules.values())).strategy is DegradeStrategy.SLOW_CALL_RATIO
+        )
 
     def test_param_flow_source_int_2_header(
         self, config: NacosRuleSourceConfig, rule_version: RuleVersion
@@ -763,6 +954,7 @@ class TestPublicApiBoundary:
         泄漏的判定标准: 任何 ``module`` 来自 ``nacos`` 顶层或 ``nacos.*`` 子模块。
         """
         import inspect
+
         sig = inspect.signature(decode_rule_snapshot)
         for pname, p in sig.parameters.items():
             ann = p.annotation
@@ -776,13 +968,11 @@ class TestPublicApiBoundary:
     def test_codec_does_not_import_nacos_sdk(self) -> None:
         """codec 模块**不**能静态导入 nacos_sdk_python。"""
         import atlas_richie.sentinel_source_nacos.codec as mod
+
         # 检查 mod 自身的 globals 是否有 nacos.* 类型
         for name, val in vars(mod).items():
             if name.startswith("_"):
                 continue
             ann_mod = getattr(type(val), "__module__", "")
             if ann_mod.startswith("nacos"):
-                pytest.fail(
-                    f"codec.{name} leaks nacos SDK type "
-                    f"(module={ann_mod})"
-                )
+                pytest.fail(f"codec.{name} leaks nacos SDK type (module={ann_mod})")

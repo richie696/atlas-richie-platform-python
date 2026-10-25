@@ -190,10 +190,7 @@ class SlotExecFact:
 
 def _now_iso_utc_micro() -> str:
     """ISO 8601 UTC microsecond, 跟 codec 严格 regex 一致 (无 +00:00)."""
-    return (
-        datetime.now(timezone.utc)
-        .strftime("%Y-%m-%dT%H:%M:%S.%f")
-    ) + "Z"
+    return (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")) + "Z"
 
 
 def _check_health_class(value: str) -> None:
@@ -207,8 +204,7 @@ def _check_health_class(value: str) -> None:
 def _check_exec_result(value: str) -> None:
     if value not in _VALID_EXEC_RESULTS:
         raise ValueError(
-            f"exec_result must be one of {sorted(_VALID_EXEC_RESULTS)}, "
-            f"got {value!r}"
+            f"exec_result must be one of {sorted(_VALID_EXEC_RESULTS)}, got {value!r}"
         )
 
 
@@ -305,7 +301,11 @@ def build_source_stale(
         "health_class": fact.health_class,
         "reason_class": fact.reason_class,
     }
-    if fact.epoch is not None and fact.revision is not None and fact.checksum is not None:
+    if (
+        fact.epoch is not None
+        and fact.revision is not None
+        and fact.checksum is not None
+    ):
         payload["rule_version_epoch"] = fact.epoch
         payload["rule_version_revision"] = fact.revision
         payload["rule_version_checksum"] = fact.checksum
@@ -332,7 +332,11 @@ def build_source_degraded(
         "health_class": fact.health_class,
         "reason_class": fact.reason_class,
     }
-    if fact.epoch is not None and fact.revision is not None and fact.checksum is not None:
+    if (
+        fact.epoch is not None
+        and fact.revision is not None
+        and fact.checksum is not None
+    ):
         payload["rule_version_epoch"] = fact.epoch
         payload["rule_version_revision"] = fact.revision
         payload["rule_version_checksum"] = fact.checksum

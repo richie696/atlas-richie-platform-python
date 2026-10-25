@@ -16,6 +16,7 @@ enums** (enforced by ``ALLOWED_LABEL_KEYS``)."""
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
@@ -52,6 +53,179 @@ class MetricLabelKey(StrEnum):
 
 # Convenience: set for fast membership check
 ALLOWED_LABEL_KEYS: frozenset[str] = frozenset(k.value for k in MetricLabelKey)
+
+# Default upper bounds for bounded response-time buckets, in nanoseconds.
+# The final bucket represents values greater than the last boundary.
+DEFAULT_RT_HISTOGRAM_BOUNDS_NS: tuple[int, ...] = (
+    1_000_000,
+    5_000_000,
+    10_000_000,
+    25_000_000,
+    50_000_000,
+    100_000_000,
+    250_000_000,
+    500_000_000,
+    1_000_000_000,
+)
+MAX_RT_HISTOGRAM_BOUND_COUNT = 64
+_PERCENTILE_RANK_DENOMINATOR = 100
+_P95_RANK_NUMERATOR = 95
+
+
+def validate_rt_histogram_bounds(bounds: tuple[int, ...]) -> tuple[int, ...]:
+    """Validate and freeze bounded response-time histogram boundaries."""
+    if not isinstance(bounds, tuple) or not bounds:
+        raise ValueError("latency bucket bounds must be a non-empty tuple")
+    if len(bounds) > MAX_RT_HISTOGRAM_BOUND_COUNT:
+        raise ValueError(
+            "latency bucket bounds exceed the maximum count "
+            f"({MAX_RT_HISTOGRAM_BOUND_COUNT})"
+        )
+    previous = -1
+    for boundary in bounds:
+        if isinstance(boundary, bool) or not isinstance(boundary, int):
+            raise ValueError("latency bucket boundaries must be integers")
+        if boundary < 0 or boundary <= previous:
+            raise ValueError(
+                "latency bucket boundaries must be non-negative and strictly increasing"
+            )
+        previous = boundary
+    return bounds
+
+
+def latency_histogram_bucket_index(
+    boundaries_ns: tuple[int, ...], sample_ns: int
+) -> int:
+    """Return the inclusive bucket index for a non-negative latency sample.
+
+    Callers validate and retain immutable bucket boundaries once when the
+    accumulator is created; this helper centralizes only sample validation
+    and bucket placement for the Sentinel and framework-adapter registries.
+    """
+    if isinstance(sample_ns, bool) or not isinstance(sample_ns, int) or sample_ns < 0:
+        raise ValueError("latency sample must be a non-negative integer")
+    return bisect_left(boundaries_ns, sample_ns)
+
+
+@dataclass(frozen=True, slots=True)
+class LatencyHistogram:
+    """Bounded, mergeable response-time distribution without raw samples.
+
+    ``bucket_counts`` contains one count for each inclusive upper boundary,
+    followed by an overflow bucket for observations above the final bound.
+    ``p95_upper_bound_ns`` uses the nearest-rank position and reports the
+    selected bucket's upper boundary; it is not an interpolated percentile.
+    """
+
+    boundaries_ns: tuple[int, ...]
+    bucket_counts: tuple[int, ...]
+    sample_count: int
+    total_ns: int
+    min_ns: int | None
+    max_ns: int | None
+
+    def __post_init__(self) -> None:
+        validate_rt_histogram_bounds(self.boundaries_ns)
+        if not isinstance(self.bucket_counts, tuple):
+            raise ValueError("bucket_counts must be an immutable tuple")
+        if len(self.bucket_counts) != len(self.boundaries_ns) + 1:
+            raise ValueError("bucket count length must equal bounds length + 1")
+        if any(
+            isinstance(count, bool) or not isinstance(count, int) or count < 0
+            for count in self.bucket_counts
+        ):
+            raise ValueError("bucket counts must be non-negative integers")
+        if (
+            isinstance(self.sample_count, bool)
+            or not isinstance(self.sample_count, int)
+            or self.sample_count < 0
+        ):
+            raise ValueError("sample_count must be a non-negative integer")
+        if sum(self.bucket_counts) != self.sample_count:
+            raise ValueError("bucket counts must sum to sample_count")
+        if isinstance(self.total_ns, bool) or not isinstance(self.total_ns, int):
+            raise ValueError("total_ns must be an integer")
+        if self.total_ns < 0:
+            raise ValueError("total_ns must be non-negative")
+        if self.sample_count == 0:
+            if self.total_ns != 0 or self.min_ns is not None or self.max_ns is not None:
+                raise ValueError("empty histogram must have zero total and no min/max")
+            return
+        if self.min_ns is None or self.max_ns is None:
+            raise ValueError("non-empty histogram requires min_ns and max_ns")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in (self.min_ns, self.max_ns)
+        ):
+            raise ValueError("min_ns and max_ns must be non-negative integers")
+        if self.min_ns > self.max_ns or self.total_ns < self.min_ns:
+            raise ValueError("histogram min/max/total are inconsistent")
+        if self.total_ns > self.max_ns * self.sample_count:
+            raise ValueError("histogram total exceeds max_ns times sample_count")
+
+    def combine(self, other: LatencyHistogram) -> LatencyHistogram:
+        """Merge another histogram with identical bucket boundaries.
+
+        Bucket counts are additive, so the result preserves the pooled
+        distribution needed for aggregate percentiles. Percentiles themselves
+        must never be averaged across histograms.
+        """
+        if not isinstance(other, LatencyHistogram):
+            raise TypeError("other must be a latency histogram")
+        if self.boundaries_ns != other.boundaries_ns:
+            raise ValueError("latency histograms must use identical boundaries")
+
+        sample_count = self.sample_count + other.sample_count
+        if sample_count == 0:
+            return LatencyHistogram(
+                boundaries_ns=self.boundaries_ns,
+                bucket_counts=tuple(0 for _ in self.bucket_counts),
+                sample_count=0,
+                total_ns=0,
+                min_ns=None,
+                max_ns=None,
+            )
+
+        minimums = tuple(
+            value for value in (self.min_ns, other.min_ns) if value is not None
+        )
+        maximums = tuple(
+            value for value in (self.max_ns, other.max_ns) if value is not None
+        )
+        return LatencyHistogram(
+            boundaries_ns=self.boundaries_ns,
+            bucket_counts=tuple(
+                left + right
+                for left, right in zip(
+                    self.bucket_counts, other.bucket_counts, strict=True
+                )
+            ),
+            sample_count=sample_count,
+            total_ns=self.total_ns + other.total_ns,
+            min_ns=min(minimums),
+            max_ns=max(maximums),
+        )
+
+    @property
+    def p95_upper_bound_ns(self) -> int | None:
+        """Return the nearest-rank p95 bucket upper bound, if it is bounded.
+
+        The result is a histogram estimate, not an interpolated percentile.
+        Empty histograms and percentiles that fall into the overflow bucket
+        have no finite upper bound and return ``None``.
+        """
+        if self.sample_count == 0:
+            return None
+
+        rank = (
+            self.sample_count * _P95_RANK_NUMERATOR + _PERCENTILE_RANK_DENOMINATOR - 1
+        ) // _PERCENTILE_RANK_DENOMINATOR
+        cumulative_count = 0
+        for index, boundary_ns in enumerate(self.boundaries_ns):
+            cumulative_count += self.bucket_counts[index]
+            if cumulative_count >= rank:
+                return boundary_ns
+        return None
 
 
 def _validate_label_key(key: str) -> None:
@@ -120,6 +294,8 @@ class MetricSnapshot:
     - ``failed`` — 业务失败数
     - ``cancelled`` — 协程取消数
     - ``avg_rt_ns`` — 平均响应时间(纳秒,``0`` 表示无样本)
+    - ``latency_histogram`` — bounded RT distribution; ``None`` is
+      retained for snapshots manually constructed by older callers.
 
     English
     --------
@@ -134,6 +310,8 @@ class MetricSnapshot:
     - ``cancelled`` — coroutine cancellation count.
     - ``avg_rt_ns`` — average response time in ns (``0`` when no
       samples).
+    - ``latency_histogram`` — bounded RT distribution; ``None`` is
+      retained for snapshots manually constructed by older callers.
     """
 
     at_ns: int
@@ -144,6 +322,7 @@ class MetricSnapshot:
     failed: int = 0
     cancelled: int = 0
     avg_rt_ns: int = 0
+    latency_histogram: LatencyHistogram | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.labels, MappingProxyType):
@@ -165,9 +344,14 @@ class MetricSnapshot:
 
 
 __all__ = [
-    "MetricSnapshot",
-    "MetricLabelKey",
     "ALLOWED_LABEL_KEYS",
-    "make_label",
+    "DEFAULT_RT_HISTOGRAM_BOUNDS_NS",
+    "MAX_RT_HISTOGRAM_BOUND_COUNT",
+    "LatencyHistogram",
+    "MetricLabelKey",
+    "MetricSnapshot",
     "_validate_label_key",
+    "latency_histogram_bucket_index",
+    "make_label",
+    "validate_rt_histogram_bounds",
 ]
