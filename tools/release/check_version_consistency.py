@@ -1,6 +1,6 @@
 """Wheel / sdist / pyproject.toml 三产物版本一致性门禁。
 
-PLANNING.md §M0.4 Exit Criteria: 主 wheel `atlas-richie-sentinel` 发布前
+components/sentinel/docs/guide/发布流程.md: 主 wheel `atlas-richie-sentinel` 发布前
 必须验证 wheel `*.dist-info/METADATA` + sdist `PKG-INFO` + 源
 `pyproject.toml [project] version` + `name` 四者全部一致。
 

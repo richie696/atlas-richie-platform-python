@@ -18,7 +18,7 @@ L1085-1086)。
 
 - ``source_id`` — 用户在 ``RuleSourceAssembly`` 中提供的稳定字符串
   (e.g. ``"nacos-prod"``); **不**自动用 endpoint / path / token 构造
-  (rule_source_activation.md §7)
+  (规则源激活事实定义.md §7)
 - ``source`` — 同进程内的 ``SnapshotRuleSource`` 实现 (新契约)
 - ``priority`` — 大值优先; Supervisor 启动时校验全局唯一
   (重复 = 公共装配入口契约违反, 由 contract test 兜底)
@@ -45,7 +45,7 @@ Fields:
 
 - ``source_id`` — user-supplied stable string in
   ``RuleSourceAssembly`` (e.g. ``"nacos-prod"``); never auto-derived
-  from endpoint / path / token (rule_source_activation.md §7).
+  from endpoint / path / token (规则源激活事实定义.md §7).
 - ``source`` — same-process ``SnapshotRuleSource`` implementation.
 - ``priority`` — larger wins; Supervisor validates global uniqueness
   at start (duplicates = public contract violation, caught by

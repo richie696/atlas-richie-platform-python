@@ -50,5 +50,5 @@ from atlas_richie.sentinel.errors import (
 )
 ```
 
-License: Apache-2.0. See `components/sentinel/docs/DESIGN.md` and
-`components/sentinel/docs/PLANNING.md` for the full design and milestone plan.
+License: Apache-2.0. See `components/sentinel/docs/design/系统架构与总体设计.md`
+for the full design.

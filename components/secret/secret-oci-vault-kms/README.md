@@ -132,5 +132,5 @@ no such fields.
   `crypto.capability` AAD gate (R-242)
 - `atlas-richie-secret-tencent-ssm-kms` — sibling
   3-SPI scope backend (also Vault + KMS)
-- `docs/acceptance/R-246-secret-oci-vault-kms-handoff.md`
+- `R-246-secret-oci-vault-kms-handoff.md` (handoff note; retired with the process material, not shipped)
   — design + verification

@@ -3,7 +3,7 @@
 Redis backend for the [atlas-richie-secret-core](../secret-core) secret
 platform. Stores AES-256-GCM envelope-encrypted secret values in
 Redis, reusing the
-[atlas-richie-cache-redis](../cache/cache-redis) infrastructure for
+[atlas-richie-cache-redis](../../cache/cache-redis) infrastructure for
 connection pooling, `RedisStringManager`, and `RedisDistributedCache`.
 
 ## Why default at-rest encryption

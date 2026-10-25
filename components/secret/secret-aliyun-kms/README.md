@@ -70,5 +70,5 @@ retry. The full list is documented in `AliyunSecretProperties`.
 - `atlas-richie-secret-core` — framework + Protocols
 - `atlas-richie-secret-aws-kms` — sibling remote backend wheel
   (5-SPI; this wheel is the 4-SPI variant for symmetric-only vendors)
-- `docs/acceptance/R-240-secret-aliyun-kms-handoff.md` — design +
+- `R-240-secret-aliyun-kms-handoff.md` (handoff note; retired with the process material, not shipped) — design +
   verification + Java→Python translation table

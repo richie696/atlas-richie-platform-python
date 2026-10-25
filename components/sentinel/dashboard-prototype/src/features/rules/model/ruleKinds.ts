@@ -35,7 +35,7 @@ export const RULE_KINDS: readonly RuleKind[] = Object.freeze([
 /**
  * Sentinel 兼容编码。
  *
- * 数值来源见 `DASHBOARD_CONTROL_PLANE.md` §4.3。这些是线上协议值，不是界面枚举。
+ * 数值来源见 `规则控制台与运行观测设计.md` §4.3。这些是线上协议值，不是界面枚举。
  */
 export const SentinelCode = Object.freeze({
   FLOW_GRADE_THREAD: 0,

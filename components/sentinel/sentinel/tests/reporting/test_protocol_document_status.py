@@ -18,7 +18,7 @@ def test_reporting_freeze_records_only_freeze_the_envelope_schema() -> None:
     chinese_transport = (
         PROTOCOLS_ROOT / "上报协议-02-transport-v1.md"
     ).read_text(encoding="utf-8")
-    planning = (SENTINEL_ROOT / "docs" / "process" / "PLANNING.md").read_text(
+    design = (SENTINEL_ROOT / "docs" / "design" / "系统架构与总体设计.md").read_text(
         encoding="utf-8"
     )
 
@@ -28,20 +28,17 @@ def test_reporting_freeze_records_only_freeze_the_envelope_schema() -> None:
     assert "transport 仍为草案" in chinese
     assert "Status**: Pending transport freeze and owner sign-off" in english_transport
     assert "Status**: 待 transport 冻结与 owner 签字" in chinese_transport
-    assert "不是当前可证事实" in planning
 
-    m651 = " ".join(
-        planning.split("- [x] M6.5.1", maxsplit=1)[1]
-        .split("- [x] M6.5.2", maxsplit=1)[0]
-        .split()
-    )
-    assert "仅冻结 V1 event envelope schema" in m651
-    assert "transport 仍待 owner 签字" in m651
-    assert "冻结 V1 schema、 transport 基线" not in m651
+    # The planning material that used to carry this guard was retired as process
+    # documentation; the surviving authority is the design baseline, which must
+    # still separate the frozen envelope from the draft transport.
+    assert "当前唯一冻结的跨语言事实是 V1 **事件 envelope**" in design
+    assert "不能把设计目标表述为已冻结或已接线能力" in design
+    assert "冻结 V1 schema、 transport 基线" not in design
 
 
 def test_design_does_not_describe_unfrozen_transport_or_metrics_as_v1_contract() -> None:
-    design = (SENTINEL_ROOT / "docs" / "DESIGN.md").read_text(encoding="utf-8")
+    design = (SENTINEL_ROOT / "docs" / "design" / "系统架构与总体设计.md").read_text(encoding="utf-8")
 
     assert "当前唯一冻结的跨语言事实是 V1 **事件 envelope**" in design
     assert "transport、认证、batch/ack" in design

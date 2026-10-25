@@ -131,5 +131,5 @@ no such fields.
 - `atlas-richie-secret-volcengine-kms` — sibling
   KMS-only 2-SPI scope backend (also bce-style with
   no AAD)
-- `docs/acceptance/R-247-secret-ibm-key-protect-handoff.md`
+- `R-247-secret-ibm-key-protect-handoff.md` (handoff note; retired with the process material, not shipped)
   — design + verification

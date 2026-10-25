@@ -83,5 +83,5 @@ auth_token_file / secrets / timeouts.
 - `atlas-richie-secret-core` — framework + Protocols
 - `atlas-richie-secret-vault` — sibling HashiCorp Vault
   backend (similar 3-SPI scope)
-- `docs/acceptance/R-242-secret-barbican-handoff.md` —
+- `R-242-secret-barbican-handoff.md` (handoff note; retired with the process material, not shipped) —
   design + verification

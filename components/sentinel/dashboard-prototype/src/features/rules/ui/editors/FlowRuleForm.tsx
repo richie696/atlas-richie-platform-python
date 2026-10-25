@@ -5,7 +5,7 @@ import { scopedClasses } from "../../../../shared/ui/styles/scopedClasses";
  *
  * 中文
  * ----
- * 条件字段与 `DASHBOARD_CONTROL_PLANE.md` §4.3 的 FlowRule 合同一致：
+ * 条件字段与 `规则控制台与运行观测设计.md` §4.3 的 FlowRule 合同一致：
  *
  * - 非直接策略必须填写 `refResource`；
  * - 慢启动显示 `warmUpPeriodSec`；

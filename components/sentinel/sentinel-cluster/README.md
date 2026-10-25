@@ -23,5 +23,5 @@ pip install atlas-richie-sentinel-cluster
 
 ## See also
 
-- `docs/acceptance/R-SENTINEL-design.md` — full design doc
+- `components/sentinel/docs/design/系统架构与总体设计.md` — full design doc
 - `components/sentinel/` — sibling wheels in the Sentinel family

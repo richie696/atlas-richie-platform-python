@@ -1,6 +1,6 @@
 """Sentinel 命名空间所有权检查工具。
 
-PLANNING.md §M0.8.1: 主 wheel `atlas-richie-sentinel` 独占
+components/sentinel/docs/design/系统架构与总体设计.md: 主 wheel `atlas-richie-sentinel` 独占
 `atlas_richie.sentinel` 命名空间。任何其它 wheel(扩展或第三方)都不能
 在该命名空间下放置 .py 文件,否则会导致:
 

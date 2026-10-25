@@ -141,8 +141,8 @@ sign-off cycle.
 
 - Project owner: richie696 implicit sign-off via "全部跑了" / "全部
   清掉" 系列隐式授权 (2026-09-13 review 群).
-- Protocol designer: Mavis self-attest — [`docs/process/PLANNING.md` §M6.5.7](../../process/PLANNING.md)
-  + [`docs/DESIGN.md` §6 Reporting Protocol V1 Scope](../../DESIGN.md)
+- Protocol designer: Mavis self-attest — 里程碑规划 §M6.5.7（过程材料，已随其它过程文档清理）
+  + [`docs/design/系统架构与总体设计.md` §6 Reporting Protocol V1 Scope](../design/系统架构与总体设计.md)
   + 4 协议 doc (中英双份) 收口.
 - Reporter implementation owner: Mavis self-attest — commit `ebf3f9a`
   M6.5.1-6 reporting 31 failed 修法, 58 单测全过, sentinel main 352

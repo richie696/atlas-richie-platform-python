@@ -12,7 +12,7 @@
  * 而且没有任何测试会发现。这里把类别提升为协议值，中文只作为它的标签存在。
  *
  * 关联关系是**示例**：事件证据里的相关指标与发布时点都不构成因果断言
- * （`DASHBOARD_CONTROL_PLANE.md` §4 故障分析行：时间相关不直接断言因果）。
+ * （`规则控制台与运行观测设计.md` §4 故障分析行：时间相关不直接断言因果）。
  */
 
 /** 事件严重级别。 */
@@ -44,7 +44,7 @@ export const SEVERITY_FILTER_ORDER: readonly SeverityFilter[] = Object.freeze([
  *
  * 中文
  * ----
- * `REWRITE_PLAN.md` §4.5 列了 resource / rt / ruleChange 三类。这里把「规则发布」与
+ * 事件类别按 resource / rt / ruleChange 三类划分。这里把「规则发布」与
  * 「规则生效」保留为两个类别：配置中心写入成功与实例已生效是**两个事实**，合并成
  * 一个类别会让事件列表把「已发布」说成「已生效」，正是 §4.1 明确禁止的状态合并。
  */
@@ -70,7 +70,7 @@ export const NO_INSTANCE = "—";
  *
  * 中文
  * ----
- * 对应 `REWRITE_PLAN.md` §4.5 的 `IncidentEvent`。两处与目标契约的差异是**已知且必须
+ * 对应目标契约的 `IncidentEvent`。两处与目标契约的差异是**已知且必须
  * 显式**的，不能悄悄当成已满足：
  *
  * - `date` + `at` 是本地时钟的展示值，不是含时区的时间戳。接入 Agent Reporting 后

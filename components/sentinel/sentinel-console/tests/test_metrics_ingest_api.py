@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -17,17 +19,16 @@ from atlas_richie.contracts.reporting.v2 import (
     decode_metrics_receipt,
     encode_metrics_snapshot,
 )
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.x509.oid import NameOID
-from starlette.applications import Starlette
-
 from atlas_richie.sentinel_console.api.metrics_ingest import metrics_ingest_route
 from atlas_richie.sentinel_console.application.ingest_metrics import IngestMetrics
 from atlas_richie.sentinel_console.application.metrics_ingest_ports import (
     MetricsReporterBinding,
 )
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
+from starlette.applications import Starlette
 
 
 class _MemoryHistory:
@@ -192,4 +193,35 @@ def test_invalid_pem_certificate_is_rejected_without_header_fallback():
     )
 
     assert response.status_code == 401
+    assert history.accepted == []
+
+
+@pytest.mark.parametrize(
+    ("field", "code"),
+    [
+        ("counters", "invalid_counter"),
+        ("histograms", "invalid_histogram"),
+        ("gauges", "invalid_gauge"),
+    ],
+)
+@pytest.mark.parametrize("mutation", ["unknown", "missing"])
+def test_nested_record_field_failures_return_safe_400_not_runtime_error(
+    tls_certificate, field, code, mutation
+):
+    fixtures = (
+        Path(__file__).resolve().parents[4]
+        / "foundation/contracts/tests/reporting/v2/fixtures"
+    )
+    value = json.loads((fixtures / "valid_full.json").read_text())
+    if mutation == "unknown":
+        value[field][0]["unapproved"] = "private injected detail"
+    else:
+        del value[field][0]["name"]
+    certificate_pem, _ = tls_certificate
+    response, history = asyncio.run(
+        _request(json.dumps(value).encode(), (certificate_pem,))
+    )
+    assert response.status_code == 400
+    assert response.json() == {"error": {"code": code}}
+    assert "private injected detail" not in response.text
     assert history.accepted == []

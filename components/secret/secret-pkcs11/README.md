@@ -45,4 +45,4 @@ fixtures read this and skip if SoftHSM is unreachable.
 ## See also
 
 - `atlas-richie-secret-core` — framework + Protocols
-- `docs/acceptance/R-238-secret-pkcs11-handoff.md`
+- `R-238-secret-pkcs11-handoff.md` (handoff note; retired with the process material, not shipped)

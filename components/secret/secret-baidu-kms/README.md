@@ -122,5 +122,5 @@ no such fields.
   KMS-only 2-SPI scope backend (also no-AAD)
 - `atlas-richie-secret-ibm-key-protect` — sibling
   KMS-only 2-SPI scope backend (R-247)
-- `docs/acceptance/R-248-secret-baidu-kms-handoff.md`
+- `R-248-secret-baidu-kms-handoff.md` (handoff note; retired with the process material, not shipped)
   — design + verification

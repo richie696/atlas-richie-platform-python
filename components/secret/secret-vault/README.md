@@ -42,4 +42,4 @@ Required: `URL`, `TOKEN` (or K8s role / AppRole credentials).
 
 - `atlas-richie-secret-core` — framework + Protocols
 - `atlas-richie-secret-redis` — sibling backend wheel
-- `docs/acceptance/R-233-2-secret-vault-handoff.md` — design + verification
+- `R-233-2-secret-vault-handoff.md` (handoff note; retired with the process material, not shipped) — design + verification

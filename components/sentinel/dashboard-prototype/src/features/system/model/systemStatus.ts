@@ -5,7 +5,7 @@
  *
  * 中文
  * ----
- * 这是 `DASHBOARD_CONTROL_PLANE.md` §2/§4.2 的链路分类：配置中心、指标后端、
+ * 这是 `规则控制台与运行观测设计.md` §2/§4.2 的链路分类：配置中心、指标后端、
  * 上报采集器三条链路各自独立健康，任何一条断开都不代表其余两条不可用。
  * 分类值只用于读模型自身，页面文案由 UI 层决定。
  */
@@ -105,7 +105,7 @@ export function resolveSystemTab(value: string | undefined): SystemTab {
   return isSystemTab(value) ? value : DEFAULT_SYSTEM_TAB;
 }
 
-/** 控制台只判断的两项能力（`DASHBOARD_CONTROL_PLANE.md` §2）。 */
+/** 控制台只判断的两项能力（`规则控制台与运行观测设计.md` §2）。 */
 export const CAPABILITY = SESSION_CAPABILITY;
 
 /** 能力值联合。与 `core/session` 同一份定义。 */

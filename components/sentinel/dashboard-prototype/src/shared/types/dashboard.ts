@@ -88,7 +88,7 @@ export type MetricKey =
  *
  * 中文
  * ----
- * 字段语义与 Console API 的 `MetricPoint` 对齐（见 `REWRITE_PLAN.md` §4.1）：
+ * 字段语义与 Console API 的 `MetricPoint` 对齐：
  *
  * - `time` 是展示用时间标签。生产实现应改用毫秒时间戳 + locale 格式化，
  *   不在协议层传本地化字符串。
@@ -98,7 +98,7 @@ export type MetricKey =
  * - 当前演示 `blocked` / `cpu` / `memory` 为展示百分数 0..100；不是 wire DTO。
  *   后续协议的比率单位必须在 feature mapper 显式换算，不可直接复用此类型。
  *
- * 当前类型尚未包含 `scope` / `source` / `freshness`。这三项是 `DASHBOARD_CONTROL_PLANE.md`
+ * 当前类型尚未包含 `scope` / `source` / `freshness`。这三项是 `规则控制台与运行观测设计.md`
  * §3.1 的硬要求，接入 Console API 时必须补齐，否则无法区分「应用总量」与「单进程」口径。
  */
 export interface MetricPoint {

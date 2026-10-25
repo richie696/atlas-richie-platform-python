@@ -60,7 +60,7 @@ import {
 
 test("CONSOLE-DOC: published contract counts match the runtime registry and generated OpenAPI", () => {
   const document = createConsoleOpenApi();
-  const contract = readFileSync(resolve(process.cwd(), "../docs/CONSOLE_API_CONTRACT.md"), "utf8");
+  const contract = readFileSync(resolve(process.cwd(), "../docs/contract/Console-API-契约.md"), "utf8");
   const operations = CONSOLE_OPERATIONS;
   const exchangeExamples = operations.reduce(
     (count, operation) => count + (operation.examples?.length ?? 0),
@@ -95,7 +95,7 @@ test("CONSOLE-DOC: published contract counts match the runtime registry and gene
 });
 
 test("CONSOLE-DOC: source credential input supports explicit modes without browser provider access", () => {
-  const contract = readFileSync(resolve(process.cwd(), "../docs/CONSOLE_API_CONTRACT.md"), "utf8");
+  const contract = readFileSync(resolve(process.cwd(), "../docs/contract/Console-API-契约.md"), "utf8");
   assert.doesNotMatch(contract, /不做连接凭证的网页写入/);
   assert.match(contract, /不让浏览器直连 Nacos\/Consul/);
   assert.match(contract, /显式选择 `none`、`reference` 或 `direct`/);
@@ -104,7 +104,7 @@ test("CONSOLE-DOC: source credential input supports explicit modes without brows
 });
 
 test("CONSOLE-DOC: synchronous fixture gateway is historical, not current integration guidance", () => {
-  const contract = readFileSync(resolve(process.cwd(), "../docs/CONSOLE_API_CONTRACT.md"), "utf8");
+  const contract = readFileSync(resolve(process.cwd(), "../docs/contract/Console-API-契约.md"), "utf8");
   assert.doesNotMatch(contract, /默认是 `fixtureGateway`/);
   assert.match(contract, /已作废的历史接线说明/);
   assert.match(contract, /feature-owned HTTP adapters 与共享 Console transport/);
@@ -127,7 +127,7 @@ test("CONSOLE-MACHINE: same runtime registry yields 66 operations across 63 uniq
     "d6e523cb0ef67f5ebcdba118af937f8c7d3c4cf7fb9f34d74bb8b9cd2d79cd41",
     "Console API 0.18.0 wire changed; review and advance the contract version explicitly",
   );
-  const contract = readFileSync(resolve(process.cwd(), "../docs/CONSOLE_API_CONTRACT.md"), "utf8");
+  const contract = readFileSync(resolve(process.cwd(), "../docs/contract/Console-API-契约.md"), "utf8");
   assert.match(
     contract,
     /0\.8\.0 于 2026-10-16 按已批准的规则目录设计增加配置中心规则读取与有界刷新/,
@@ -275,7 +275,7 @@ test("F7.4: account creation and read contract expose only the intended account 
   ]);
 
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const accounts = pageChapter(pageDesign, "## 10. 账户维护", "## 11.");
@@ -299,7 +299,7 @@ test("F6.1: disabling an account revokes existing sessions and re-enable cannot 
   assert.ok(generated["x-semantic-rules"].includes(rule));
 
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const accountChapter = pageChapter(pageDesign, "## 10. 账户维护", "## 11.");
@@ -307,7 +307,7 @@ test("F6.1: disabling an account revokes existing sessions and re-enable cannot 
   assert.match(accountChapter, /重新启用不会恢复旧 session\/Cookie/);
 
   const consoleContract = readFileSync(
-    resolve(process.cwd(), "../docs/CONSOLE_API_CONTRACT.md"),
+    resolve(process.cwd(), "../docs/contract/Console-API-契约.md"),
     "utf8",
   );
   assert.match(consoleContract, /同一数据库事务内撤销该账号全部现有 session/);
@@ -327,7 +327,7 @@ test("F6.1: own-password reauthentication and all-session revocation stay in the
   assert.ok(generated["x-semantic-rules"].includes(rule));
 
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const passwordChapter = pageChapter(pageDesign, "## 12. 修改密码", "## 13.");
@@ -338,7 +338,7 @@ test("F6.1: own-password reauthentication and all-session revocation stay in the
 
 test("F7.4: all 11 page chapters document runtime operations, schema fields, and wire enums", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const chapters = [...pageDesign.matchAll(/^## (\d+)\./gm)]
@@ -528,7 +528,7 @@ test("F7.4: all 11 page chapters document runtime operations, schema fields, and
 
 test("F7.4: every page chapter names its demo HTTP mock owner and Python authority boundary", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const sectionStart = pageDesign.indexOf("### 13.1.1 页面 Mock 工厂与 Python 权威数据责任");
@@ -597,7 +597,7 @@ test("F7.4: every page chapter names its demo HTTP mock owner and Python authori
 
 test("F6.1/F7.4: shared design summary defers to current endpoint wire contracts", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const commonStart = pageDesign.indexOf("## 1. 共同边界与数据约束");
@@ -632,7 +632,7 @@ test("F6.1/F7.4: shared design summary defers to current endpoint wire contracts
 
 test("F7.4: setup and login chapters document current runtime input bounds", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const pageChapter = (chapterNumber) => {
@@ -687,7 +687,7 @@ test("F7.4: setup and login chapters document current runtime input bounds", () 
 
 test("F7.4: rules chapter documents current target, candidate, and plan bounds", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const rulesPage = pageChapter(pageDesign, "## 4. 规则", "## 5.");
@@ -775,7 +775,7 @@ test("F7.4: rules chapter documents current target, candidate, and plan bounds",
 
 test("F7.4: observation page chapters document current runtime query bounds", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const openApi = createConsoleOpenApi();
@@ -838,7 +838,7 @@ test("F7.4: observation page chapters document current runtime query bounds", ()
 
 test("F7.4: rules chapter separates JSON number bounds from per-rule validation", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const rulesPage = pageChapter(pageDesign, "## 4. 规则", "## 5.");
@@ -1105,7 +1105,7 @@ test("F7.4: schema field collector resolves local JSON Pointer references", () =
 
 test("F7.4: role-binding chapter separates demo command state from live session authority", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const chapterStart = pageDesign.indexOf("## 11. 角色绑定");
@@ -1119,7 +1119,7 @@ test("F7.4: role-binding chapter separates demo command state from live session 
 
 test("F7.4: overview page documents every runtime fleet error projection", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const overviewStart = pageDesign.indexOf("## 2. 总览");
@@ -1141,7 +1141,7 @@ test("F7.4: overview page documents every runtime fleet error projection", () =>
 
 test("F7.4: application page documents observation endpoint errors and retired incarnations", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const applicationsStart = pageDesign.indexOf("## 3. 应用与实例");
@@ -1174,7 +1174,7 @@ test("F7.4: application page documents observation endpoint errors and retired i
 
 test("F7.4: realtime page documents every metrics endpoint error and authority semantics", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const realtimeStart = pageDesign.indexOf("## 5. 实时监控");
@@ -1199,7 +1199,7 @@ test("F7.4: realtime page documents every metrics endpoint error and authority s
 
 test("F7.4: incident page documents every endpoint error and non-disclosing recovery", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const faultsStart = pageDesign.indexOf("## 6. 故障分析");
@@ -1229,7 +1229,7 @@ test("F7.4: incident page documents every endpoint error and non-disclosing reco
 
 test("F7.4: rules page documents every runtime error and async command outcome", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const rulesStart = pageDesign.indexOf("## 4. 规则");
@@ -1249,7 +1249,7 @@ test("F7.4: rules page documents every runtime error and async command outcome",
 
 test("F6.1: rules chapter keeps read-back mismatch in publication reason, not stage state", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const rules = pageChapter(pageDesign, "## 4. 规则", "## 5.");
@@ -1262,7 +1262,7 @@ test("F6.1: rules chapter keeps read-back mismatch in publication reason, not st
 
 test("F7.4: rules page documents current local draft validation separately from server capability checks", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const rules = pageChapter(pageDesign, "## 4. 规则", "## 5.");
@@ -1283,7 +1283,7 @@ test("F7.4: rules page documents current local draft validation separately from 
 
 test("F7.4: system page documents endpoint error matrices and rate-limit recovery", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const systemStart = pageDesign.indexOf("## 7. 系统管理");
@@ -1323,7 +1323,7 @@ test("F7.4: system page documents endpoint error matrices and rate-limit recover
 
 test("F7.4: setup page documents each bootstrap operation error matrix", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const page = pageChapter(pageDesign, "## 8. 首次初始化", "## 9.");
@@ -1342,7 +1342,7 @@ test("F7.4: setup page documents each bootstrap operation error matrix", () => {
 
 test("F7.4: login page documents bootstrap, session, login and logout error matrices", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const page = pageChapter(pageDesign, "## 9. 登录", "## 10.");
@@ -1366,7 +1366,7 @@ test("F7.4: login page documents bootstrap, session, login and logout error matr
 
 test("F7.4: account and role pages share exact account endpoint failures", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const accounts = pageChapter(pageDesign, "## 10. 账户维护", "## 11.");
@@ -1384,7 +1384,7 @@ test("F7.4: account and role pages share exact account endpoint failures", () =>
 
 test("F7.4: every page chapter documents its runtime role and capability requirements", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const mappingStart = pageDesign.indexOf("### 13.1 页面动作到当前 machine operations 的映射");
@@ -1435,7 +1435,7 @@ test("F7.4: every page chapter documents its runtime role and capability require
 
 test("F7.4: own-password page documents every runtime error and safe recovery", () => {
   const pageDesign = readFileSync(
-    resolve(process.cwd(), "../docs/Dashboard页面能力与接口设计.md"),
+    resolve(process.cwd(), "../docs/design/页面能力与接口设计.md"),
     "utf8",
   );
   const page = pageChapter(pageDesign, "## 12. 修改密码", null);

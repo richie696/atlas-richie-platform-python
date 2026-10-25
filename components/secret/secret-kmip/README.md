@@ -91,4 +91,4 @@ key_store_password / protocol_major (1-2) / protocol_minor (0-9)
 - `atlas-richie-secret-core` — framework + Protocols
 - `atlas-richie-secret-pkcs11` — sibling HSM backend wheel
   (similar 2-SPI scope)
-- `docs/acceptance/R-241-secret-kmip-handoff.md` — design + verification
+- `R-241-secret-kmip-handoff.md` (handoff note; retired with the process material, not shipped) — design + verification

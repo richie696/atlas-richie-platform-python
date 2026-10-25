@@ -3,12 +3,12 @@
 中文
 ----
 **禁止外部 import** (DESIGN §10.3 L1081-1089 / API delta v3 决策 1 /
-``rule_source_activation.md`` §4)::
+``规则源激活事实定义.md`` §4)::
 
     # DO NOT (extension / user code)
     from atlas_richie.sentinel.source._supervisor import _RuleSourceActivationBus  # noqa
 
-同进程 pub-sub, 单 observer 异常隔离 (P1 #2 / ``rule_source_activation.md`` §4):
+同进程 pub-sub, 单 observer 异常隔离 (P1 #2 / ``规则源激活事实定义.md`` §4):
 
 - 单个 observer 抛任何异常**不能**影响 (1) 其它 observer 的调用
   (2) ``publish()`` 调用栈本身 (包括 Supervisor 的"Repository 成功
@@ -29,13 +29,13 @@
 English
 --------
 **Do not import from outside** (DESIGN §10.3 L1081-1089 / API delta v3
-decision 1 / ``rule_source_activation.md`` §4)::
+decision 1 / ``规则源激活事实定义.md`` §4)::
 
     # DO NOT (extension / user code)
     from atlas_richie.sentinel.source._supervisor import _RuleSourceActivationBus  # noqa
 
 Same-process pub-sub with per-observer exception isolation (P1 #2 /
-``rule_source_activation.md`` §4):
+``规则源激活事实定义.md`` §4):
 
 - A single observer raising any exception **must not** affect
   (1) other observers' calls (2) the ``publish()`` call stack itself
@@ -76,12 +76,12 @@ ActivationObserver = Callable[[RuleSourceActivation], None]
 """中文
 ----
 C 层 observer hook; 同进程 only; M6.1 不导出给 extension
-(``rule_source_activation.md`` §4)。
+(``规则源激活事实定义.md`` §4)。
 
 English
 --------
 C-layer observer hook; same-process only; M6.1 does not export to
-extensions (``rule_source_activation.md`` §4).
+extensions (``规则源激活事实定义.md`` §4).
 """
 
 
@@ -145,7 +145,7 @@ class _RuleSourceActivationBus:
         """中文
         ----
         分发 fact 给所有 observer; **单 observer 抛异常被隔离**, 主
-        调用栈不受影响 (P1 #2 / ``rule_source_activation.md`` §4)。
+        调用栈不受影响 (P1 #2 / ``规则源激活事实定义.md`` §4)。
 
         实现要点:
 
@@ -160,7 +160,7 @@ class _RuleSourceActivationBus:
         --------
         Dispatch ``fact`` to all observers; **a single observer raising
         is isolated**, the main call stack is unaffected (P1 #2 /
-        ``rule_source_activation.md`` §4).
+        ``规则源激活事实定义.md`` §4).
 
         Implementation notes:
 

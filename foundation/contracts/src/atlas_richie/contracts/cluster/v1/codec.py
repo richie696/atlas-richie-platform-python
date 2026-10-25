@@ -9,7 +9,7 @@
 - 时间字段不符合 ISO 8601 UTC microsecond
 - UUID 字段不符合 8-4-4-4-12 格式
 
-参考: ``docs/protocols/CLUSTER_TOKEN_PROTOCOL.md`` §3 + §4 + §6.
+参考: ``components/sentinel/docs/protocol/cluster-token-protocol-v1.md`` §3 + §4 + §6.
 """
 
 from __future__ import annotations

@@ -17,8 +17,7 @@ import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
  * - 面板按 tab 条件渲染且互斥，条件表达式的先后顺序不影响 DOM。
  * - 「账户维护」「角色绑定」两个 tab 的内容由 identity feature 拥有。本页通过
  *   identity 的**公共入口**引用它们，不再深导入 `features/identity/ui/*`：
- *   深导入让一个 feature 读另一个 feature 的私有文件，改动会互相打断
- *   （`REWRITE_PLAN.md` §9.5）。
+ *   深导入让一个 feature 读另一个 feature 的私有文件，改动会互相打断。
  */
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { Intro } from "../../../shared/ui/Intro";

@@ -4,6 +4,10 @@ All notable changes to Atlas Richie Sentinel are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/).
 
+> 历史条目中提到的 `docs/acceptance/` 交接文档与 `docs/process/` 过程文档属过程材料，
+> 已于 2026-10-25 随过程材料一并清理，不再随包发布。条目内容按当时的记录原样保留，
+> 其中的路径不再指向现存文件。
+
 ## [0.2.0] - 2026-09-13 — M0-M5 完整闭环 / 1.0 release baseline
 
 ### Added

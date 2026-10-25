@@ -412,7 +412,7 @@ class SentinelEngine:
         ``install_legacy_source``), 在状态转 SHUTDOWN 前先关闭它们:
 
         - Supervisor: ``await supervisor.aclose()`` 等待所有 source
-          task 关闭 (decision 2, ``rule_source_activation.md`` §5.2)
+          task 关闭 (decision 2, ``规则源激活事实定义.md`` §5.2)
         - Legacy source: ``source.stop()`` (1.0 行为, 同步)
         - **不**关闭 ``RuleRepository`` (Repository 是被动容器)
 
@@ -428,7 +428,7 @@ class SentinelEngine:
 
         - Supervisor: ``await supervisor.aclose()`` waits for all
           source tasks to close (decision 2,
-          ``rule_source_activation.md`` §5.2).
+          ``规则源激活事实定义.md`` §5.2).
         - Legacy source: ``source.stop()`` (1.0 behavior, sync).
         - **Does not** close the ``RuleRepository`` (passive container).
         """
@@ -1071,7 +1071,7 @@ def _rule_source_binding_from_assembly(
     ``_RuleSourceBinding``。
 
     - ``source_id`` 从 ``assembly.source.source_id`` 取
-      (配置时 stable 字符串; rule_source_activation.md §7)
+      (配置时 stable 字符串; 规则源激活事实定义.md §7)
     - ``priority`` 与 ``failover_after`` 直接透传
       (``RuleSourceAssembly.__post_init__`` 已校验 ≥ 0)
 
@@ -1085,7 +1085,7 @@ def _rule_source_binding_from_assembly(
     C-layer private ``_RuleSourceBinding``.
 
     - ``source_id`` is read from ``assembly.source.source_id``
-      (user-supplied stable string; rule_source_activation.md §7).
+      (user-supplied stable string; 规则源激活事实定义.md §7).
     - ``priority`` and ``failover_after`` are passed through
       (``RuleSourceAssembly.__post_init__`` already validated ≥ 0).
 

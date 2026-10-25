@@ -28,7 +28,7 @@ per-process 嵌入管理 API + HTML UI (Web 管理页面).
 - Static:
   - ``/static/*`` — CSS / JS / favicon
 
-设计要点 (M6.6 v2, 详见 ``docs/process/M6.6-DASHBOARD-AGGREGATOR-EVAL.md``):
+设计要点 (M6.6 v2；模式评估稿属过程材料, 已随过程文档清理, 现行口径以本段为准):
 
 - **Facade**: 1 个 ``SentinelDashboard`` 对象 = 1 个 admin 入口
 - **Decorator**: admin 鉴权 + audit log 中间件 (Starlette Middleware)

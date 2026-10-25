@@ -3,7 +3,7 @@
 中文
 ----
 **禁止外部 import** (DESIGN §10.3 L1073-1079 / API delta v3 决策 4 /
-``rule_source_activation.md`` §1.3)::
+``规则源激活事实定义.md`` §1.3)::
 
     # DO NOT (extension / user code)
     from atlas_richie.sentinel.source._supervisor import RuleSourceActivation  # noqa
@@ -12,7 +12,7 @@
 frozen dataclass shape。**不**是跨语言 wire protocol, **不**冻结任何
 ``event_name`` 字符串常量、跨进程 transport 或时间戳字段。
 
-**3 条件 AND emit** (``rule_source_activation.md`` §2):
+**3 条件 AND emit** (``规则源激活事实定义.md`` §2):
 
 1. ``RuleRepository.apply_snapshot(snap)`` 返回 ``True``
 2. active Source **实际**变更 (``new_source_id != old_source_id``)
@@ -47,7 +47,7 @@ frozen dataclass shape。**不**是跨语言 wire protocol, **不**冻结任何
 English
 --------
 **Do not import from outside** (DESIGN §10.3 L1073-1079 / API delta v3
-decision 4 / ``rule_source_activation.md`` §1.3)::
+decision 4 / ``规则源激活事实定义.md`` §1.3)::
 
     # DO NOT (extension / user code)
     from atlas_richie.sentinel.source._supervisor import RuleSourceActivation  # noqa
@@ -57,7 +57,7 @@ internal activation fact emitted by ``RuleSourceSupervisor``. **Not** a
 cross-language wire protocol, **does not** freeze any ``event_name``
 string constant, cross-process transport, or timestamp field.
 
-**3-condition AND emit** (``rule_source_activation.md`` §2):
+**3-condition AND emit** (``规则源激活事实定义.md`` §2):
 
 1. ``RuleRepository.apply_snapshot(snap)`` returns ``True``
 2. active Source **actually** changed (``new_source_id != old_source_id``)
@@ -128,7 +128,7 @@ class RuleSourceActivation:
 
 
 # __all__ is intentionally EMPTY: ``RuleSourceActivation`` is a C-layer
-# internal fact, NOT re-exported by ``import *`` (rule_source_activation.md
+# internal fact, NOT re-exported by ``import *`` (规则源激活事实定义.md
 # §3.1 "extension **不**能 import 这个类"). C-layer tests import it
 # directly via ``from .activation import RuleSourceActivation``.
 __all__: list[str] = []

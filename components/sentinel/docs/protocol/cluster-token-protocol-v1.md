@@ -561,8 +561,9 @@ This V1 specification was frozen under 5-owner sign-off. The
 envelope schema 5-owner sign-off record is maintained in
 [`reporting-protocol-03-freeze-record-v1.md`](./reporting-protocol-03-freeze-record-v1.md);
 the 5-owner sign-off table for this spec is to be added. The
-cluster-token design discussion is at
-[`docs/process/M6.3-CLUSTER-TOKEN-DESIGN.md`](../process/M6.3-CLUSTER-TOKEN-DESIGN.md).
+cluster-token design discussion draft was process material and was
+retired with the rest of the process documents; the body of this spec
+is the only current statement of that design.
 Subsequent revisions require a new sign-off cycle and the changes
 listed in §10.
 

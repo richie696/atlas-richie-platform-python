@@ -142,7 +142,7 @@ class ClusterFailurePolicy(StrEnum):
     - ``LOCAL_FALLBACK``: 显式配置本地策略 + 上限 + 恢复切换;
       **不**伪装为共享配额, 多实例不一致。
 
-    详细语义见 ``docs/M6.3-CLUSTER-TOKEN-DESIGN.md`` §4 + §5.
+    详细语义见 ``components/sentinel/docs/design/系统架构与总体设计.md`` 的集群令牌策略段.
 
     English
     --------
@@ -161,7 +161,7 @@ class ClusterFailurePolicy(StrEnum):
       recovery switch; **not** disguised as shared quota; multi-instance
       inconsistent.
 
-    Full semantics: ``docs/M6.3-CLUSTER-TOKEN-DESIGN.md`` §4 + §5.
+    Full semantics: ``components/sentinel/docs/design/系统架构与总体设计.md`` 的集群令牌策略段.
     """
 
     FAIL_CLOSED = "fail_closed"

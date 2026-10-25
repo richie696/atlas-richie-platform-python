@@ -109,5 +109,5 @@ no such fields.
   `crypto.capability` AAD gate (R-242)
 - `atlas-richie-secret-tencent-ssm-kms` — sibling cloud
   backend wheel (similar 3-SPI scope; same SDK pattern)
-- `docs/acceptance/R-244-secret-huawei-csms-kms-handoff.md`
+- `R-244-secret-huawei-csms-kms-handoff.md` (handoff note; retired with the process material, not shipped)
   — design + verification

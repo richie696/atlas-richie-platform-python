@@ -31,7 +31,8 @@ edge must replace `X-Forwarded-For` with the observed client address, and each
 subsequent trusted proxy may append its observed peer to the right. Invalid
 chains fall back to the immediate peer. A loopback Apache 2.4.67 + installed
 wheel/CLI + disposable MySQL acceptance verifies this policy and the shared SQL
-throttle bucket; see `docs/process/acceptance/R-SENTINEL-CONSOLE-B0.1-installed-cli-acceptance.md`.
+throttle bucket; the deployment boundary is described in
+`components/sentinel/docs/guide/运维指南.md`.
 This does not accept a user's production ingress/TLS configuration.
 
 This is not yet a complete Console or production deployment. Explicit first-run

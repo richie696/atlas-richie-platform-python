@@ -50,8 +50,7 @@ export interface UseRuleWorkbenchOptions {
    * 中文
    * ----
    * 类型筛选是离散选择、切换频率低，且明确描述「正在看哪一类规则」——可分享的观察
-   * 范围，因此进 URL。搜索词是高频自由文本，仍留在本地 state，理由见
-   * `REWRITE_PLAN.md` §「导航状态」。
+   * 范围，因此进 URL。搜索词是高频自由文本，仍留在本地 state。
    */
   readonly kindFilter: RuleKindFilter;
   /** 切换类型筛选。页面实现：写回 URL，而不是改本地 state。 */

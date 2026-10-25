@@ -52,4 +52,4 @@ Prefix `ATLAS_RICHIE_SECRET_VAULT_` (inherited from
 
 - `atlas-richie-secret-vault` — the underlying engine
 - `atlas-richie-secret-core` — framework + Protocols
-- `docs/acceptance/R-234-secret-openbao-handoff.md` — design + verification
+- `R-234-secret-openbao-handoff.md` (handoff note; retired with the process material, not shipped) — design + verification

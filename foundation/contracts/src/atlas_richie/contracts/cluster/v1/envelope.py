@@ -1,6 +1,6 @@
 """Atlas Richie Cluster Token Protocol V1 — envelope frozen dataclass.
 
-1:1 镜像 ``docs/protocols/CLUSTER_TOKEN_PROTOCOL.md`` §3. 所有消息共享同一
+1:1 镜像 ``components/sentinel/docs/protocol/cluster-token-protocol-v1.md`` §3. 所有消息共享同一
 envelope 形状, 仅 ``payload`` 是 per-kind frozen object.
 """
 
@@ -16,7 +16,7 @@ from .message_kind import ClusterMessageKind
 class ClusterTokenEnvelope:
     """Cluster Token Protocol V1 — envelope (8 必填 + payload).
 
-    字段定义见 ``docs/protocols/CLUSTER_TOKEN_PROTOCOL.md`` §3.2.
+    字段定义见 ``components/sentinel/docs/protocol/cluster-token-protocol-v1.md`` §3.2.
     """
 
     protocol_version: str

@@ -10,8 +10,8 @@ app, 供 ``SentinelDashboard`` 启动 uvicorn server 时使用.
 - **Facade**: 1 个 ``SentinelDashboard`` 对象 = 1 个 admin 入口
   (SentinelEngine + MetricRegistry + RuleRepository 聚合)
 - **Decorator (Starlette Middleware)**: admin 鉴权 + audit log 中间件
-- **不**用其它 GoF 模式 (1.0 单策略, 简单路由 + 模板足够, 评估见
-  ``docs/process/M6.6-DASHBOARD-AGGREGATOR-EVAL.md`` v2 §2.5)
+- **不**用其它 GoF 模式 (1.0 单策略, 简单路由 + 模板足够；模式评估稿属过程材料,
+  已随过程文档清理, 现行口径以本段为准)
 - **依赖**: Starlette + Jinja2 + uvicorn (extension wheel, 主包 0 3rd-party 不变)
 
 English

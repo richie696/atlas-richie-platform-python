@@ -61,4 +61,4 @@ override (for localstack).
 
 - `atlas-richie-secret-core` — framework + Protocols
 - `atlas-richie-secret-vault` — sibling remote backend wheel
-- `docs/acceptance/R-235-secret-aws-kms-handoff.md` — design + verification
+- `R-235-secret-aws-kms-handoff.md` (handoff note; retired with the process material, not shipped) — design + verification

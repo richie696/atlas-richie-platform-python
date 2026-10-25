@@ -179,7 +179,7 @@ class SnapshotRuleSource(Protocol):
 
     - ``source_id`` — 配置时用户提供的 stable 字符串 (e.g.
       ``"nacos-prod"``); 不自动从 endpoint / path / token 构造
-      (rule_source_activation.md §7)。 Supervisor 把它转写到
+      (规则源激活事实定义.md §7)。 Supervisor 把它转写到
       ``_RuleSourceBinding.source_id`` 并出现在 activation fact 中。
     - ``snapshots()`` 是**异步迭代器**, 单向 yield 已校验完整
       ``RuleSnapshot``; 不持有 ``RuleRepository`` 引用
@@ -198,7 +198,7 @@ class SnapshotRuleSource(Protocol):
 
     - ``source_id`` — user-provided stable string at configuration
       time (e.g. ``"nacos-prod"``); never auto-derived from endpoint /
-      path / token (rule_source_activation.md §7). The Supervisor
+      path / token (规则源激活事实定义.md §7). The Supervisor
       transcribes it into ``_RuleSourceBinding.source_id`` and
       includes it in the activation fact.
     - ``snapshots()`` is an **async iterator**, one-way yielding
@@ -220,7 +220,7 @@ class SnapshotRuleSource(Protocol):
     转换 ``_RuleSourceBinding`` 时读取, 写入 activation fact 的
     ``previous_source_id`` / ``source_id`` 字段。
 
-    **不**自动从 endpoint / path / token 构造 (rule_source_activation.md
+    **不**自动从 endpoint / path / token 构造 (规则源激活事实定义.md
     §7)。
 
     English
@@ -231,7 +231,7 @@ class SnapshotRuleSource(Protocol):
     ``previous_source_id`` / ``source_id`` fields.
 
     **Never** auto-derived from endpoint / path / token
-    (rule_source_activation.md §7).
+    (规则源激活事实定义.md §7).
     """
 
     def snapshots(self) -> AsyncIterator[RuleSnapshot]:
@@ -257,7 +257,7 @@ class RuleSourceAssembly:
       由 contract test 兜底; 启动时 Supervisor 抛
       ``SentinelConfigurationError("duplicate_priority")``)
     - ``failover_after`` — 短抖动容错窗口; active stale 后等这么久才
-      切到次高 priority ready source (rule_source_activation.md §1)
+      切到次高 priority ready source (规则源激活事实定义.md §1)
 
     ``__post_init__`` 校验 (不触发生命周期):
 
@@ -277,7 +277,7 @@ class RuleSourceAssembly:
       start).
     - ``failover_after`` — short-jitter tolerance window; after active
       becomes stale, wait this long before switching to the next
-      highest priority ready source (rule_source_activation.md §1).
+      highest priority ready source (规则源激活事实定义.md §1).
 
     ``__post_init__`` validates (no lifecycle calls):
 

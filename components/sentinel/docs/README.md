@@ -1,63 +1,94 @@
-# docs/ — Sentinel 产品文档 (最终保留)
+# Sentinel 文档中心
 
-中文
-----
-本目录放 **Sentinel 产品最终保留的文档**, 跟代码一起发布给用户。
+> 本目录是 Sentinel **随产品发布**的正式文档库。Sentinel 是面向 Python 服务的**技术中台**，
+> 不是面向终端用户的业务系统：这里没有功能清单、用户痛点映射或采购决策材料，
+> 只有**技术详设、接口契约、使用与运维材料**。
+>
+> 每篇技术详设开头都有「**解决的业务场景**」，说明它承接哪一类线上问题、
+> 解决后运维与研发能得到什么结果。协议套件（`protocol/`、`protocols/`）整体受保护，
+> 结构整理不改字段、语义与版本。
 
-Dashboard 阅读入口：
+## 先读这三篇
 
-- [规则控制台与运行观测设计](DASHBOARD_CONTROL_PLANE.md)：总体产品边界与规则/指标语义。
-- [页面能力与接口设计](Dashboard页面能力与接口设计.md)：11 个页面的功能、交互与数据需求；页面设计仍需实现与验收。
-- [Console API 契约](CONSOLE_API_CONTRACT.md)：Console API wire 0.19.0 已冻结；冻结不代表 Python 全量实现、生产部署或 E2E 已通过。
+| 你是 | 先读 | 读完能做什么 |
+| --- | --- | --- |
+| 第一次接触 Sentinel | [快速开始](guide/快速开始.md) → [系统架构与总体设计](design/系统架构与总体设计.md) | 明白 Sentinel 管什么、边界在哪、主 wheel 零三方依赖意味着什么 |
+| 要接入规则 | [规则参考](guide/规则参考.md) → [扩展开发指南](guide/扩展开发指南.md) | 选对 5 类规则、写对 `ResourceSelector`、用正确的方式扩展 |
+| 要运维线上服务 | [运维指南](guide/运维指南.md) → [使用手册](guide/使用手册.md) | 按边界部署、排查、扩容、升级，不把设计目标当成已具备能力 |
 
-**目录结构**:
+## 文档分区
 
-```
-docs/
-├── README.md                    # 本文件 (目录说明)
-│
-├── DESIGN.md                    # 架构总览 (产品)
-├── OPERATIONS.md                # 运维指南 (产品)
-├── EXTENSION_GUIDE.md           # 扩展编写指南 (产品)
-├── QUICK_START.md               # 快速开始 (产品)
-├── RULE_REFERENCE.md            # 5 类规则参考 (产品)
-├── USAGE.md                     # 完整使用指南 (产品)
-├── MIGRATION-M6.md              # 升级迁移指南 (产品)
-├── RELEASE.md                   # 发布流程 (产品)
-│
-├── protocol/                    # V1 协议 frozen (产品, 跨语言 wire, IETF RFC 风格, 中英双语)
-│   ├── 集群令牌协议-v1.md         + cluster-token-protocol-v1.md
-│   ├── 上报协议-01-envelope-v1.md   + reporting-protocol-01-envelope-v1.md
-│   ├── 上报协议-02-transport-v1.md  + reporting-protocol-02-transport-v1.md
-│   └── 上报协议-03-freeze-v1.md     + reporting-protocol-03-freeze-record-v1.md
-│
-└── process/                     # 过程文档 (1.0 publish 后清理)
-    ├── README.md                # 过程文档约定
-    ├── M6.X-*.md                # M 系列 design / impl-plan / handoff
-    ├── R-XXX-*.md               # R 系列 handoff / sign-off 中间产物
-    ├── HANDOFF-*.md             # 会话交接
-    ├── PLANNING.md              # milestone planning
-    ├── rule_source_activation.md  # C 层内部 fact schema (非 wire)
-    └── acceptance/              # 测试 / 验收证据
-```
+| 分区 | 目录 | 内容 | 主管来源规则 |
+| --- | --- | --- | --- |
+| 技术详设 | [`design/`](design/) | 8 篇：系统架构、规则控制台、页面能力、监控接入、规则源激活事实、账号生命周期、前端技术选型、文档中心设计 | 每篇是各自主题的唯一主管来源；不重复定义 wire |
+| 接口契约 | [`contract/`](contract/) | Console API 契约（冻结 0.19.0）、身份与访问 API 历史草案 | wire 只以 Console API 契约 §9–23 与生成 OpenAPI 为准 |
+| 使用与运维 | [`guide/`](guide/) | 快速开始、使用手册、规则参考、扩展开发指南、运维指南、升级迁移指南、发布流程 | 操作步骤与运维边界的主管来源；不复制设计推理 |
+| 工程实践 | [`engineering/`](engineering/) | 前端编码前置检查、前端验证节奏、发行验证与契约修复记录 | 可复用的工程纪律；一次性修复记录不进入正式规则 |
+| 冻结协议套件 | [`protocol/`](protocol/)、[`protocols/`](protocols/) | 跨语言 wire 规范、Console OpenAPI 版本归档、ADR 与决策 ballot | 整套受保护：入口、版本、Schema、示例与兼容性规则不得拆分或改写 |
 
-**V1 协议 命名约定** (richie696 决策 2026-09-13):
+## 按角色的阅读路径
 
-- V1 frozen 协议**不**带 M 编号 (例: `protocol/上报协议-02-transport-v1.md`
-  而不是 `protocol/M6.5-REPORTING-PROTOCOL-V1.md`).
-- V1 frozen 协议统一放 `docs/protocol/` 子目录, 不混在根目录.
-- 协议在 1.x 阶段**只允许** V1.1 minor 兼容变更; 任何破坏性变更走 V2
-  major + 独立 ADR + 5 owner sign-off.
+**研发（第一次接触）**
+[系统架构与总体设计](design/系统架构与总体设计.md) → [规则参考](guide/规则参考.md) →
+[扩展开发指南](guide/扩展开发指南.md) → 需要改控制台时读
+[规则控制台与运行观测设计](design/规则控制台与运行观测设计.md) 与
+[页面能力与接口设计](design/页面能力与接口设计.md)。
 
-English
---------
-`docs/` holds **Sentinel final product docs**, shipped to users
-alongside code.
+**研发（写前端）**
+[页面能力与接口设计](design/页面能力与接口设计.md)（页面用例与数据需求主管来源）→
+[规则使用与监控接入详细设计](design/规则使用与监控接入详细设计.md)（新增能力的交互主管来源）→
+[前端技术选型](design/前端技术选型.md)（控件与图表边界）→
+[前端编码前置检查](engineering/前端编码前置检查.md) 与
+[前端验证节奏](engineering/前端验证节奏.md)（提交前做什么）。
 
-V1 protocol naming (richie696 decision 2026-09-13):
+**集成方（SDK / 语言适配）**
+[集群令牌协议](protocol/集群令牌协议-v1.md) → [Agent Reporting Envelope](protocol/上报协议-01-envelope-v1.md) →
+[规则目录读取](protocol/RULE_CATALOG_READ_V1.md) 与
+[Flow 运行时 profile](protocol/SENTINEL-FLOW-RUNTIME-PROFILE-V1.md)。
 
-- V1 frozen protocols do **not** use M-numbers (e.g.
-  `protocol/上报协议-02-transport-v1.md` not `protocol/M6.5-REPORTING-PROTOCOL-V1.md`).
-- V1 frozen protocols live in `docs/protocol/` subdir, not at root.
-- 1.x only allows V1.1 minor-compatible changes; breaking changes go
-  V2 major + independent ADR + 5 owner sign-off.
+**运维与实施**
+[运维指南](guide/运维指南.md) → [使用手册](guide/使用手册.md) →
+[升级迁移指南](guide/升级迁移指南.md) → [发布流程](guide/发布流程.md)。
+
+## 按问题入口
+
+| 你遇到的问题 | 读哪篇 |
+| --- | --- |
+| 规则不生效 / 实例没加载 | [规则源激活事实定义](design/规则源激活事实定义.md)、[规则控制台与运行观测设计](design/规则控制台与运行观测设计.md) |
+| 想要看指标但没有图表 | [规则使用与监控接入详细设计](design/规则使用与监控接入详细设计.md)、[运维指南](guide/运维指南.md) |
+| 想知道某个接口的字段与错误码 | [Console API 契约](contract/Console-API-契约.md)、[页面能力与接口设计](design/页面能力与接口设计.md) |
+| 登录不了 / 账号被锁 / 要重置别人密码 | [账号生命周期设计](design/账号生命周期设计.md)、[页面能力与接口设计](design/页面能力与接口设计.md) §10–§12 |
+| 控制台该放哪些内容、读者怎么找 | [文档中心设计](design/文档中心设计.md) |
+| 要升级或发版 | [升级迁移指南](guide/升级迁移指南.md)、[发布流程](guide/发布流程.md) |
+
+## 目录与命名约定
+
+- **文档文件名用中文**（如 `系统架构与总体设计.md`）；目录名保留稳定的英文类型名，
+  便于脚本与链接定位。
+- **协议文件名保留英文**：冻结套件对外以英文标识版本与标识符，中英双份并置
+  （如 `cluster-token-protocol-v1.md` 与 `集群令牌协议-v1.md`）。
+- 每一类事实只有一个主管来源；其它文档只解释或摘要，不重新定义。
+- 过程材料（执行计划、交接记录、一次性验收清单）不属于本目录，也不被正式文档引用。
+
+## 文档状态约定
+
+文档状态、实现状态与验证状态分开记录：
+
+- **目标/规划** —— 已写进设计，尚未作为当前已具备能力。
+- **部分实现** —— 指明具体已实现与缺失范围。
+- **已实现待验证** —— 有源码或配置基础，不等于可用。
+- **有范围的已验证** —— 写明版本、环境、场景、日期与证据。
+
+「设计已冻结」只说明规范本身已定版，不代表 Python 全部实现、生产部署或浏览器 E2E 已通过。
+
+## 冻结协议套件说明
+
+`protocol/` 与 `protocols/` 都是受保护的协议资产：
+
+- `protocol/` —— 早期已冻结的跨语言协议、Console HTTP API 机器合同与版本化 OpenAPI 归档，
+  以及 ADR 与决策 ballot。入口见 [protocol/README.md](protocol/README.md)。
+- `protocols/` —— 另一组独立运行时协议（规则发布封装、加载观察、发布回执、故障事件）。
+  入口见 [protocols/README.md](protocols/README.md)。
+
+两套目录名相近但职责不同：`protocol/` 收纳冻结规范与决策记录，`protocols/` 收纳运行时协议正文。
+不把其中一套拆散并入其它目录，也不把提案当作已冻结实现。

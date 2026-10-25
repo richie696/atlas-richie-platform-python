@@ -26,7 +26,7 @@ const styleModules = [filtersStyles, presentationStyles] as const;
  * 应用列表由调用方传入。本组件曾经直接读取跨 feature 的演示数据模块，于是「应用」
  * 这个筛选的候选集在所有页面共享一份全局常量——任何一个 feature 改演示数据都会
  * 静默影响另外五个页面的下拉内容。应用目录属于各 feature 自己的读模型
- * （`DASHBOARD_CONTROL_PLANE.md` §4.2），由页面传入更符合边界。
+ * （`规则控制台与运行观测设计.md` §4.2），由页面传入更符合边界。
  *
  * ## 标签归属 `core/i18n/shell.ts`，不再内联
  *

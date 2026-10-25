@@ -18,4 +18,7 @@ Install an adapter only at the application boundary:
 
 The implementation is standards-oriented, not a Java-private integration layer.
 Actual cross-language HTTPS/OAuth interoperability still requires a real peer and
-issuer acceptance run; see `docs/acceptance/mcp-2026-07-28-test-matrix.md`.
+issuer acceptance run. The controlled test matrix and the
+mutual-authentication boundary were recorded in the MCP component's acceptance
+notes, which are process material and were retired with the rest of the
+process documents rather than promoted into the formal docs.

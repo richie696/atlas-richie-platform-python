@@ -48,8 +48,8 @@ pagination 与 `input_required` MRTR 结果。Schema、ASGI、OAuth 和远程 HT
 不包含 Authorization Server。
 
 真实 HTTPS/SSE、第三方标准 Authorization Server 和跨语言端到端互操作尚未验证；受控
-测试矩阵、路线和双向认证边界见
-[docs/acceptance/mcp-2026-07-28-test-matrix.md](docs/acceptance/mcp-2026-07-28-test-matrix.md)。
+测试矩阵、路线和双向认证边界原记录在 MCP 组件的历史验收文档中，该文档属过程材料，
+已随其它过程文档一并清理，未并入正式文档。
 
 ## 本地验证
 

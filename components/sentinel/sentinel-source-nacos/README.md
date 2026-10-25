@@ -240,7 +240,6 @@ testcontainers / docker-compose), scheduled for M6.1.
 
 ## See also
 
-- `components/sentinel/docs/MIGRATION-M6.md` — 1.0 → 1.x migration
-- `components/sentinel/docs/EXTENSION_GUIDE.md` §3 — extension author guide
-- `components/sentinel/docs/PLANNING.md` §M6.1 — Nacos source roadmap
-- `components/sentinel/docs/DESIGN.md` §10 — RuleSource architecture
+- `components/sentinel/docs/guide/升级迁移指南.md` — 1.0 → 1.x migration
+- `components/sentinel/docs/guide/扩展开发指南.md` §3 — extension author guide
+- `components/sentinel/docs/design/系统架构与总体设计.md` §10 — RuleSource architecture

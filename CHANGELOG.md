@@ -3,6 +3,10 @@
 All notable changes are documented here. The project follows Keep a Changelog
 categories and Semantic Versioning.
 
+> 历史条目中提到的 `docs/acceptance/` 交接文档与 `docs/process/` 过程文档属过程材料，
+> 已于 2026-10-25 随过程材料一并清理，不再随包发布。条目内容按当时的记录原样保留，
+> 其中的路径不再指向现存文件。
+
 ## [Unreleased]
 
 ### Added
@@ -334,7 +338,7 @@ categories and Semantic Versioning.
      jinja2/uvicorn 验证).
   5. **R-240 时代遗留 M 文件清理**: 删除 `components/sentinel/sentinel-source-redis/`
      (M6.2 取消的 skeleton 目录, README / pyproject / src / tests 4 文件),
-     同步从根 `pyproject.toml` workspace members + USAGE.md pip install
+     同步从根 `pyproject.toml` workspace members + 使用手册.md pip install
      命令移除. `token.py` (主包 ports/, M6.3 cluster 17 tests 用) **保留**
      (active code, 不是遗留). `R-SENTINEL-1.0-handoff.md` + `HANDOFF-M6.1.7.md`
      **保留** (历史 handoff 记录, 1.0 release 状态文档).

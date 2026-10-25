@@ -7,7 +7,7 @@ Sentinel 家族的**集群模式** (M6.3)。把多个 Python 进程的 Flow/Degr
 + JSON wire protocol, **不**依赖 Redis / gRPC / aiohttp (Cluster wheel 0
 3rd-party)。
 
-**架构分层** (跟 M6.3-CLUSTER-TOKEN-DESIGN.md §2 一致):
+**架构分层** (与 `components/sentinel/docs/design/系统架构与总体设计.md` 的集群分层一致):
 
 - **主包 sentinel**: ``TokenService`` Port + ``LocalTokenService`` 默认实现
   (永远 LOCAL_GRANTED), 零 Cluster / Redis 依赖
@@ -66,7 +66,7 @@ shared quota (lease) coordination. 1.0 ships an in-process Server over
 HTTP/1.1 + JSON wire protocol, with **zero** Redis / gRPC / aiohttp
 dependencies (Cluster wheel is 0 3rd-party).
 
-Architecture (per M6.3-CLUSTER-TOKEN-DESIGN.md §2):
+Architecture (per `components/sentinel/docs/design/系统架构与总体设计.md`):
 
 - **main sentinel**: ``TokenService`` Port + ``LocalTokenService`` default
   (always LOCAL_GRANTED), zero Cluster / Redis deps

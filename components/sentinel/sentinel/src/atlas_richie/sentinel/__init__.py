@@ -4,8 +4,8 @@ This is the public Facade for the main wheel. The version string is read
 from distribution metadata (PEP 562 lazy attribute) so there is no
 hard-coded ``__version__`` to drift out of sync with ``pyproject.toml``.
 
-For detailed documentation, see ``components/sentinel/docs/DESIGN.md``
-and ``components/sentinel/docs/PLANNING.md`` in the source repository.
+For detailed documentation, see ``components/sentinel/docs/design/系统架构与总体设计.md``
+in the source repository.
 
 中文
 ----

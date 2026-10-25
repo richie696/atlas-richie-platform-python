@@ -402,7 +402,7 @@ class RuleSourceSupervisor:
         单 source 消费循环: 迭代 ``snapshots()``, apply 到 repository,
         触发 active 切换。
 
-        Stale 判定 (rule_source_activation.md §1.1 / DESIGN §10.3) 只在
+        Stale 判定 (规则源激活事实定义.md §1.1 / DESIGN §10.3) 只在
         异常 / 长时间没 yield 时发生; **iterator 自然结束不触发 stale**
         (这是 source 实现细节, 不是 stale 信号)。Source 标 READY 后
         保持 READY 直到 aclose。
@@ -415,7 +415,7 @@ class RuleSourceSupervisor:
         Per-source consume loop: iterate ``snapshots()``, apply to
         repository, trigger active switch.
 
-        Stale determination (rule_source_activation.md §1.1 / DESIGN
+        Stale determination (规则源激活事实定义.md §1.1 / DESIGN
         §10.3) only fires on exception / long-no-yield; **natural
         iterator end does NOT trigger stale** (this is a source
         implementation detail, not a stale signal). A source marked
@@ -513,7 +513,7 @@ class RuleSourceSupervisor:
         ----
         决定是否要把 ``runtime`` 提升为 active。
 
-        **3 条件 AND** (rule_source_activation.md §2):
+        **3 条件 AND** (规则源激活事实定义.md §2):
 
         1. ``runtime.state == READY`` 且 ``snap`` 非空 (Repository 已
            接受, 业务校验通过)
@@ -527,7 +527,7 @@ class RuleSourceSupervisor:
         --------
         Decide whether to promote ``runtime`` to active.
 
-        **3-condition AND** (rule_source_activation.md §2):
+        **3-condition AND** (规则源激活事实定义.md §2):
 
         1. ``runtime.state == READY`` and ``snap`` is not None
            (Repository accepted, business validation passed).

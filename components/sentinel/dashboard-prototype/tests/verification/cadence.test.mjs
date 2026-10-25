@@ -22,11 +22,11 @@ test("CADENCE: automated verify defaults to static-only and focused logic/HTTP r
   assert.equal(scripts["test:logic:focused"], "node scripts/test/run-focused.mjs logic");
   assert.equal(scripts["test:http:focused"], "node scripts/test/run-focused.mjs http");
   assert.match(
-    readFileSync(new URL("../../docs/TESTING_CADENCE.md", import.meta.url), "utf8"),
+    readFileSync(new URL("../../../docs/engineering/前端验证节奏.md", import.meta.url), "utf8"),
     /Codex 内置浏览器/,
   );
   assert.match(
-    readFileSync(new URL("../../docs/TESTING_CADENCE.md", import.meta.url), "utf8"),
+    readFileSync(new URL("../../../docs/engineering/前端验证节奏.md", import.meta.url), "utf8"),
     /全部计划实现完成后的最终验收/,
   );
 });

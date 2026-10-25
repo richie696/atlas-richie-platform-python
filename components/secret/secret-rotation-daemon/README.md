@@ -55,4 +55,4 @@ constructor.
 
 - `atlas-richie-secret-core` — framework + `SecretOperations` /
   `SecretMetadata` types
-- `docs/acceptance/R-239-secret-rotation-daemon-handoff.md`
+- `R-239-secret-rotation-daemon-handoff.md` (handoff note; retired with the process material, not shipped)

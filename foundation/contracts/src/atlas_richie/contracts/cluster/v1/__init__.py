@@ -1,6 +1,6 @@
 """Atlas Richie Cluster Token Protocol V1 — Python 投影.
 
-1:1 镜像 ``docs/protocols/CLUSTER_TOKEN_PROTOCOL.md`` (V1 frozen). 任何
+1:1 镜像 ``components/sentinel/docs/protocol/cluster-token-protocol-v1.md`` (V1 frozen). 任何
 变更走 V1.1 minor + ADR, V2 major 破坏兼容.
 
 设计:

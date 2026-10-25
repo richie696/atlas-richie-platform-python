@@ -173,7 +173,7 @@ export const RULE_VERSION_FIXTURES: readonly RuleVersion[] = Object.freeze([
  * 规则工作台可见的应用目录。
  *
  * 从规则条目派生而不是读取全局应用表：规则页能看到的应用，恰好是**存在规则绑定**
- * 的应用。这与 `DASHBOARD_CONTROL_PLANE.md` §4.2「规则页读模型 = 配置中心权威快照 +
+ * 的应用。这与 `规则控制台与运行观测设计.md` §4.2「规则页读模型 = 配置中心权威快照 +
  * 来源/版本」一致，也让筛选下拉不会列出没有任何规则的应用。
  */
 export const RULE_APP_FIXTURES: readonly { readonly id: string; readonly label: string }[] =

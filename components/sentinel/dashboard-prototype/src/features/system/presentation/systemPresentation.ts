@@ -152,7 +152,7 @@ export interface AuditChainStep {
  *
  * 中文
  * ----
- * 四步对应 `DASHBOARD_CONTROL_PLANE.md` §4.3 的发布合同，**不能合并**：
+ * 四步对应 `规则控制台与运行观测设计.md` §4.3 的发布合同，**不能合并**：
  * 「本地草稿已验证」「配置中心写入成功」「回读一致」「实例已生效」是四条独立事实，
  * 前一步永远不能被当作后一步的结论。
  */
@@ -184,7 +184,7 @@ export const AUDIT_CHAIN_STEPS: readonly AuditChainStep[] = Object.freeze([
  *
  * 中文
  * ----
- * 只有两个字段：协议名与它负责的事。`REWRITE_PLAN.md` §4.6 还列了
+ * 只有两个字段：协议名与它负责的事。目标设计还列了
  * `independence`，但当前面板并不展示该维度，**不提前加入未渲染的字段**——
  * 接入 Console API、面板真要显示独立面时再补。
  */

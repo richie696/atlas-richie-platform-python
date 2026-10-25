@@ -19,7 +19,7 @@ import type { RuleFieldCopy, RuleTypeCopy } from "../../i18n/ruleMessages";
 
 const styleModules = [rulesStyles] as const;
 
-/** 五个系统阈值字段，与 `DASHBOARD_CONTROL_PLANE.md` §4.3 SystemRule 一致。 */
+/** 五个系统阈值字段，与 `规则控制台与运行观测设计.md` §4.3 SystemRule 一致。 */
 const SYSTEM_FIELDS = [
   { key: "highestSystemLoad", field: "systemLoad" },
   { key: "avgRt", field: "averageRt" },

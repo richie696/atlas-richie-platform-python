@@ -1,6 +1,6 @@
 """Atlas Richie Cluster Token Protocol V1 — payload frozen dataclasses.
 
-1:1 镜像 ``docs/protocols/CLUSTER_TOKEN_PROTOCOL.md`` §4. 6 个 payload:
+1:1 镜像 ``components/sentinel/docs/protocol/cluster-token-protocol-v1.md`` §4. 6 个 payload:
 - AcquireRequestPayload
 - AcquireResponsePayload
 - ReleaseRequestPayload

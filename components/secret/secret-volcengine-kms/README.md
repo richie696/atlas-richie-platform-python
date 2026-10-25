@@ -107,5 +107,5 @@ has no such fields.
   `crypto.capability` AAD gate (R-242)
 - `atlas-richie-secret-pkcs11` — sibling 2-SPI scope
   backend (also KMS-only)
-- `docs/acceptance/R-245-secret-volcengine-kms-handoff.md`
+- `R-245-secret-volcengine-kms-handoff.md` (handoff note; retired with the process material, not shipped)
   — design + verification

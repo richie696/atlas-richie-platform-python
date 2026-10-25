@@ -1,6 +1,6 @@
 """Atlas Richie Cluster Token Protocol V1 — codec 单测.
 
-1:1 镜像 ``docs/protocols/CLUSTER_TOKEN_PROTOCOL.md``. 严格 codec 行为
+1:1 镜像 ``components/sentinel/docs/protocol/cluster-token-protocol-v1.md``. 严格 codec 行为
 锁定; 任何 V1.1 minor 变更必须同步更新本测试.
 """
 

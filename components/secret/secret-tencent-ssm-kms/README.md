@@ -105,5 +105,5 @@ simply has no such fields.
   `crypto.capability` AAD gate (R-242)
 - `atlas-richie-secret-aws-kms` — sibling cloud backend
   wheel (similar 3-SPI scope)
-- `docs/acceptance/R-243-secret-tencent-ssm-kms-handoff.md`
+- `R-243-secret-tencent-ssm-kms-handoff.md` (handoff note; retired with the process material, not shipped)
   — design + verification

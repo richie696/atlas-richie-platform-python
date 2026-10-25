@@ -46,4 +46,4 @@ not set, the integration markers `pytest.skip` gracefully.
 - `atlas-richie-secret-core` — framework + Protocols
 - `atlas-richie-secret-vault` — sibling remote backend wheel
 - `atlas-richie-secret-aws-kms` — sibling cloud backend
-- `docs/acceptance/R-236-secret-azure-keyvault-handoff.md`
+- `R-236-secret-azure-keyvault-handoff.md` (handoff note; retired with the process material, not shipped)

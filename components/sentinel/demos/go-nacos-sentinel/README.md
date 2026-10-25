@@ -90,7 +90,7 @@ provenance and Rule Load Observation V1 alone are not durable acknowledgement.
 - `GET /health`: process health only.
 - `GET /rules`: confirms a valid initial snapshot was loaded.
   It also distinguishes provider source-byte SHA-256 from the shared
-  `sentinel-flow-runtime-v1` canonical semantic digest; neither value alone is
+  `sentinel-flow-snapshot-v1` canonical semantic digest; neither value alone is
   a Console durable receipt.
 - `GET /api/hello`: a real Sentinel resource entry; blocked calls return HTTP
   429.

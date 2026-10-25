@@ -411,7 +411,7 @@ class ActivationSchemaTest(unittest.TestCase):
     def test_activation_field_count(self) -> None:
         import dataclasses
         # Exactly 4 fields: previous_source_id, source_id, version, reason.
-        # (rule_source_activation.md §3.1 — frozen dataclass shape.)
+        # (规则源激活事实定义.md §3.1 — frozen dataclass shape.)
         fields = dataclasses.fields(RuleSourceActivation)
         self.assertEqual(
             len(fields), 4,

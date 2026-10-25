@@ -333,6 +333,13 @@ name = "atlas-richie-contracts"
 version = "0.2.0"
 source = { editable = "../../../foundation/contracts" }
 
+[package.metadata]
+requires-dist = [
+    { name = "jsonschema", marker = "extra == 'test'", specifier = ">=4.25,<5.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+]
+provides-extras = ["test"]
+
 [[package]]
 name = "atlas-richie-http"
 version = "0.2.0"
