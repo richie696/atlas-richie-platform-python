@@ -23,7 +23,9 @@ class AccountPasswordTest(unittest.TestCase):
         accepted = "😀" * (MIN_ACCOUNT_PASSWORD_UTF16_UNITS // 2)
         rejected = "😀" * (MIN_ACCOUNT_PASSWORD_UTF16_UNITS // 2 - 1) + "a"
 
-        self.assertEqual(len(accepted.encode("utf-16-le")) // 2, 12)
+        self.assertEqual(
+            len(accepted.encode("utf-16-le")) // 2, MIN_ACCOUNT_PASSWORD_UTF16_UNITS
+        )
         self.assertEqual(AccountPassword(accepted).value, accepted)
         with self.assertRaises(ValueError):
             AccountPassword(rejected)

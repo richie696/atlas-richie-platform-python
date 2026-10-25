@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import ssl
 import sys
 import unittest
@@ -89,10 +90,42 @@ class BootstrapDatabaseEngineFactoryTests(unittest.IsolatedAsyncioTestCase):
             {
                 "hostaddr": "10.30.1.8",
                 "sslmode": "verify-full",
-                "connect_timeout": 3,
+                "connect_timeout": 10,
                 "sslrootcert": "/etc/ssl/db-ca.pem",
             },
         )
+
+    async def test_configured_connect_timeout_replaces_the_default(self) -> None:
+        engine = object()
+        factory = BootstrapDatabaseEngineFactory(
+            self.policy, postgresql_root_certificate="/etc/ssl/db-ca.pem"
+        )
+        with patch.dict(
+            os.environ,
+            {"SENTINEL_CONSOLE_DATABASE_CONNECT_TIMEOUT_SECONDS": "45"},
+        ), patch.object(
+            database_engine_adapters, "create_async_engine", return_value=engine
+        ) as create:
+            result = await factory.create(self._candidate())
+
+        self.assertIs(result.engine, engine)
+        self.assertEqual(
+            create.call_args.kwargs["connect_args"]["connect_timeout"],
+            45,
+        )
+
+    async def test_out_of_range_connect_timeout_is_a_stable_failure(self) -> None:
+        factory = BootstrapDatabaseEngineFactory(
+            self.policy, postgresql_root_certificate="/etc/ssl/db-ca.pem"
+        )
+        with patch.dict(
+            os.environ,
+            {"SENTINEL_CONSOLE_DATABASE_CONNECT_TIMEOUT_SECONDS": "0"},
+        ), patch.object(database_engine_adapters, "create_async_engine") as create:
+            with self.assertRaises(ValueError):
+                await factory.create(self._candidate())
+
+        create.assert_not_called()
 
     async def test_denied_target_never_constructs_an_engine(self) -> None:
         self.policy.resolve = AsyncMock(side_effect=BootstrapDatabaseTargetRejected)

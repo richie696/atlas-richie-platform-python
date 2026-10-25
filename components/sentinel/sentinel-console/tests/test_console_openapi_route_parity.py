@@ -142,11 +142,11 @@ def test_openapi_freeze_metadata_matches_console_contract_approval() -> None:
     document = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
     contract = _CONTRACT_DOC_PATH.read_text(encoding="utf-8")
 
-    assert document["info"]["version"] == "0.18.0"
+    assert document["info"]["version"] == "0.19.0"
     assert document["x-contract-status"] == "frozen"
-    assert "0.18.0 baseline (2026-10-17)" in document["info"]["description"]
-    assert "冻结版本 0.18.0" in contract
-    assert "0.18.0" in contract
+    assert "0.19.0 baseline (2026-10-24)" in document["info"]["description"]
+    assert "冻结版本 0.19.0" in contract
+    assert "0.19.0" in contract
     assert "authorize-local" in contract
 
 
@@ -195,33 +195,128 @@ def test_console_api_08_operations_remain_wire_identical() -> None:
             )
 
 
+# 0.19.0（契约文档 §23「管理员账号生命周期」）把**新口令**统一收窄到 8–32 UTF-16 码元，
+# 此前是 12–1024。当前密码与连接凭证保留各自上限（1–1024 / 1–512），不受影响。
+_NEW_PASSWORD_MIN_UTF16_UNITS = 8
+_NEW_PASSWORD_MAX_UTF16_UNITS = 32
+_LEGACY_PASSWORD_MIN_UTF16_UNITS = 12
+_LEGACY_PASSWORD_MAX_UTF16_UNITS = 1024
+
+# summary / description 是文档字段，不是 wire 形状的一部分。
+_DOCUMENTATION_OPERATION_FIELDS = ("summary", "description")
+
+
+def _widen_new_password_fields(node: object) -> object:
+    """Undo the approved 0.19.0 new-password narrowing so only that delta is tolerated.
+
+    只命中 `writeOnly` 且边界恰好是 8/32/32 的字段：当前口令（1–1024）与连接凭证
+    （1–1024 / 1–512）的边界不同，因此不会被误伤。
+    """
+    if isinstance(node, dict):
+        if (
+            node.get("writeOnly") is True
+            and node.get("minLength") == _NEW_PASSWORD_MIN_UTF16_UNITS
+            and node.get("maxLength") == _NEW_PASSWORD_MAX_UTF16_UNITS
+            and node.get("x-max-utf16-code-units") == _NEW_PASSWORD_MAX_UTF16_UNITS
+        ):
+            node["minLength"] = _LEGACY_PASSWORD_MIN_UTF16_UNITS
+            node["maxLength"] = _LEGACY_PASSWORD_MAX_UTF16_UNITS
+            node["x-max-utf16-code-units"] = _LEGACY_PASSWORD_MAX_UTF16_UNITS
+        for value in node.values():
+            _widen_new_password_fields(value)
+    elif isinstance(node, list):
+        for value in node:
+            _widen_new_password_fields(value)
+    return node
+
+
+def _list_item_identity(item: object) -> tuple[str, str] | None:
+    """Return the stable identity of a request variant or parameter, when it has one."""
+    if not isinstance(item, dict):
+        return None
+    kind = item.get("properties", {})
+    if isinstance(kind, dict):
+        const = kind.get("kind", {})
+        if isinstance(const, dict) and isinstance(const.get("const"), str):
+            return ("kind", const["const"])
+    name = item.get("name")
+    if isinstance(name, str):
+        return ("name", name)
+    return None
+
+
+def _project_onto_previous(previous: object, node: object) -> object:
+    """Reduce `node` to exactly the surface `previous` declared.
+
+    后续 contract 增量带来的新增内容（新增请求变体、新增响应枚举值、新增语义规则、
+    新增响应状态码）在此被移除，剩下的比较因此保持严格：旧版声明过的任何形状变化
+    都会让等值断言失败。
+    """
+    if isinstance(previous, dict) and isinstance(node, dict):
+        projected: dict[str, object] = {}
+        for key, old_value in previous.items():
+            if key not in node:
+                projected[key] = old_value
+                continue
+            projected[key] = _project_onto_previous(old_value, node[key])
+        return projected
+    if isinstance(previous, list) and isinstance(node, list):
+        if all(not isinstance(item, (dict, list)) for item in previous):
+            missing = [value for value in previous if value not in node]
+            assert not missing, f"已声明的值消失了: {missing}"
+            return previous
+        identities = [_list_item_identity(item) for item in previous]
+        if all(identity is not None for identity in identities):
+            available = {
+                identity: item
+                for item in node
+                if (identity := _list_item_identity(item)) is not None
+            }
+            projected_items: list[object] = []
+            for item, identity in zip(previous, identities):
+                assert identity is not None
+                counterpart = available.get(identity)
+                if counterpart is None:
+                    projected_items.append(item)
+                    continue
+                projected_items.append(_project_onto_previous(item, counterpart))
+            return projected_items
+        projected_items = []
+        for index, item in enumerate(previous):
+            if index >= len(node):
+                projected_items.append(item)
+                continue
+            projected_items.append(_project_onto_previous(item, node[index]))
+        return projected_items
+    return node
+
+
 def _assert_historical_operation_compatible(
     previous: dict[str, object],
     current: dict[str, object],
     path: str,
     method: str,
 ) -> None:
-    """Permit only documented additive audit-action enum values in old reads."""
-    comparable = copy.deepcopy(current)
-    if previous.get("operationId") == "readSystemAudit":
-        previous_parameters = previous["parameters"]
-        current_parameters = comparable["parameters"]
-        old_action = next(item for item in previous_parameters if item["name"] == "action")
-        new_action = next(item for item in current_parameters if item["name"] == "action")
-        assert set(old_action["schema"]["enum"]).issubset(new_action["schema"]["enum"])
-        new_action["schema"]["enum"] = old_action["schema"]["enum"]
+    """Frozen operations stay wire-equivalent; only approved 0.19.0 deltas may differ.
 
-        old_response_schema = previous["responses"]["200"]["content"]["application/json"]["schema"]
-        new_response_schema = comparable["responses"]["200"]["content"]["application/json"]["schema"]
-        old_query_actions = old_response_schema["properties"]["query"]["properties"]["action"]["anyOf"][0]["enum"]
-        new_query_actions = new_response_schema["properties"]["query"]["properties"]["action"]["anyOf"][0]["enum"]
-        assert set(old_query_actions).issubset(new_query_actions)
-        new_response_schema["properties"]["query"]["properties"]["action"]["anyOf"][0]["enum"] = old_query_actions
-        old_record_actions = old_response_schema["properties"]["items"]["items"]["properties"]["action"]["enum"]
-        new_record_actions = new_response_schema["properties"]["items"]["items"]["properties"]["action"]["enum"]
-        assert set(old_record_actions).issubset(new_record_actions)
-        new_response_schema["properties"]["items"]["items"]["properties"]["action"]["enum"] = old_record_actions
-    assert comparable == previous, (path, method)
+    0.19.0（契约文档 §23）对**既有** operation 做了两类已批准改动：
+
+    1. **新口令收窄**：新建账号、初始化管理员与改密的新口令统一为 8–32 UTF-16 码元
+       （此前 12–1024）。当前密码与连接凭证保留各自上限。
+    2. **账号生命周期扩展**：新增请求变体（`reset_password` / `delete`）、响应原因新增
+       `self_operation`，以及新增语义规则。
+
+    除此之外，旧 operation 声明过的每一个请求变体、响应枚举值、语义规则、参数和
+    schema 形状都必须还在；任何丢失或形状变化都判失败。
+    """
+    comparable = _widen_new_password_fields(copy.deepcopy(current))
+    declared = {
+        key: value
+        for key, value in previous.items()
+        if key not in _DOCUMENTATION_OPERATION_FIELDS
+    }
+    projected = _project_onto_previous(declared, comparable)
+    assert projected == declared, (path, method)
 
 
 def test_registered_console_routes_match_openapi_paths_and_methods() -> None:
@@ -238,6 +333,7 @@ def test_registered_console_routes_match_openapi_paths_and_methods() -> None:
         client_identity_hmac_key=b"contract-test-key" * 2,
         account_command_service=object(),
         own_password_service=object(),
+        system_settings_store=object(),
     )
 
     actual = {
@@ -511,6 +607,8 @@ def test_openapi_declares_the_complete_operation_permission_matrix() -> None:
         "readAgentReportingProtocolObservations": (None, ()),
         "readIncidentEventProtocolObservations": (None, ()),
         "readSystemAudit": ("admin", ()),
+        "readSystemSettings": (None, ()),
+        "updateSystemTimeZone": ("admin", ()),
         "readSystemDeploymentGuides": (None, ()),
         "readHostMetrics": (None, ("metrics:view",)),
         "readHostAssociations": (None, ()),
@@ -635,6 +733,7 @@ def test_every_runtime_operation_rejects_missing_invalid_or_duplicate_request_id
             client_identity_hmac_key=b"contract-test-key" * 2,
             account_command_service=object(),
             own_password_service=object(),
+            system_settings_store=object(),
         )
         document = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
         invalid_request_id = "not a valid request id"

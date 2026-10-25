@@ -15,6 +15,7 @@ _SCRIPT = (
     / "tools"
     / "with_disposable_e2e_dependencies.sh"
 )
+_OS_METADATA_FILENAMES = frozenset({".DS_Store"})
 
 
 class DisposableE2EDependenciesScriptTests(unittest.TestCase):
@@ -81,6 +82,19 @@ class DisposableE2EDependenciesScriptTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.fake_docker.chmod(0o755)
+
+    def _run_owned_state_files(self) -> list[Path]:
+        """Return only the state files this run created.
+
+        macOS drops a `.DS_Store` metadata file into directories below the
+        per-user temporary items folder. It is not a run-owned dependency, so
+        cleanup assertions must not count it as a leftover container state.
+        """
+        return sorted(
+            path
+            for path in self.docker_state.iterdir()
+            if path.name not in _OS_METADATA_FILENAMES
+        )
 
     def _run(
         self,
@@ -190,7 +204,7 @@ class DisposableE2EDependenciesScriptTests(unittest.TestCase):
         retained_ids = {line.split()[0] for line in created}
         retained_state_ids = {
             state.read_text(encoding="utf-8").split()[0]
-            for state in self.docker_state.iterdir()
+            for state in self._run_owned_state_files()
         }
         self.assertEqual(retained_state_ids, retained_ids)
         self.assertNotIn("rm --force --volumes", self.docker_log.read_text(encoding="utf-8"))
@@ -213,7 +227,7 @@ class DisposableE2EDependenciesScriptTests(unittest.TestCase):
         self.assertNotIn("Retaining run-owned acceptance dependencies", result.stdout)
         commands = self.docker_log.read_text(encoding="utf-8").splitlines()
         self.assertEqual(sum(line.startswith("rm ") for line in commands), 2)
-        self.assertEqual(list(self.docker_state.iterdir()), [])
+        self.assertEqual(self._run_owned_state_files(), [])
 
     def test_explicit_failure_retention_keeps_only_this_runs_dependencies(self) -> None:
         result = self._run(
@@ -228,7 +242,7 @@ class DisposableE2EDependenciesScriptTests(unittest.TestCase):
         retained_ids = {line.split()[0] for line in created}
         retained_state_ids = {
             state.read_text(encoding="utf-8").split()[0]
-            for state in self.docker_state.iterdir()
+            for state in self._run_owned_state_files()
         }
         self.assertEqual(retained_state_ids, retained_ids)
         self.assertNotIn("rm --force --volumes", self.docker_log.read_text(encoding="utf-8"))
@@ -242,7 +256,7 @@ class DisposableE2EDependenciesScriptTests(unittest.TestCase):
         self.assertIn("could not be confirmed removed", result.stderr)
         commands = self.docker_log.read_text(encoding="utf-8").splitlines()
         self.assertEqual(sum(line.startswith("rm ") for line in commands), 2)
-        self.assertEqual(len(list(self.docker_state.iterdir())), 2)
+        self.assertEqual(len(self._run_owned_state_files()), 2)
 
     def test_cleans_partial_start_when_second_container_creation_fails(self) -> None:
         result = self._run(["true"], extra_environment={"FAIL_CONSUL_RUN": "1"})

@@ -48,7 +48,8 @@ _OLD_KEY = b"o" * 32
 _ACTIVE_KEY = b"n" * 32
 _FINGERPRINT_KEY = b"f" * 32
 _SOURCE_PASSWORD = "synthetic-nacos-password-never-log"
-_ADMIN_PASSWORD = "synthetic-admin-password-never-log"
+# 内置管理员口令遵守账号口令策略：8–32 UTF-16 码元。
+_ADMIN_PASSWORD = "synthetic-admin-pw-never-log"
 _bootstrap_tx = bootstrap_initialization_transaction
 _source_store = registered_source_store
 

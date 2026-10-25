@@ -10,6 +10,9 @@ from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.change_own_password import (
     ChangeOwnPassword,
 )
+from atlas_richie.sentinel_console.domain.account_password import (
+    MAX_ACCOUNT_PASSWORD_UTF16_UNITS,
+)
 from atlas_richie.sentinel_console.infrastructure.persistence.current_session_reader import (
     SqlAlchemyCurrentSessionReader,
 )
@@ -384,7 +387,7 @@ class OwnPasswordApiTest(unittest.IsolatedAsyncioTestCase):
                     "newPassword": "synthetic-new-password-00001",
                 },
             )
-            invalid_new_password = await self._change(client, new_password="too-short")
+            invalid_new_password = await self._change(client, new_password="short-7")
             extra_field = await client.post(
                 "/api/v1/auth/password",
                 headers=self._headers(_ADMIN_CSRF, "password-extra-field"),
@@ -410,7 +413,7 @@ class OwnPasswordApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.hasher.hash_calls, 1)
 
     async def test_password_utf16_limit_accepts_exact_supplementary_boundary(self):
-        new_password = "😀" * 512
+        new_password = "😀" * (MAX_ACCOUNT_PASSWORD_UTF16_UNITS // 2)
         async with self._client(_ADMIN_COOKIE, _ADMIN_CSRF) as client:
             response = await self._change(client, new_password=new_password)
 
