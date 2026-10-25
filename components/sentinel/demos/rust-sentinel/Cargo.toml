@@ -1,0 +1,22 @@
+[package]
+name = "sentinel-rust-runtime-demo"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+axum = "0.8"
+base64 = "0.22"
+nacos-sdk = { version = "=0.8.2", features = ["config", "auth-by-http"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sentinel-core = { version = "=0.1.3", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+time = { version = "0.3", features = ["formatting"] }
+uuid = { version = "1", features = ["v4"] }
+url = "2"
+
+
