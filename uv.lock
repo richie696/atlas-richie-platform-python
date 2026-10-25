@@ -38,6 +38,9 @@ members = [
     "atlas-richie-sentinel-adapter-httpx",
     "atlas-richie-sentinel-cluster",
     "atlas-richie-sentinel-dashboard",
+    "atlas-richie-sentinel-reporter-incidents",
+    "atlas-richie-sentinel-reporter-rules",
+    "atlas-richie-sentinel-reporter-v2",
     "atlas-richie-sentinel-source-file",
     "atlas-richie-sentinel-source-nacos",
     "atlas-richie-testing",
@@ -1172,6 +1175,82 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.30,<1.0" },
 ]
 provides-extras = ["prod", "test"]
+
+[[package]]
+name = "atlas-richie-sentinel-reporter-incidents"
+version = "0.1.0"
+source = { editable = "components/sentinel/sentinel-reporter-incidents" }
+dependencies = [
+    { name = "atlas-richie-contracts" },
+    { name = "atlas-richie-http" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "atlas-richie-http", editable = "components/http" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21,<1.0" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-sentinel-reporter-rules"
+version = "0.1.0"
+source = { editable = "components/sentinel/sentinel-reporter-rules" }
+dependencies = [
+    { name = "atlas-richie-contracts" },
+    { name = "atlas-richie-http" },
+    { name = "atlas-richie-sentinel" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "atlas-richie-http", editable = "components/http" },
+    { name = "atlas-richie-sentinel", editable = "components/sentinel/sentinel" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21,<1.0" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-sentinel-reporter-v2"
+version = "0.2.0"
+source = { editable = "components/sentinel/sentinel-reporter-v2" }
+dependencies = [
+    { name = "atlas-richie-contracts" },
+    { name = "atlas-richie-http" },
+    { name = "atlas-richie-sentinel" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "atlas-richie-http", editable = "components/http" },
+    { name = "atlas-richie-sentinel", editable = "components/sentinel/sentinel" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21,<1.0" },
+]
+provides-extras = ["test"]
 
 [[package]]
 name = "atlas-richie-sentinel-source-file"

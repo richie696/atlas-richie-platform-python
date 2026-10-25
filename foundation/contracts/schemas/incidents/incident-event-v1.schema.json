@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:atlas-richie:incidents:event:v1",
+  "title": "Atlas Richie Incident Event V1",
+  "description": "Finite authenticated runtime incident fact; scope is derived from enrolled mTLS identity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "event_id", "process_epoch", "occurred_at", "severity", "fact"],
+  "properties": {
+    "protocol_version": { "const": "atlas-richie.incident-events/v1" },
+    "event_id": { "$ref": "#/$defs/uuid" },
+    "process_epoch": { "$ref": "#/$defs/uuid" },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{6}Z$"
+    },
+    "severity": { "enum": ["critical", "warning", "info"] },
+    "fact": {
+      "oneOf": [
+        { "$ref": "#/$defs/resourcePressure" },
+        { "$ref": "#/$defs/responseTime" }
+      ]
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "finiteRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+    "finiteNonNegative": { "type": "number", "minimum": 0, "maximum": 9007199254740991 },
+    "resourcePressure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "metric", "value", "threshold"],
+      "properties": {
+        "kind": { "const": "resource_pressure" },
+        "metric": { "enum": ["cpu_ratio", "memory_ratio"] },
+        "value": { "$ref": "#/$defs/finiteRatio" },
+        "threshold": { "$ref": "#/$defs/finiteRatio" }
+      }
+    },
+    "responseTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "p95_ms", "threshold_ms"],
+      "properties": {
+        "kind": { "const": "response_time" },
+        "p95_ms": { "$ref": "#/$defs/finiteNonNegative" },
+        "threshold_ms": { "$ref": "#/$defs/finiteNonNegative" }
+      }
+    }
+  }
+}

@@ -34,6 +34,9 @@ members = [
   "components/sentinel/sentinel-source-nacos",
   "components/sentinel/sentinel-adapter-asgi",
   "components/sentinel/sentinel-adapter-httpx",
+  "components/sentinel/sentinel-reporter-v2",
+  "components/sentinel/sentinel-reporter-incidents",
+  "components/sentinel/sentinel-reporter-rules",
   "components/sentinel/sentinel-dashboard",
   "components/sentinel/sentinel-cluster",
 ]
@@ -68,6 +71,9 @@ atlas-richie-sentinel-source-file = { workspace = true }
 atlas-richie-sentinel-source-nacos = { workspace = true }
 atlas-richie-sentinel-adapter-asgi = { workspace = true }
 atlas-richie-sentinel-adapter-httpx = { workspace = true }
+atlas-richie-sentinel-reporter-v2 = { workspace = true }
+atlas-richie-sentinel-reporter-incidents = { workspace = true }
+atlas-richie-sentinel-reporter-rules = { workspace = true }
 atlas-richie-sentinel-dashboard = { workspace = true }
 atlas-richie-sentinel-cluster = { workspace = true }
 atlas-richie-testing = { workspace = true }

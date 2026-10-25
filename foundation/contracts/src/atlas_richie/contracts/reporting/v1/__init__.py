@@ -1,7 +1,8 @@
-"""Atlas Richie Agent Reporting Protocol V1 — Python 投影 (DRAFT).
+"""Atlas Richie Agent Reporting Protocol V1 — Python projection.
 
-1:1 镜像 ``docs/protocol/上报协议-01-envelope-v1.md`` + ``上报协议-02-transport-v1.md`` +
-``上报协议-03-freeze-v1.md`` (DRAFT, 待 5-owner sign-off + 跨语言合同测试通过后冻结).
+The inner event envelope / per-kind payloads are frozen. Batch, ack, transport
+and transport error models remain draft and are not made authoritative by this
+combined export module.
 
 V1 协议 BUG 收口 (richie696 2026-09-13) 关键变更:
 - ingress envelope 7 字段 (无 ``received_at``, 由 Collector 在 Ack /
@@ -24,8 +25,9 @@ V1 协议 BUG 收口 (richie696 2026-09-13) 关键变更:
 - 配套 sentinel + 未来 collector SDK 用, 不在主包
 
 English
---------
-Atlas Richie Agent Reporting Protocol V1 — Python projection (DRAFT).
+-------
+Atlas Richie Agent Reporting Protocol V1 — Python projection with separately
+identified frozen-envelope and draft-transport models.
 """
 
 from .batch import (

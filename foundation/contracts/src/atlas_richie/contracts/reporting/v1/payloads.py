@@ -5,7 +5,7 @@
 - ``RuleSourceHealthPayload`` (RULE_SOURCE_STALE / _DEGRADED)
 - ``RuleExecPayload`` (RULE_APPLIED / _BLOCKED / _FAILED)
 
-DRAFT, 待 5-owner sign-off + 跨语言合同测试通过后冻结.
+V1 per-kind payload schemas 已冻结；新增 event kind 走 V2 major + 独立 ADR。
 V1.x spec revision 允许加 optional field; 改语义走 V2 major + ADR.
 """
 

@@ -1,9 +1,9 @@
-"""Atlas Richie Agent Reporting Protocol V1 — strict JSON codec (DRAFT).
+"""Atlas Richie Agent Reporting Protocol V1 — envelope codec + draft transport codec.
 
 1:1 镜像 ``docs/protocol/上报协议-01-envelope-v1.md`` + ``上报协议-02-transport-v1.md``.
 严格 JSON 序列化 / 反序列化, 拒绝:
 
-- 未知 field (DRAFT 阶段严格, V1 frozen 后仍严格)
+- Unknown fields in the frozen ingress envelope are rejected.
 - 缺必填字段
 - ``protocol_version`` ≠ ``"atlas-richie.reporting/v1"``
 - ``event_kind`` 不在 V1 6 个枚举
@@ -388,7 +388,7 @@ def _validate_envelope_dict(obj: dict[str, Any]) -> None:
             ReportingErrorCode.MALFORMED_ENVELOPE,
             f"missing required fields: {sorted(missing)}",
         )
-    # 2. 严格不允许未知字段 (V1 严格, 即使 DRAFT)
+    # 2. The frozen V1 ingress envelope strictly rejects unknown fields.
     unknown = set(obj.keys()) - _REQUIRED_ENVELOPE_FIELDS
     if unknown:
         raise ReportingProtocolError(

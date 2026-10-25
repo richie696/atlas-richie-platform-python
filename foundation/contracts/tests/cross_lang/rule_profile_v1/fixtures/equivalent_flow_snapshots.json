@@ -1,0 +1,8 @@
+{
+  "profile": "sentinel-flow-runtime-v1",
+  "semantics": "one-second direct QPS threshold, immediate reject, current resource",
+  "javaSnapshot": "[{\"resource\":\"GET /api/hello\",\"grade\":1,\"count\":3,\"strategy\":0,\"controlBehavior\":0,\"limitApp\":\"default\"}]",
+  "goSnapshot": "[{\"resource\":\"GET /api/hello\",\"threshold\":3,\"statIntervalInMs\":1000,\"tokenCalculateStrategy\":0,\"controlBehavior\":0,\"relationStrategy\":0,\"refResource\":\"\"}]",
+  "memberFingerprint": "9c11dd44491ed7625dad136d1238c8a23dcbb39c65b3db7d1e3220c65589047d",
+  "canonicalRulesSha256": "3f83eb929e9a20a9028da7f372aa1e012ceeb6cadf78f8f81763b8f7e53cbb82"
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-richie.dev/contracts/sentinel/managed-rule-publication/v1/schema.json",
+  "title": "Atlas Richie Sentinel Managed Rule Publication Envelope V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "binding_id",
+    "publication_id",
+    "target_version_id",
+    "publication_sequence",
+    "rule_kind",
+    "profile_id",
+    "payload_sha256",
+    "rule_payload"
+  ],
+  "properties": {
+    "protocol_version": {
+      "const": "atlas-richie.sentinel.managed-rule-publication/v1"
+    },
+    "binding_id": { "$ref": "#/$defs/identifier" },
+    "publication_id": { "$ref": "#/$defs/identifier" },
+    "target_version_id": { "$ref": "#/$defs/identifier" },
+    "publication_sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "rule_kind": {
+      "enum": ["flow", "degrade", "system", "authority", "param"]
+    },
+    "profile_id": { "$ref": "#/$defs/identifier" },
+    "payload_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "rule_payload": {
+      "type": "string",
+      "maxLength": 512000
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"
+    }
+  }
+}

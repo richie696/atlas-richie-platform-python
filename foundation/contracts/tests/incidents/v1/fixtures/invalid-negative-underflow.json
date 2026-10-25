@@ -1,0 +1,1 @@
+{"event_id":"72000000-0000-0000-0000-000000000002","fact":{"kind":"response_time","p95_ms":-1e-9999,"threshold_ms":0},"occurred_at":"2026-10-15T04:00:00.000000Z","process_epoch":"71000000-0000-0000-0000-000000000001","protocol_version":"atlas-richie.incident-events/v1","severity":"critical"}

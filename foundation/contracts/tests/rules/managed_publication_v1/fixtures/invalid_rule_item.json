@@ -1,0 +1,1 @@
+{"protocol_version":"atlas-richie.sentinel.managed-rule-publication/v1","binding_id":"binding-01","publication_id":"publication-42","target_version_id":"version-42","publication_sequence":42,"rule_kind":"flow","profile_id":"sentinel-nacos-flow-v1","payload_sha256":"8e7a2f1c0bf496e30cc81bbf515901ce5b97bb37972f8eac81bd59f8df8eeaf8","rule_payload":"[1]"}

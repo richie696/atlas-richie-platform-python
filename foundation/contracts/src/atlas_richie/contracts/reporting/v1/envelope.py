@@ -1,4 +1,4 @@
-"""Atlas Richie Agent Reporting Protocol V1 — ingress envelope (7 字段).
+"""Atlas Richie Agent Reporting Protocol V1 — frozen ingress envelope (7 字段).
 
 1:1 镜像 ``docs/protocol/上报协议-01-envelope-v1.md`` §3.
 
@@ -7,7 +7,7 @@ V1 协议 BUG 收口 (richie696 2026-09-13) 关键变更:
 - ``received_at`` 只由 Collector 在 Ack / 持久化投影写入, 不是 ingress 字段
 - Reporter 不得猜测 / 写入 / 回传 ``received_at``
 
-DRAFT, 待 5-owner sign-off + 跨语言合同测试通过后冻结.
+本文件只定义已冻结的 inner event envelope；外层 transport / batch / ack 仍是草案。
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ UUID_V4_REGEX = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
 
 @dataclass(frozen=True, slots=True)
 class ReportingEnvelope:
-    """Agent Reporting Protocol V1 — ingress envelope (7 字段, DRAFT).
+    """Agent Reporting Protocol V1 — frozen ingress envelope (7 字段).
 
     字段定义见 ``docs/protocol/上报协议-01-envelope-v1.md`` §3.2.
     """

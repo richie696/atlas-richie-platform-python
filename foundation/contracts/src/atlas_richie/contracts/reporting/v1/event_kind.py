@@ -1,7 +1,7 @@
-"""Atlas Richie Agent Reporting Protocol V1 — event_kind 枚举 (Draft, 1:1 镜像).
+"""Atlas Richie Agent Reporting Protocol V1 — frozen event_kind 枚举.
 
 1:1 镜像 ``docs/protocol/上报协议-01-envelope-v1.md`` §4. V1 6 个
-event_kind (DRAFT, 待 5-owner sign-off + 跨语言合同测试通过后冻结).
+event_kind 已由 5-owner sign-off 冻结 (见 envelope freeze record).
 任何新增走 V2 major + 独立 ADR (V1.x spec revision **不**扩展枚举).
 
 注意: V1 协议 BUG 收口 (richie696 2026-09-13) 改了 ingress envelope
@@ -14,7 +14,7 @@ from enum import StrEnum
 
 
 class ReportingEventKind(StrEnum):
-    """Agent Reporting Protocol V1 — 6 event_kind (DRAFT, 待冻结)."""
+    """Agent Reporting Protocol V1 — 6 frozen event kinds."""
 
     RULE_SOURCE_ACTIVATED = "RULE_SOURCE_ACTIVATED"
     RULE_SOURCE_STALE = "RULE_SOURCE_STALE"

@@ -1,11 +1,12 @@
-"""Atlas Richie Agent Reporting Protocol V1 — batch + ack + error envelope frozen dataclasses.
+"""Atlas Richie Agent Reporting Protocol V1 — draft transport batch + ack models.
 
 1:1 镜像 ``docs/protocol/上报协议-02-transport-v1.md``:
 - ``ReportingBatch`` (8 字段, §7.1)
 - ``AckEnvelope`` + ``AckSequence`` (5 + 3 字段, §9.1 / §9.2)
 - ``ErrorEnvelope`` + ``ErrorDetails`` (协议 transport §6)
 
-DRAFT, 待 5-owner sign-off + 跨语言合同测试通过后冻结.
+These models project the pending transport draft; they are not covered by the
+event-envelope schema freeze record and must not be treated as a frozen wire contract.
 """
 
 from __future__ import annotations

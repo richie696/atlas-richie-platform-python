@@ -1,8 +1,8 @@
+import ssl
 import unittest
 from unittest.mock import patch
 
 import httpx
-
 from atlas_richie.http import (
     AsyncHttpClient,
     HttpAuditEvent,
@@ -21,6 +21,7 @@ from atlas_richie.http import (
     MultipartPart,
     SseEventParser,
 )
+from atlas_richie.http.client import _HttpxClientFactory
 
 
 class _Events:
@@ -77,6 +78,13 @@ def _controlled_async_client(transport: httpx.AsyncBaseTransport):
 
 
 class HttpClientContractTests(unittest.TestCase):
+    def test_tls_context_is_forwarded_to_the_owned_httpx_boundary(self) -> None:
+        context = ssl.create_default_context()
+        options = HttpClientOptions(ssl_context=context)
+        with patch("atlas_richie.http.client.httpx.AsyncClient") as constructor:
+            _HttpxClientFactory.create_async(options)
+        self.assertIs(constructor.call_args.kwargs["verify"], context)
+
     def test_httpx_is_hidden_and_controlled_transport_receives_request_id(self) -> None:
         captured: list[httpx.Request] = []
 
@@ -87,7 +95,9 @@ class HttpClientContractTests(unittest.TestCase):
         events = _Events()
         with _controlled_client(httpx.MockTransport(handler)):
             with HttpClient(audit_sink=events) as client:
-                response = client.execute(HttpRequest.get("https://unit.test/json?secret=not-recorded"))
+                response = client.execute(
+                    HttpRequest.get("https://unit.test/json?secret=not-recorded")
+                )
 
         self.assertEqual({"result": "ok"}, response.json())
         self.assertTrue(captured[0].headers["X-Request-Id"])
@@ -125,12 +135,15 @@ class HttpClientContractTests(unittest.TestCase):
             return httpx.Response(200, content=b"too-large", request=request)
 
         transport = httpx.MockTransport(handler)
-        with _controlled_client(transport):
-            with HttpClient() as client:
-                with self.assertRaises(HttpStatusError):
-                    client.execute(HttpRequest.get("https://unit.test/status")).require_success()
-                with self.assertRaises(HttpDecodeError):
-                    client.execute(HttpRequest.get("https://unit.test/invalid-json")).json()
+        with _controlled_client(transport), HttpClient() as client:
+            with self.assertRaises(HttpStatusError):
+                client.execute(
+                    HttpRequest.get("https://unit.test/status")
+                ).require_success()
+            with self.assertRaises(HttpDecodeError):
+                client.execute(
+                    HttpRequest.get("https://unit.test/invalid-json")
+                ).json()
 
         with _controlled_client(transport):
             limited = HttpClient(HttpClientOptions(max_response_bytes=3))
@@ -148,7 +161,12 @@ class HttpClientContractTests(unittest.TestCase):
 
         with _controlled_client(httpx.MockTransport(redirect_handler)):
             with HttpClient() as client:
-                self.assertEqual(302, client.execute(HttpRequest.get("https://unit.test/redirect")).status_code)
+                self.assertEqual(
+                    302,
+                    client.execute(
+                        HttpRequest.get("https://unit.test/redirect")
+                    ).status_code,
+                )
 
         def unavailable(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("offline", request=request)
@@ -178,13 +196,21 @@ class HttpClientContractTests(unittest.TestCase):
 
         self.assertEqual((), original.query)
         self.assertEqual("tag=first&tag=second&page=1", captured[0].url.query.decode())
-        self.assertEqual(MediaType.JSON, captured[0].headers["content-type"].split(";")[0])
+        self.assertEqual(
+            MediaType.JSON, captured[0].headers["content-type"].split(";")[0]
+        )
         self.assertEqual(b'{"name":"widget"}', captured[0].content)
 
     def test_form_multipart_and_sse_parser_have_owned_protocol_semantics(self) -> None:
-        form = HttpRequest.post("https://unit.test/token").with_form({"scope": "items:read"})
+        form = HttpRequest.post("https://unit.test/token").with_form(
+            {"scope": "items:read"}
+        )
         multipart = HttpRequest.post("https://unit.test/upload").with_multipart(
-            (MultipartPart("file", b"payload", filename="note.txt", media_type="text/plain"),),
+            (
+                MultipartPart(
+                    "file", b"payload", filename="note.txt", media_type="text/plain"
+                ),
+            ),
             boundary="unit-boundary",
         )
         parser = SseEventParser()
@@ -197,7 +223,10 @@ class HttpClientContractTests(unittest.TestCase):
         event = parser.feed("")
 
         self.assertEqual(b"scope=items%3Aread", form.content)
-        self.assertIn(b'Content-Disposition: form-data; name="file"; filename="note.txt"', multipart.content or b"")
+        self.assertIn(
+            b'Content-Disposition: form-data; name="file"; filename="note.txt"',
+            multipart.content or b"",
+        )
         self.assertEqual("one\ntwo", event.data if event else None)
         self.assertEqual("changed", event.event if event else None)
         self.assertEqual(1500, event.retry_ms if event else None)
@@ -207,12 +236,18 @@ class HttpClientContractTests(unittest.TestCase):
 
         def handler(incoming: httpx.Request) -> httpx.Response:
             captured.append(incoming)
-            return httpx.Response(200, content=b"data: first\n\ndata: second\n\n", request=incoming)
+            return httpx.Response(
+                200, content=b"data: first\n\ndata: second\n\n", request=incoming
+            )
 
         with _controlled_client(httpx.MockTransport(handler)):
             with HttpClient() as client:
-                events = list(client.iter_sse(HttpRequest.get("https://unit.test/events")))
-                response = client.open_stream(HttpRequest.get("https://unit.test/stream"))
+                events = list(
+                    client.iter_sse(HttpRequest.get("https://unit.test/events"))
+                )
+                response = client.open_stream(
+                    HttpRequest.get("https://unit.test/stream")
+                )
                 list(response.iter_bytes())
                 with self.assertRaises(HttpStreamClosedError):
                     list(response.iter_bytes())
@@ -223,7 +258,9 @@ class HttpClientContractTests(unittest.TestCase):
 
 
 class AsyncHttpClientContractTests(unittest.IsolatedAsyncioTestCase):
-    async def test_async_client_has_the_same_interceptor_contract_and_lifecycle(self) -> None:
+    async def test_async_client_has_the_same_interceptor_contract_and_lifecycle(
+        self,
+    ) -> None:
         trace: list[str] = []
         events = _Events()
         request = HttpRequest.get("https://unit.test/short-circuit")
@@ -250,11 +287,18 @@ class AsyncHttpClientContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_async_sse_stream_matches_sync_semantics(self) -> None:
         async def handler(incoming: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, content=b"event: notice\ndata: ready\n\n", request=incoming)
+            return httpx.Response(
+                200, content=b"event: notice\ndata: ready\n\n", request=incoming
+            )
 
         with _controlled_async_client(httpx.MockTransport(handler)):
             async with AsyncHttpClient() as client:
-                events = [event async for event in client.iter_sse(HttpRequest.get("https://unit.test/events"))]
+                events = [
+                    event
+                    async for event in client.iter_sse(
+                        HttpRequest.get("https://unit.test/events")
+                    )
+                ]
 
         self.assertEqual(["notice"], [event.event for event in events])
         self.assertEqual(["ready"], [event.data for event in events])
