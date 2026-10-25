@@ -2,18 +2,20 @@
 
 ## Scope
 
-Implement the Python `GET /api/v1/system/sources` consumer contract. This slice
+Implement the Python `GET /api/v1/system/sources` consumer contract. This route
 reads only the authoritative server-owned registry snapshot and projects safe
-metadata. It does not register sources, probe Nacos/Consul, access their
-credentials, write configuration, or create a production persistence provider.
-The route remains explicitly unavailable (503) until a trusted reader is
-composed.
+metadata. This read operation does not register sources, probe Nacos/Consul,
+resolve their credentials, or write configuration. The API has no demo/default
+reader: a generic `build_app()` without an injected `RegisteredSourcesReader`
+returns 503, while SQL identity composition with registered-source keys
+composes `SqlAlchemyRegisteredSourceStore` as the durable reader.
 
 ## Ownership and design
 
-- `RegisteredSourcesReader` is the Console application port for the existing
-  source-registry read capability; a future durable registry adapter owns the
-  persistence mapping.
+- `RegisteredSourcesReader` is the Console application port for the
+  source-registry read capability; `SqlAlchemyRegisteredSourceStore` owns the
+  current SQL persistence mapping and returns safe registry facts without
+  decrypting or probing credentials.
 - Immutable domain records include source ID/revision/name/endpoint/provider,
   provider location, authentication mode, and only the boolean
   `credential_configured`. They have no credential or reference-value field.
@@ -41,7 +43,17 @@ composed.
   shared provider enum regression.
 - `python -m compileall -q` for the new route/application/domain modules and
   `git diff --check` — passed.
+- Installed-wheel / standard CLI acceptance through
+  `tools/with_disposable_e2e_dependencies.sh uv run --no-sync --extra test
+  --extra mysql pytest -q --tb=short
+  tests/test_installed_cli_bootstrap_acceptance.py::InstalledCliBootstrapAcceptanceTests::test_installed_cli_migrates_and_serves_safe_first_run_state`
+  — **1 passed in 19.06s** on disposable MySQL 8.4.11 + Consul 1.21.1. After
+  first-run initialization, the real authenticated CLI request reads the
+  persisted Consul source from `/api/v1/system/sources`, verifies safe source
+  metadata/no token leakage, and completes the configured source probe.
 
-This record is a focused API acceptance slice, not production registry
-persistence, real Nacos or Consul validation, or browser E2E. The default
-`build_app` composition has no registry reader and correctly returns 503.
+The unit/API slice and installed CLI path are distinct evidence: the latter
+proves this configured MySQL/Consul route is live in the standard CLI. It does
+not prove PostgreSQL parity for this exact CLI path, React-to-Python browser
+integration, production secret delivery, or browser E2E. A generic `build_app`
+without a composed reader still correctly returns 503.

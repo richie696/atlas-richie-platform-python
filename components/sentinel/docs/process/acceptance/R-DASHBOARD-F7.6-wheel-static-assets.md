@@ -57,12 +57,14 @@ claim the Console service or all of its API workflows are production-ready.
 ## Remaining acceptance
 
 - Non-root Vite base-path configuration has strict unit tests and an isolated
-  artifact build; direct ASGI prefix routing has focused tests. Matching
-  reverse-proxy behavior has not been implemented or verified.
-- No real server startup/CLI or deployment configuration exists yet.
-- No Codex IAB route was exercised against the installed wheel in this slice.
-- No complete page E2E, live Python service, PostgreSQL/MySQL, Nacos, or Consul
-  integration was run.
+  artifact build; direct ASGI prefix routing has focused tests. A generic
+  Apache prefix-strip loopback integration is recorded below; production
+  ingress/TLS/header/cache/trusted-proxy policy remains unverified.
+- Installed-wheel rendering in the Codex IAB is now verified for the login
+  page only (see the 2026-10-11 entry below); this is not a full browser flow.
+- No complete page E2E, production deployment, PostgreSQL/MySQL, Nacos, or
+  Consul integration was run. A disposable loopback launcher smoke was later
+  added below; it is not a production service acceptance.
 
 Therefore **F7.6 and B0.6 remain unchecked**. Full browser journeys stay
 reserved for explicit milestone acceptance and must use the Codex in-app
@@ -75,7 +77,7 @@ browser; Chrome, Edge, and CDP are not used.
 - Installed the wheel into an isolated target with `uv pip install --target ... --no-deps`; Python static ASGI tests ran against the isolated installed package with no Node: 4 passed.
 - Current production `BUILD-LIVE` and `BUILD-SETUP-LAZY` manifest checks: 2/2 passed; Console compileall passed.
 
-Remaining acceptance is unchanged: no Codex IAB route was exercised against the installed wheel; full live API, production launcher/proxy, DB/provider integration and final E2E remain open.
+Remaining acceptance is unchanged: no Codex IAB route was exercised against the installed wheel; reverse-proxy behavior, DB/provider integration and final E2E remain open.
 
 ## Current production bundle refresh (2026-10-10)
 
@@ -98,3 +100,123 @@ Remaining acceptance is unchanged: no Codex IAB route was exercised against the 
   then reran the test file with `PYTHONPATH` pointing to that wheel: **4 passed**.
   This proves the packaged code contains the routing correction; it does not
   prove a live launcher, reverse proxy, or browser render.
+
+## Current production bundle refreshed in Console wheel (2026-10-10)
+
+- Rebuilt the production-only app and synchronized its manifest-linked assets
+  into the marker-owned `sentinel-console/web/` directory with
+  `npm run build:console-assets`: **81 files, 2,166,274 bytes**. The build
+  completed with the existing informational upstream Zod annotation warnings.
+- Built the current Console sdist and wheel with `uv build --out-dir ...` from
+  `components/sentinel/sentinel-console/`. Installed the wheel into a fresh
+  isolated target using `uv pip install --target ... --no-deps` and ran
+  `tests/test_static_web.py` with `PYTHONPATH` set to that target: **4 passed**.
+  This re-verifies packaged assets and ASGI static routing against the current
+  frontend bundle without Node at serving time.
+- Confirmed pytest imported `atlas_richie.sentinel_console` from the isolated
+  target, then independently compared every wheel marker entry: **81/81** files
+  exist with matching byte lengths and SHA-256 values; `mockServiceWorker.js`
+  is absent.
+- This is packaging/source-tree evidence only. It does not close F7.6's
+  installed-wheel Codex IAB rendering or production launcher/reverse-proxy
+  acceptance, and it does not run the final cross-page E2E suite.
+
+## Installed-wheel launcher smoke (2026-10-10)
+
+- Installed the current Console wheel, its runtime dependencies, and the
+  optional Uvicorn server dependency into an isolated target, then started the
+  documented `python -m atlas_richie.sentinel_console serve` and generated
+  `bin/sentinel-console serve` entry points with that target first on
+  `PYTHONPATH`.
+- Bound only to `127.0.0.1` on a temporary port. All keys and state paths were
+  disposable values under `/private/tmp`; the setup window stayed closed and
+  no database or configuration-center connection was attempted.
+- Runtime checks passed: `/` returned the packaged HTML with HTTP 200, and
+  `/api/v1/system/bootstrap` returned HTTP 200 with `initialized=false`.
+  The child server was terminated after the checks.
+- This verifies the installed-wheel CLI startup and the closed first-run
+  bootstrap response. It does not verify an initialized database, reverse
+  proxy, browser rendering, or full user journeys; F7.6 remains open.
+
+## Prefix-stripping reverse-proxy integration (2026-10-11)
+
+- Built a disposable production frontend with
+  `SENTINEL_CONSOLE_BASE_PATH=/ops/sentinel/` into a private temporary directory;
+  the generated HTML referenced fingerprinted assets below that external prefix.
+- Ran the real Python `dashboard_web_routes` ASGI static router under Uvicorn on
+  loopback with root routing, then fronted it with the machine's Apache HTTP
+  Server **2.4.67** using `mod_proxy` + `mod_proxy_http`. Apache stripped
+  `/ops/sentinel/` before forwarding UI/assets and separately proxied `/api/`.
+- Through Apache, verified: prefixed index **200**; `/ops/sentinel/rules` with
+  application query parameters **200** and app-shell HTML; generated prefixed
+  fingerprinted JS asset **200** with `public, max-age=31536000, immutable`;
+  both `/api/not-registered` and `/ops/sentinel/api/not-registered` returned
+  JSON `404 not_found`, never HTML. Temporary services/config/build output were
+  stopped and removed after the check.
+- Re-ran the source-tree routing suite after the proxy exercise:
+  `uv run --extra test pytest -q tests/test_static_web.py` — **4 passed**;
+  `git diff --check` passed.
+- This proves the generic prefix-stripping proxy behavior against a real local
+  proxy and the Python static ASGI router. It is not the installed-wheel CLI,
+  does not validate a user's production Apache/Nginx/TLS/header/cache policy,
+  trusted-client-address configuration, or browser rendering; those F7.6/F7.2
+  acceptance items remain open.
+
+## Current production wheel rendered in Codex IAB (2026-10-11)
+
+- Rebuilt the current production React bundle using
+  `npm run build:console-assets`: **81 files, 2,162,703 bytes**. Built a fresh
+  Console wheel/sdist and installed the wheel and server extra into a private,
+  isolated virtual environment.
+- Constructed the ASGI app from the installed wheel using the existing
+  `StaticWebTest` controlled test authorities and bound Uvicorn only to
+  `127.0.0.1:52137`. The Codex in-app browser loaded `/login` and rendered the
+  login page, including username/password inputs, show-password control, and
+  submit button. Server logs showed HTTP 200 for `/login`,
+  `/api/v1/system/bootstrap`, `/api/v1/auth/me`, and the page's fingerprinted
+  JS/CSS assets. The isolated installed-wheel discovery test passed (**1/1**).
+- Chrome and Edge were not used. No real database or configuration-center
+  service was contacted. This is a single-page installed-artifact render smoke;
+  it does not verify authenticated login, all routes, production CLI/lifespan,
+  or the final cross-page E2E suite. F7.6 remains open for production launcher
+  and deployment-policy acceptance; full E2E remains deferred until all
+  implementation tasks are complete.
+
+## Current production bundle revalidated against an isolated wheel (2026-10-11)
+
+- The current frontend source was rebuilt and packaged using
+  `npm run build:console-assets`: **81 files, 2,163,810 bytes**. The existing
+  informational Zod annotation-position warnings did not fail the build.
+- Built the Console sdist and wheel into a private temporary directory and
+  installed the wheel into an isolated target. `tests/test_static_web.py` ran
+  with the isolated installed package first on `PYTHONPATH`: **4 passed**.
+- Verified pytest imported `atlas_richie.sentinel_console` from the isolated
+  target. Compared all 81 packaged marker entries with both the installed
+  wheel and current `dashboard-prototype/dist/client`: no missing entries,
+  byte-count mismatches, or SHA-256 mismatches; `mockServiceWorker.js` is
+  absent.
+- This refresh establishes that the wheel contains the current production
+  UI—not the prior bundle. It does not rerun the Codex IAB against this exact
+  build, validate user-specific production ingress/TLS/header/trusted-proxy
+  policy, or close full React→Python E2E. No package was published and no real
+  database/configuration center was contacted.
+
+## F7.6 exit verification (2026-10-11)
+
+- Opened the latest isolated-wheel static ASGI app in the Codex in-app browser
+  at `/login`. The login page rendered username, password, show-password, and
+  submit controls. Server logs showed HTTP 200 for the page, bootstrap and
+  current-session requests, and every requested fingerprinted JS/CSS asset.
+  The server was loopback-only and stopped after inspection; Chrome and Edge
+  were not used.
+- `npm run test:build-profiles`: **10/10 passed**, including canonical base
+  paths, live/demo isolation, mock-worker exclusion, lazy route/chart/i18n
+  loading, and setup/auth chunk separation.
+- `npm run test:sites`: **4/4 passed**, covering static assets, SPA route
+  fallback, API/write non-fallback, and the Sites packaging file set.
+- Together with the current wheel's **4/4** installed static ASGI tests,
+  81/81 manifest/byte/SHA-256 matches, loopback CLI startup, and Apache
+  prefix-stripping proxy evidence, all requirements explicitly listed in F7.6
+  are covered. F7.6 is closed. User-specific production TLS, header, and
+  trusted-proxy policy is not claimed; neither is the final multi-page
+  React→Python E2E, which remains deferred to final acceptance.

@@ -29,6 +29,31 @@ implementation detail, the optional MySQL extra is pinned to `asyncmy==0.2.16`
 and has a runtime compatibility test; driver upgrades require deliberate
 review.
 
+Runtime and first-run engine creation share the registered
+`DatabaseEngineAdapter` boundary. `ConsoleDatabaseConfiguration` is the
+configuration Facade: it validates URLs/candidates and selects an adapter by
+driver or typed database kind. `BootstrapDatabaseEngineFactory` owns the
+first-run sequence (validate candidate, resolve the allowlisted DNS target,
+ask the selected adapter to construct the pinned engine, and return the durable
+locator facts). PostgreSQL and MySQL adapters own their URL, driver, IP pin,
+TLS options and locator pin semantics. SQLite is registered for local
+file-backed runtime engines, but it intentionally does not implement remote
+first-run engine creation; this does not claim that the current First Run UI
+can create or initialize a SQLite database. A new dialect must add its typed
+candidate/contract and deployment security policy as well as an Adapter, then
+pass the same contract and disposable-database matrix. The engine Adapter is
+not a promise that a dialect works merely because SQLAlchemy can construct it.
+
+Connectivity checks use a separate `BootstrapDatabaseCheckAdapter` Port and
+typed-kind registry. `BootstrapDatabaseConnector` is only the Facade that
+resolves one adapter and delegates; SQLite, PostgreSQL, and MySQL probes own
+their respective read-only connection semantics, driver handling, and finite
+error mapping. Additional adapters can be supplied to the Facade, while empty
+or duplicate-kind registrations are rejected. This SPI does not alter the
+frozen HTTP request union: a new database still needs its API contract,
+deployment target rules, driver dependency, and full acceptance suite before
+activation.
+
 `build_first_run_sql_identity_app` wires a `BootstrapDatabaseConnector` into the
 bootstrap check route, using the deployment's database target policy and TLS
 configuration. This proves source-level composition, not that a particular
@@ -56,9 +81,11 @@ disposable database acceptance remains mandatory before deployed use.
 | Malformed/extra input reaches connector | strict discriminator, field set, scalar types and boolean-port rejection | Consumer-generated OpenAPI and Python route contract check |
 | Credentials leak through object repr or response | candidate repr and all result/error bodies omit password and raw connector details | Captured production logs plus real provider failure cases |
 | Checker absence/failure appears successful | stable 503 without infrastructure message | Runtime composition must require a real checker |
+| A newly registered check Adapter is shadowed or silently skipped | registry rejects duplicate/empty registrations; Connector Facade dispatches the matching typed kind; unsupported kinds return the frozen `unsupported` fact | API/OpenAPI request union and deployment policy must include the new kind before enabling it |
 | Check performs an unintended mutation | only the injected check port is called; SQLite opens the deployment path read-only and uses connection-local `query_only`; absent files are not created; this route has no migration/write port | Real disposable database verifies no schema/data mutation |
 | Route and SQLite checker diverge | ASGI request through the real `BootstrapDatabaseConnector` with a disposable SQLite file; bytes remain unchanged and missing paths stay absent | Real PostgreSQL/MySQL endpoint verifies deployed driver, TLS and network policy |
 | DNS rebinding or mixed answers escape destination scope | focused policy tests pin allowlisted DNS answers, reject mixed/oversized sets, and adapter tests verify pinned host/`hostaddr` plus TLS identity arguments | Real disposable PostgreSQL/MySQL acceptance must prove each driver's socket uses only the approved address while TLS verifies the original hostname |
+| A database provider leaks into the bootstrap check Facade | check registry dispatches by typed kind and rejects duplicate registrations; unknown kinds map to the frozen `unsupported` result; provider errors remain bounded | Add API/schema/policy/dependency, then run the same read-only, real-database and migration matrix for the new provider |
 
 No external PostgreSQL/MySQL, Nacos/Consul, or production credential is used in
 this slice. A disposable local SQLite file is used only for the isolated
@@ -71,3 +98,10 @@ connector matrix and browser-to-Python setup E2E are not claimed.
 - The run used an isolated ASGI test client, fake PostgreSQL/MySQL connections, synthetic DNS answers and the local asyncmy class only; no external browser, database, configuration center or submitted credential was used.
 - The changed API test and checker sources passed Python `compileall`; a direct trailing-whitespace scan was clean. The MySQL optional extra and Ruff are unavailable in this virtual environment, so those checks are not claimed for this follow-up.
 - Console-wide unittest, production startup wiring, real PostgreSQL/MySQL/SQLite integration, live connector matrix and browser-to-Python setup E2E were not run. These remain reserved for their owning milestone, consistent with `dashboard-prototype/docs/TESTING_CADENCE.md`.
+
+### 2026-10-14 — runtime/bootstrap engine and checker Adapter follow-up
+
+- **Verification:** in `sentinel-console`, `uv run --project . --extra test pytest -q tests/test_database_runtime.py tests/test_bootstrap_database_engine.py tests/test_bootstrap_database_connector.py tests/test_bootstrap_database_check_api.py tests/test_runtime_database_engine_provider.py tests/test_bootstrap_initialization_transaction.py tests/test_bootstrap_initialization_coordinator.py tests/test_first_run_composition.py tests/test_first_run_http_persistence_integration.py`: **75 passed** (24 existing HTTPX per-request-cookie deprecation warnings). The tests cover registered runtime dialects and check adapters, SQLite temporary-file `SELECT 1`, PostgreSQL/MySQL setup URL and adapter construction, cross-adapter mismatch rejection, registry duplicate/unknown-kind behavior, DNS allowlist denial before engine creation, TLS validation, first-run locator behavior, and checker/ASGI regressions.
+- **Static checks:** Ruff check/format passed for all changed production modules; Ruff check for the touched database tests passed with the pre-existing `SIM117` style rule ignored; `git diff --check` passed.
+- **Boundary:** this is Adapter/Facade composition and local test evidence, not real PostgreSQL/MySQL acceptance. SQLite is a runtime engine capability only; production First Run still lacks deployment-owned SQLite-path configuration and a first-run SQLite creation flow. No external database, Consul, Docker, browser, or full E2E was run; B0.2 remains open.
+- **Remaining boundary:** SQLite is a runtime engine capability only; production First Run still lacks deployment-owned SQLite-path configuration and a first-run SQLite creation flow. No external database, Consul, Docker, browser, or full E2E was run; B0.2 remains open.

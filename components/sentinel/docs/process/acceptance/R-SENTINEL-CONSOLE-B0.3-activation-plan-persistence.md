@@ -1,6 +1,6 @@
 # B0.3 — Activation plan SQL persistence
 
-Status: **scheduled activation/restoration now enqueue and reconcile through the durable publish outbox; SQL receipt storage/query exists; Consul SQL-outbox provider acceptance now passes on PostgreSQL and MySQL (see `R-SENTINEL-CONSOLE-B0.3-real-consul-sql-dialects.md`); Reporter ingress, authoritative inventory, Nacos acceptance, and full B0.3 remain open**.
+Status: **scheduled activation/restoration now enqueue and reconcile through the durable publish outbox; SQL receipt storage/query exists; direct Consul publication and scheduled Consul activation/restoration pass on PostgreSQL and MySQL (see `R-SENTINEL-CONSOLE-B0.3-real-consul-sql-dialects.md`); Reporter ingress, authoritative inventory, deeper provider-failure recovery, and full B0.3 remain open**.
 
 ## Implemented
 
@@ -90,8 +90,26 @@ injection and task cancellation on shutdown. PostgreSQL/MySQL concurrency and
 - Reclaiming an expired activation claim reuses the same operation/publication and does not add another audit or publication record. Restoration selects the explicit restore version and uses the activated version as its expected CAS baseline.
 - An isolated-SQLite orchestration test advances both phases only after all three publication facts are durably marked `succeeded`, including exact read-back; the plan remains `activating` while publication work is pending. This test simulates successful provider receipts at the durable outbox boundary. It is not evidence that Nacos/Consul accepted or returned a real write.
 - `build_app`, identity composition, and first-run composition now accept the scheduler explicitly; its ASGI lifecycle starts/stops the task and logs only finite exception type. This does not automatically instantiate provider credentials, targets, or workers. Deployment must explicitly assemble and inject both the schedule worker and a compatible publish worker (which may be separately hosted against the same SQL authority).
-- The original PLAN-EXEC-01–10 matrix remains only partially covered: PLAN-EXEC-01/08 now have independent PostgreSQL/MySQL connection-pool claim/lease evidence (details below); PLAN-EXEC-04/06 have SQLite end-to-end SQL-workflow evidence with controlled provider conflicts, and PLAN-EXEC-06 additionally proves persisted blocking excludes restoration claims on PostgreSQL/MySQL (details in the checklist). Scheduler loser side effects, real provider CAS/unknown outcomes, a second external-write race between restoration read and CAS, cancellation races, and multiple ASGI workers still require dedicated tests/acceptance.
-- SQLite ignores row-level `FOR UPDATE`; it cannot prove supported PostgreSQL/MySQL row-locking, unique-origin races, or deployment restart behavior. The focused Consul SQL-outbox acceptance now proves that one real provider publication path on both production SQL dialects; it does not prove plan recovery against a real provider. Nacos, browser, and full E2E acceptance remain open. Full E2E remains the final acceptance milestone.
+- The original PLAN-EXEC-01–10 matrix remains only partially covered: PLAN-EXEC-01/08 have independent PostgreSQL/MySQL claim/lease evidence; PLAN-EXEC-04 covers real Nacos conflicts after scheduled activation and restoration preflight (§15.525–§15.526), plus the real Consul activation CAS conflict in §15.570; PLAN-EXEC-06 has SQLite workflow evidence, PostgreSQL/MySQL persisted blocking, and real Nacos + Consul scheduled-restoration preflight acceptance on PostgreSQL/MySQL (§15.1062–§15.1063). Scheduler loser side effects, provider RPC in-flight process loss/unknown transport outcome, production auth/TLS and multi-cluster consistency remain separate acceptance boundaries. See the individual matrix rows below for exact scope.
+- SQLite ignores row-level `FOR UPDATE`; it cannot prove supported PostgreSQL/MySQL row-locking, unique-origin races, or deployment restart behavior. The focused Consul SQL-outbox and scheduled activation/restoration acceptances prove real provider paths on both production SQL dialects, including controlled post-write unknown-ack recovery and the committed-write/response-drop/process-termination window (§15.717, §15.948); they do not prove an unknown Consul server commit or failure before the proxy receives the response. Nacos, browser, and full E2E acceptance remain separate. Full E2E remains the final acceptance milestone.
+
+### Runtime receipt authenticated SQL → ASGI GET composition (2026-10-13)
+
+The PostgreSQL/MySQL receipt acceptance now continues beyond direct store invocation. It creates a synthetic account/session plus publication/version facts, records and advances one receipt in the production SQL store, assembles the standard `build_sql_identity_app` (including the production SQL current-session, publication-detail, and receipt readers), then queries the protected receipt GET through `ASGITransport`. It asserts exact binding/publication/instance/version/checksum projection, page counters, `Cache-Control: no-store`, `Vary: Cookie`, and anonymous-session rejection.
+
+- PostgreSQL 16: `tools/with_disposable_postgresql_acceptance.sh uv run --no-sync --extra test --extra postgres pytest -q --tb=short tests/test_postgresql_acceptance.py::PostgreSQLConsoleAcceptanceTest::test_rule_publication_receipt_store_round_trip` — **1 passed**.
+- MySQL 8.4.11: `tools/with_disposable_e2e_dependencies.sh uv run --no-sync --extra test --extra mysql pytest -q --tb=short tests/test_mysql_migration_acceptance.py::MySQLConsoleMigrationAcceptanceTest::test_rule_publication_receipt_store_round_trip` — **1 passed**.
+- Both runners completed cleanup; a post-run container query found no `sentinel-e2e-mysql-*`, `sentinel-e2e-consul-*`, or Nacos acceptance leftovers.
+
+This closes only the database-store → standard Console composition → authenticated read-route slice. It does **not** create a Reporter/Collector writer or prove how a runtime agent is identified and correlated to one immutable publication; the explicit correlation-contract blocker in tracker §15.1072 and the draft in [`../../protocol/RULE_PUBLICATION_RECEIPT_PROJECTION_DECISION.md`](../../protocol/RULE_PUBLICATION_RECEIPT_PROJECTION_DECISION.md) remain. B0.3 and final browser E2E remain open.
+
+### Viewer-role receipt read authorization (2026-10-13)
+
+The same PostgreSQL/MySQL SQL → standard `build_sql_identity_app` → protected ASGI receipt GET acceptance now authenticates as an active `view` account instead of `admin`. Both SQL dialects still return the exact persisted publication/instance/version projection and no-store headers, while clearing the session cookie still yields `401 unauthenticated`. This proves the read-only receipt endpoint works for the Dashboard viewer role without weakening the anonymous boundary; it does not authorize receipt writes or close the Reporter identity/publication correlation blocker.
+
+- PostgreSQL 16: `tools/with_disposable_postgresql_acceptance.sh uv run --no-sync --extra test --extra postgres pytest -q --tb=short tests/test_postgresql_acceptance.py::PostgreSQLConsoleAcceptanceTest::test_rule_publication_receipt_store_round_trip` — **1 passed**.
+- MySQL 8.4.11: `tools/with_disposable_e2e_dependencies.sh uv run --no-sync --extra test --extra mysql pytest -q --tb=short tests/test_mysql_migration_acceptance.py::MySQLConsoleMigrationAcceptanceTest::test_rule_publication_receipt_store_round_trip` — **1 passed**.
+- Ruff check/format, Python compileall, and `git diff --check` passed; disposable MySQL/Consul containers were removed by the owner runner and no matching containers remained.
 
 ## Execution acceptance matrix (remaining B0.3 gate)
 
@@ -102,16 +120,79 @@ covered:
 
 | ID | Risk / trigger | Required assertion | Current evidence |
 | --- | --- | --- | --- |
-| PLAN-EXEC-01 (P0) | Two independent workers claim one due plan | Exactly one current fenced claim; the losing worker emits no publish command. | **Verified on real PostgreSQL/MySQL 2026-10-10:** independent queue pools first prove one current fenced claim; then two `RunRuleActivationPlanWorker` instances race a second due plan while the winner is gated inside the publication port. The loser returns no outcome and emits no command; the winner creates exactly one real SQL operation/publication and associates it with the plan. PostgreSQL 16 and MySQL 8.4.11 each pass the acceptance. This uses independent database pools in one process, not separate OS processes. |
-| PLAN-EXEC-02 (P0) | Worker exits after enqueueing activation but before recording its publication link; outbox finishes before plan recovery | Recovery reuses one deterministic phase key/publication and advances only after the persisted publication is fully verified; no duplicate operation/publication/phase audit. | **Partial, stronger SQLite evidence:** `test_activation_recovers_completed_publication_after_lost_plan_association` now leaves the durable plan unassociated, completes the SQL outbox facts, then constructs a new scheduler after claim expiry. It verifies one operation, publication, accepted audit, and completed audit, and the plan links that same publication. This simulates loss of worker memory, not an OS process crash or real provider write. |
-| PLAN-EXEC-03 (P0) | Activation write/read-back is awaiting or unknown | Plan remains non-active and is reconciled from the same publication; it is never blindly republished. | **Partial, full SQLite SQL path now covers provider-unknown recovery:** a controlled provider applies the candidate then raises outcome-unknown; publication persists `unknown`, plan remains `activating`, lease recovery reuses the same publication, provider read confirms the candidate without a second write, and scheduler advances the plan only after read-back completes (checklist §15.466). This does not prove behavior against real Nacos/Consul transport or process kill/restart. |
-| PLAN-EXEC-04 (P0) | Provider baseline changes between plan creation/read and CAS | CAS conflict becomes `blocked`; external configuration is not overwritten and restore is not attempted. | **Partial:** SQLite full SQL plan/outbox/publication-worker path with controlled read/CAS race verifies external bytes remain unchanged, publication rejection and blocked-plan/no-restoration operation (checklist §15.462). PostgreSQL/MySQL independently verifies persisted claim recovery, `block_claim`, lease clearing and no subsequent restoration claim (checklist §15.464). A separate real Consul SQL-outbox success path now passes on PostgreSQL/MySQL (§15.485); real provider CAS-conflict during scheduled activation/restoration and Nacos remain open. |
-| PLAN-EXEC-05 (P0) | Activation succeeds, then deactivation time arrives | Explicit immutable restore version is enqueued once against the observed activated content; plan completes only after exact read-back succeeds. | **Partial:** SQL orchestration verifies explicit restore target/baseline and completed state after successful read-back facts; no real provider application. |
-| PLAN-EXEC-06 (P0) | External actor changes configuration after activation but before restoration | Restore baseline/CAS conflict blocks the plan; the worker does not overwrite the external change. | **Partial:** SQLite SQL plan/outbox/publication-worker test verifies an external pre-read change causes preflight rejection and zero writes after a persisted activation (checklist §15.463); PostgreSQL/MySQL queue acceptance verifies a blocked plan has no live lease and neither independent scheduler can claim it in the later restoration window (checklist §15.464). This does not simulate a true external write racing between restoration read and provider CAS, nor real provider writes. |
+| PLAN-EXEC-01 (P0) | Two independent workers claim one due plan | Exactly one current fenced claim; the losing worker emits no publish command. | **Verified on real PostgreSQL/MySQL (2026-10-10, §15.467/§15.481):** independent queue pools prove one current fenced claim; two scheduler workers racing behind a gated publication port prove the loser emits no command; and §15.481 starts two separate spawned processes, each with its own SQL engine and real `build_app` ASGI lifespan, then releases both schedulers against the same due plan and asserts exactly one outbox enqueue/operation/publication and winner association. PostgreSQL 16 and MySQL 8.4.11 pass. This closes the two-worker scheduler race, not provider-side-effect crash recovery or the remaining PLAN-EXEC/B0.3 cases. |
+| PLAN-EXEC-02 (P0) | Worker exits after enqueueing activation but before recording its publication link; outbox finishes before plan recovery | Recovery reuses one deterministic phase key/publication and advances only after the persisted publication is fully verified; no duplicate operation/publication/phase audit. | **Verified for SQL recovery and real Consul/Nacos provider paths on PostgreSQL 16 and MySQL 8.4.11 (2026-10-13, §15.1042/§15.1058/§15.1060):** §15.1042 proves spawned-process loss and deterministic SQL recovery; §15.1058 pauses the production scheduler before association, completes a real ACL/TLS Consul CAS plus exact read-back, kills the scheduler, then proves a fresh lease owner links the same publication without another provider CAS; §15.1060 verifies the equivalent Nacos path. In each provider case the persisted operation/publication and accepted/completed phase audits remain unique. The in-flight provider boundary is covered for these two providers only; runtime instance receipt, deployment topology, and remaining B0.3 cases remain separate. |
+| PLAN-EXEC-03 (P0) | Activation write/read-back is awaiting or unknown | Plan remains non-active and is reconciled from the same publication; replay is allowed only after an authoritative unchanged-baseline read and remains fenced by provider CAS. | **Partial, real Nacos plus Consul recovery:** §15.522 covers a spawned scheduled worker exiting after Nacos returns success but before the SQL receipt (PostgreSQL/MySQL + Nacos 3.2.4). §15.523 applies the real Nacos write, then injects `RulePublicationProviderOutcomeUnknown` at the provider Port; the SQL outbox persists `unknown`, and a new worker exact-reads the candidate with zero additional writes (PostgreSQL 16 + Nacos 3.2.4). §15.551 executes the create-only HTTP client-ack loss seam (PostgreSQL 16/MySQL 8.4.11 + Nacos 3.2.4): the real Admin Import succeeds, its response is discarded before the writer observes it, SQL persists `unknown`, and recovery exact-reads with no second Import. §15.553 applies the scheduled activation gRPC CAS to Nacos, discards the successful response before the writer observes it, and proves SQL `unknown` → exact read-only recovery → active plan only after confirmed read-back (PostgreSQL/MySQL + Nacos 3.2.4). §15.574 additionally kills a spawned scheduled Consul publication worker after real CAS/read-back and before SQL receipt; PostgreSQL/MySQL recovery exact-reads without another provider write, then restores the explicit baseline. §15.717 adds TLS response-path loss and spawned-process termination during scheduled activation on MySQL; §15.948 proves the same network-fault window on PostgreSQL 16. Both dialects recover after Consul commits CAS and the proxy drops the caller response, with zero second writes; the scheduled plan advances only after exact read-back and completes restoration. §15.1029 proves the complementary provider boundary: the HTTPS proxy receives one CAS and resets the client connection before forwarding to Consul; the production writer conservatively reports `unknown`, the original exact baseline remains, and no retry occurs. §15.1043 proves a direct SQL outbox can recover this specific Consul liveness gap using a strong `consistent=true` exact read and a CAS against the observed ModifyIndex. §15.1044 extends the same fault to a real scheduled activation: PostgreSQL 16 and MySQL 8.4.11 each preserve the plan as non-active while unknown, then activate only after lease takeover, one recovery CAS and exact read-back. **§15.1046 verifies the competing-writer window after the strong recovery read on PostgreSQL 16 and MySQL 8.4.11: the stale recovery CAS is rejected, the plan is durably blocked, and external Consul bytes are preserved. §15.1059 adds the Nacos complement: after the real activation CAS commits but its gRPC ACK is dropped, a controlled proxy replays one byte-exact, previously observed Nacos baseline on the first recovery GET; publication remains `unknown/awaiting`, the plan stays non-active, and no second write occurs. Once the fault is exhausted, a real exact GET observes the candidate and the same publication completes, followed by plan activation (PostgreSQL 16/MySQL 8.4.11). §15.1064 adds the in-flight process-loss complement: the real Nacos publish commits but the successful gRPC response is held before client delivery; the spawned scheduled worker is terminated with SQL still `running/awaiting`, and the next lease owner confirms the candidate through exact read without a second publish before activating the plan (PostgreSQL 16/MySQL 8.4.11).** Nacos and providers without the explicit strong-read guarantee remain read-only during unknown reconciliation. These local controlled stale-read/response-hold faults are not evidence of native Nacos multi-node consistency. Unknown Consul server commit, failure before the proxy receives the request, provider-specific cluster behavior and deployment auth/TLS remain open. |
+| PLAN-EXEC-04 (P0) | Provider baseline changes between plan creation/read and CAS | CAS conflict becomes `blocked`; external configuration is not overwritten and restore is not attempted. | **Partial across real Nacos and Consul:** §15.525/§15.526 race both scheduled phases against Nacos 3.2.4; §15.570/§15.571 race scheduled activation and restoration against disposable ACL-enabled Consul 1.21.1. PostgreSQL 16/MySQL 8.4.11 prove stale CAS rejection, exact external bytes retained, plan persisted `blocked`, and no subsequent phase. §15.719/§15.720 run Consul management writes from spawned OS processes during MySQL-backed scheduled activation and restoration CAS; §15.949 adds both independent-process races on PostgreSQL 16. All four stale CAS attempts are rejected and plans are blocked without overwriting external bytes. Production provider auth/TLS/token lifecycle and multi-cluster behavior remain open. Earlier SQLite/provider evidence is in §15.462/§15.464/§15.485. |
+| PLAN-EXEC-05 (P0) | Activation succeeds, then deactivation time arrives | Explicit immutable restore version is enqueued once against the observed activated content; plan completes only after exact read-back succeeds. | **Partial, real Nacos restoration and Consul recursive recovery:** §15.522 verifies normal exact restoration after scheduled activation. §15.524 applies the restoration write to Nacos 3.2.4, injects `RulePublicationProviderOutcomeUnknown` at the provider Port, and verifies the SQL plan remains `restoring`; after lease expiry, the new worker exact-reads the immutable daily version with zero additional writes, and only then can the plan become `completed` (PostgreSQL 16/MySQL 8.4.11). §15.552 additionally applies the real restoration gRPC CAS, discards its successful response at the `NacosGrpcTransport` caller boundary, and verifies unknown persistence followed by read-only exact reconciliation with no second CAS in both SQL dialects. §15.525 verifies a real external Nacos update racing restoration CAS blocks the scheduled plan without overwriting external bytes. **§15.1056 closes the recursive Consul restore-ACK-loss window on PostgreSQL 16 and MySQL 8.4.11:** the recovery CAS commits the immutable baseline but its response is dropped; SQL remains `unknown/awaiting` and the plan `restoring`; a later lease owner performs a `consistent=true` exact read, sends no further CAS, and only then permits `completed`. **§15.1068 adds Nacos's complementary process-loss window:** the scheduled restoration CAS commits the exact baseline, its successful gRPC acknowledgement is held, and the spawned worker is terminated while SQL is `running/awaiting`; on both SQL dialects a new worker confirms the baseline with a read-only exact GET (zero second publish), then the scheduler completes the plan. **§15.1070 verifies Nacos's conservative complement for a publish accepted by the local proxy but never forwarded upstream:** PostgreSQL 16/MySQL 8.4.11 keep the restoration publication `unknown/awaiting` and plan `restoring`; the replacement worker performs reconciliation but never replays CAS or marks completion based on the injected pre-dispatch fault. These deterministic seams do not simulate an unknown server commit or production multi-cluster behavior. Production auth/TLS remains open. |
+| PLAN-EXEC-06 (P0) | External configuration changes after activation and before the restoration worker's first read | Restoration preflight detects the changed baseline, issues zero provider writes, preserves external bytes, and durably blocks the plan without creating another restore phase. | **Verified on real Nacos 3.2.4 + PostgreSQL 16/MySQL 8.4.11 (§15.1063) and ACL/TLS Consul + PostgreSQL 16/MySQL 8.4.11 (§15.1062):** each disposable SQL/provider run performs scheduled activation and exact read-back, enqueues restoration, then changes the provider key through its management plane before the restoration worker starts. Both production provider workers reject during preflight; Consul observed CAS count does not increase and Nacos gRPC publish count remains at the successful activation only; external bytes stay exact, SQL records the validation conflict and `blocked` plan, and subsequent polls do not create or replay a phase. Existing SQLite workflow and PG/MySQL blocked-queue evidence remain in §15.463–§15.464. This does not cover a second external write racing after preflight (see PLAN-EXEC-04), production topology/auth lifecycle, or close B0.3. |
 | PLAN-EXEC-07 (P1) | Cancellation races with activation claim | Exactly one transition wins; accepted/started publication is never presented as if it had not run. | **Verified on real PostgreSQL/MySQL:** both controlled interleavings are tested. Claim-wins: cancellation pauses between its read transactions, queue claims, cancellation conflicts, then the pending publication is durably associated and the plan remains `activating`. Cancellation-wins: hold the due plan row while the in-flight cancel waits, verify `SKIP LOCKED` scheduler returns no claim, release the row, then cancellation commits and a later claim still returns empty (checklist §15.465). Neither outcome allows a started claim to appear cancelled or a committed cancellation to activate. |
-| PLAN-EXEC-08 (P1) | Lease expires and another worker takes over | Stale claim token cannot advance plan/publication state; stable phase key preserves idempotency. | **Partial:** PostgreSQL 16/MySQL 8.4.11 queue tests prove unique attempt-2 takeover, new token, stale-token renewal rejection, and millisecond lease persistence. The SQLite SQL publication outbox test now proves exact same-phase replay is idempotent while the claim remains current, and that after takeover the old token cannot advance the phase (§15.472). Independent OS-process takeover and cross-process publication execution remain open. |
-| PLAN-EXEC-09 (P1) | Scheduled execution creates audit/publication facts | Audit identifies both the plan initiator and system execution without inventing a browser session or exposing credentials/rule bodies. | **Partial:** SQLite verifies null actor/session, phase action, plan target, and one audit on replay; production audit-query end-to-end pending. |
-| PLAN-EXEC-10 (P1) | Multiple ASGI workers restart/poll together | Persisted claims and phase facts recover across process restart; no process-local election or timer is required. | **Partial, expanded 2026-10-10:** isolated PostgreSQL 16 and MySQL 8.4.11 acceptance starts two real `build_app` lifespans in separate spawned processes, gates both until active, then releases them to poll one due plan. Exactly one reaches SQL publication enqueue; one operation/publication is associated with one attempt. The existing spawned-process lease-expiry recovery also passes. Process termination during provider side effect and real provider phase recovery remain open. |
+| PLAN-EXEC-08 (P1) | Lease expires and another worker takes over | Stale claim token cannot advance plan/publication state; stable phase key preserves idempotency. | **Verified at SQL/process boundary on PostgreSQL 16 and MySQL 8.4.11 (2026-10-13):** a spawned OS process claims the plan, enqueues one deterministic publication, and commits all three successful stage receipts while leaving the outbox operation pending; it is forcibly terminated before outbox completion and plan association. After expiry, a new outbox owner takes attempt 2; the exact successful read-back receipt replay is accepted for that current owner, while the old publication claim token is rejected by SQL CAS. The new owner completes the same publication; an explicit attempt-1 plan claim is then rejected, and a fresh scheduler takes plan attempt 2, links that publication and activates the plan. Both dialect tests assert one operation/publication/accepted+completed audit and a second scheduler pass is a no-op. Stage receipts are controlled SQL outbox facts, not provider calls; the provider and runtime/instance boundaries remain separate. Earlier same-phase replay and fencing evidence is in §15.472. |
+| PLAN-EXEC-09 (P1) | Scheduled execution creates audit/publication facts | Audit identifies both the plan initiator and system execution without inventing a browser session or exposing credentials/rule bodies. | **Partial:** SQLite evidence remains in §15.612. PostgreSQL 16 and MySQL 8.4.11 now verify the real scheduler write through the production SQLAlchemy audit reader and authenticated admin ASGI route: null system actor, no session on scheduled operation, initiating account retained on the plan, phase action, plan target, `requestId`, unknown result, and no rule-version IDs in the response (§15.1028). Browser E2E and the broader schedule/publication failure matrix remain pending. |
+| PLAN-EXEC-10 (P1) | Multiple ASGI workers restart/poll together | Persisted claims and phase facts recover across process restart; no process-local election or timer is required. | **Partial, expanded 2026-10-13:** isolated PostgreSQL 16 and MySQL 8.4.11 acceptance starts two real `build_app` lifespans in separate spawned processes, gates both until active, then releases them to poll one due plan. Exactly one reaches SQL publication enqueue; one operation/publication is associated with one attempt. The existing spawned-process lease-expiry recovery also passes. Provider-side-effect termination has real scheduled activation evidence: Consul TLS response-path hold/termination on PostgreSQL/MySQL (§15.717/948) and Nacos successful gRPC response hold/termination on PostgreSQL/MySQL (§15.1064); §15.1066 proves the matching Consul scheduled-restoration path, while §15.1068 now proves Nacos scheduled-restoration ACK-in-flight termination and read-only lease takeover on both SQL dialects. Production deployment and browser journeys remain open. |
+
+**Consul pre-dispatch recovery addendum (2026-10-13):** §15.1044 covers a real scheduled activation whose CAS is received by the HTTPS proxy but dropped before Consul; §15.1045 covers both scheduled activation and scheduled restoration under the same fault. In each phase, the SQL publication remains unknown and the plan does not advance until lease takeover, exact strong-consistency read, one CAS against the observed ModifyIndex, and exact read-back. PostgreSQL 16 and MySQL 8.4.11 both pass. This does not cover a multi-node Consul cluster or an unknown outcome after the Consul server itself commits.
+
+**Consul scheduled restoration process-loss addendum (2026-10-13):** §15.1066 covers the complementary post-commit window for the restoration phase. Consul commits the exact immutable baseline while a spawned scheduled worker's successful response is held; SQL remains `running/awaiting`, the plan remains `restoring`, and the worker is terminated. On lease takeover, the replacement worker proves the baseline with a strong exact read and performs zero additional CAS writes; only after the publication is complete does the scheduler mark the plan `completed`. PostgreSQL 16 and MySQL 8.4.11 pass. This closes only the local Consul scheduled-restoration ACK-in-flight process-loss slice, not PLAN-EXEC-03/05, B0.3, deployment security/multi-node behavior, or final browser-to-Python E2E.
+
+**Consul recursive post-commit ACK-loss addendum (2026-10-13):** §15.1052 covers activation recovery; §15.1056 covers the restoration counterpart. In each case the recovery CAS commits at the real ACL/TLS Consul server but the client response is dropped. The SQL publication remains `unknown/awaiting`, the plan remains in its nonterminal phase, and the next lease owner uses a `consistent=true` exact read to confirm the candidate without another CAS. PostgreSQL 16 and MySQL 8.4.11 both pass. This does not resolve server-side unknown commit, multi-node consistency, production credentials, or deployment topology.
+
+**Nacos pre-dispatch uncertainty addendum (2026-10-13):** §15.1061 exercises the complementary boundary where the gRPC publish reaches the local fault proxy but is rejected before the real Nacos server receives it. The real server remains at the exact baseline, while the worker correctly records the provider result as `unknown` because the client cannot prove how far a production network failure progressed. A later lease owner performs read-only reconciliation; because Nacos does not provide the required strong-read guarantee, it must not retry the CAS from the observed baseline. The publication remains `unknown/awaiting` and the scheduled plan remains `activating`. PostgreSQL 16 and MySQL 8.4.11 both pass. This controlled proxy test does not simulate a Nacos server commit or establish native Nacos cluster consistency.
+
+**Consul rejected-CAS response-loss addendum (2026-10-13):** §15.1065 composes PLAN-EXEC-03/04: an independent management-plane update advances the real Consul key after activation preflight; the stale CAS is rejected by Consul, but the local proxy hides the `false` response so the first worker persists `unknown`. After lease takeover, a `consistent=true` exact read proves the external value is neither baseline nor candidate. The worker now persists `failed/conflict`, the activation plan becomes `blocked`, the external bytes remain unchanged, and no second CAS/restoration phase is created. PostgreSQL 16 and MySQL 8.4.11 pass. Nacos remains conservative because it does not claim the equivalent strong-read contract. This closes only this local conflict-response-loss slice, not PLAN-EXEC-03/04 or full B0.3.
+
+**Consul evidence for PLAN-EXEC-03/05 (2026-10-11):** §15.569 additionally
+drives the complete SQL plan → real ACL-enabled Consul activation → exact
+read-back → restoration path on PostgreSQL 16 and MySQL 8.4.11. Both activation
+and restoration inject controlled acknowledgement loss after the real writer
+returns; a fresh worker reconciles each by exact read with zero retry writes.
+§15.717 adds real TLS response-path loss and spawned-process termination during
+scheduled activation on MySQL 8.4.11; §15.948 adds the same specific fault
+window on PostgreSQL 16. On both, the plan recovers only after exact read.
+Consul external-writer process concurrency on PostgreSQL, production ACL/TLS,
+unknown server commit, pre-proxy failure and multi-node consistency remain open.
+
+**Consul evidence for PLAN-EXEC-04 activation/restoration CAS (2026-10-11):**
+§15.570 and §15.571 inject authorized external KV writes after the scheduled
+publication worker has read its baseline and immediately before the production
+Consul CAS. On PostgreSQL 16 and MySQL 8.4.11, both stale CAS attempts are
+rejected, external bytes remain exact, SQL persists each publication as
+`failed/conflict` and each plan as `blocked`; the activation conflict creates
+no restoration publication and the restoration conflict is not retried. The
+Both activation and restoration races now have separate spawned management
+writer processes on MySQL (§15.719/§15.720). PostgreSQL independent-process
+parity is verified by §15.949: the same real PostgreSQL 16 + ACL-enabled
+Consul acceptance runs both races, rejects each stale CAS, preserves external
+bytes, and blocks the affected plan. Deployment-level multi-node writer
+behavior remains unverified.
+
+**Consul scheduled process-loss evidence (2026-10-11):** §15.574 extends the
+same production SQL plan/outbox/worker flow. A spawned worker completes real
+Consul activation CAS and exact read-back, then exits at the provider/SQL
+boundary before the write receipt is persisted. The plan remains `activating`
+and the publication remains `running/awaiting`; after lease expiry, a fresh
+worker exact-reads the already committed value, performs zero additional
+writes, advances the plan, and later restores the explicit baseline. The
+activation-loss/recovery/restoration path passed on PostgreSQL 16 and MySQL
+8.4.11. This is process termination after a completed provider request, not an
+in-flight RPC termination or packet-loss test.
+
+**Transport-boundary response-loss case (PLAN-EXEC-03/P0):** the disposable
+Consul HTTPS test proxy now has an opt-in one-shot barrier for its exact
+synthetic KV key. It forwards the request, waits for the upstream KV endpoint
+to commit and answer, then withholds and resets the client response socket. A
+loopback protocol-compatible endpoint test verifies that the caller remains
+blocked after commit, cancellation plus proxy release loses the response, and
+an independent GET still observes the one committed value (**1 passed**,
+§15.716). Real recovery is exercised on disposable MySQL 8.4.11 and
+ACL-enabled Consul 1.21.1 in §15.717 for both direct publication and scheduled
+activation: while the production publisher is blocked on the held TLS response,
+SQL remains running/pending; the spawned worker is terminated; after lease
+expiry a fresh worker exact-reads and completes with zero additional writes.
+The scheduled plan remains non-active until this read-back and later completes
+its restoration phase. PostgreSQL parity remains open. This is narrower than
+final React→Python Dashboard E2E; cleanup owns only generated test rows, proxy
+certificate directory, and disposable containers.
 
 ### ASGI lifespan concurrency test design
 
@@ -201,6 +282,75 @@ must recover the same deterministic operation/publication, link it, and advance
 the plan without adding a second publication or scheduled audit. This proves
 the SQL recovery path across a lost in-memory worker, not an OS-process crash,
 provider behavior, or multi-database locking.
+
+### Cross-dialect recovery acceptance (2026-10-11)
+
+Run the same deterministic recovery window on isolated PostgreSQL and MySQL:
+
+1. Persist one due plan, then let a spawned worker process claim its activation
+   and enqueue the deterministic scheduled operation/publication.
+2. Through the real SQL publish outbox, persist validation, provider-write,
+   and exact-read-back stages as `succeeded`; this acceptance is about SQL
+   recovery and explicitly does not claim a real provider call. The child
+   signals only after those transactions commit and while the plan still has no
+   publication link; the parent forcibly terminates that process.
+3. Confirm the process exited non-zero and the persisted plan remains
+   unassociated while the outbox is complete. Construct a fresh plan
+   scheduler/store after the plan lease expires; it must link the existing
+   publication and complete the activation phase.
+4. Assert exactly one scheduled operation, publication, accepted audit, and
+   completed audit; assert no duplicate is created and the plan references the
+   original publication.
+
+The isolated SQLite test remains the local workflow proof. This increment adds
+the same persisted recovery path against disposable PostgreSQL 16 and MySQL
+8.4.11 databases and forcibly terminates a spawned worker after the outbox
+commit but before association; actual provider acceptance remains in
+PLAN-EXEC-03/05. The outbox's successful stage receipts are controlled SQL
+facts, not a real provider call.
+
+Commands and results:
+
+```text
+SENTINEL_CONSOLE_TEST_POSTGRES_URL=postgresql+psycopg://.../sentinel_console_test_plan_recovery \
+  .venv/bin/pytest -q tests/test_postgresql_acceptance.py::PostgreSQLConsoleAcceptanceTest::test_activation_recovers_completed_publication_after_lost_association
+# 1 passed (PostgreSQL 16)
+
+SENTINEL_CONSOLE_TEST_MYSQL_URL=mysql+asyncmy://.../sentinel_console_test_plan_recovery \
+  .venv/bin/pytest -q tests/test_mysql_migration_acceptance.py::MySQLConsoleMigrationAcceptanceTest::test_activation_recovers_completed_publication_after_lost_association
+# 1 passed (MySQL 8.4.11)
+```
+
+Both checks used unique loopback-only disposable containers and synthetic
+credentials; the containers were removed after each run. No shared database,
+Nacos, or Consul was contacted. Targeted Ruff checks and Python compilation
+passed. This closes the process-termination recovery window across both SQL
+dialects, but PLAN-EXEC-02 and B0.3 remain partial until provider/runtime and
+remaining acceptance boundaries are verified.
+
+### Verification refresh — completion before forced process loss (2026-10-13)
+
+The previous helper revision committed the three successful stage facts but
+left the publication operation pending. The current test now calls
+`complete_claimed_publication` in the spawned process and asserts the persisted
+operation is `completed` before killing that process; the plan still has no
+publication link. After the plan lease expires, recovery links that already
+completed publication, rejects stale publication/plan claims, and creates no
+duplicate operation or audit.
+
+```text
+tools/with_disposable_postgresql_acceptance.sh uv run --no-sync --extra test --extra postgres pytest -q --tb=short tests/test_postgresql_acceptance.py::PostgreSQLConsoleAcceptanceTest::test_activation_recovers_completed_publication_after_lost_association
+# 1 passed in 2.18s (PostgreSQL 16)
+
+tools/with_disposable_e2e_dependencies.sh uv run --no-sync --extra test --extra mysql pytest -q --tb=short tests/test_mysql_migration_acceptance.py::MySQLConsoleMigrationAcceptanceTest::test_activation_recovers_completed_publication_after_lost_association
+# 1 passed in 2.80s (MySQL 8.4.11)
+```
+
+Both disposable runners removed their owner-labeled containers. No Nacos or
+Consul provider was contacted by this SQL-only refresh. The provider-in-the-loop
+Consul recovery counterpart was subsequently verified across PostgreSQL and
+MySQL in checklist §15.1058; runtime/instance receipts and remaining B0.3
+boundaries remain open.
 
 Command and result:
 
@@ -341,3 +491,105 @@ These controlled interleavings prove both claim-wins and cancellation-wins
 database outcomes on both supported SQL dialects. They do not cover an OS
 process crash after claim, real provider effects, or multiple ASGI deployments;
 those remain separate B0.3 acceptance requirements.
+
+## Real scheduled activation and restoration against disposable Nacos
+
+### Test design
+
+| Field | Acceptance definition |
+| --- | --- |
+| ID / priority | `PLAN-EXEC-03/05-NACOS` / P0 |
+| Source | PLAN-EXEC-03 and PLAN-EXEC-05 above; scheduled plan must use the durable SQL publication outbox, provider CAS, and exact read-back before advancing state. |
+| Layer / automation | Opt-in real integration acceptance; isolated PostgreSQL or MySQL plus one disposable Nacos 3.2.4 instance. |
+| Preconditions | A synthetic admin/session, one Nacos binding/target, an immutable daily version already present in Nacos, and a separately validated immutable promotion version. The plan has a due activation and later deactivation timestamp. |
+| Action | Run the production `RunRuleActivationPlanWorker`, then spawn the production Nacos publication worker against the same SQL authority and Nacos key. After Nacos returns successful activation write, terminate that OS worker with `os._exit` before it can persist the SQL phase receipt. Advance injected clocks beyond the plan and publication leases; run a newly constructed scheduler and publisher to reconcile that same activation publication, then perform the scheduled restoration normally. |
+| Assertions | After the child exits, exact promotion bytes are present in Nacos, the outbox write phase is still `running`, and the plan is still `activating`. Recovery reads the exact candidate and completes without another provider-write call; only a later plan-lease reclaim advances it to `active`. Restoration then reaches `completed` only after read-back equals the exact encoded daily version. The plan records distinct activation/restoration publication IDs, each phase has one stable system operation and audit fact, both outbox records complete, and replay after completion adds no provider write or duplicate operation/publication/audit. Final Nacos bytes equal the immutable restoration version. |
+| Observability | Assert the persisted plan state/revision/phase publication IDs, operation and publication counts, phase audits, publication write/read-back stages, and exact provider bytes. |
+| Cleanup | Delete the unique Nacos dataId, exact plan/phase operations, publication/audit rows, plan, versions/validation receipts, session, and synthetic account in `finally`; remove only the uniquely named disposable container. |
+
+### Commands and result
+
+Run from `components/sentinel/sentinel-console` with credentials for a newly
+created disposable database only; the helper starts and removes its own Nacos
+3.2.4 container. Do not substitute a shared database or configured Nacos target.
+
+```text
+SENTINEL_CONSOLE_TEST_POSTGRES_URL='postgresql+psycopg://<user>:<password>@127.0.0.1:<port>/sentinel_console_test_<unique>' \
+  SENTINEL_CONSOLE_RUN_NACOS_ACCEPTANCE=1 uv run --no-sync --extra test \
+  pytest -q tests/test_postgresql_acceptance.py \
+  -k sql_rule_outbox_creates_config_in_disposable_nacos
+# 1 passed, 10 deselected (PostgreSQL 16)
+
+SENTINEL_CONSOLE_TEST_MYSQL_URL='mysql+asyncmy://<user>:<password>@127.0.0.1:<port>/sentinel_console_test_<unique>' \
+  SENTINEL_CONSOLE_RUN_NACOS_ACCEPTANCE=1 uv run --no-sync --extra test \
+  pytest -q tests/test_mysql_migration_acceptance.py \
+  -k sql_rule_outbox_creates_config_in_disposable_nacos
+# 1 passed, 11 deselected (MySQL 8.4.11)
+```
+
+### Explicit limits
+
+This case proves scheduled activation→OS worker exit after successful real Nacos
+write→SQL lease recovery/read-back→explicit restoration against real supported
+SQL dialects. It does not prove a process crash while the scheduled provider RPC
+is in flight, a concurrent external writer racing between restoration preflight
+read and Nacos CAS, authentication/TLS deployment, multi-ASGI-worker provider
+recovery, production Nacos, or React-to-Python browser E2E. Those remain
+separate PLAN-EXEC acceptance rows and the final Dashboard E2E gate.
+
+## Real scheduled activation and restoration against disposable Consul
+
+### Test design and result
+
+| Field | Acceptance definition |
+| --- | --- |
+| ID / priority | `PLAN-EXEC-03/05-CONSUL` / P1 |
+| Source | PLAN-EXEC-03 and PLAN-EXEC-05 above; scheduler state must advance only after the Consul publication worker has conditionally written and exactly read back the immutable phase version. |
+| Layer / automation | Opt-in real integration acceptance; isolated PostgreSQL or MySQL plus one disposable ACL-enabled Consul 1.21.1 and private-CA HTTPS test proxy. |
+| Preconditions | Synthetic admin/session, two immutable flow versions, an exact-key Consul ACL token, and baseline bytes seeded under one random KV key. |
+| Action | Create a persisted activation plan and run the production scheduler. For activation, first drop its CAS before Consul; after lease takeover, let the recovery CAS commit but discard its ACK, then recover from a later lease owner. Repeat a controlled post-write acknowledgement loss for restoration. |
+| Assertions | The actual Consul value changes to the exact encoded activation version then back to the exact baseline. During recursive activation uncertainty the SQL publication stays `unknown` and plan stays `activating`; final recovery uses a `consistent=true` exact read and performs no additional CAS. Restoration also completes only after exact read-back. Plan states progress `activating` → `active` → `restoring` → `completed`; exactly one activation and restoration operation/publication exist; replay after completion creates no provider write or new revision; the application token is sent only in the request header. |
+| Cleanup | Remove the unique plan, phase operations/publications/audits, immutable versions/validation receipts, session/account, and the uniquely named Consul container in `finally`. |
+
+Run from `components/sentinel/sentinel-console` using isolated loopback database
+URLs and the opt-in Consul flag:
+
+```text
+SENTINEL_CONSOLE_RUN_CONSUL_ACCEPTANCE=1 PYTHONPATH=src .venv/bin/pytest -q \
+  tests/test_postgresql_acceptance.py \
+  tests/test_mysql_migration_acceptance.py \
+  -k sql_activation_plan_publishes_and_restores_to_disposable_consul
+# 2 passed, 23 deselected (PostgreSQL 16 + MySQL 8.4.11)
+```
+
+### Recursive recovery acknowledgement loss (2026-10-13)
+
+The scheduled activation acceptance now covers two consecutive uncertain
+provider outcomes on the real ACL/TLS Consul path. The initial CAS is received
+by the HTTPS proxy and dropped before Consul, leaving the baseline unchanged
+and the publication `unknown`. After lease takeover, the recovery CAS commits
+the candidate in Consul but the proxy drops its response; SQL remains
+`unknown`/`awaiting`, and the activation plan stays `activating`. After another
+lease takeover, the next worker sends a `consistent=true` exact-key read,
+recognizes the already committed candidate, performs no additional CAS, and
+only then allows the scheduler to move the plan to `active`. The shared
+acceptance passed against disposable TLS PostgreSQL 16 and MySQL 8.4.11, with
+ACL/TLS Consul 1.21.1. The test explicitly counts provider CAS attempts and
+checks the final recovery request sequence; each runner owns cleanup of its
+containers.
+
+This closes only the recursive recovery-ACK-loss window for scheduled
+activation. It does not prove a multi-node Consul consistency model, an unknown
+Consul server commit, production ingress/secret rotation, or React-to-Python
+browser E2E.
+
+### Boundary
+
+This proves scheduled Consul activation/restoration over both SQL dialects,
+including exact read-back, state transitions, replay idempotency, scoped ACL
+token placement, cleanup, and controlled post-write acknowledgement-loss
+recovery without a second provider write. TLS terminates at the test proxy; this
+does not prove Consul's native HTTPS listener, production ACL/token lifecycle,
+multi-node Consul consistency, external-writer process concurrency, PostgreSQL
+parity for TLS response-loss recovery, a server commit unknown to the proxy,
+instance receipts, or React-to-Python browser E2E.

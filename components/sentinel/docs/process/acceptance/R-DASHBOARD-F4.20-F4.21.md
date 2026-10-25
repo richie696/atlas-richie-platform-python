@@ -23,10 +23,16 @@
 ## 仍未关闭
 
 - F4.20 整项未完成：本记录没有逐一验收所有字段级错误、各种网络失败/恢复、数据库与配置源切换、凭证清理、取消/离开清理及实际后端校验语义。
-- F4.21 整项未完成：上述路由行为来自本地 mock，Python bootstrap 的首启事务、并发初始化锁、持久化、配置中心写回及重启恢复仍未接入/验收。
+- F4.21 整项未完成：真实 MySQL 首启 HTTP 切片已覆盖 initialized gate 关闭、重复 initialize 被拒，以及 `/auth/me` 仍为匿名（见 2026-10-12 补充）；React 到 Python 的 mounted 浏览器流程、生产配置中心写回和部署级验收仍开放。
 - 完整 `npm run test:e2e` 未运行：该脚本通过 CDP 启动外部浏览器，与当前明确的“只使用内置浏览器”约束不兼容。IAB 手工交互及自动化逻辑/HTTP 测试不冒充全自动浏览器 E2E；需要覆盖的浏览器交互优先改用 IAB，不能回退到 Chrome/Edge。
 - `tests/e2e/probes/first-run.html` 与 `first-run.ts` 仅为 Vite 本地验收入口，用于在 IAB 中设置确定性合成 bootstrap 情景；两者位于测试目录，build-profile 门禁须持续确认不会进入产品构建。
 - Demo build 保留既有 Zod PURE 注释警告和约 1.19 MB 初始 JS chunk 体积提示；不是本轮首启行为的验收失败，但仍需性能任务处理。
+
+## 2026-10-12 补充：真实 MySQL 首启关闭 gate 且不自动登录
+
+- **缺口与修复：**真实 MySQL first-run ASGI 验收已检查 bootstrap initialized gate、重复初始化拒绝及持久化 receipt，但没有检查业务会话。现在初始化后同一 HTTP client 读取 `/api/v1/auth/me`，必须得到 `200` 与 JSON `null`，避免将一次性 setup/operator 授权误当成管理员登录。
+- **验证：**在 `components/sentinel/sentinel-console` 执行 `./tools/with_disposable_e2e_dependencies.sh uv run --extra test --extra mysql pytest -q tests/test_mysql_migration_acceptance.py::MySQLConsoleMigrationAcceptanceTest::test_z_full_first_run_http_path_persists_setup`，真实 MySQL `8.4.11` + Consul `1.21.1`，**1 passed**。本轮临时容器 `sentinel-e2e-mysql-09c0f8106944bd2fe664b7abb10d773f`、`sentinel-e2e-consul-09c0f8106944bd2fe664b7abb10d773f` 在脚本退出后按精确名称查询均不存在。
+- **边界：**这是真实 MySQL + Python ASGI 首启路径证据，不是 React HTTP adapter 到 Python 的 mounted 浏览器 E2E，也不证明 PostgreSQL、生产 Ingress、多 worker、真实配置中心写回或所有 setup 表单 UI 状态。F4.20/F4.21 仍未完成；最终浏览器 E2E 仍按清单后置。
 
 ## 2026-10-09 补充：初始化 workflow 强制 bootstrap 刷新参数
 
@@ -198,3 +204,41 @@ HTTP 测试需要绑定隔离的 `127.0.0.1` listener。本轮在明确限定为
 - **前端命令与结果：**在 `dashboard-prototype` 执行 `npm run test:logic:focused -- 'SETUP-(COMMAND|SECRET|LIFECYCLE)'`，**13 passed**。覆盖 secret 分支清理、授权窗口终态、初始化单飞/权威确认、未知回执核查、已知拒绝后显式重提和取消/销毁边界。
 - **Python 命令与结果：**在 `sentinel-console` 执行 `PYTHONPATH=src .venv/bin/pytest -q tests/test_bootstrap_initialization_api.py tests/test_bootstrap_initialization_coordinator.py tests/test_bootstrap_initialization_transaction.py tests/test_bootstrap_persistence_integration.py tests/test_first_run_http_persistence_integration.py tests/test_first_run_composition.py tests/test_first_run_deployment_configuration.py`，**32 passed**；HTTPX 输出 10 条 per-request cookie deprecation warnings。
 - **边界：**两侧均为聚焦自动化证据。Python integration tests 使用本地/受控数据库与 ASGI fixtures，不证明 PostgreSQL/MySQL 真实部署、Ingress 多 worker、真实配置中心写入或跨服务浏览器 E2E。前端未运行 mounted 浏览器 secret-clear 用例或完整 E2E；未访问任何未授权服务。F4.20/F4.21/B0.2 保持未完成。
+
+## 2026-10-11 补充：授权后的初始化 workflow 读取新鲜 bootstrap
+
+- **缺陷：**路由 owner 先创建一次性授权和初始化两个 workflow；原 adapter 各自捕获创建时的 bootstrap snapshot。授权成功后，初始化 workflow 的首次普通读取可能继续看到旧的 `operatorAuthorized=false`，与刚确认的授权状态不一致。
+- **修复：**setup identity ports 每次从共享 AuthenticationWorkflow 读取最新 resolved snapshot；强制刷新或当前事实未解析时才调用共享 `restore()`。初始化 workflow 在每个连接检查和写命令前要求 `operatorAuthorized=true`，初始化页面在相同条件满足前不渲染向导。
+- **验证：**未授权时数据库/来源检查与初始化写入均零 Port 调用；一次权威授权刷新后，初始化 reader 读到新事实并可继续。`npm run test:logic:focused -- 'SETUP-'` **27 passed**；页面 SSR `F4.20-SETUP-PAGE-RENDER` **1 passed**；F4.21/setup auth/check 聚焦组 **8 passed**；typecheck、目标源码 ESLint、Prettier、diff check 通过。
+- **仍未验证：**这是前端 owner/workflow 和 SSR 证据；未挂载真实浏览器，也未连接 Python、SQLite/MySQL 或 Consul。最终 IAB 和 live E2E 仍必须按全项收口后执行。
+
+## 2026-10-11 补充：mounted 闭窗秘密清理用例补齐数据库密码
+
+- **缺口与修正：**已有最终 `SETUP-LIFECYCLE` 浏览器用例覆盖关闭/重开后数据库用户名、Nacos 账号/密码和管理员密码被清空，但没有实际填入数据库密码。现在共享 `review()` fixture 也输入合成数据库密码；闭窗并重新开放后返回数据库步骤，明确断言密码字段为空，并把该 sentinel 纳入页面/storage 泄露断言。
+- **验证：**`npm run test:logic:focused -- 'SETUP-SECRET'` **2/2 passed**；`node --check tests/e2e/initialization.e2e.test.mjs` 与 `git diff --check` 通过。未执行此浏览器 E2E（按约定留到全部实现完成后）。该文件本身不在 `format:check` 覆盖范围；直接 Prettier 检查报告历史压缩排版不符合格式，不对整文件做大规模重排。
+- **边界：**新增浏览器断言尚未运行，仍需最终内置浏览器 mounted 验收；模型单测不能证明 React layout effect 时序。F4.20/F4.21 与最终 React→Python E2E 保持开放。
+
+## 2026-10-12 补充：一次性授权结果未知时禁止重放
+
+- **缺口与覆盖：**除“授权 POST 已成功、权威回读失败”外，补充一次性授权 POST 本身因网络结果未知而失败的路径。回归锁定：未知写入进入 `result-unknown`、提交码不进入快照、再次提交不会调用第二次授权写入；只有显式 inspection 读到 `authorized=true` 才解除未知状态。inspection 仍显示未授权时继续 fail-closed。
+- **验证：**在 `dashboard-prototype` 执行 `npm run check:fast` 通过；`npm run test:http:focused -- 'BOOTSTRAP-AUTH'` **4 passed**，覆盖写入/回读之间的单飞、成功写入后的未知回读、写入本身的网络未知结果及 deployment-code wire 校验；`git diff --check` 通过。
+- **边界：**该回归通过受控 Port 验证前端工作流，不证明 Python 一次性授权码原子消费、持久化/重启行为、React mounted 路由时序或最终浏览器 E2E。没有访问真实数据库、Nacos 或 Consul；F4.21 继续开放。
+
+## 2026-10-12 补充：真实 MySQL TLS 首启 HTTP 路径复验
+
+- **覆盖：**使用仓库的 `tools/with_disposable_e2e_dependencies.sh` 创建唯一命名、仅 loopback 暴露的 MySQL 8.4.11 与 Consul 1.21.1；仅运行 MySQL migration acceptance 中的 `test_z_full_first_run_http_path_persists_setup`。该用例经 Console ASGI HTTP 路由进行一次性 operator 授权、真实 MySQL TLS 数据库连通检查（错误密码稳定归类为 `authentication` 且不回显；有效凭证返回 `reachable`）、首次初始化与持久化、bootstrap 闭窗、操作回执恢复、`/auth/me` 仍为 `null`、重复初始化被拒绝；同时检查响应不泄露提交的凭证。
+- **验证命令与结果：**从 `sentinel-console` 目录执行 `tools/with_disposable_e2e_dependencies.sh env PYTHONPATH=src .venv/bin/pytest -q tests/test_mysql_migration_acceptance.py -k test_z_full_first_run_http_path_persists_setup`，**1 passed, 19 deselected**（3.15s）。随后按脚本输出的本次精确容器名查询 `docker ps -a`，MySQL 与 Consul 均不存在，临时 TLS 文件由 wrapper 清理。另执行 setup/first-run Python 聚焦组 `PYTHONPATH=src .venv/bin/pytest -q tests/test_bootstrap_database_check_api.py tests/test_bootstrap_source_check_api.py tests/test_bootstrap_initialization_api.py tests/test_bootstrap_initialization_coordinator.py tests/test_bootstrap_initialization_transaction.py tests/test_bootstrap_persistence_integration.py tests/test_first_run_http_persistence_integration.py tests/test_first_run_composition.py tests/test_first_run_deployment_configuration.py`，**67 passed**，有 51 条 HTTPX per-request cookie deprecation warnings。Dashboard setup workflow 当前复验 `npm run test:logic:focused -- 'SETUP-'`，**27 passed**。
+- **边界：**这补足了真实 MySQL/TLS 和 Python 首启 HTTP 的窄验收，不是从 React 页面发起的端到端旅程；一次性授权/表单/路由 mounted 时序、浏览器秘密清除、React→真实 Python Console 全链路仍待最终内置浏览器 E2E。没有运行完整 Dashboard E2E，没有启动 Chrome、Edge 或 CDP，也没有访问真实配置中心或持久数据库。F4.20/F4.21 不因此整体关闭。
+
+## 2026-10-12 补充：F4.20/F4.21 setup 专属逻辑与 SSR 复验
+
+- **验证：**在 `dashboard-prototype` 执行 `npm run test:logic:focused -- 'SETUP-|F4.20|F4.21'`，**33/33 passed**；执行 `node --test --test-name-pattern='F4.20-SETUP-CHECK-RENDER|F4.20-SETUP-PAGE-RENDER|F4.20-SETUP-FIELD-ERROR-RENDER|F4.21-BOOTSTRAP-GATE-RENDER' tests/i18n/catalog.test.mjs`，**4/4 passed**。覆盖首次初始化授权门禁、bootstrap 权威刷新/过期状态、初始化字段与秘密分支、连接检查并发/重试、命令未知结果保护，以及相应真实 React 组件 SSR 投影。
+- **mounted 尝试与边界：**尝试通过独立本地 Vite 端口 `5206` 和 Codex IAB 检查真实 React mounted 行为；当前 CUA 浏览器清单为空，`createBrowserTab("iab", ...)` 返回 `Browser is not available: iab`，因此没有 mounted 证据。临时隔离 harness 已删除，本地 Vite 服务已停止。未改用 Chrome、Edge、CDP 或合成浏览器断言，也未运行完整 E2E。
+- **结论：**本次没有发现可由当前逻辑/SSR 用例独立证明的新代码缺陷。离开保护的原生浏览器行为、React mounted effect 下的一次性授权码/表单秘密清理、确认后真实路由跳转，以及 React 到 Python/持久层的联调仍未验证；F4.20/F4.21 保持开放，不能据此关闭。
+
+## 2026-10-12 补充：初始化写入前复核一次性操作员授权
+
+- **风险与边界：**初始化 workflow 在提交入口检查了当前 bootstrap 授权快照，并在真正写入前强制刷新 bootstrap；但原逻辑刷新后只检查 `initialized` 和 `setupAvailable`，漏检 `operatorAuthorized`。若一次性操作员授权在两次读取间被撤销，仍可能把初始化写命令发送到 Port。此测试只证明前端拒绝已撤销授权，不替代 Python 服务端的授权校验/原子消费。
+- **回归证据：**新增 `SETUP-AUTHORIZATION rechecks the one-use operator grant immediately before initialization`。先以已授权事实装载 workflow，再令初始化前的强制 bootstrap 刷新返回 `operatorAuthorized=false`。修复前测试失败：Port 已返回意外初始化回执（写请求已被发出）；这确认是行为缺陷而非仅补覆盖。
+- **修复与验证：**强制刷新后分别处理“setup 已关闭”与“授权已撤销”；撤销授权时以 `FORBIDDEN` 拒绝且不调用 initialization Port。`npm run test:logic:focused -- 'SETUP-AUTHORIZATION|SETUP-BOOTSTRAP|SETUP-COMMAND'` **14/14 passed**；`npm run typecheck` 通过；针对两个改动文件的 `git diff --check` 通过。
+- **未覆盖：**未启动浏览器、Python Console、数据库或配置中心；未运行完整 E2E。该逻辑回归不验证服务端授权撤销竞态、数据库事务或跨服务初始化行为，因此 F4.20/F4.21 仍开放。

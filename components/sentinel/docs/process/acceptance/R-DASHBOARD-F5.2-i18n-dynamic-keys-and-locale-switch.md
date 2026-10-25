@@ -182,3 +182,26 @@ F5.2 仍保持未完成。剩余 22 个动态调用、各业务 key producer 的
 - **改进：**每项 manifest 现在同时记录源文件、`t()` 表达式、命名 runtime suite 与实际 key producer 模块。覆盖门禁按 suite 边界提取 `catalog.test.mjs` 中该测试的代码块，并要求其中显式 `ssrLoadModule()` 对应 producer；动态集合仍直接取自 `i18n:check` 输出，新增/删除/改写调用未维护 manifest 会失败。22 个当前动态调用分别指向 navigation、instance status、identity/setup validator/presentation、realtime read copy、rule copy 或 publication-label producer。
 - **验证：**`npm run test:i18n-tools` **36/36 passed**；`npm run i18n:check` 显示三语各 **1,220** 条消息、**1,065** 个 AST 静态键和 **22** 个保留动态调用，parity 通过；`npm run check:fast` 通过（TypeScript、Prettier、ESLint、OpenAPI contract）。没有将动态调用移出报告、减少 manifest、或引入 allow-all。
 - **边界：**该门禁证明调用点登记指向包含对应 producer module 的真实三语 runtime suite，不等于各页面组件已 mounted，也不证明动态交互视觉行为。语言切换下其他持草稿页面/URL、日期/时区/DST 的完整 Codex IAB 矩阵仍留到最终 E2E；F5.2 不勾选。本轮没有启动 Chrome、Edge、CDP，也未连接 Python Console、数据库或配置中心。
+
+## 2026-10-12 补充：当前 locale 资源与动态调用覆盖复核
+
+- **当前源码实测：**`npm run i18n:check` 显示 zh-CN / en-US / ja-JP 各 **1,156** 条消息、**962** 个静态可校验键和 **20** 个 AST 无法枚举的动态调用；资源 parity、插值与静态键检查通过。`I18N-DYNAMIC-CALLSITE-COVERAGE` 当前从 AST 输出取集合并逐项验证 producer runtime suite，避免历史记录中 17/22 调用数被误当作当前值。
+- **验证：**`npm run test:i18n-tools -- --test-name-pattern='I18N-PLURAL|DYNAMIC-CALLSITE|LOCALE'` 实际运行 **45 passed**；覆盖 catalog 全量渲染、三语复数、动态 producer/runtime 映射；`npm run test:logic:focused -- 'LOCALE|F5\\.2'` **11 passed**，覆盖 UTC/DST、数字格式、业务观测值稳定及 schedule locale 投影。
+- **边界：**本轮未改动 UI，也未启动浏览器；自动化测试不证明每个活跃页面的 mounted 语言切换、页面草稿/URL/session 稳定性或视觉排版。相关 IAB 页面矩阵按计划留最终验收，F5.2 继续未完成。
+
+## 2026-10-12 补充：当前工作树最终自动化复验与挂载态余项
+
+- **当前资源事实：**在本轮工作树执行 `npm run i18n:check`，zh-CN / en-US / ja-JP 各 **1,156** 条消息，**962** 个 AST 静态键通过；剩余 **20** 个无法由 AST 枚举的动态 `t()` 调用仍明确列出。动态调用有 JSON 派生的 TypeScript key 限制，并由 `I18N-DYNAMIC-CALLSITE-COVERAGE` 逐项关联到实际 producer runtime suite；不能把 AST 不可枚举描述成静态键已解析，也不能视为无运行覆盖。
+- **资源与 producer 自动化：**`npm run test:i18n-tools` **45/45 passed**。实际覆盖三语 JSON key/插值 parity、完整 catalog 渲染、plural 0/1/many 分支、20 个调用点到 producer 测试的映射，以及 identity/setup/role、规则文案、发布字段、导航/状态/反馈等 producer 的真实三语输出。`npm run i18n:audit -- --summary` 为 **0 view / 0 model 命中**。
+- **Intl 与 locale 状态：**`npm run test:logic:focused -- 'LOCALE|F5\\.2|SCHEDULE-LOCALE|Intl number|UTC formatting|chart timestamp'` **4/4 passed**；`npm run test:logic:focused -- 'I18N-|F5\\.2|SCHEDULE'` **10/10 passed**。两组都在默认宿主时区执行；再以 `env TZ=America/Los_Angeles` 重跑第一条命令，**4/4 passed**。用例覆盖三语数字呈现且 wire 数值不变、UTC instant 在宿主时区跨日期边界仍稳定、图表缺省时区为 UTC、规则排期重复 DST 时刻的 occurrence 值/协议时间保持稳定，以及 locale switch 并发、失败和恢复语义。以上为 Node/纯逻辑证据，不证明浏览器 ICU 一致性或页面挂载行为。
+- **静态工程门禁：**`npm run typecheck`、`npm run format:check` 均通过。源码检索确认产品日期显示均经共享 UTC formatter，图表日期标签显式采用传入时区或默认 `UTC`；`ruleActivation` 的 `Intl.DateTimeFormat` 用于固定 `en-US` Gregorian/Latin 数字的规则输入解析，不用于本地化 UI 文案。
+- **本轮边界：**没有改动产品源码或翻译 JSON；没有运行完整 E2E、Chrome、Edge、CDP，也没有访问 Python Console、数据库或配置中心。主推进清单由任务协调者维护，本记录不替代勾选。
+- **仍须最终 Codex IAB 挂载验收的场景：**(1) 登录凭证草稿及偏好切换（§15.903）；(2) 初始化数据库连接字段与管理员敏感密码草稿（§15.805）；(3) 账号创建对话框和角色变更草稿/回读，含刷新后草稿恢复（§15.804 与本轮 F4.29 记录）；(4) 本人改密敏感字段（§15.807）；(5) 配置源登记草稿（§15.586）；(6) 规则排期 DST occurrence、发布理由、取消理由草稿（§15.845–§15.847），以及已保存规则草稿/URL/wire 状态（§15.358）的当前挂载实现。每项须在语言往返后检查页面仍有正确草稿/owner、URL 和协议值不变、无意外写操作；该清单留待最终 IAB E2E 节点一次性执行，不在本轮抢跑完整 E2E。
+- **结论：**本轮收口了可自动化复验的 F5.2 静态资源、动态 producer 与 Intl/locale 逻辑切片；F5.2 整项仍不勾，原因是上述挂载态场景尚未运行，而非上述自动化失败。
+
+## 2026-10-12 F5.2 当前工作树窄门禁复验
+
+- **Catalog / dynamic producer：**`npm run test:i18n-tools` **45/45 passed**，重新覆盖三语资源键、插值占位符与 plural 分支，完整 catalog 的真实 i18next 渲染，以及当前 20 个 AST 动态 `t()` 调用到对应实际 producer runtime suite 的一一映射。`npm run i18n:check` 通过，三语各 **1,156** 条消息、**962** 个静态键，20 个动态调用仍明示并由 producer 测试覆盖；没有用放宽 AST 或隐藏调用清单来制造绿色结果。
+- **Locale / Intl：**默认宿主时区下 `npm run test:logic:focused -- 'LOCALE|F5\\.2|SCHEDULE-LOCALE|Intl number|UTC formatting|chart timestamp'` **4/4 passed**；在 `TZ=America/Los_Angeles` 下同一聚焦集合也 **4/4 passed**。另运行 `npm run test:logic:focused -- 'I18N-|F5\\.2|SCHEDULE'`，**10/10 passed**，覆盖三语数值分组/精度、UTC 日期边界、图表 UTC 标签、规则排期 DST occurrence、locale 切换并发/失败/恢复及未保存计划字段边界；协议 timestamp/wire 值保持断言通过。
+- **静态审计/工程门禁：**`npm run i18n:audit -- --summary` 报告 view **0** / model **0**；`npm run typecheck` 与 `npm run format:check` 均通过。
+- **边界：**本轮只运行了 i18n/Intl 自动化和静态门禁；未改产品源码、翻译资源或协议值，未运行页面 E2E，也未启动浏览器。自动测试不替代最终 Codex IAB 挂载态矩阵：登录凭证、初始化敏感字段、账号创建/角色草稿、本人改密、来源登记和规则发布/取消/排期草稿在语言往返后的 DOM、URL、wire 值与无意外写入，仍待最终验收。F5.2 整项不因此关闭。

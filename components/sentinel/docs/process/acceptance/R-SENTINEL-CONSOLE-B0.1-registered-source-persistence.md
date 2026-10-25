@@ -1,6 +1,6 @@
 # B0.1 — Registered configuration-source persistence
 
-Status: **SQLite-tested persistence, exact-revision credential resolution, and deployment key-ring composition implemented; production service composition and provider connectivity remain open**.
+Status: **SQLite/MySQL/PostgreSQL-tested persistence, exact-revision credential resolution, and deployment key-ring composition implemented; production service composition and provider connectivity remain open**.
 
 ## Ownership and persistence contract
 
@@ -42,7 +42,7 @@ migrations, read keys from a KMS, or build the full Console application.
 
 | Risk | Evidence |
 | --- | --- |
-| Migration/model mismatch | SQLite in-memory upgrade through Alembic head and store integration suite |
+| Migration/model mismatch | SQLite in-memory, MySQL 8.4.11, and PostgreSQL 16 disposable upgrades through Alembic head and store integration suite |
 | Secret at rest or context substitution | Inspect encrypted DB envelope, decrypt only with source-bound AAD, reject wrong owner context |
 | Duplicate side effect or key reuse | Same request replay returns original result; changed input conflicts; source/receipt/audit counts remain one |
 | Lost update | Exact-revision update changes revision; stale revision returns conflict and leaves current source unchanged |
@@ -52,12 +52,32 @@ migrations, read keys from a KMS, or build the full Console application.
 ## Focused verification
 
 - Registered-source persistence, its composed ASGI→SQLite→decrypt→checker path,
-  command API and source-check API: **21 passed** across four focused test modules.
+  command API and source-check API: current five-module focused regression
+  **27 passed**.
+- The standard `build_sql_identity_app` composition now owns the tested protected
+  ASGI→SQL source-registration, safe registry read, credential resolution for a
+  source check, probe persistence/readback, and original receipt path. It passes
+  against disposable MySQL 8.4.11 and PostgreSQL 16 (**1 passed each**)
+  as well as in-memory SQLite (**1 passed**). The test accepts only loopback
+  `sentinel_console_test_*` database URLs. This exposed and fixed a snapshot-time
+  ordering edge when SQL timestamp precision rounds a persisted probe; snapshot
+  time now covers its latest included observation without weakening the domain
+  invariant. All disposable database containers were removed by their owner runners.
+- The same production SQL composition also supports an explicit Consul test
+  profile: a loopback-only allow rule is derived from the disposable runner's
+  random Consul port, and the ASGI source-check route uses the production
+  provider checker rather than the test checker. The test registers a no-auth
+  Consul source, verifies a candidate-only probe does not persist status, then
+  checks the exact registered source with `keep` semantics and reads back the
+  persisted `available` state and `read`/`watch` capabilities. MySQL 8.4.11 +
+  Consul 1.21.1: **1 passed**; default SQLite/source API regression: **27 passed**.
+  The disposable MySQL/Consul owner runner removed both containers. From
+  `components/sentinel/sentinel-console`, reproduce with:
+  `./tools/with_disposable_e2e_dependencies.sh bash -lc 'export SENTINEL_CONSOLE_REGISTERED_SOURCE_TEST_URL="$SENTINEL_CONSOLE_TEST_MYSQL_URL"; uv run --extra test --extra mysql pytest -q tests/test_registered_source_store_api_integration.py'`.
 - Key-ring parser and store composition: **3 passed**, including active/retained
   rotation keys, malformed/missing configuration rejection, repr suppression,
   and AES-GCM round-trip using the active key.
 - Console package `compileall` and `git diff --check` passed.
-- No full browser E2E, external database, KMS, Nacos/Consul endpoint, or production
-  startup was used. PostgreSQL/MySQL concurrency, production key injection and
+- No full browser E2E, KMS, or production startup was used. Production key injection and
   rotation rehearsal, external credential-reference resolution, provider probe/write, and real
   React → Python → DB/config-center acceptance remain open.

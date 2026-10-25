@@ -1,17 +1,107 @@
-# Console API 契约（F6 收敛中）
+# Console API 契约（冻结版本 0.19.0）
 
-> 当前执行入口：**§9**。§0–8 保留为旧草案输入与决策沿革，不再直接指导实现。
+> 当前执行入口：**§9–§22**。§0–8 保留为旧草案输入与决策沿革，不再直接指导实现。
 > §9 依据正式异步页面 Port 定义职责；feature DTO Runtime Schema 与 OpenAPI 已生成。
-> 身份、账号、观测、故障分析、系统观测、配置源与规则生命周期 **43/43** 个 operation 均已将正负请求/响应样例纳入同一 contract 并生成 OpenAPI examples
->（**87** 个完整 exchange、**111** 个标准 media examples）。样例覆盖不代表逐页协议语义审计/签字完成；整体仍为 `draft-partial`，不宣称 wire 已签字冻结、
-> Python 已实现或 E2E 已通过。
+> 当前 contract 有 **68/68** operations / **64 paths**；0.8.0 原有 operation 保持 wire 等价，0.9.0 新增规则状态观察读取，后续版本累加首次初始化授权、监控源管理、HOST metrics、host-to-Reporter associations，0.16.0 新增旧 process epoch 的规则加载历史独立只读查询，0.17.0 新增认证后的部署引导目录读取，0.18.0 为监控源删除回执增加 `source_in_use` 稳定拒绝原因，0.19.0 新增 Console 全局系统时区设置读取与更新。历史 contract 的请求/响应样例继续由 OpenAPI 生成并验证。Console API wire **0.4.0 已于 2026-10-13 冻结；0.5.0 在 2026-10-14 由产品/API owner 批准添加配置源删除命令；0.6.0 于 2026-10-15 增加规则绑定范围读取；0.7.0 于 2026-10-16 按已批准方案增加逐 worker 协商观察；0.8.0 于 2026-10-16 按已批准的规则目录设计增加配置中心规则读取与有界刷新；0.9.0 于 2026-10-16 增加规则绑定观测状态与运行时加载观察；0.10.0 于 2026-10-17 增加本机首次初始化授权；0.11.0 于 2026-10-17 按已授权的推荐默认值增加监控源候选探测；0.12.0 按 owner 已授权的推荐默认值增加 monitoring source safe reads；0.13.0 按 owner 已授权的推荐默认值增加 monitoring source management commands；0.14.0 增加有界 HOST metrics query；0.15.0 增加 SQL-backed host-to-Reporter associations 与对应 audit action enum 扩展；0.16.0 增加 exact-binding historical rule-load observations；0.17.0 增加 Console-owned deployment guide readiness 与显式 Runtime Collector 公布地址读取；0.18.0 仅扩展 monitoring source operation reason 为 `source_in_use`，不改变 Collector/Agent Reporting/Metrics V2 wire；0.19.0 仅新增 Console 全局系统时区设置端点，既有 operation 的 wire 不变**。历史版本继续保留对应 schema；后续新增字段/enum 均须走明确兼容性评审。冻结范围是本文件 §9–23 与生成的 OpenAPI，不代表 Python 全部实现、生产部署或 E2E 已通过。
+> 当前 machine contract 提供 **121** exchange examples 与 **156** media examples；成功/失败响应示例按 OpenAPI 与 runtime contract 同步校验。
 > 不得再按本文旧末段“替换 gateway 页面不动”执行。
 
-> 状态：**草案，待后端确认**。本文冻结前端与控制面服务之间**必须一致**的部分，
-> 让 gateway 替换 fixture 时不需要改页面。§「待确认」列出尚未与后端对齐的项。
+> 状态：**已冻结实现基线（0.18.0；监控源引用删除保护）；真实 provider/UI/E2E 验收仍开放**。当前规范入口仅为 §9–22 与生成的
+> `docs/protocol/console-api.openapi.json`；§0–8 和 §「待确认」是历史讨论记录，不再构成待确认项或覆盖当前规范。
 >
 > 依据 `DASHBOARD_CONTROL_PLANE.md` §6.1「契约先行」：逐页用例与 machine contract 是
 > Python 实现输入；各规则 codec、发布回执及运行时数据来源仍需与后端实现共同验收。
+
+## 10. Console API 0.5.0 增量：配置源删除
+
+0.5.0 仅扩展既有 `POST /api/v1/system/sources/commands` 判别联合，不改变 0.4.0 已有
+register/update 请求、响应、授权或幂等语义。删除请求必须包含 `kind=delete`、唯一
+`requestKey`、`sourceId` 与调用方读到的 `expectedRevision`；`Idempotency-Key` 必须与
+`requestKey` 相等。所有请求仍须满足当前 admin + Origin + CSRF 策略。
+
+- 仅当 source 存在且 revision 精确匹配时才删除；缺失返回持久 `rejected/not_found`，
+  版本过期返回 `rejected/conflict`。
+- 只要有 `console_rule_binding` 引用该 source，命令返回 `rejected/source_in_use`；不级联
+  删除 binding、规则版本、发布计划或发布回执。数据库 `RESTRICT` 外键是并发下最终保护。
+- 成功删除在同一 SQL transaction 中移除 source row（包含在线加密凭证）与探测快照；之后
+  registry/read、credential resolver 与 source probe 均无法访问该 source。既有数据库备份/WAL
+  的保留及销毁由部署备份策略负责，不将在线行删除误称为备份介质擦除。
+- delete operation receipt 只保存 actor/session ownership、requestKey、keyed fingerprint、
+  deletedSourceId 或有限 rejection、时间及审计关联；不得保留 endpoint、location、provider、
+  credential ciphertext、credential reference 或明文。重放同一 key/同输入返回原结果；异输入
+  或跨 register/update/delete 复用 key 拒绝为 `idempotency_conflict`。
+- receipt 查询仍要求有效 admin 会话及原操作者。审计仅记录配置源目标 ID、action 和 outcome，
+  不记录源配置或凭证。
+
+本节是 0.5.0 source-delete 的 wire 与安全边界。Python migration/API/SQL 验收及 React 删除交互
+分别按推进清单 T02.1 记录；契约冻结不表示这些实现或最终 E2E 已验收。
+
+## 11. Console API 0.6.0 增量：规则绑定范围读取
+
+0.6.0 新增 `GET /api/v2/rules/binding-scopes`。该读取仅为 Rules 页面提供环境与应用筛选项，
+来源是 Console 持久化的完整规则绑定/配置源/发布目标事实，不读取 Metrics V2 Reporter，
+也不修改既有 `/api/v1/observation/catalog` 的观测语义。
+
+- 仅有效浏览器会话可读取；admin/view 均可读。响应采用 `no-store` 与 `Vary: Cookie`。
+- 对完整、内部一致的绑定记录按 environment/app 去重并排序；当前没有任何绑定时返回成功的空
+  `environments` 与 `applications`。上限与标识校验按生成 DTO/domain schema 执行。
+- 缺少 scope authority、SQL 故障、目标/来源关系不一致或结果越界均返回脱敏
+  `503 service_unavailable`；不得把故障伪装为空目录。
+- 环境与应用目前以持久化标识作为显示名称；为允许首次无 Reporter、无既有绑定的配置，Rules
+  页面可由管理员显式输入环境/应用标识，再创建第一个 binding。不会自动选择任意 scope。
+- DTO 不含凭证、provider target body、规则正文或配置源连接信息。
+
+本节冻结 wire 形状，不代表 Console runtime 数据库部署与浏览器到 Python E2E 已验收；定向证据
+记录在推进清单与 `R-DASHBOARD-rules-scope-catalog.md`。
+
+## 12. Console API 0.7.0 增量：逐 worker 协议协商观察
+
+0.7.0 新增两个只读观察：`GET /api/v2/system/protocol-observations/agent-reporting?page&pageSize` 与
+`GET /api/v2/system/protocol-observations/incident-events?page&pageSize`。它们保留每个已登记 worker 的
+独立身份与各自协议事实，不聚合成可能丢失滚动升级差异的单值；旧 `GET /api/v1/system/protocols`
+仍只呈现原有部署级协议边界。
+
+- 两个读取都要求有效浏览器会话；每页最多 100 项，页码有界，未知或重复查询参数返回
+  `400 invalid_request`。无有效会话返回 `401 unauthenticated`，权威 SQL 不可用返回
+  `503 service_unavailable`。
+- Agent Reporting 和 Incident Event 协商分别来自已认证 Runtime↔Collector hello/accept；一个协议的
+  握手不能推断另一个协议兼容。已登记但未完成对应握手的 worker 必须显示 `unknown`，不按 Collector
+  supported list 推断 Runtime 版本。
+- 身份由 Reporter enrollment 与已认证证书绑定导出，只返回 environment/app/instance/process/reporter
+  的安全标识；证书 subject/principal、PEM、私钥和凭证均不得进入响应。
+- 当前已撤销 enrollment 不进入活动 worker 结果。版本混合必须按 worker 保留；不得使用 latest-wins、
+  majority 或 fleet summary 折叠为单一 active version。
+
+本节只冻结 Console read wire 与数据语义；它不替代实际 hello/accept 的认证、SQL durable commit、
+跨语言 producer/collector 合同或 React→Python 浏览器验收。相关实现与协议证据见推进清单 §15.1197–§15.1208。
+
+## 14. Console API 0.9.0 增量：规则绑定状态与运行时加载观察
+
+0.9.0 在 0.8.0 之上只新增两个认证只读接口：
+`GET /api/v2/rules/catalog/binding-states` 与
+`GET /api/v2/rules/load-observations`。完整响应 schema、严格 query、错误响应与示例以生成的
+`docs/protocol/console-api.openapi.json` 为准；0.8.0 machine contract 归档在
+`docs/protocol/console-api-0.8.0.openapi.json`，既有 operation 必须逐字保持 wire 等价。
+
+- 规则绑定状态来自 Console SQL 投影，不同步访问 Nacos/Consul。七态区分有规则、确认空数组、目标缺失、内容无效、不支持 profile、来源不可用、从未读取。目标缺失不是删除指令；失败时保留 last-known-good，只有 provider 确认的合法空数组可清除其当前规则投影。
+- 运行时加载状态来自 Reporter enrollment 与 Collector durable current projection 的 SQL 联接；同一环境/app 的每个未撤销 enrollment 是每条匹配 binding 的预期目标。已撤销 enrollment 排除；没有活动 enrollment 是精确零，而不是“未知”。
+- Collector `receivedAt` 是唯一新鲜度时钟；超过 90 秒（严格 `> 90s`）标 stale。运行时 `observedAt` 仅作为事件时间展示。分页排序固定为 `(bindingId, instanceId)`。
+- 未知/未评审 profile 或不完整 membership 不能展示为未加载、unsupported 或未使用；精确 rule membership 只有在 Console 显式兼容 profile 且 membership 完整时才可声明。API 不返回证书身份、密钥、原始规则正文、原始异常或 provider payload。
+- 0.9.0 仅扩展 Console 查询 API；Agent Reporting V1、Runtime Receipt V1、Metrics V2、Nacos/Consul provider wire 均不变。接口冻结不代表跨数据库、生产 provider 或浏览器验收已完成；闭环证据按推进清单 T03.4/T03.5 记录。
+
+本增量于 **2026-10-16 由产品/API owner 批准**；冻结仅授权 API 0.9.0 实现，不代表发布或最终 E2E 已通过。
+
+## 13. Console API 0.8.0 增量：配置中心规则目录
+
+0.8.0 新增 `GET /api/v2/rules/catalog` 与 `POST /api/v2/rules/catalog/refresh`。前者从 Console SQL 投影分页读取已登记 Nacos / Consul 规则快照；后者对指定环境/应用范围执行有界 source refresh。Nacos/Consul 仍是规则内容权威源，Console SQL 仅保存可搜索的 last-known-good 读模型。刷新不发布、不写回或修正规则源内容。
+
+- GET query 必须且只可使用 `environmentId`、可选 `appId`、可选 `kind`、可选 `search`、`page` 与 `pageSize`；拒绝未知/重复参数。admin/view 有效会话均可读，响应 `no-store` 且按 Cookie 区分。
+- 响应明确 `coverage`、绑定总数及 current/stale/notRead 计数。只有范围内所有绑定都成功读取时，`total` 才是精确值；不完整时 `total: null`，不能将部分搜索结果或当前空页解释成“没有规则”。`hasMore` 只表示已确认 SQL 投影中是否还有下一页；partial 时不能推断未读来源。合法空 JSON rule array 是成功读取，贡献完整覆盖与精确零规则数。
+- 每个规则条目绑定到 provider snapshot checksum、source revision/version 与 read timestamp。读取失败保留此前成功内容并标为 stale；从未读取的绑定标为 not_read；无原始异常、连接地址、凭证或规则以外的业务数据。
+- POST body 只接受 `environmentId` 与可选 `appId`，需要有效 session、同源 Origin 与双提交 CSRF。admin/view 均可触发，因为这是只读 provider refresh；每次最多读取 24 个绑定、最多 8 个 provider 请求并行，下一次调用优先处理从未读/最久未尝试绑定。失败绑定与成功绑定互相隔离。
+- 运行时实例是否加载规则、流量是否匹配规则属于不同数据事实；本目录不得从规则存在、发布回执或空请求量推断“有实例使用”或“无实例使用”。实例加载观察由后续独立运行时观察协议负责。
+
+本节冻结 additive Console wire 与已批准的 source/SQL/UI 语义；Nacos/Consul live source readback、SQL dialect coverage 和 Rules 页面→Python 运行实例链路仍须按 T03.4 定向验收与 T07.1 完整 E2E 分开记录。
 
 ## 0. 范围与不做什么
 
@@ -20,7 +110,7 @@
 **不做**（原文 §2 已划界）：
 
 - 不提供多租户、组织树、数据范围授权、多级审批；
-- 不做连接凭证的网页写入——地址与写凭证由部署配置管理；
+- 不让浏览器直连 Nacos/Consul；连接源凭证可在控制台显式选择 `none`、`reference` 或 `direct`，由 Python Console 代理检查/保存，`direct` 凭证仅 write-only 提交并在服务端保护，任何读取/回执均不得回显明文或引用值；
 - 不承诺长期历史与告警（§6.4，后续独立评审）。
 
 现有 per-process Bearer admin token 与统一控制台的登录授权是**两套边界**，
@@ -28,17 +118,22 @@
 
 ## 1. 最小权限
 
-沿用已落地的 `core/session`：`metrics:view` 与 `rules:write` 两项，**可独立授予**。
+本节权限表是早期草案摘要，曾与当前角色/错误码合同不一致。当前逐 operation 权限以
+§9 和生成 OpenAPI 的 `x-required-access` 为唯一机器事实；本产品目前只有 `admin`、`view`
+两种角色，不提供独立授予 capability 的账号编辑能力。角色到 capability 的映射由服务端
+session 投影固定派生。
 
-| 能力 | 允许 | 服务端行为 |
+| 当前 access 条件 | operation 范围 | 服务端行为 |
 | --- | --- | --- |
-| `metrics:view` | 指标查询、趋势图、实例指标详情 | 无此能力时返回 `403`，**不返回空数组或 0 值** |
-| `rules:write` | 快照读取、草稿校验、发布、回滚 | 无此能力时读取快照仍允许，写操作全部 `403` |
+| `metrics:view` | 指标、Fleet、实例及故障观测读取 | 拒绝时返回 `403 forbidden`，不返回空数组、零值或 Mock 数据 |
+| `rules:write` | 规则草稿读取、候选校验与比较 | 拒绝时返回 `403 forbidden`；不得将拒绝伪装成空草稿或校验成功 |
+| `admin` + `rules:write` | 创建规则 binding、执行规则变更命令 | 两个条件均须满足；view 不能写规则 |
+| 无额外 capability | 已发布 binding/snapshot/version/publication/receipt/plan 与 publication target 读取；系统连接和协议摘要读取 | 仍要求有效登录 session；各自资源级授权及 operation 错误以 §9/OpenAPI 为准 |
+| `admin` | 账号、审计、登记配置源及其操作回执 | view 不可读取或修改上述管理数据 |
 
-登录用户**始终可读**规则摘要、版本与规则源健康状态，不要求任何能力。
-
-`403` 与「没有数据」是两件事：`403` 必须在响应体里带 `error.code = "capability_denied"`，
-客户端据此区分「无权」与「确实为空」。把无权渲染成空图就是用 0 值伪装无流量。
+`403 forbidden` 与「没有数据」是两件事。客户端必须按 operation 的稳定错误码呈现权限拒绝，
+不得把拒绝投影成空图、空规则或零值；具体角色/capability 组合以生成 OpenAPI 的
+`x-required-access` 为准。
 
 ## 2. 配置键映射（冻结项 1）
 
@@ -128,14 +223,19 @@ Dashboard 的表单草稿与配置中心的规则 JSON **不是同一层**，映
 
 | HTTP | `error.code` | 客户端处理 |
 | --- | --- | --- |
-| 400 | `validation_failed` | 显示字段级问题，保留草稿 |
+| 400 | `invalid_request` / `current_password_invalid` | 请求、query 或 request-id 不符合协议；当前密码无效时按改密流程重新认证 |
 | 401 | `unauthenticated` | 回登录页 |
-| 403 | `capability_denied` | 隐藏对应入口，不显示空数据 |
-| 409 | `version_conflict` | 提示基准版本已变，要求重新拉取后再提交 |
-| 422 | `readback_mismatch` | 停在 `read-back-matched` 之前，**不重试写** |
-| 503 | `config_center_unavailable` | 显示配置中心不可用，区别于「规则为空」 |
+| 403 | `forbidden` / `csrf_failed` / `bootstrap_unauthorized` | 按 operation 的拒绝原因呈现；不得投影成空数据或成功 |
+| 404 | `not_found` | 仅对公开该错误的 operation 呈现目标不存在，不做跨资源 fallback |
+| 409 | `conflict` / `idempotency_conflict` | 区分业务/目标冲突与 request-key 冲突；以 operation contract 为准 |
+| 410 | `target_retired` | 清除已退役 incarnation 的指标与详情，不回退到另一实例 |
+| 422 | `validation_failed` / `unsupported_profile` | 显示受控字段/语义问题并保留可修正草稿；不支持的 profile 不盲目重试 |
+| 429 | `rate_limited` | 使用有界 `retryAfterMs` 展示冷却并禁止到期前重发 |
+| 503 | `service_unavailable` / `dependency_unavailable` | 显示当前 authority 不可用，不回落到 Mock 或空成功 |
 
-`422 readback_mismatch` 不自动重试：写入成功但回读不一致时，重试可能放大不一致。
+错误集合与状态码按 operation 区分；上表是当前全局错误形状摘要，不替代生成 OpenAPI
+中的 `responses` / `x-allowed-error-codes`。规则发布回读不匹配属于 operation 的持久化
+rejection reason，不伪装成可盲目重试的 HTTP `422`。
 
 ## 8. 五项决策（已定，改动需重开本节）
 
@@ -200,9 +300,12 @@ Dashboard 的表单草稿与配置中心的规则 JSON **不是同一层**，映
 
 ---
 
-以上决策已落到 `core/api` 的实现：`HttpConsoleGateway` 按 §6 的端点、§7 的错误码、
-§8 的 `version` 与 `instanceId` 编写。gateway 通过 `useConsoleGateway()` 取实现，
-默认是 `fixtureGateway`；接后端时在装配处换一个实现即可，页面不动。
+> **已作废的历史接线说明：**旧版 `HttpConsoleGateway`、`useConsoleGateway()` 与
+> `fixtureGateway` 不代表当前实现，禁止按“装配处替换 gateway、页面不动”继续开发。
+> 当前正式页面使用 feature-owned HTTP adapters 与共享 Console transport；demo 仅由
+> HTTP boundary 的 MSW 拦截，live 由同一 adapters 请求 Python Console，不保留
+> `FixtureGateway` 兼容路径。现行前端边界详见
+> [页面能力设计 §13.2](Dashboard页面能力与接口设计.md#132-网关迁移现状与实现边界)。
 
 ## 9. F6 当前唯一执行决策（2026-10-07）
 
@@ -227,7 +330,7 @@ Dashboard 的表单草稿与配置中心的规则 JSON **不是同一层**，映
 - ID/revision/checksum 为有界字符串，版本和原生序号不做 JS Number 转换或字典序“更新”比较。所有绝对时间 wire 为 RFC3339 UTC `...Z`，内部模型可用 epoch 毫秒；持续时长 `stepMs/ttlMs` 为有界安全整数，不当作时间戳。相对 `range` 属 UI，HTTP 实际发送 `[from,to)`。
   当前机器合同将绝对时间规范为 `YYYY-MM-DDTHH:mm:ss.SSSZ`（1970–9999），非法日历/offset/本地时间拒绝；显式 mapper 不对持续时长或原生修订做转换。
 - 列表 `items/page/pageSize/total`；默认和上限明确，稳定排序由后台实现。集合读取明确 bounded complete 或分页，不能把一页当完整目录。响应身份必须回核原 query/binding/profile/incarnation；数据缺失、权限拒绝、陈旧可信值和网络失败不合并为零值。
-- 错误体唯一为 `error{code,requestId,issues?,retryAfterMs?}`，有限 code；issues 只含稳定字段路径/分类和有界非敏感参数。不得反射输入、DSN、密码、引用值、厂商响应或 exception.message。网络、timeout、取消、协议错误为客户端独立错误，不能全部归为 config_center_unavailable。
+- 错误体唯一为 `error{code,requestId,issues?,retryAfterMs?}`，有限 code；其中 `code=rate_limited` 时 `retryAfterMs` 必须出现且为 `0..300000` 的有界整数，其它错误不得依赖该字段恢复。issues 只含稳定字段路径/分类和有界非敏感参数。不得反射输入、DSN、密码、引用值、厂商响应或 exception.message。网络、timeout、取消、协议错误为客户端独立错误，不能全部归为 config_center_unavailable。
   本轮机器合同中的每项 issue 仅有 `field/reason`，没有任意参数或原始输入；单端点按 status 收窄允许的 code。客户端重新构造有限错误，不将原始 body/cause 暴露给消费者。
 - status：400 无效输入/JSON；401 认证失效；403 授权/CSRF/初始化引导不满足；404 权威不存在；409 修订或请求键冲突；410 权威目标已退役；422 语义/不支持 profile；429 有界限速；503 服务/依赖不可用。具体 endpoint 允许的 code/status 必须在机器合同穷尽，不用 status 猜业务 reason。
 - 底座 HTTP client 自动重试 **0**，显式传递 AbortSignal。取消/timeout 只结束客户端观察，不撤销服务端已受理命令。GET 的用户重试和命令原操作核查分别由已有 workflow 管理，不添加全局写重放拦截器。
@@ -279,6 +382,7 @@ Dashboard 的表单草稿与配置中心的规则 JSON **不是同一层**，映
 | readMetrics | GET /metrics/query | metrics:view；MetricBundle，显式 metrics/window/scope/step |
 | readTimeline / readEvidence | GET /incidents；GET /incidents/{incidentId}/evidence | metrics:view；有界窗口/过滤/分页/明确事实身份 |
 | readBindings | GET /rulesets | 会话；environment/app/kind/search/page/pageSize |
+| readBindingRegistration | GET /rulesets/{bindingId}/registration-operations/{requestKey} | admin + `rules:write`；当前 admin session 重新授权，精确读取原 actor/binding/requestKey 的安全回执；`not_found` 不证明 POST 回滚，禁止自动重发 |
 | readSnapshot | GET /rulesets/{bindingId}/snapshot | 会话；完整 RuleSetSnapshot、profile、来源及独立 revision |
 | readDrafts / readDraft | GET /rulesets/{bindingId}/drafts；GET /rulesets/{bindingId}/drafts/{draftId} | `rules:write`（当前由 admin 唯一持有）；草稿内容及修订 |
 | validateCandidate / compareCandidate | POST /rulesets/{bindingId}/validate；POST /rulesets/{bindingId}/diff | `rules:write`（当前仅 admin 持有）+ CSRF；两者均非幂等命令。validate 持久化校验 receipt/审计但不改规则源；diff 不产生持久化写入 |
@@ -307,6 +411,7 @@ Dashboard 的表单草稿与配置中心的规则 JSON **不是同一层**，映
 `POST /rulesets/{bindingId}/validate` 的 Python route 已拆为三个显式职责：`RuleSetSnapshotReader` 读取当前完整规则快照，`RuleCandidateProfileValidator` 对当前 binding/profile 做纯语义校验，`RuleValidationReceiptWriter` 在响应前持久化不可变 receipt。`SqlAlchemyRuleValidationReceiptStore` 实现 receipt reader/writer；receipt 与 `rules.validate` 审计行同事务提交，只存 candidate checksum、有限 issue code/字段路径、actor/request identity，不存规则正文或配置凭证。无 snapshot/profile validator/receipt writer 时安全返回 503，候选 baseline 过期返回 409。当前尚无 production provider profile validator 或 production startup composition，因此 route 存在和 SQLite migration 测试都不表示 Nacos/Consul 候选可发布；freeze 必须从持久化 receipt authority 再读取并核对 exact candidate。
 
 账号接口错误矩阵按当前 Python 路由实际可达分支冻结：`listAccounts`、`readAccount` 与 `readAccountOperation` 为 `invalid_request`、`unauthenticated`、`forbidden`、`service_unavailable`；`mutateAccount` 另允许 `csrf_failed` 与 `idempotency_conflict`。账号路由当前没有 rate-limit 分支，因此不得在这些 operation 上声明 `rate_limited`；操作查询的未知 requestKey 是安全的 `not-found` 操作观察值，不是 HTTP `not_found`。V1 账号命令在单个 HTTP 请求内同步完成，成功 HTTP 响应仅返回最终 `completed` 或 `rejected` 回执；UI 的 `pending` 表示 HTTP 请求仍在途，不是账号 wire 回执。若响应丢失，客户端保持 `result-unknown` 并通过 operation lookup 核查最终回执；lookup 可返回 `not-found`、`completed` 或 `rejected`。
+账号从 `active` 变为 `disabled` 时，服务端必须在同一数据库事务内撤销该账号全部现有 session；重新启用账号不会恢复或重新签发旧 session，旧 Cookie 仍须重新认证。此持久状态迁移属于账号命令的完成语义，不由前端模拟。
 
 本人改密 `changeOwnPassword` 的错误集合为 `invalid_request`、`current_password_invalid`、`unauthenticated`、`csrf_failed`、`validation_failed`、`rate_limited`、`service_unavailable`；此路由按当前会话账号执行，没有 role-based `forbidden` 分支。
 
@@ -314,11 +419,13 @@ Dashboard 的表单草稿与配置中心的规则 JSON **不是同一层**，映
 
 观测读取错误矩阵按具体目标语义区分：fleet、instance catalog、incident timeline/evidence 均可能返回 `invalid_request`、`unauthenticated`、`forbidden`、`not_found`、`rate_limited`、`service_unavailable`；instance detail 与 metrics query 另可返回 `target_retired`，表达 incarnation 已退役，不等同于普通 404。事件 timeline 的环境/应用等查询目标也可能在权威目录中不存在，因此必须声明 `not_found`。
 
-登记配置源的 `checkRegisteredSource` 是 admin + CSRF 的非幂等探测，错误为 `invalid_request`、`unauthenticated`、`forbidden`、`csrf_failed`、`rate_limited`、`service_unavailable`；`mutateRegisteredSource` 是幂等命令，错误为 `invalid_request`、`unauthenticated`、`forbidden`、`csrf_failed`、`idempotency_conflict`、`validation_failed`、`rate_limited`、`service_unavailable`。配置源 revision/provider 冲突作为已受理的 operation rejection 表达，不是 HTTP `conflict`；原操作查询另允许路径 key 非法时 `not_found`。
+登记配置源的 `checkRegisteredSource` 是 admin + CSRF 的非幂等探测，错误为 `invalid_request`、`unauthenticated`、`forbidden`、`csrf_failed`、`rate_limited`、`service_unavailable`；`mutateRegisteredSource` 是幂等命令，错误为 `invalid_request`、`unauthenticated`、`forbidden`、`csrf_failed`、`idempotency_conflict`、`validation_failed`、`rate_limited`、`service_unavailable`。客户端若收到含合法 `retryAfterMs` 的 `rate_limited`，来源检查 workflow 必须在单调时钟下保留绝对冷却截止时间；表单字段编辑、旧探测结果失效或 UI 重渲染不得重置该截止时间，且所有检查触发入口都必须在期限内阻止再次派发。该限制只在期限到达后解除，不进行自动重放。配置源 revision/provider 冲突作为已受理的 operation rejection 表达，不是 HTTP `conflict`；原操作查询另允许路径 key 非法时 `not_found`。
 
 ### 9.5 命令一致性、条件写与观测
 
 支持核查的 setup/account/rules/source command 必须带请求键，HTTP `Idempotency-Key` 与 body requestKey 一致；它只是相关性，不是授权。服务端按 actor/operator + capability/目标 + kind 归属，保存原输入的服务端 keyed HMAC（不是可离线猜密码的裸哈希或原凭证 body）。同 key/同输入观察原操作，不重写；同 key/异输入 409。核查只返回原安全结果，不能给另一 actor、未授权 session 或外来 binding 偷看；同一 actor 重新认证后须重新检查当前权限，不能仅因 Cookie 已轮换就永久失去原操作核查路径，旧页面资源仍不得跨 sessionEpoch 复活。
+
+规则绑定创建是同步 `201`，但仍提供独立的只读核查路径 `GET /api/v1/rulesets/{bindingId}/registration-operations/{requestKey}`，用于创建请求已发出、原 Cookie 轮换或响应无法确认后的安全恢复。服务端必须在查询中重新验证当前有效的 admin session，并以原 `actor + bindingId + requestKey` 精确匹配持久回执；同 actor 的新有效 admin session 可读取原安全回执，但不能读取其他 actor、错误 binding 或错误 requestKey 的事实。响应仅含 `completed` 与原 `RuleBinding` 安全视图，或 `not_found` 与 `binding: null`，不返回 target body、凭证或原 session hash。`not_found` 可能是可见性/提交结果未知，不表示创建已回滚，前端必须继续只读核查，不能因此解锁或自动重发 `POST`。原 `POST` 的幂等恢复仍严格要求原 actor、原 session 与相同 canonical fingerprint；此读权限不放宽写入幂等约束。
 
 安全操作事实为 pending/not-found/completed/rejected；not-found 可能是可见性滞后，不证明未提交；前端不能因此解锁或重发。命令接口成功返回“操作事实”并不代表业务成功：rejected 明确有限 reason，completed 的 publication 仍有各阶段状态。尚未通过授权/shape/请求键一致性检查的请求直接 HTTP 错误，不创建伪已受理结果。幂等保存、业务持久化和审计须有事务/恢复路径，不能先写源再靠 browser 标已成功。
 
@@ -330,10 +437,102 @@ Dashboard 的表单草稿与配置中心的规则 JSON **不是同一层**，映
 
 指标/故障/系统健康来自独立 Console 观测读模型；保持已冻结 Agent Reporting V1 六类事件，绝不为填图临时新增 wire kind/塞 metrics。未采到 QPS/TPS/histogram/host 数据时显式 not_integrated/no_samples；初始化或规则写成功不能伪造图表点。开发 HTTP Mock 可用确定性独立模拟采集状态，但不得将其展示为真实 Python/Collector 接线证明。
 
-### 9.6 后续退出条件
+### 9.6 后续退出条件（0.7.0 历史快照；当前以 §13 为准）
 
-当前可生成机器入口为 `docs/protocol/console-api.openapi.json`：`npm run contract:generate` 从 feature runtime DTO/endpoint declarations 生成，`npm run contract:check` 拒绝漂移。当前生成物包含 **43 paths**、`x-contract-status=draft-partial`、`x-pending-capabilities=[]`，覆盖 authentication、bootstrap、accounts、own-password、metrics、fleet、instances、incidents、system-observation、system-sources、observation-catalog 和 rulesets。每个 operation 必须有 `x-required-access`，明确 `role` 与能力数组；它与 `security` 分离，后者定义 session/bootstrap/CSRF 凭据要求，前者定义会话之外的角色/能力门槛。`pending=[]` 只表示生成器声明的 endpoint family 已有 machine contract，不证明逐页动作审核、wire 冻结/签字、Python 实现、真实数据或 E2E 已完成。204 无 JSON Schema，资源级约束仍列于 `x-semantic-rules`，不使用 `unrepresentable:any`。所有 Zod 字符串 `.max(n)` 同时生成 `maxLength: n` 和 `x-max-utf16-code-units: n`：标准 JSON Schema 的 `maxLength` 按 Unicode code points 计数，Console 前后端运行时则按 JavaScript/Python UTF-16 code units 限制；消费者必须同时执行标准约束与该扩展约束。初始化命令 ACK 不接受 not-found，原操作 lookup 可以返回 not-found，二者不得混用。
+本节首段记录的是 0.7.0 生成物快照；当前规范与机器版本为 0.19.0，64 paths / 68 operations，新增规则目录内容以 §13 及当前 `console-api.openapi.json` 为准。
 
-请求固定使用 `x-request-id`（客户端相关 ID，响应 header/body 对应一致）、内存态 `x-sentinel-csrf` 与命令 `idempotency-key`。缺失或格式非法的 `x-request-id` 以 `400 invalid_request` 拒绝；错误响应不得回显非法值，使用服务端生成的 request ID。登录/注销通过当前会话事实核查未知结果，不建立幂等操作查询；账号、规则、源及初始化命令则要求原 requestKey。后台按当前 Cookie/Origin 授权，不相信 legacy x-user-id。传输 owner 是本次鉴权/引导观察 generation，不得直接用 React 的 checking/匿名显示状态拼接；App 装配须证明实际换会话的迟到请求、CSRF 切换及新的 Cookie 读回。
+当前可生成机器入口为 `docs/protocol/console-api.openapi.json`：`npm run contract:generate` 从 feature runtime DTO/endpoint declarations 生成，`npm run contract:check` 拒绝漂移。冻结版本为 **0.7.0**（0.4.0–0.6.0 既有 wire 保持不变），生成物包含 **47 paths / 48 operations**、`x-contract-status=frozen`、`x-pending-capabilities=[]`，覆盖 authentication、bootstrap、accounts、own-password、metrics、fleet、instances、incidents、system-observation、system-sources、observation-catalog 和 rulesets。每个 operation 必须有 `x-required-access`，明确 `role` 与能力数组；它与 `security` 分离，后者定义 session/bootstrap/CSRF 凭据要求，前者定义会话之外的角色/能力门槛。声明 query 参数的 operation 另带 `x-query-policy`：未知参数和重复参数都必须拒绝，并以 `400 invalid_request` 返回；Python parser 按 URL 解码后的查询键检查，不能依赖框架默认的首值/末值选择。整数 query parameter 另带 `x-query-integer-encoding=canonical-decimal`：只接受 ASCII 十进制规范表示，不接受前导零（数值零仅写作 `0`），数值范围由该参数 schema 声明。`pending=[]` 只表示生成器声明的 endpoint family 已有 machine contract，不证明 Python 实现、真实数据或 E2E 已完成。204 无 JSON Schema，资源级约束仍列于 `x-semantic-rules`，不使用 `unrepresentable:any`。所有 Zod 字符串 `.max(n)` 同时生成 `maxLength: n` 和 `x-max-utf16-code-units: n`：标准 JSON Schema 的 `maxLength` 按 Unicode code points 计数，Console 前后端运行时则按 JavaScript/Python UTF-16 code units 限制；消费者必须同时执行标准约束与该扩展约束。初始化命令 ACK 不接受 not-found，原操作 lookup 可以返回 not-found，二者不得混用。
+
+请求固定使用且必须恰好包含一个 `x-request-id`（客户端相关 ID，响应 header/body 对应一致）、内存态 `x-sentinel-csrf` 与命令 `idempotency-key`。缺失、重复或格式非法的 `x-request-id` 以 `400 invalid_request` 拒绝；错误响应不得回显非法值，使用服务端生成的 request ID。登录/注销通过当前会话事实核查未知结果，不建立幂等操作查询；账号、规则、源及初始化命令则要求原 requestKey。后台按当前 Cookie/Origin 授权，不相信 legacy x-user-id。传输 owner 是本次鉴权/引导观察 generation，不得直接用 React 的 checking/匿名显示状态拼接；App 装配须证明实际换会话的迟到请求、CSRF 切换及新的 Cookie 读回。
 
 逐页 wire schemas / 完整 endpoints / OpenAPI / 正负样例 → 同一 foundation HTTP adapter + 未匹配 Console 请求拒绝的 MSW → App 正式 async DI / 删除旧路径 → mock 与受控 live 同实现 → Python 真实 DB/源/重启/权限 E2E。每步单独留证，不以 schema、HTTP 200、compile 或内部探针代替后续层。最终验收以执行清单 F6/F7/B0 为准。
+
+## 15. Console API 0.10.0 增量：本机首次初始化授权
+
+0.10.0 新增 `POST /api/v1/system/bootstrap/authorize-local`。请求严格为空对象 `{}`，成功响应为 `{authorized:true}` 并设置短时、HttpOnly、SameSite=Strict 的 bootstrap grant；该 grant 仅允许首次配置步骤，不创建也不代表管理员会话。
+
+此路由仍要求精确允许的 `Origin`、CSRF cookie/header 双提交及有效 request ID。授权层同时要求部署明确判定允许本机免码路径、setup window 仍开放，并且真实连接 peer 是 loopback。部署只有在 bind host 是 loopback、所有允许的 Browser Origin 都是 loopback，且未配置可信反向代理时，才启用该路径。其他拓扑继续通过既有 `POST /api/v1/system/bootstrap/authorize` 提交部署生成的一次性 `operatorCode`；本机 endpoint 不接收或推断 operator code。
+
+错误语义为 `400 invalid_request`、`403 forbidden`/`csrf_failed`、`409 conflict`（setup 已关闭）、`429 rate_limited`（含有界 `retryAfterMs`）和 `503 service_unavailable`。此新增不改变既有远程授权、初始化提交/回执、登录或 Console API 0.9.0 规则观察 wire。发行包的 key/path 初始化仍是独立安装运维事项；本机免码不意味着允许公网访问或绕过 Origin/CSRF/setup 状态门禁。
+
+0.10.0 于 **2026-10-17 由产品/API owner 批准**。批准范围仅为 loopback 本机首次授权路由，不代表 Prometheus monitoring-source API 已冻结、Console wheel 发布或最终 E2E 已通过。
+
+## 16. Console API 0.11.0 增量：监控源候选检查
+
+0.11.0 新增 `POST /api/v2/monitoring/sources/check` 与
+`GET /api/v2/monitoring/sources/checks/{checkId}`。这些操作只冻结一次只读候选检查和其短时回执查询；监控源目录、详情、保存/删除命令及 host metric query 仍需各自完成设计与后续兼容扩展，不由本增量假定已经实现。
+
+- POST 仅 admin 可用，须精确 Origin 与 CSRF；输入严格由 profile/source candidate 与 credentials 组成。支持无认证、直接 Basic/Bearer，以及由部署侧 resolver 解出的 opaque credential reference。引用值永远不会作为 Prometheus 凭证发送；resolver 不存在或失败返回脱敏 `503 service_unavailable`。
+- 候选固定为 `prometheus-compatible` + `node-exporter-v1`，不接收任意 PromQL；身份标签/精确 selector、抓取间隔、stale 阈值和 body 均有界。候选检查只对目标发只读请求，不写 source registry 或 Prometheus scrape 配置。
+- 成功响应只含随机 `checkId`、source id/revision、候选 HMAC 指纹、检查/过期时间，以及有限 connection/queryApi/profile/identity 计数和错误类别；不会回显 endpoint、原始 label、异常文本、凭证、reference 或响应 body。SQL 回执只存这些安全字段、actor 与 session digest，TTL 为 10 分钟。
+- GET 要求当前有效 admin session，且必须是创建该回执的同一 account 与同一浏览器 session；过期或不匹配返回 `not_found`。响应使用 `no-store` 与 `Vary: Cookie`。
+- 该检查回执尚未被 source mutation 消费；在候选保存命令冻结并实现前，不得把探测成功当作配置已保存或监控数据已接入。
+
+0.11.0 于 **2026-10-17 按产品 owner 已授权的推荐默认值冻结候选检查边界**。冻结只涵盖两个 operation 的 wire，不等于完整 T05.3、真实 Prometheus/Exporter 验收、PostgreSQL/MySQL migration 验收或浏览器 E2E 通过。
+
+## 17. Console API 0.12.0 增量：安全监控源读取
+
+0.12.0 保留 0.11.0 候选检查与回执 wire 不变，新增：
+`GET /api/v2/monitoring/sources`（已登录的 admin/view 可读）与
+`GET /api/v2/monitoring/sources/{sourceId}`（仅 admin 可读）。目录只返回有界的安全元数据，不返回 endpoint 或凭证；详情也只暴露 endpoint 的 scheme/authority，路径和认证材料始终 write-only。二者均 `no-store` 且 `Vary: Cookie`。
+
+该增量让系统管理页面能从正式 SQL registry 读取监控源目录/编辑上下文，不代表保存、修改、停用、删除命令或 HOST 历史查询已接通；不存在来源时返回空目录是正常状态，来源不存在返回 `404 not_found`。命令幂等、revision 更新、依赖引用冲突与对应 UI 将由后续 additive API 增量冻结，不能把 candidate check 当作保存成功。
+
+生成快照为 `docs/protocol/console-api-0.12.0.openapi.json`；0.11.0 历史快照 `docs/protocol/console-api-0.11.0.openapi.json` 仅保留原候选检查 API。
+
+## 18. Console API 0.13.0 增量：监控源管理命令
+
+0.13.0 在不改变 0.12.0 读取 DTO 与既有 operation wire 的前提下新增：
+
+- `POST /api/v2/monitoring/sources/commands`：仅 admin；要求有效会话、同源 `Origin`、CSRF 与唯一 `Idempotency-Key`。请求是严格判别联合 `create | update | set-enabled | delete`。更新/启停/删除使用当前 `expectedRevision` 做 compare-and-swap；创建/更新必须提交当前操作者、当前浏览器会话创建的未过期成功检查回执，或明确指定跳过检查。跳过检查的已保存来源明确标记 `verified=false`；单独启停保留现有 endpoint、profile 和加密凭证，不需要将凭证重新输入或回显。
+- `GET /api/v2/monitoring/sources/operations/{requestKey}`：仅原 account + 同一浏览器 session 可读；其他身份看到 `not_found`，不会泄露操作是否存在。回执可安全重试读取，不得因客户端超时换 key 重放写命令。
+
+来源变更、探测回执消费、幂等操作记录和安全审计事件必须在同一 SQL transaction 中原子提交。重复相同 key 与相同 canonical 输入返回原结果且不重复副作用；相同 key 用于不同输入返回 `409 idempotency_conflict`。凭证以 write-only 形式输入，仅加密保存；响应、目录、操作回执和审计不得回显 endpoint 完整路径、秘密、密文或 credential reference。凭证更新必须显式指定 `keep | replace | clear`，不以省略字段猜测意图。
+
+命令回执只包含 `completed | rejected`、requestKey、source ID/revision、enabled/verified 和有限拒绝原因；操作查询找不到或不属于当前会话时统一返回 `not_found`。版本冲突、来源缺失、检查缺失或候选不匹配均为安全拒绝，不泄漏 SQL/Provider 异常。此增量冻结 HTTP 线形及事务不变量，不代表三个 SQL 方言、真实 Prometheus、UI 管理工作流或最终 E2E 已通过。
+
+生成快照为 `docs/protocol/console-api-0.13.0.openapi.json`；0.12.0 快照继续保留原安全读取 operation 集合作为不可变历史版本。
+
+## 19. Console API 0.14.0 增量：HOST 指标查询
+
+0.14.0 新增只读 `GET /api/v2/monitoring/sources/{sourceId}/host-metrics`，访问要求已登录且具备 `metrics:view`。请求只接受 `from`、`to`、`stepMs` 三个参数；时间区间为 UTC 半开区间 `[from,to)`，点数超过每序列 1,000 时在访问 provider 前拒绝。端点、凭证、selector 与 PromQL 只能来自服务端保存的监控源，不从浏览器接受。
+
+响应最多包含 200 个稳定 host identity 和四类固定 metric：CPU busy ratio、memory used bytes、memory used ratio、Linux load1。每个 host 必须有四条 metric identity；各序列最多 1,000 个真实样本，并携带 unit、quality、reason。未采到的点必须保持缺口；`no_samples`、`partial`、`stale`、`not_integrated`、`unavailable` 不得折叠成零。响应只暴露配置的身份标签，不回传 Prometheus 其他标签、原始 provider 错误、endpoint、凭证或 PromQL。
+
+HOST 与现有 PROCESS Metrics V2 是独立事实域：该 API 不推断应用 QPS/TPS，不写入 SQL 时间序列，不改变 PROCESS 的 metric denominator、scope 或 wire。Python 侧由固定 `node-exporter-v1` Prometheus Adapter 查询，保持部署管理的目标 allowlist/pinned transport、认证 secret resolver、固定 PromQL、查询超时与响应边界。当前接口定义和 focused test 通过不代表真实 Prometheus、Collector 部署引导、React 图表或完整 E2E 已验收。
+
+生成快照为 `docs/protocol/console-api-0.14.0.openapi.json`；0.13.0 快照保持不可变。
+
+## 20. Console API 0.16.0 增量：历史进程规则加载观察
+
+新增只读 `GET /api/v2/rules/load-observation-history`，要求已登录。请求必须提供精确的 `environmentId`、`appId`、`bindingId`，可选 `instanceId`，并使用有界 `page`/`pageSize` 分页。只读 SQL Collector durable inbox，不同步访问 Nacos/Consul。
+
+响应只包含已持久化的观察元数据、规则指纹和 Collector 收件时间，并将 process epoch 标注为 `superseded`、`revoked` 或 `no_current_epoch`。当前 epoch 的事件被排除；历史页与 `GET /api/v2/rules/load-observations` 的当前目标目录及计数严格分离。缺少 binding 时 coverage 为 partial；对存在的 binding，complete 且 total 为 0 仅表示保留的历史观察中没有记录，不代表没有实例或规则未加载。证书 principal、凭证、原始 body 和规则正文不出现在响应中。
+
+本增量不修改既有当前态 API，不引入新事件存储或修改 Agent Reporting、Runtime Receipt、Metrics V2 wire。生成 OpenAPI 快照为 `docs/protocol/console-api.openapi.json`；旧版本历史快照不覆盖。
+
+## 21. Console API 0.17.0 增量：部署引导目录
+
+新增只读 `GET /api/v1/system/deployment-guides`。仅已登录的 `admin` 与 `view` 可读取；响应使用 `Cache-Control: no-store` 和 `Vary: Cookie`。接口返回 Console release 拥有的目录修订号、有限的 `existing | linux | kubernetes` 路径、当前路径 readiness，以及可选的 Runtime Collector 显式公布 HTTPS endpoint。
+
+本版只冻结目录身份和 readiness 元数据：existing path 表示还需配置并验证已有 Prometheus 查询源；Linux/Kubernetes 当前为 `guide-only`，不声称已有已验证安装模板或可执行部署产物。页面说明由 React 本地化资源提供；经过版本固定、安全审查和 profile 验收的安装/配置 artifacts 才能在后续 additive API 版本中由服务端目录提供。Console 不远程安装 exporter、创建 Prometheus scrape target、修改 Kubernetes 或配置 Runtime。
+
+Runtime Collector endpoint 仅来自部署者显式设置的 `SENTINEL_CONSOLE_RUNTIME_COLLECTOR_ADVERTISED_URL`，要求 HTTPS 且禁止 user-info、query、fragment；未配置时响应 `state=not_configured, endpoint=null`。不得从 Console/Collector bind 地址、`Host`/`Forwarded` 请求头、浏览器 localhost 或 Reporter 配置推断可达地址。该 endpoint 与 Prometheus 查询地址、Exporter scrape target 是不同字段与不同职责。
+
+生成的 `docs/protocol/console-api.openapi.json` 包含 0.17.0 响应 schema 与未配置示例。API 接口与 DTO 的定向测试通过，不代表 Linux/Kubernetes 部署已经验收，也不关闭 T05.3/T05.4/T07.1。
+
+## 22. Console API 0.18.0 增量：监控源删除引用保护
+
+删除仍被 `console_host_instance_association` 引用的监控源，返回 durable
+operation receipt：`status: "rejected"`、`reason: "source_in_use"`。源记录、关联、探测回执和版本均保持不变；操作回执与拒绝审计按常规事务持久化。前端提示管理员先移除主机实例关联再重试。0.17.0 的历史 OpenAPI 快照保持不变。
+
+## 23. Console API 0.19.0 增量：管理员账号生命周期
+
+`POST /api/v1/accounts/commands` 增加两个严格命令变体，仍要求 admin 会话、Origin、CSRF 和 header/body 相同的幂等键：
+
+- `reset_password`: `{ kind, requestKey, accountId, revision, password }`。password 是只写的 8–32 UTF-16 码元；不要求目标旧密码或确认密码。创建账号、初始化管理员和所有新密码均采用 8–32 UTF-16 码元（含边界），不 trim 或 Unicode 归一化；连接凭证有独立长度限制。事务内校验目标版本并更新 Argon2id 摘要、撤销目标全部会话；不改变停用状态。登录发放会话时还会锁定并比对已校验密码摘要，拒绝跨重置竞态的旧凭证登录。
+- `delete`: `{ kind, requestKey, accountId, revision }`。设置逻辑删除时间与 disabled，撤销全部会话。目录排除、详情返回 null、登录拒绝；用户名继续占用，审计、版本、发布和原操作回执保留。前端确认框输入账号名只是本地防误触，不进入命令 DTO。
+
+内置账号拒绝管理命令，但当前 admin 可通过 `reset_password` 重置自己的密码；该事务会更新摘要并撤销目标账号的全部会话，成功后必须重新登录。自身 `delete` 返回 `self_operation`；内置账号仍不能停用或降级。本人也可继续通过 `/auth/password` 使用旧密码修改。最后有效管理员不能停用、降级或删除。目标删除后旧 revision 不能复活身份。事务串行化、CAS、HMAC 幂等摘要与审计沿用原通道；同键异密码是 409，相同命令读回原最终安全快照，不返回密码或哈希。
+
+completed 回执沿用安全 AccountRecord；delete 回执为删除时的 disabled 快照，不表示其仍存在于目录。操作 lookup 可读回该原快照；账号读接口继续返回 null。数据库迁移 `0041_account_lifecycle` 增加 nullable tombstone 并扩展拒绝原因约束；既有账号不改变密码、状态或角色。OpenAPI 当前生产版本更新为 0.19.0。

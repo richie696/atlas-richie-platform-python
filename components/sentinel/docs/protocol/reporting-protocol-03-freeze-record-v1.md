@@ -1,8 +1,8 @@
 # Atlas Richie Agent Reporting Envelope Schema — V1 Freeze Record
 
 > **Protocol**: `atlas-richie-agent-reporting`
-> **Version**: 1.0 (Frozen)
-> **Status**: Frozen — 5-owner sign-off complete (2026-09-13)
+> **Version**: 1.0 Envelope Schema (Frozen)
+> **Status**: Envelope schema frozen — 5-owner schema sign-off complete (2026-09-13); transport remains a draft
 > **Date**: 2026-09-13
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0
@@ -13,8 +13,8 @@
 
 ## Abstract
 
-This document records the V1 freeze candidate of the Atlas Richie
-Agent Reporting Envelope Schema. It is the pending sign-off record for
+This document records the completed V1 freeze of the Atlas Richie
+Agent Reporting Envelope Schema. It is the sign-off record for
 [`reporting-protocol-01-envelope-v1.md`](./reporting-protocol-01-envelope-v1.md) and the schema-level
 contract that Reporters and Collectors MUST honour.
 
@@ -23,14 +23,17 @@ all field definitions, payload types, and serialization rules, is
 specified in [`reporting-protocol-01-envelope-v1.md`](./reporting-protocol-01-envelope-v1.md). The outer
 transport, authentication, batching, and sequence semantics are
 specified in [`reporting-protocol-02-transport-v1.md`](./reporting-protocol-02-transport-v1.md). The present
-document records only the freeze event and the immutability
-guarantees that follow from it.
+document records only the envelope-schema freeze and the immutability
+guarantees that follow from it. It does **not** freeze the outer transport;
+`reporting-protocol-02-transport-v1.md` remains pending transport freeze and
+owner sign-off.
 
 ## Status of This Memo
 
-This document records a V1 freeze candidate. It is neither a released nor an
-immutable wire contract until every owner signs §5. Distribution of this memo
-is unlimited.
+This document records the V1 envelope-schema freeze and its schema-owner
+signatures in §5. The freeze does not extend to the outer transport, which
+remains a draft pending its own freeze and owner sign-off. Distribution of
+this memo is unlimited.
 
 ## Copyright Notice
 
@@ -65,6 +68,10 @@ MUST NOT change without a new version bump, ADR, and 5-owner sign-off:
 - The serialization rules (UTF-8 strings, ISO 8601 microsecond time,
   lowercase UUIDs, key-based object parsing).
 - The size limits (envelope ≤ 16 KB; see `reporting-protocol-02-transport-v1.md` §3.4).
+
+This declaration freezes the envelope schema only. The transport, authentication,
+batching, sequencing, and acknowledgment rules in
+`reporting-protocol-02-transport-v1.md` are **not frozen** by this record.
 
 ## 2. Immutability Guarantees
 

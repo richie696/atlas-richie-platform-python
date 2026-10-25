@@ -1,6 +1,6 @@
 # B0.1 — Registered configuration-source check HTTP slice
 
-Status: **admin/CSRF contract and bounded read-only Nacos/Consul checker implemented; live provider acceptance remains open**.
+Status: **admin/CSRF contract and bounded read-only Nacos/Consul checker implemented; disposable-provider acceptance is partial, production deployment acceptance remains open**.
 
 ## Contract and boundary
 
@@ -142,6 +142,99 @@ The command passed **30 tests**; **2 loopback cases were deselected** because
 the sandbox does not permit local listener binding. `python -m compileall`
 passed for the changed module and test. No real Nacos/Consul, TLS/ACL, database,
 or browser E2E was involved. B0.1 remains open.
+
+## Installed-wheel Nacos auth acceptance (2026-10-13)
+
+The next deployment-level slice exercises the same trust boundary through the
+installed `sentinel-console` CLI rather than an in-process checker composition:
+
+| Risk | Acceptance proof |
+| --- | --- |
+| First-run setup accepts a Nacos endpoint but the installed service cannot resolve it after restart | Build/install the current Console wheel, start the standard two-worker CLI from no runtime locator, initialize against disposable auth-enabled Nacos 3.2.4 over a loopback HTTPS proxy with an explicitly provisioned CA, and verify the exact Nacos endpoint remains usable after initialization. **Passed.** |
+| Direct source credentials are not protected through SQL or exposed on read | Inspect the SQL registered-source row for encrypted credential payload; source directory, initialization receipt, connection status, CLI log, and runtime files must not contain the synthetic password. **Passed.** |
+| A wrong credential or stored-credential check silently succeeds | Submit an invalid direct Nacos password and require `unreachable/authentication` without changing the registered source's unknown state; then use `authentication.mode=keep` and require reachable/read capability plus persisted `available` state. **Passed.** |
+
+Only disposable MySQL/Nacos services and synthetic credentials are allowed. The
+test-owned Nacos proxy certificate must include loopback IP SAN so standard CLI
+DNS/target-policy code is exercised without modifying host resolver state. This
+acceptance proves the local installed deployment path, not a production Nacos
+cluster, external Secret Manager, native Nacos TLS listener, or browser E2E.
+The installed-wheel path is run independently against disposable MySQL and
+PostgreSQL databases so SQL dialect parity is observed without sharing a
+database between acceptance cases.
+
+Command (from the repository root):
+
+```bash
+SENTINEL_CONSOLE_RUN_NACOS_AUTH_ACCEPTANCE=1 \
+SENTINEL_CONSOLE_RUN_INSTALLED_NACOS_AUTH_ACCEPTANCE=1 \
+SENTINEL_CONSOLE_RUN_APACHE_PROXY_ACCEPTANCE=0 \
+components/sentinel/sentinel-console/tools/with_disposable_e2e_dependencies.sh \
+uv run --project components/sentinel/sentinel-console --extra test --extra mysql \
+--extra server --extra nacos-grpc pytest -q --tb=short \
+components/sentinel/sentinel-console/tests/test_registered_source_nacos_auth_acceptance.py \
+-k installed_cli
+```
+
+MySQL command result: **1 passed in 29.32s** using disposable MySQL 8.4.11
+with TLS and auth-enabled Nacos 3.2.4. PostgreSQL command (same opt-in Nacos
+fixture, run with the separate disposable PostgreSQL runner):
+
+```bash
+SENTINEL_CONSOLE_RUN_NACOS_AUTH_ACCEPTANCE=1 \
+SENTINEL_CONSOLE_RUN_INSTALLED_NACOS_POSTGRES_AUTH_ACCEPTANCE=1 \
+components/sentinel/sentinel-console/tools/with_disposable_postgresql_acceptance.sh \
+uv run --project components/sentinel/sentinel-console --extra test --extra postgres \
+--extra server --extra nacos-grpc pytest -q --tb=short \
+components/sentinel/sentinel-console/tests/test_registered_source_nacos_auth_acceptance.py \
+-k installed_cli_postgresql
+```
+
+PostgreSQL result: **1 passed in 26.57s** on disposable TLS PostgreSQL 16 with
+`sslmode=verify-full`. The MySQL shared-helper regression rerun passed **1 in
+21.38s**. In both dialects the installed CLI ran two workers, began without a
+runtime database locator, initialized through the setup HTTP flow, persisted
+the source secret as ciphertext, rejected a bad password without changing
+probe state, then authenticated with the stored credential and reported
+`available`/`read`. Ruff check/format, `compileall`, and `git diff --check`
+passed. Owner-run MySQL/Consul/PostgreSQL containers and the test-owned Nacos
+container were removed on exit; a post-run name check found no matching
+containers.
+
+PostgreSQL installed-CLI/Nacos authentication case re-run on 2026-10-13:
+**1 passed in 28.16s** with the isolated PostgreSQL runner. The post-run
+container-name check was empty; this refresh confirms only the same local
+acceptance slice and does not broaden its deployment or E2E claims.
+
+This is an installed-wheel/local-provider acceptance slice. It does not close
+B0.1: user-specific DNS, native TLS, ingress, production target allowlists,
+external Secret delivery/rotation, rule publication, and React-to-Python
+browser E2E remain unverified.
+
+## Installed-wheel PostgreSQL Consul ACL source-read acceptance (2026-10-13)
+
+The registered-source directory and saved-credential probe path was also
+verified through the installed Console wheel on disposable TLS PostgreSQL 16
+and a test-owned ACL/TLS Consul server. The test initialized the SQL database
+through the two-worker CLI setup flow, authenticated as admin, read the saved
+Consul source through `GET /api/v1/system/sources`, and verified provider,
+endpoint, authentication mode, revision, and token redaction. It then checked
+the exact saved source revision and required a successful Consul read; invalid
+credentials were rejected without changing the source's `unknown` state.
+
+Command (from `components/sentinel/sentinel-console/`):
+
+```bash
+SENTINEL_CONSOLE_RUN_CONSUL_ACL_ACCEPTANCE=1 \
+tools/with_disposable_postgresql_acceptance.sh \
+uv run --no-sync --extra test --extra postgres pytest -q --tb=short \
+tests/test_installed_cli_bootstrap_acceptance.py::InstalledCliConsulAclAcceptanceTests::test_installed_cli_postgresql_reads_and_checks_persisted_acl_source
+```
+
+Result: **1 passed in 17.06s**. The PostgreSQL runner and test-owned Consul
+server were cleaned up. This complements the MySQL installed-CLI source-list
+slice but does not establish production Consul topology/secret delivery or
+React-to-Python browser E2E; B0.1 remains open.
 
 ## 2026-10-09 follow-up — Strict Nacos JSON success-code validation
 

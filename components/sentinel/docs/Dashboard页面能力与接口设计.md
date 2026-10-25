@@ -1,9 +1,10 @@
 # Sentinel Dashboard 页面能力与接口设计
 
-> 文档状态：设计草案，未冻结 Console wire protocol。
-> 日期：2026-10-07。读者：产品、前端、Python 管理服务开发者。
+> 文档状态：页面能力与交互设计仍在演进；Console wire protocol 0.19.0 已按 [Console API 契约](CONSOLE_API_CONTRACT.md) §9–23 冻结。
+> 日期：2026-10-16。读者：产品、前端、Python 管理服务开发者。
 > 范围：11 个页面路由及其内部交互；不是现有功能的生产可用声明。
 > 使用方法：先读共同边界，再按页面进入功能、数据、接口与验收条件。
+> 新增目标范围：监控数据源接入、HOST 指标查询、零业务流量的规则读取与原生/managed 实例加载观察已获产品方向确认，尚待实现与定向验收。Console 0.19.0 已冻结；后续仍不得修改既有 Metrics V2 或 Runtime Receipt V1。
 
 ## 0. 产品目标与主管来源
 
@@ -15,17 +16,22 @@
 | 规则治理       | 内存修改丢失、规则难配置、大促后难恢复 | 完整快照写回配置中心、不可变版本、计划与生效跟踪 | 规则                           |
 | 故障调查       | 有异常但缺时间线和上下文               | 可追溯事实、相关版本、指标窗口和下一步           | 故障分析                       |
 | 控制面运维     | 无法区分浏览器、采集、配置源或服务故障 | 组件健康、覆盖、权限与审计事实                   | 系统管理                       |
+| 监控接入       | 有主机图表却找不到采集/查询接入入口 | 登记监控查询源、部署采集器并核实实际指标覆盖 | 系统管理的连接与采集、主机视图 |
+| 规则预配置     | 无请求/无实例时看不到已存储规则 | 从已绑定的配置中心读取并展示规则，无需先发业务请求 | 规则 |
+| 规则使用观察   | 不清楚哪些实例加载了规则，加载与命中容易混淆 | 原生/managed 规则关联当前实例加载状态，0/未知/历史分开展示 | 规则详情、应用与实例 |
 | 安全启动与访问 | 首次无数据库、无管理员，或账户权限不清 | 一次初始化、安全登录、简单 admin/view 管理       | 初始化、登录、账户、角色、改密 |
 
 本文主管**页面用例及页面数据需求**，不另建第二套已冻结协议。关联来源：
 
+- [规则使用与监控接入功能、UI/UE详细设计](DASHBOARD_INTEGRATION_DESIGN.md)：本轮新增能力的详细功能与交互主管来源；本文件§3.4/§4.7/§5.4/§7.4只提供入口摘要。
+
 - [规则控制台与运行观测设计](DASHBOARD_CONTROL_PLANE.md)：产品总体边界、指标口径、配置中心写回与规则兼容 profile。
-- [Console API 契约](CONSOLE_API_CONTRACT.md)：现有 Console 通信草案；后续收敛后的 wire 定义应在此维护，而非同时修改多份表。
-- [初始化与身份 API](../dashboard-prototype/docs/api/IDENTITY_AND_ACCESS_API.md)：现有身份草案；账号/初始化需求作为输入，最终 wire 定义应归并到 Console 契约，保留本文件为阅读入口。
+- [Console API 契约](CONSOLE_API_CONTRACT.md)：现行 Console wire 的唯一规范入口；冻结版本与后续增量以该契约为准，不在页面文档复制或另行冻结 wire 字段。
+- [初始化与身份 API](../dashboard-prototype/docs/api/IDENTITY_AND_ACCESS_API.md)：身份需求的历史草案，非规范 API；当前 wire 以 Console API 契约和生成 OpenAPI 为准。
 - [Agent Reporting envelope](protocol/reporting-protocol-01-envelope-v1.md)、[transport](protocol/reporting-protocol-02-transport-v1.md)、[freeze record](protocol/reporting-protocol-03-freeze-record-v1.md)：保持已有版本与冻结规则。
 - [Cluster Token 协议](protocol/cluster-token-protocol-v1.md)：独立准入协议，浏览器不参与 Token 请求。
 
-历史草案之间存在不一致；当前 F6 的唯一通信收敛入口为 `CONSOLE_API_CONTRACT.md` §9，旧 §0–8 仅保留沿革。本文接口/DTO 均为**页面需求投影**，不代表签字、已实现或已经对外发布；唯一 wire schema、示例和错误码落回该契约入口，不在本文件重复机器字段。
+历史草案之间存在不一致；当前 F6 唯一生效合同为 `CONSOLE_API_CONTRACT.md` §9 与其生成 OpenAPI，旧 §0–8 仅保留沿革。本文接口/DTO 均为**页面需求投影**，不替代已冻结 wire，也不代表 Python 全部实现、生产部署或对外发布；唯一 wire schema、示例和错误码落回该契约入口，不在本文件重复机器字段。
 
 ## 1. 共同边界与数据约束
 
@@ -54,46 +60,35 @@ Nacos/Consul 持有当前生效规则；控制面数据库保存账号、审计�
 
 ### 1.3 观察上下文、时间与缺失值
 
-候选 `ObservationQuery`：`env`、可选 `appId/resource/instanceId`、`from/to`（RFC 3339 UTC）、`stepMs`、`scope`、`metrics`。相对窗口 `15m/1h` 先解析为明确 `[from,to)`；后台返回实际执行窗口，不能只改标签。具体参数名与既有 `app/window` 草案需统一后冻结。
+各页面的 query DTO 由 endpoint schema 定义，本设计不再假设存在统一的 `ObservationQuery` wire 类型。观测响应共用 `ObservationContext`：`environmentId/appId/instanceId/resource/scope/window{from,to}`；扁平 GET 参数按 endpoint 选择适用的身份字段，并使用 `from/to`、`scope`。指标查询另外要求 `metrics/stepMs`，总览和实例目录有各自的分页/搜索字段，事件时间线使用不透明 `cursor`。权威字段、约束和失败码见各页第 2–12 章、生成 OpenAPI 与 feature `api/*Wire.ts`，不得从 URL 名或页面标签推造协议字段。
 
-页面 URL 已支持 `app/range/account/view/env/instance/resource/event/version/scope/q`；各页实际查询与下钻的消费者迁移仍待完成。`all` 是 UI 哨兵值，查询时省略 `appId`，不当作真实应用。未注册应用/实例显示不存在，不静默回落到另一应用的数据。环境目录来自后台，不能继续使用无操作的“生产”下拉框。
+UI 的相对时间范围必须先解析为明确 UTC 半开窗口 `[from,to)`；服务端回显规范化后的查询与实际窗口。UTC wire instant 为 `Z` 结尾且固定毫秒精度；显示格式由 locale/Intl 投影，不改变 wire。`app=all` 是 UI 哨兵，查询时省略 `appId`，不能作为真实应用 ID。环境和应用选择来自授权目录，不静态假设“生产”。所有 opaque identity/version ID 按字符串处理；runtime `(epoch,revision,checksum)`、Console version ID 与配置源原生 revision 不得互换。
 
-所有身份 ID 用字符串。时间用 RFC 3339 UTC，展示由 Intl/locale 与用户时区处理；大整数版本序号用十进制字符串，不按字典序比较。后台的原生配置索引、Console 版本 ID 与 runtime `(epoch,revision,checksum)` 分别命名，不互相代替。
+### 1.4 现行 DTO 与跨页面约束
 
-### 1.4 共同 DTO 需求（候选字段，不是现有接口）
+本节说明现行 DTO 的归属和跨页面约束，不定义第二套字段表。唯一字段级合同是生成的 `docs/protocol/console-api.openapi.json` 与对应 React `api/*Wire.ts`；Python serializer/parser 必须逐项遵守它们。页面章节记录其用户动作、业务不变量和错误恢复，不能用下面的摘要覆盖 endpoint schema。
 
-| 数据            | 字段与语义                                                                                                   |
-| --------------- | ------------------------------------------------------------------------------------------------------------ |
-| `Page<T>`       | `items/page/pageSize/total`；稳定排序与最大 pageSize。事件时间线可采用 cursor，不能伪装精确 total            |
-| `Coverage`      | `expected/reported/unknown`、`asOf`、`inventorySource`；无权威实例目录时 expected 为 null，不宣称全量覆盖    |
-| `MetricReading` | `value: number                                                                                               | null`、`unit`、`scope`、`source`、`sampledAt`、`window`、`quality`、`coverage` |
-| `MetricSeries`  | `metric`、`unit`、`scope`、`source`、`window{from,to,stepMs}`、`points[{at,value}]`、`quality`、`coverage`   |
-| `DataQuality`   | `available/not_integrated/no_samples/stale/partial` 与稳定 `reasonCode`；网络和鉴权错误独立处理，不混入 0 值 |
-| `Annotation`    | `id/at/kind/bindingId/versionId/publicationId`；来自实际发布或生效记录，只画窗口内标记                       |
-| `FieldIssue`    | `path/code/params`；前端按三语资源翻译，不直接展示厂商原始错误或字段名标签                                   |
-| `ApiFailure`    | `error{code,requestId,issues?,retryAfterMs?}`；message 仅可为脱敏兜底，不是唯一判定依据                      |
+- 分页/目录形状按操作区分：应用、实例、账号等目录使用各自带 `items/page/pageSize/total`（或其页面专属计数）的响应；事件时间线使用 `filteredTotal/nextCursor`。不能强行套一个 `Page<T>`，或将 cursor 冒充 offset。
+- 观测 wire 使用 `MetricBundle` 与 `MetricReading`、`MetricSeries`、`ObservationAnnotation`、`ObservationCoverage`。关键字段及单位/来源/分母/质量由 `shared/api/observationWire.ts` 定义；摘要、采样点与 management annotations 不能互相推导。每个指标的 denominator 必须符合指标目录映射：`http_qps/rt_p95 → completed_http_requests`、`resource_entry_rate/blocked_ratio → attempted_entries`、`tps → business_transactions`、`cpu_ratio → cpu_cores`、`memory_ratio → memory_limit_bytes`、`memory_bytes → reporting_processes`。`memory_bytes` 是可在无已知内存 limit 时仍有效的原始 RSS 字节值；它的汇总人口口径是上报进程，不能标成 ratio 的内存容量基数。同一 bundle 中同一 metric 的 summary 与 series 必须具有完全一致的 `unit/source/denominator/coverage/quality`；summary 的 scalar 值不推导为最后一个采样点。
+- 错误 wire 使用 `ConsoleErrorSchema`：`error{code,requestId,issues?,retryAfterMs?}`；字段问题是 `{field,reason}`，不是 `path/code/params`。有限错误码及 HTTP status 由 `core/api/protocol/common.ts` 和各 endpoint contract 共同定义。
+- 不可用、缺样本、部分覆盖和陈旧观测按现行 `quality`/coverage schema 表达；网络失败、权限撤销、目标退役和服务拒绝仍是不同错误/状态，不得用 0、空列表或旧查询数据伪装成成功。
+- DTO 是 JSON 数据，不包含 ReactNode、函数、样式 tone、翻译后单位或图表计算结果；domain/UI model 与 wire DTO 通过显式 mapper 转换。
 
-DTO 不携带 ReactNode、函数、样式 tone、翻译后的单位字符串或 `seriesForRange`；界面 VM 与 wire DTO 分离。数据的名称可以是运维录入内容；系统产生的状态、建议、错误由稳定 code + params 翻译。
+指标解释仍遵循以下产品不变量：无独立业务埋点不展示 TPS；无可聚合样本不生成 p95；host/container/process 不混用；各实例 p95 不取平均；分母为零或覆盖未知时不伪造 ratio/全量值。Sentinel 本地 histogram 的 `p95_upper_bound_ns` 使用 nearest-rank 返回桶上界，不做插值；空样本或 p95 落入 overflow 桶时必须表达 unavailable。ratio 的 wire 单位按具体 metric schema 声明，百分数只在呈现层转换。
 
-QPS、TPS、RT、阻断与 CPU 的口径沿用总体设计：没有业务事务埋点不展示 TPS；无 histogram 不展示可聚合 p95；host/container/process 不混用；分母为 0 时比率为 null。CPU/阻断 ratio 采用 0..1 的候选 wire 表达，由 mapper 转换为百分数。各实例的 p95 不取平均。实际 memoryBytes 与 limitBytes 同时提供才计算使用率。
+### 1.5 现行 Console HTTP、命令和流边界
 
-### 1.5 HTTP、命令和流的共同候选策略
+以下是现行合同摘要；Console API 当前为 0.19.0（64 paths / 68 operations），详细路径、版本与同源 runtime registry 以生成 OpenAPI 和 [Console API 契约](CONSOLE_API_CONTRACT.md) 为准。身份使用 `/auth/*`，首次初始化使用 `/system/bootstrap/*`，规则生命周期使用 `/rulesets/{bindingId}/*` 等 binding-scoped endpoint；零流量规则目录另使用 `/api/v2/rules/catalog*`。不存在独立 `/rules/publish` 写入路径；规则 mutation 使用 `POST /rulesets/{bindingId}/commands` 的判别命令和对应原操作查询。
 
-下文章节路径均相对于 `/api/v1`。为避免两份会话规范，候选沿用身份稿的 `/auth/*` 和 `/system/bootstrap*`；规则采用显式 `/rulesets/{bindingId}/*`，防止写错环境或配置项。现有 `/rules/publish` 等无 binding 路径尚无 Console 服务端实现，迁移决定仍需记录。
+成功响应依 endpoint 使用严格、类型化 JSON；bodyless operation 明确为 `204`。错误统一使用 `ConsoleErrorSchema`，各 endpoint 只声明有限允许的 code/status。`ApiResult<T>` 不是 Console wire envelope。列表形状、空值表达与详情 not-found 语义按具体 operation 处理，不能跨 endpoint 猜测。
 
-候选成功返回类型化 JSON（列表为 Page），失败按 ApiFailure，空成功为 204。现有改写计划的 `ApiResult<T>` 与之不同：必须在冻结时选择一种 wire 信封；如底座请求机制需要 ApiResult，gateway 可显式适配，不能两端各自猜测或直接强转。分页也只能冻结一种形状。
+写命令仅在 endpoint 声明时要求 `Idempotency-Key`，并与 body `requestKey` 一致；key 冲突是 `409 idempotency_conflict`。账户 last-admin、内置账号、角色/状态 revision 等业务拒绝通过账号 command observation 的 `rejected.reason` 表达，不冒充 HTTP 409。初始化关闭后返回 `403 bootstrap_unauthorized`；规则基线过期可为 HTTP 409 `conflict`。未知写结果按原 requestKey 查询，不因 `not-found` 推断回滚或重放安全。更新草稿/账号使用各自 revision，不能交叉复用版本号。
 
-写操作按用途定义幂等，不机械要求登录和改密的响应被缓存重放：规则发布、版本、计划、初始化与账号创建使用 `Idempotency-Key`；同 key 不同 body 拒绝，用户超时重试查询原操作结果。自动重试要依赖服务端真实幂等保证，前端防重按钮不是保证。更新草稿/账号需带其独立的基线 revision；不能拿运行规则版本锁账号记录。
+通用错误 status map 为 `400/401/403/404/410/409/422/429/503`，但具体 endpoint 的 code allowlist 是裁决依据：例如实例目标退役为 `410 target_retired`，身份/权限为 `401/403`，输入验证为 `400 invalid_request`，语义拒绝也可能是成功响应中的 typed observation。网络超时/取消/响应解析失败属于 transport/client outcome，不是服务端错误码，也不能都叫配置中心不可用。
 
-HTTP 错误至少区分 400 输入、401 会话、403 权限、404 不存在、409 冲突/重复初始化/最后管理员、422 语义校验或回读不一致、429 限速、503 控制面/依赖不可用。网络、超时、取消、协议解析失败属于客户端错误，不能统称配置中心不可用。
+浏览器会话依赖 session cookie、CSRF cookie/header 双提交和 Origin 校验；需安全 cookie 属性与 HTTPS 的部署边界由 Console 部署配置满足。密码、DSN、Token、凭证引用及 Authorization/Cookie 不进入 URL、localStorage、日志或业务响应体；CSRF header 是明确受限的请求防伪例外，不是用户身份凭证。Bootstrap operator code 仅在 setup 表单短暂输入，由 bootstrap-operator Cookie 授权受限检查/初始化/原操作核查，不预设默认 admin 或允许匿名探测任意目标。
 
-Cookie 会话需 HttpOnly/Secure/SameSite、CSRF 与 Origin 校验；跨源部署还需受限 CORS。密码、DSN、Token、引用解析结果、Authorization/Cookie 均不进入 URL、localStorage、日志或返回体。setup 应有部署侧一次性窗口/引导保护，不能被第一个匿名访问者抢占。
-
-F6 反推补充：一次性 operator authorization code 通过本系统 setup 的启动授权字段输入，不放 URL 或本机持久存储；后台建立受限 bootstrap-operator Cookie，仅能检查/初始化/核查原操作。未获授权时不能向任意数据库/源执行连接检查。这个入口与四步配置分离但仍由唯一 bootstrap 身份 owner 管理，不引入默认 admin 或第二份会话 store。底座传输 adapter 内存持有的会话绑定 CSRF header 是防伪令牌、不是页面身份 DTO 或 bearer 登录凭证；该有限 header 交换是“响应不回读业务秘密”的明确安全例外。
-
-OpenAPI 的 `security` 明确区分身份 Cookie 与 CSRF 证明：`anonymous` 表示无 session cookie 或可选 `BrowserSession` 均可；需要 CSRF 的操作在每个身份候选上再要求 `CsrfCookie`，并仍显式要求 `x-sentinel-csrf` header。因此首次登录不要求已有登录 session，但必须先由 bootstrap 获取配对 CSRF cookie/header；`GET /auth/me` 可无 cookie 并返回匿名状态。CSRF cookie 与 header 是双提交校验的两个部分，不可把 CSRF Cookie 单独视作用户认证。
-
-实时可以先采用参数化轮询；SSE 是后续等价通道而非必须先做的底座。选 SSE 时冻结鉴权、event/id、heartbeat、序列去重、断线重取和过期处理；该流是 Console 读模型，不修改 Reporter 的已冻结事件协议。
+当前实时观测使用有界参数化 HTTP 轮询，Console 查询读模型不修改 Reporter event protocol。SSE/EventSource 没有纳入现行 Console runtime operations；未来若提出流式能力，应新增独立协议决策与版本兼容审查，不能把建议写成已存在合同。
 
 ## 2. 总览 `#/overview`
 
@@ -103,31 +98,49 @@ OpenAPI 的 `security` 明确区分身份 Cookie 与 CSRF 证明：`anonymous` �
 
 ### 2.2 页面数据
 
-`FleetOverview`：`asOf/window/coverage/attention/applications/connectionSummary/annotations`。
-`attention` 含总应用数、关注数、关注 appIds 与 `reasonCode/params`；无关注项时不可下钻未定义 ID。
-`ApplicationSummary` 含 `appId/name/health/healthReasons/instanceCoverage/ruleDelivery` 与 HTTP QPS、RT p95、阻断率、实例平均 CPU/内存的 MetricReading。CPU 平均值须声明分母和采样覆盖，不标为宿主机 CPU。
+当前 wire 与 React 页面模型为 `FleetSnapshot`：`query/asOf/coverage/totalApplications/attentionApplications/attentionTargets/applications/metrics/connections`。`applications` 是服务端分页结果 `{items,total,page,pageSize}`；`attentionTargets` 是明确可下钻的 appId 列表，无目标时不可自行挑选首行。
+`query.context` 是 `{environmentId,appId,instanceId,resource,scope,window:{from,to}}`；Fleet query 不接受实例或资源过滤，但快照内的 `MetricBundle.query.context` 会显式回显实际范围。覆盖对象含 `expected/inventorySource/reporting`（未知 inventory 分母与来源必须成对保持 null）；不能用当前页条数冒充预期 inventory 或 Agent reporting 数。`MetricBundle` 含 `summary/series/annotations`：summary reading 包含 `source/denominator/coverage/quality/metric/unit/value/sampledAt`；series 在相同口径元数据上带 `samples:[{at,value}]`；annotation 为 `{id,kind,at,versionId?,publicationId?,incidentId?}`。连接项另含 `id/provider/state/checkedAt/latencyMs`。
+`FleetApplication` 含 `appId/name/health/instanceCoverage/ruleCoverage/metrics[]`，应用行指标与快照 `metrics` 是两个不同范围。每个 `MetricReading` 必须带指标单位、来源、分母、覆盖和质量语义；CPU 值若非宿主机范围不得标为宿主机 CPU。当前 DTO 不提供 `healthReasons` 或 `ruleDelivery`，页面不得从状态枚举自行推断这些字段。
+Fleet 成功响应的有限状态值为：应用 `health=healthy|attention|unknown`；指标 `quality=available|partial|stale|no_samples|not_integrated`；连接状态 `available|unavailable|not_configured|unknown`。这些值表示观测事实完整性，不可按颜色或空列表相互推断。
 总览卡片与曲线共享所选 `env/app/window/scope` 的同一 MetricBundle；应用目录行的指标绑定各自行内 `appId` 的 application scope，不得将 fleet 汇总复制到每个应用行。TPS 未接入/无样本必须保留 null 与质量状态，覆盖率与读取时间随指标一起展示。
 
 发布标记与曲线对照使用同一份 `FleetSnapshot.metrics`：该 `MetricBundle` 必须与 `FleetSnapshot.query` 的 scope、时间窗、指标集、采样步长一致，且与快照 `asOf` 对齐；`series` 携带实际样本和口径元数据，`annotations` 携带窗口内的 publication identity 与事件时间。它足以绘制真实曲线和发布竖线，不需要复制一份 pairwise comparison DTO。页面不得把时间相关性表述为发布导致的因果结论。
 
 “发布前后数值/变化率”是独立产品能力，不得按窗口名称、固定示例或前端自行挑选的最近点伪造。若后续确认要展示这类数值，F6.1 必须先冻结服务端选择样本的规则（严格事件前/后的样本、最大时间距离、指标 source/denominator/coverage 可比性、缺样本状态及是否允许显示变化率），再决定是否需要独立 DTO；缺少可比样本时只展示未提供/不可比较，不补零或估算。当前正式页面仅画同窗 series 与 annotation，不展示独立的发布前后数值卡片。
 
-| 动作       | 候选接口                                      | 结果与责任                                                  |
-| ---------- | --------------------------------------------- | ----------------------------------------------------------- |
-| 首屏/刷新  | `GET /fleet/overview?env&from&to`             | 同一观测时点的摘要；后台完成范围与聚合                      |
-| 应用表分页 | `GET /applications?env&from&to&page&pageSize` | Page<ApplicationSummary>；统计不是当前页行数                |
-| 趋势窗口   | `GET /metrics/query`                          | MetricSeries[] + Annotation[]；禁止浏览器由累计值造 QPS     |
-| 下钻       | 无写接口                                      | 导航传 appId/env/window，发布标记传 publicationId/versionId |
+| 动作       | 当前正式接口                                                                                                 | 结果与责任                                                     |
+| ---------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| 首屏/刷新  | `GET /api/v1/fleet/overview?environmentId&appId&scope&from&to&page&pageSize&search&stepMs`                   | 同一查询身份下返回 FleetSnapshot；后台负责聚合与分页。         |
+| 应用选项   | `GET /api/v1/observation/catalog`                                                                            | 返回观测上下文目录；不从当前分页结果伪造完整应用选项。         |
+| 趋势窗口   | 由 FleetSnapshot 内 `metrics` 返回；独立实时查询使用 `GET /api/v1/metrics/query`                             | MetricBundle + annotations；禁止浏览器由累计值造 QPS。         |
+| 下钻       | 无写接口                                                                                                     | 导航保留明确 appId/environmentId/window；不产生发布标记写操作。|
+
+总览读取要求有效会话及 `metrics:view`。HTTP 失败投影必须与当前运行时 endpoint 错误码一致：
+
+| HTTP | 稳定错误码 | 页面处理语义 |
+| ---: | --- | --- |
+| 400 | `invalid_request` | 查询参数缺失、重复、未知或格式/范围非法；后端不得调用 fleet authority。 |
+| 401 | `unauthenticated` | 会话缺失或失效；先走统一身份过期处理，不显示空总览。 |
+| 403 | `forbidden` | 会话缺少 `metrics:view`；不得读取 fleet authority，也不得用 Mock 数据掩盖拒绝。 |
+| 404 | `not_found` | 查询明确指定的环境或应用不存在；不得静默退回全局或其他应用范围。 |
+| 429 | `rate_limited` | authority 限流；按稳定错误展示，可使用响应中的有界 `retryAfterMs` 提示重试时间。 |
+| 503 | `service_unavailable` | authority 未装配、暂不可用或返回与查询身份不匹配的快照；仅展示不可用状态，不暴露基础设施异常。 |
+
+网络断开、客户端超时与主动取消属于 transport 状态，不伪装成上述业务错误。Live 模式不得在失败时回退到 Mock；只有显式启用的 demo/mock profile 才能返回合成观测，且 `unknown`/未接入指标仍按带质量状态的未知值呈现，不转成零值。
 
 ### 2.3 当前实现与验收条件
 
-正式 hash 路由已加载 `FleetOverviewContainer`，通过应用 Console transport 装配 `FleetPort` 和目录 Port；`FleetOverviewPage` 组合查询编辑器、上下文/刷新、摘要、连接探测、`MetricCharts` 与分页目录。旧 `FleetTrendPanel` 不再是正式页面消费者，不能作为正式路由的视觉或 E2E 证据。后台仍需负责同一环境/应用/实际窗口的聚合与筛选；当前契约是 draft-partial，真实 Python 联调尚未完成。
+正式 hash 路由已加载 `FleetOverviewContainer`，通过应用 Console transport 装配 `FleetPort` 和目录 Port；`FleetOverviewPage` 组合查询编辑器、上下文/刷新、摘要、连接探测、`MetricCharts` 与分页目录。旧 `FleetTrendPanel` 不再是正式页面消费者，不能作为正式路由的视觉或 E2E 证据。后台仍需负责同一环境/应用/实际窗口的聚合与筛选；Console wire 已冻结至 0.19.0，真实 Python 联调尚未完成。
 
 新模型的窗口为内部 UTC epoch 毫秒 `[fromMs,toMs)`，F6 adapter 再转换为唯一 RFC3339 wire。query key 包括 owner、环境、应用、实例、资源、scope、窗口、采样步长、搜索及页码；scope/单位/返回 query 不匹配应报协议错误，不借另一应用数据。MetricReading/MetricSeries 明确 source、denominator、coverage、quality；QPS/资源调用率/TPS 是独立指标，比率只在展示转成百分数，TPS 未接入不补 0，p95 不由前端平均。点列至多 1000 点、窗口至多 7 天，缺测保持 null 间隙；窗口内事件不必恰好落在采样点才绘制。
 
-全范围应用数/关注数与筛选结果总数/当前页行数分开；下钻只能使用显式目标，并携带精确 from/to，不重新算“最近 15 分钟”。连接探测呈现其自身探测时间，不等于所选应用流量或规则已生效。新入口目前未装配实际 App、HTTP 或 Python；纯负例与浏览器 Port 测试的完成状态见推进清单，不据此宣称真实聚合已实现。
+当前查询边界：`environmentId/appId` 最长 200 个 UTF-16 code units；`page` 为 1–1000000、`pageSize` 为 1–100；`search` 最长 200；`stepMs` 为 1–604800000（最多 7 天）。这些是请求结构上限；实际窗口与采样组合仍须满足最多 1000 个点，不能因 `stepMs` 上限而推导窗口可任意扩大。
 
-目标验收：空目录、无权限、部分覆盖与依赖离线分别可辨；摘要/表格/曲线同范围；窗口外不画发布标记；具体应用下钻后不出现别的应用实例。此处仅定义预期，未执行真实验收。
+全范围应用数/关注数与筛选结果总数/当前页行数分开；下钻只能使用显式目标，并携带精确 from/to，不重新算“最近 15 分钟”。连接探测呈现其自身探测时间，不等于所选应用流量或规则已生效。正式 App 与 Console HTTP adapter 已装配，demo 由显式 Mock 提供；Python 路由/DTO 已存在，但真实 fleet/metrics authority 未装配时必须保持 unavailable/unknown，不得宣称真实聚合已实现。
+
+响应计数字段 `reporting/expected/totalApplications/attentionApplications/total` 均为非负整数，最大值为 9007199254740991（JavaScript safe integer）；不能因类型为 number 而接受精度丢失的计数。
+
+当前页面已由正式 `FleetOverviewContainer` 接入共享 Console transport，demo profile 通过 HTTP Mock 返回合成数据；Python Console 路由与 DTO 存在，但实际 metrics/fleet authority 尚未装配，因此 live 模式不能据此展示真实聚合。目标验收仍为：空目录、无权限、部分覆盖与依赖离线分别可辨；摘要/表格/曲线同范围；窗口外不画发布标记；具体应用下钻后不出现别的应用实例。页面 Mock/局部浏览器证据不代表真实数据验收。
 
 ## 3. 应用与实例 `#/applications`
 
@@ -137,31 +150,66 @@ OpenAPI 的 `security` 明确区分身份 Cookie 与 CSRF 证明：`anonymous` �
 
 ### 3.2 页面数据与接口
 
-`InstanceSummary`：`instanceId/appId/env/hostId/containerId/processId`、`processEpoch`、`lastReportAt/status/healthReasons/supportedScopes`、`ruleDelivery`、指标摘要。pid 仅展示；实例重启需识别新进程 incarnation，旧进程回执不能证明新进程已加载。
-`InstanceCatalog`：Page<InstanceSummary> + 全范围 coverage/异常计数；分页后不要仅按一页分组假装完整宿主机拓扑。
-`InstanceDetail`：身份、scope、MetricSeries[]、已加载规则版本、保护规则摘要。
+当前 wire 为 `InstanceCatalog{query,asOf,coverage,totalInstances,attentionInstances,filteredTotal,items}`；条目 `ObservedInstance` 含 `instanceId/appId/environmentId/hostId/containerId/processId/processEpoch/health/lastReportAt/supportedScopes/ruleReceipt/processMetrics`。pid 仅展示；实例重启由 `processEpoch` 区分，旧进程回执不能证明新进程已加载。全量计数、过滤后总数、当前页条目分别表达，不从当前页推导全宿主机拓扑。
+目录 `query.context` 为 `{environmentId,appId,instanceId:null,resource:null,scope,window:{from,to}}`；coverage 的 `expected/inventorySource/reporting` 表示服务端掌握的分母与 reporting 覆盖，未知分母保持 null，不按 items 推算。条目 `ruleReceipt` 为 `{state,desiredVersionId,appliedVersionId,processEpoch,receivedAt}`，`processMetrics` 是该进程层的 MetricReading 数组，每项含 `source/denominator/coverage/quality/metric/unit/value/sampledAt`。
+详情 wire 为 `InstanceObservation{query,asOf,instance,metrics}`；`metrics` 可为 null，表示该 scope 当前没有可用指标 bundle。`ruleReceipt` 是显式的规则投递回执，不额外假定存在保护规则明细或独立的 rule-delivery endpoint。
+详情 `query.context` 含完整 `{environmentId,appId,instanceId,resource,scope,window:{from,to}}` 并另含 `processEpoch/stepMs`；非空 `metrics` 含 `summary/series/annotations`，`series.samples` 是 `{at,value}` 点列，同样遵守 §2 中 MetricBundle 的 reading 与 annotation 字段口径；annotation 为 `{id,kind,at,versionId?,publicationId?,incidentId?}`。详情实例状态与回执的 `state/receivedAt` 来自服务端 facts，不在前端由指标推导。
+共享 `ObservationCatalog` 的返回体为 `{asOf,environments,applications}`；环境项是 `{id,name}`，应用项是 `{id,environmentId,name}`。目录项由服务端授权并维护归属关系，前端不能从实例页当前分页结果补造缺失项。
+实例目录查询的 `scope` 仅接受 `fleet` 或 `application`：前者查询环境全量实例，后者必须绑定明确 `appId`；这只是查询范围，不代表单实例的 host/container/process 指标已采集。
 
-| 动作          | 候选接口                                                             | 结果                                             |
+| 动作          | 当前正式接口                                                         | 结果                                             |
 | ------------- | -------------------------------------------------------------------- | ------------------------------------------------ |
-| 应用目录/摘要 | `GET /applications`、`GET /applications/{appId}`                     | 目录与所选应用读模型                             |
-| 矩阵/异常筛选 | `GET /applications/{appId}/instances?env&statusFilter&page&pageSize` | 应用限定的实例集合 + 未过滤分母                  |
-| 实例详情      | `GET /instances/{instanceId}`                                        | 身份、supportedScopes、规则回执                  |
-| 层级/时间曲线 | `GET /instances/{instanceId}/series?scope&from&to&stepMs`            | MetricSeries[]，未接入层级不复制另一层数据       |
-| 查看规则      | 导航规则页                                                           | appId/env/bindingId/resource，避免打开不相关规则 |
+| 应用选项      | `GET /api/v1/observation/catalog` | 独立观测目录，不以实例分页结果代替应用目录。 |
+| 矩阵/异常筛选 | `GET /api/v1/instances?environmentId&appId&scope&from&to&page&pageSize&search&attentionOnly` | `InstanceCatalog`，含全范围 coverage/count、过滤总数和当前页实例。 |
+| 实例详情      | `GET /api/v1/instances/{instanceId}?environmentId&appId&resource&scope&from&to&processEpoch&stepMs` | `InstanceObservation`；绑定明确实例 incarnation 与查询范围。 |
+| 层级/时间曲线 | 使用实例详情返回的可空 `metrics`；通用独立指标查询为 `GET /api/v1/metrics/query` | 不支持的 scope 返回 `metrics: null`，不得复制另一层数据。 |
+| 查看规则      | 导航规则页 | 仅携带当前具备的目标身份；不得臆造接口未提供的 binding/resource。 |
+
+目录/详情/选择器的 HTTP 失败语义按各自 runtime endpoint 处理：
+
+| operationId | HTTP | 稳定错误码 | 页面处理语义 |
+| --- | ---: | --- | --- |
+| `readObservationCatalog` | 400 | `invalid_request` | 请求关联 ID 无效；不生成或替换默认环境/应用。 |
+| `readObservationCatalog` | 401 | `unauthenticated` | 会话缺失或失效；走统一身份过期处理。 |
+| `readObservationCatalog` | 503 | `service_unavailable` | 会话或目录 authority 不可用/未装配；不以实例当前页拼造目录。 |
+| `readInstanceCatalog` | 400 | `invalid_request` | 查询字段重复、未知、缺失或取值非法；不调用 inventory authority。 |
+| `readInstanceCatalog` | 401 | `unauthenticated` | 会话缺失或失效；不得显示旧权限主体的数据。 |
+| `readInstanceCatalog` | 403 | `forbidden` | 会话缺少 `metrics:view`；不得以 Mock 数据遮盖拒绝。 |
+| `readInstanceCatalog` | 404 | `not_found` | 环境/应用目标不存在；不回退至其他应用或环境。 |
+| `readInstanceCatalog` | 429 | `rate_limited` | authority 限流；尊重有界 `retryAfterMs`。 |
+| `readInstanceCatalog` | 503 | `service_unavailable` | inventory authority 未装配、不可用或快照身份不匹配；显示不可用，不伪造空目录。 |
+| `readInstanceObservation` | 400 | `invalid_request` | 实例标识或详情查询参数非法；不调用 observation authority。 |
+| `readInstanceObservation` | 401 | `unauthenticated` | 会话缺失或失效；走统一身份过期处理。 |
+| `readInstanceObservation` | 403 | `forbidden` | 会话缺少 `metrics:view`；不得显示旧权限主体的详情。 |
+| `readInstanceObservation` | 404 | `not_found` | 指定实例或环境/应用目标不存在；清除对应已知旧详情。 |
+| `readInstanceObservation` | 410 | `target_retired` | 服务端确认 `processEpoch` 已退役；HTTP adapter 投影为本地 `409 instance_incarnation_changed`，清除旧详情/回执，提示刷新目录并由用户重新选择，不自动切到别的实例。 |
+| `readInstanceObservation` | 429 | `rate_limited` | authority 限流；尊重有界 `retryAfterMs`，不得以旧 incarnation 数据冒充新数据。 |
+| `readInstanceObservation` | 503 | `service_unavailable` | observation authority 未装配、不可用或返回身份不匹配；显示不可用，不借用其他 scope/实例数据。 |
+
+`metrics:view` 仅要求于实例目录与详情；环境/应用选择目录只要求已认证会话。空目录与 200 响应中的 `metrics: null` 都是业务数据状态，不等于 404/410。网络超时/取消保持 transport 状态；Live 模式不得回退至合成 Mock。
+实例成功响应使用 `health=healthy|attention|unknown`、规则回执 `state=applied|pending|failed|unknown`；指标质量使用 `available|partial|stale|no_samples|not_integrated`。`metrics: null` 表示所选 scope 不支持或当前没有对应观测，不替代任何 health/state 枚举。
 
 ### 3.3 当前实现与验收条件
 
-旧 App 保留演示矩阵/详情直至 F6，一般应用没有借用订单实例样本；该路径的 scope 与保护阈值仍是示例，不能当作正式数据合同。新增内部 `applications/observation.ts`：InstancePort 分别提供实例目录和显式详情，资源拥有者、查询校验、筛选、宿主机分组、加载回执及指标展示已按职责分离，不增加 FixtureGateway 方法。
+正式 `/applications` 路由由 `ApplicationsObservationContainer` 装配 observation catalog 与 instance HTTP Port；demo profile 的目录/矩阵/详情来自显式 app-owned Mock scenario，是合成数据而不是生产事实。`InstancePort` 分别提供实例目录和显式详情，资源拥有者、查询校验、筛选、宿主机分组、加载回执及指标展示按职责分离。
 
-目录查询包含环境、可选应用、实际窗口、页码、搜索及异常筛选；全范围实例数/关注数与过滤总数、当前页行数分开。宿主机分组仅标当前页，进程级摘要不会冒称容器或宿主机指标。应用选项由 app 注入目录，实例行不得反过来充当完整应用目录；真实目录装配仍待 F6。
+目录查询包含环境、可选应用、实际窗口、页码、搜索及异常筛选；全范围实例数/关注数与过滤总数、当前页行数分开。若页偏移已到达或超过 `filteredTotal`，返回条目必须为空；非空页必须与页码、页大小和过滤总数相容，客户端与服务端均拒绝矛盾快照。宿主机分组仅标当前页，进程级摘要不会冒称容器或宿主机指标。应用选项由 `readObservationCatalog` 读模型注入，实例行不得反过来充当完整应用目录；前端 HTTP adapter/Mock 已接线，live 的权威应用/实例 inventory 与指标 reader 仍由 Python 宿主 authority 提供，未装配时应返回 unavailable/unknown 而不是合成生产数据。
+
+当前查询边界：`environmentId/appId/instanceId/resource/processEpoch` 最长 200 个 UTF-16 code units；目录 `page` 为 1–1000000、`pageSize` 为 1–100、`search` 最长 200；实例详情 `stepMs` 为 1–604800000（最多 7 天）。目录 `scope` 仅 `fleet/application`，详情 `scope` 仅 `host/container/process`。这是输入结构约束，不改变 scope 的数据授权、可观测能力或 1000 点上限。
+
+实例目录的 `reporting/expected/totalInstances/attentionInstances/filteredTotal` 与实例详情的 `reporting/expected` 均为非负整数，最大值为 9007199254740991；过滤结果总数与本页行数不可互换。
 
 所选详情独立于分页/异常筛选，隐藏一行不意味着实例不存在，也不自动改选首行。环境/应用/窗口不匹配时不渲染旧详情。详情查询和返回均绑定 instanceId/appId/environmentId/processEpoch/scope/step/window；进程更换不能借旧数据。加载回执的 processEpoch 必须匹配，applied 还要求 desiredVersionId 等于 appliedVersionId 且有收到时间；发布/回读成功不能替代该回执。
 
-普通断网/超时保留同 query 的 last-known-good 并标陈旧；权威 404/410 则清空已知旧目标，不能显示旧加载回执。服务端确认进程 incarnation 更换时也清旧详情，要求用户刷新目录再显式选择当前进程；不存在“自动改选其他实例”。内部失败码及最终 HTTP 形状在 F6 固化，不能把所有 409 都无差别当作实例重启。
+普通断网/超时保留同 query 的 last-known-good 并标陈旧；权威 404/410 则清空已知旧目标，不能显示旧加载回执。服务端确认进程 incarnation 更换时也清旧详情，要求用户刷新目录再显式选择当前进程；不存在“自动改选其他实例”。Python wire `410 target_retired` 由 instance HTTP adapter 映射为本地 `instance_incarnation_changed`；不能把所有 409 都无差别当作实例重启。
 
-supportedScopes 由实例事实给出，所选不支持层级返回显式 metrics=null；支持层级须提供完整且匹配查询的 MetricBundle。缺失实例为明确读错误，不能用另一对象填补。新页面目前只在内部 Port 浏览器探针中验证，未接 HTTP/Python。完整目录摘要、规则绑定定位及故障下钻仍需后续闭环；不能据此提前勾选 F4.04–06。
+`supportedScopes` 由实例事实给出，所选不支持层级返回显式 `metrics=null`；支持层级须提供完整且匹配查询的 MetricBundle。缺失实例为明确读错误，不能用另一对象填补。前端已有正式 HTTP adapter、demo HTTP handlers，Python 也有相应路由/DTO；但 live inventory、指标与实例加载回执的生产 authority 尚未全部接入，页面到 Python 的真实浏览器闭环仍待最终验收。应用筛选、实例深链及 scope 语义已有前端专项验证；不要将其扩大为生产 Agent 数据验收。
 
 目标验收：应用切换只显示自身实例；选中项不存在展示明确空态；host/进程不支持展示“未接入”；QPS/阻断双轴单位正确；列表、详情与规则回执中的 instanceId/processEpoch 一致。
+
+### 3.4 主机范围与应用实例关联（目标功能）
+
+主机视图位于现有应用与实例页，支持独立于应用/worker查看、明确身份关联与去重、缺少采集时局部降级。布局、字段、关联行为及验收统一由[规则使用与监控接入详细设计 §9](DASHBOARD_INTEGRATION_DESIGN.md#hosts)主管；本节不另行定义新 host DTO。
 
 ## 4. 规则 `#/rules`
 
@@ -169,74 +217,126 @@ supportedScopes 由实例事实给出，所选不支持层级返回显式 metric
 
 回答“配置从哪里来、影响谁、如何安全改动并确认生效”。应用/环境/绑定 → 类型/资源搜索目录 → 检视/草稿 → 五类专用表单/JSON 预览 → 服务端校验/差异 → 固化版本 → 发布/生效跟踪。版本计划负责指定期间使用某个版本及明确恢复版本。
 
-**当前可观察动作**：搜索、类型筛选、选择规则、复制本地草稿、编辑字段、本地校验、JSON 预览、查看示例版本。创建版本按钮仅输出预览提示。**目标待补动作**：新建/删除或停用规则、持久草稿、差异确认、发布、回滚、生效回执、计划创建/取消；不能把它们记作已实现。
+**当前前端命令路径**：搜索/筛选绑定（含 `GET /api/v2/rules/binding-scopes` 的持久化环境/应用筛选目录）、读取 `/api/v2/rules/catalog` 已登记配置中心规则、触发 `/api/v2/rules/catalog/refresh` 有界只读刷新、注册绑定、读取快照与发布目标、持久化草稿的保存/删除、五类规则整组编辑、本地及服务端候选校验、差异预览、固化不可变版本、发布、计划创建/取消、读取发布阶段与实例回执。demo profile 通过 HTTP Mock 模拟命令；这些前端路径不证明 Python live/provider 全链路已验收。服务端真实 CAS/回读、实例级 Reporter 回执与部署恢复仍按 B0.1/B0.3/B0.4/B0.5 的状态分别判断。旧演示组件里的“创建版本”预览提示不是正式工作台能力，不作为当前正式路由证据。
 
 ### 4.2 绑定、快照与版本数据
 
-| 对象                 | 字段与不变量                                                                                                                            |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `RuleBinding`        | `bindingId/appId/env/ruleType/sourceId/profile/activeVersionId` 与脱敏的配置定位摘要；一个绑定同一时刻只有一个写入目标                  |
-| `RuleRecord`         | `ruleId/ruleType/resource?/definition`；System 无 resource。ruleId 是管理身份，不擅自写入兼容规则对象                                   |
-| `RuleSetSnapshot`    | `bindingId/profile/ruleType/rules[]/version/nativeRevision/asOf`；rules 为整组，读取空数组与读取失败不同                                |
-| `RuleDraftRecord`    | `draftId/bindingId/baseVersion/draftRevision/rules[]/updatedAt`；数字输入可以暂为空文本，提交 DTO 必须解析为有限数值                    |
-| `RuleValidation`     | `validatedChecksum/profile/isPublishable/issues[]/targetCapabilities`；一次结论仅对同一内容及同一目标有效                               |
-| `RuleDiff`           | `baseVersion/candidateChecksum/changes[{ruleId,path,operation,before,after}]`；新增/删除/禁用均可解释                                   |
-| `RuleVersion`        | `versionId/baseVersionId/bindingId/checksum/createdAt/createdBy/name/note/ruleCount/profile`；内容不可变，是否 active 来自绑定/发布事实 |
-| `Publication`        | `publicationId/bindingId/targetVersionId/baseVersion/progress/result/createdAt`；每阶段独立事实与脱敏失败原因                           |
-| `ApplicationReceipt` | `instanceId/processEpoch/loadedVersion/checksum/appliedAt/status/lastReportAt`；未知不是成功                                            |
-| `ActivationPlan`     | `planId/bindingId/versionId/activateAt/deactivateAt?/restoreVersionId/timeZone/state`；目标版本不可变，时间转换有明确 IANA 时区         |
+| 当前 wire 对象 | 字段与不变量 |
+| --- | --- |
+| `RuleBindingScopeCatalog` | `asOf/environments/applications`；环境项为 `id/name`，应用项为 `id/environmentId/name`。仅由已登记规则绑定及关联 source/target 权威事实投影。 |
+| `RuleBinding` | `id/environmentId/appId/kind/profile/sourceId/sourceLabel/location`。location 是脱敏定位描述；写目标另由 publication-target 查询读取。 |
+| `RuleBindingRegistrationReceipt` | `requestKey/bindingId/status/binding`；`status` 为 `completed|not_found`。completed 返回创建时的安全 `RuleBinding`，not_found 返回 `binding: null`；它不包含原始 target body、凭证或 session 标识。 |
+| `RuleBindingScopeCatalog` | `asOf/environments/applications`；环境项含 `id/name`，应用项含 `id/environmentId/name`。只从持久化绑定及其 source/target 权威事实投影；真实空目录返回空数组，不从监控 Reporter 猜测。 |
+| `RuleCatalogPage` | `query{environmentId,appId,kind,search,page,pageSize}/asOf/coverage/bindings{total,current,stale,notRead}/total/hasMore/items/issues`；目录项含 `binding/record/snapshot{checksum,sourceRevision,versionId,asOf}/read{freshness,lastAttemptAt}`；问题项含 `binding/reason/lastAttemptAt/stale`，`reason` 为 `source_unavailable|content_invalid|not_read`。`coverage` 为 `complete|partial`，目录项 freshness 为 `current|stale`；部分覆盖时 `total:null`，不可宣称空目录。 |
+| `RuleCatalogRefreshResult` | `scope{environmentId,appId}/asOf/coverage/bindings{total,attempted,current,stale,notRead}`；coverage 为 `complete|partial`，`attempted` 最多 24。只返回读取覆盖事实，不包含配置内容写入结果。 |
+| `RuleRecord` / `RuleValue` | `id/rule`；`rule` 是五种 kind 的严格判别联合。管理记录 id 与兼容规则正文分开，不把管理 id 注入规则正文。 |
+| `RuleSetSnapshot` | `binding/versionId/checksum/sourceRevision/asOf/records`；records 是整组；空数组与读失败不同。 |
+| `StoredRuleDraft` | `id/bindingId/revision/kind/profile/baseVersionId/baseChecksum/sourceRevision/updatedAt/records`。候选 `RuleSetCandidate` 使用 `baseChecksum` 和完整 rules；表单临时空字符串不进入 wire。 |
+| `RuleValidationReport` | `bindingId/profile/baseChecksum/candidateChecksum/validationId/isPublishable/issues[]`；校验回执绑定候选内容和绑定基线，不含未实现的 `targetCapabilities`。 |
+| `RuleSetDiff` | `bindingId/baseChecksum/candidateChecksum/changes[]`；change 是严格 add/remove/replace 联合，不使用任意 path/value 对。 |
+| `RuleSetVersion` | `id/bindingId/kind/profile/baseVersionId/checksum/name/note/createdAt/createdById/records`；冻结内容不可变。 |
+| `RulePublication` | `id/bindingId/targetVersionId/targetChecksum/baseVersionId/createdAt` 与独立 `validation/configurationWrite/readBack` 阶段。 |
+| `PublicationReceiptPage` | 分页身份、`expected/inventorySource`、各状态计数与 `items`；单条回执分别标明 `instanceId/processEpoch/loadedProcessEpoch/targetVersionId/loadedVersionId/loadedChecksum/appliedAt/lastReportAt/state`。未知不能算成功。 |
+| `ActivationPlan` | `id/revision/bindingId/versionId/restoreVersionId/activateAt/deactivateAt/timeZone/state/activationPublicationId/restorePublicationId`。时间 wire 为 UTC instant，IANA 时区用于解释用户输入。 |
+
+当前规则写入 DTO 的容量/长度边界以生成 OpenAPI 为准，所有字符串长度按 UTF-16 code units 计，包含边界：
+
+| 字段 | 当前约束 |
+| --- | --- |
+| Nacos/Consul binding target 的 `namespace/group/dataId/datacenter/key` | 各最多 512 |
+| 单次整组候选 `rules` | 最多 1000 条；ParamFlow 单条规则的 `paramFlowItemList` 最多 100 项 |
+| `resource/refResource` 与 ParamFlow `classType/object` | 各最多 512 |
+| 版本说明 `note`、写入/计划原因 `reason` | 各最多 2000 |
+| 计划 `timeZone` | 最多 128；必须是有效 IANA timezone，长度通过不代表 timezone 有效 |
+| 数值 wire 字段 | 绝对值不超过 9007199254740991；整数性、正数/非负范围、ratio 与禁用哨兵仍按第 4.3 节逐类型校验 |
+| JSON 数值下限 | 不低于 -9007199254740991；与上限共同限定为 JavaScript 可精确往返的安全整数范围，具体业务下限仍由规则类型校验 |
+
+候选校验响应的 `issues` 最多 32 项；每项 `recordIndex` 可空，非空时为 0–999 的规则数组位置。
+
+目录查询的 `environmentId/appId` 与所有 binding/draft/version/publication/plan 标识为 1–200 个 UTF-16 code units；目录 `search` 最长 200，`page` 为 1–1000000、`pageSize` 为 1–100。生效回执分页使用相同的 page/pageSize 范围；规则命令 `requestKey` 为 1–128。该范围约束仅检查请求形状。
+
+这些是当前 HTTP schema 的结构边界，不代替第 4.3 节五类规则各自的数值/枚举/条件校验，也不代表 runtime 或 provider 一定支持候选内容。
+
+规则绑定目录响应为 `{query,total,items}`，其中 `total` 是当前过滤条件下的总数，不是当前页长度；`PublicationReceiptPage` 的状态计数字段为 `applied/pending/failed/unknown/restartRequired`，须与 `total/items` 保持同一 publication 分页身份。发布目标快照在目标已配置时带 `targetRevision` 与 `sourceRevision`，修改目标必须用已读取的两个 revision 作条件，不能覆盖并发更新。
+每个发布阶段是 `{state,observedAt,reason}`，其中 `observedAt` 可空且仅标记该阶段被观察到的时间。规则 command 的 mutation 联合按 kind 携带对应条件：草稿使用 `draftId/expectedRevision/candidate`，候选 rule 项用 `{recordId,rule}`；冻结版本还用 `validationId/candidateChecksum/name/note`，发布使用 `versionChecksum/expectedVersionId/expectedChecksum/expectedSourceRevision/reason`，计划使用 `schedule`（含 `activateAt/deactivateAt/timeZone`），取消计划使用 `planId/expectedRevision/reason`，目标配置使用 `expectedSourceRevision/expectedTargetRevision/target`。这些条件必须原样表达当前服务端基线，不能把缺字段解释为“无条件覆盖”。差异项按 add/remove/replace 判别：add 带 `after`，remove 带 `recordId/before`，replace 带 `recordId/before/after`；校验 issue 的 `recordIndex` 可空并定位输入记录。完成的规则 mutation result 可含 `draftRevision`；拒绝 observation 使用有限 `reason`，不得放原始异常。
+
+这些是当前 React strict Zod 与 Python Console DTO 的 wire 名称；页面可使用更友好的 domain model，但须由 mapper 显式转换，不能把候选设计字段冒充已冻结字段。
+规则类型的 wire discriminator 固定为 `flow`、`degrade`、`system`、`authority`、`param`；页面的“参数流控”对应 `param`，不能把展示名 `ParamFlow` 写入请求。所有绑定列表、候选校验/差异、命令候选都复用此枚举。
 
 runtime RuleVersion 三元组与 Console versionId 必须可映射，但不能直接采用页面示例字符串代替 checksum/epoch。源切换纳入绑定/发布状态，不靠 provider 字符串比较版本。
 
 ### 4.3 五类表单合同
 
-兼容字段语义由总体设计 §4.3 主管；这里记录页面交互与后端校验需求：
+兼容编码与策略含义由总体设计 §4.3 主管。下表记录正式页面 `validateRuleDraft` 当前执行的本地编辑校验，供 UI 与 Python Console 对齐；它不是 Sentinel 运行时/codec 支持声明，也不替代服务器对请求、绑定基线、配置源和目标 runtime 能力的独立校验。枚举编码必须使用总体设计中的固定值，不能用显示标签或任意数字代替。
 
-| 类型      | 输入/条件交互                                                                                                                      | 后端必查                                                                 |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| Flow      | resource/limitApp/grade/count/strategy/controlBehavior；非直接 refResource、warm-up 时间、排队上限；clusterMode 条件 clusterConfig | 有限数、枚举/单位、条件组合、关联资源/调用链支持、集群失败策略与资源上限 |
-| Degrade   | 策略切换改变 count 单位；timeWindow/minRequestAmount/statIntervalMs；慢调用 slowRatioThreshold                                     | 比率与计数范围、整数约束、窗口、最低样本与目标 runtime 支持              |
-| System    | 五个可启用阈值；禁用用 -1，CPU ratio 显示与序列化转换                                                                              | 至少一项启用、各项范围、CPU 0..1、采样能力                               |
-| Authority | resource、origin 列表、黑/白名单；说明未匹配来源的行为                                                                             | origin 规范化/分隔符、枚举、可信来源识别能力                             |
-| ParamFlow | resource/grade/count/durationInSec/paramIdx；例外项增删与 classType/object/count                                                   | 非负整数索引、有限阈值、窗口、例外值类型与跨语言 codec 支持              |
+| 类型 | 页面交互与本地校验（当前实现） | Python 服务端仍须独立校验 |
+| --- | --- | --- |
+| Flow | `resource`、`limitApp` 非空；`grade/strategy/controlBehavior` 只能取固定枚举；`count` 为有限数且大于 0，线程数模式另要求整数；非直接模式要求 `refResource`；Warm-up 的 `warmUpPeriodSec` 与排队模式的 `maxQueueingTimeMs` 只在对应模式启用时要求正整数。开启 `clusterMode` 时必须提供 `clusterConfig`，阈值类型只能为本地平均/全局两种固定值，`sampleCount/windowIntervalMs` 均为正整数，且窗口毫秒数不得小于样本数并须整除样本数。关闭条件时对应字段从 wire 中省略。 | 重验数值、枚举、条件字段、精确配置 shape 和 resource 引用；另外拒绝目标 profile/codec/runtime 不支持的字段/集群能力，不因本地表单通过而假定可发布。 |
+| Degrade | `resource` 非空；`grade` 是固定熔断策略；`count` 为有限正数，错误数模式要求整数、错误比例模式要求不大于 1；`timeWindow/minRequestAmount/statIntervalMs` 均为正整数；仅慢调用比例模式要求 `slowRatioThreshold` 且其范围为 `(0,1]`，其它模式省略该字段。 | 重验策略与 count 单位、范围/整数性、统计窗口和目标 runtime 支持；不得把比例 count 当作毫秒/次数或反向转换。 |
+| System | 不使用 `resource`；五个系统阈值可分别禁用为 `-1`，但至少启用一项。其余值须为有限非负数；`maxThread` 为整数，`highestCpuUsage` 限于 `[0,1]`。页面百分比显示与 wire ratio 转换分离。 | 重验禁用哨兵、至少一项启用、各字段单位/范围、CPU ratio 及目标采样能力。 |
+| Authority | `resource` 非空；`strategy` 只能是固定白名单/黑名单值；`limitApp` 按逗号分隔后 trim，每个来源非空且去重。 | 重验来源边界、策略枚举和来源身份语义；不得把客户端规范化当作可信来源认证。 |
+| ParamFlow | `resource` 非空；当前页面只允许 QPS `grade`；`count` 为有限正数，`durationInSec` 为正整数，`paramIdx` 为非负整数。例外项的 `classType/object` 非空、`count` 为有限非负数；按 trim 后 classType 与 object 组合去重。表单临时 key 不进入 wire。 | 重验参数索引/窗口/阈值、例外项数量与 shape，并拒绝目标 runtime/codec 不支持的参数类型或例外能力。 |
+
+上述标签表达的是业务语义；当前严格 wire `RuleValue` 的字段名称按类型固定如下，表单、候选、差异和版本/草稿读取共用这一联合，不得只保留表格中较短的显示标签：Flow=`resource/limitApp/grade/count/strategy/controlBehavior/clusterMode/refResource?/warmUpPeriodSec?/maxQueueingTimeMs?/clusterConfig?`，其中 `clusterConfig={thresholdType,fallbackToLocalWhenFail,sampleCount,windowIntervalMs}`；Degrade=`resource/grade/count/timeWindow/minRequestAmount/statIntervalMs/slowRatioThreshold?`；System=`highestSystemLoad/avgRt/maxThread/qps/highestCpuUsage`；Authority=`resource/limitApp/strategy`；ParamFlow=`resource/grade/count/durationInSec/paramIdx/paramFlowItemList[{classType,object,count}]`。`?` 表示受条件启用的可选字段，不允许序列化为额外 null 或空字符串。
 
 Nacos 和 Consul 都是存储/分发载体，**不会因为使用 Consul 就不支持 clusterFlow 或参数例外**。执行能力由 runtime/codec/profile/部署拓扑决定；存储能力另分 CAS/history/watch/read/write。未支持的字段或未知字段必须拒绝发布，不能删掉后继续写。兼容 profile 的配置正文是同类 JSON array；浏览器不加 `{rules: ...}` / `{Rules: ...}` 厂商包装。
 
 旧 demo JSON 预览仅 `[draft]`；新内部工作台已经展示完整同类候选数组，保留未编辑规则，显式支持空数组清空。后台仍须核对当前绑定基线、完整校验和原子条件；前端完整预览不能替代后端保护。一个 binding 单次原子写；多个类型/binding 的联合发布不能承诺跨 Nacos/Consul 原子性，应逐绑定显示部分成功。
 
-### 4.4 交互接口候选
+### 4.4 当前交互接口与命令协议
 
-| 用例           | 接口                                                              | 请求 → 返回                                                                       |
-| -------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| 绑定目录       | `GET /rulesets?appId&env&ruleType`                                | → Page<RuleBinding>                                                               |
-| 创建绑定       | `POST /rulesets`                                                  | admin + Origin/CSRF + Idempotency-Key；精确 source revision + Nacos/Consul target → RuleBinding；只写控制面绑定/target 元数据，不写规则正文 |
-| 权威快照       | `GET /rulesets/{bindingId}/snapshot`                              | → RuleSetSnapshot                                                                 |
-| 草稿列表/新建  | `GET/POST /rulesets/{bindingId}/drafts`                           | 新建带 baseVersion/rules → RuleDraftRecord                                        |
-| 草稿读/存/删除 | `GET/PATCH/DELETE /rulesets/{bindingId}/drafts/{draftId}`         | 更新带 draftRevision/rules；冲突不覆盖                                            |
-| 服务端校验     | `POST /rulesets/{bindingId}/validate`                             | 完整 rules/profile/baseVersion → RuleValidation                                   |
-| 差异预览       | `POST /rulesets/{bindingId}/diff`                                 | baseVersion + 候选 rules → RuleDiff；避免规则正文进 GET URL                       |
-| 固化/列版本    | `POST/GET /rulesets/{bindingId}/versions`                         | draftId/draftRevision/name/note → RuleVersion；固化不等于发布                     |
-| 历史快照       | `GET /rulesets/{bindingId}/versions/{versionId}`                  | → 不可变版本内容                                                                  |
-| 发布/查记录    | `POST/GET /rulesets/{bindingId}/publications`                     | targetVersionId/baseVersion/reason → Publication；写/回读，不阻塞等待所有实例     |
-| 查询发布结果   | `GET /rulesets/{bindingId}/publications/{publicationId}`          | → 阶段进度/失败与目标身份                                                         |
-| 逐实例生效     | `GET /rulesets/{bindingId}/publications/{publicationId}/receipts` | → Page<ApplicationReceipt> + Coverage                                             |
-| 回滚           | 同一个 `POST .../publications`                                    | 旧版本作为内容目标、当前版本作为基线，生成新发布/runtime 版本，不倒退运行版本序号 |
-| 建立/查计划    | `POST/GET /rulesets/{bindingId}/activation-plans`                 | versionId/时间/restoreVersionId/timeZone → ActivationPlan                         |
-| 取消计划       | `POST /rulesets/{bindingId}/activation-plans/{planId}/cancel`     | plan revision/reason → 状态；已启动动作不能伪装从未执行                           |
+规则目录与生命周期工作台分开读取：`GET /api/v2/rules/catalog` 接受必填 `environmentId`、可选 `appId/kind/search`、`page/pageSize`，从已登记配置源的 SQL last-known-good 投影读取规则；只有所有绑定均成功读取时才返回精确 `total`，部分覆盖必须显示覆盖状态与问题，不能把未读来源误报为空规则。`POST /api/v2/rules/catalog/refresh` 接受 `environmentId` 与可选 `appId`，请求是有界只读刷新，不写配置中心；admin/view 的有效会话均可触发，需 Origin 与 CSRF。每次最多尝试 24 个绑定、最多 8 个 provider 请求并行，单来源失败不阻断其它来源，已有 last-known-good 内容保留并标 stale。两个操作的字段、错误与 response schema 以 0.8.0 OpenAPI 为准。
 
-以上是完整功能所需候选，不要求一次实现所有接口。保留旧 `/rules/rollback` 还是采用统一 publications，用冻结记录选择一种公开入口，不能重复形成两条发布业务逻辑。
+| 用例 | 当前正式接口 | 请求/结果摘要 |
+| --- | --- | --- |
+| 绑定目录/创建绑定 | `GET/POST /api/v1/rulesets` | GET query 为 `environmentId/appId/kind/search/page/pageSize`；POST 创建绑定元数据，严格携带已登记 `sourceRevision` 与 Nacos/Consul target，不写规则正文。 |
+| 核查绑定创建回执 | `GET /api/v1/rulesets/{bindingId}/registration-operations/{requestKey}` | `admin` + `rules:write`；按原 actor、binding 和 requestKey 查询 `RuleBindingRegistrationReceipt`；`completed` 返回安全绑定视图，`not_found` 返回 `binding: null`，不证明 POST 已回滚，也不允许据此自动重发。 |
+| 权威快照/发布目标 | `GET /api/v1/rulesets/{bindingId}/snapshot`；`GET /api/v1/rulesets/{bindingId}/publication-target` | 返回 `RuleSetSnapshot` 与 `RulePublicationTargetSnapshot`；目标变化须重新确认。 |
+| 草稿列表/读取 | `GET /api/v1/rulesets/{bindingId}/drafts`；`GET /api/v1/rulesets/{bindingId}/drafts/{draftId}` | 返回有 binding 与读取时刻的 collection / 单草稿。 |
+| 草稿保存/删除、固化版本、发布、创建/取消计划、配置发布目标 | `POST /api/v1/rulesets/{bindingId}/commands` | 一个带 `requestKey` 的命令入口，body 的 `mutation.kind` 严格区分 `save_draft/delete_draft/freeze_version/publish/create_plan/cancel_plan/configure_target`；expected revision/checksum 等条件随 mutation 携带。 |
+| 服务端校验/差异预览 | `POST /api/v1/rulesets/{bindingId}/validate`；`POST /api/v1/rulesets/{bindingId}/diff` | 提交整组候选；校验与 diff 是读式评估，不固化版本或写配置中心。 |
+| 版本/发布/计划历史 | `GET /api/v1/rulesets/{bindingId}/versions`、`GET /api/v1/rulesets/{bindingId}/versions/{versionId}`、`GET /api/v1/rulesets/{bindingId}/publications`、`GET /api/v1/rulesets/{bindingId}/publications/{publicationId}`、`GET /api/v1/rulesets/{bindingId}/plans` | 集合使用 `{bindingId,asOf,items}`；单项读取不可变版本、三阶段发布或计划事实。 |
+| 逐实例生效 | `GET /api/v1/rulesets/{bindingId}/publications/{publicationId}/receipts?page&pageSize` | 带有限状态计数与当前页 receipt；实例覆盖未知时不得编造 expected 分母。 |
+| 历史进程加载观察 | `GET /api/v2/rules/load-observation-history?environmentId&appId&bindingId&instanceId&page&pageSize` | 仅读取已持久化历史观察；不将旧 epoch 状态混入当前实例目录/计数。 |
+| 核查原命令 | `GET /api/v1/rulesets/{bindingId}/operations/{requestKey}` | 查询 pending/completed/rejected/not-found；未知或 not-found 不授权以新 requestKey 重放旧动作。 |
+
+规则使用状态与规则存在/发布状态分开读取：`GET /api/v2/rules/catalog/binding-states` 返回配置中心规则快照的权威状态；`GET /api/v2/rules/load-observations` 返回当前实例加载观察；`GET /api/v2/rules/load-observation-history`（Console API 0.16.0）按精确 binding 单独分页读取非当前 epoch 的历史事件。不得从“规则目录非空”推断实例已加载，也不得从零流量推断无实例使用。binding state 的 `ruleCount/hasLastKnownGood` 区分当前规则数与是否保留过 LKG；状态区分 `current_with_rules/configured_empty/target_missing/unsupported_profile` 等状态。load observation 包含预期 `targets/notObserved` 与实例 `processId/profileId/loadState/eventKind/activeSnapshot/canonicalRulesSha256/membershipComplete/members/failureReason/receivedAt`。历史观察单独标记 `superseded/revoked/no_current_epoch`，不加入 current expected/loaded 计数；成员项用 `ruleKind/fingerprintSha256` 标识具体规则，不包含原始规则正文；`members` 最多 8192 项。
+
+规则命令核查响应恒带 `bindingId/requestKey/status`；`pending` 与 `not-found` 不含结果，`completed` 带判别联合 `result`（对应 mutation 的持久化结果），`rejected` 带有限 `reason`。分页读取的 `total` 表示过滤后的总条数；目标 revision 和回执状态计数如上方 DTO 表所列，UI 不得由当前页或本地命令状态推导。
+
+绑定注册与规则变更是两个边界：注册是独立 POST；其余写命令统一经过 commands。回滚不是额外公开接口，而是选旧版本内容作为新 publish mutation 的目标、以当前快照为条件基线；运行版本身份不倒退。所有路径均以生成 OpenAPI 与当前 adapter 为准，不保留旧 `/rules/rollback` 第二入口。
 
 创建绑定请求只接受 `requestKey/bindingId/environmentId/appId/kind/profile/sourceId/sourceRevision/target`。`target` 是严格 provider 联合：Nacos 仅允许 `provider/namespace/group/dataId`，Consul 仅允许 `provider/datacenter/key`；来源名称、provider、revision 必须由已登记来源行验证，不能由浏览器声明来源标签或任意 endpoint。绑定元数据、精确目标、幂等回执及 `rule-binding-create` 审计在同一关系库事务提交。相同 actor/session、幂等键和内容重复提交返回原绑定；同键不同内容返回 `idempotency_conflict`，重复环境/应用/类型或来源 revision 冲突返回 `conflict`。该命令不探测配置中心、不创建规则数组，也不隐式选择默认来源。
+上述 binding `target.provider` 以及规则命令中提供的 provider 判别值，wire 仅接受小写字符串 `nacos` 或 `consul`；界面上的“Nacos / Consul”是正式显示名，不是可发送的 wire 值。
+规则读取响应的关键状态枚举也属于 wire 合同：发布阶段 `awaiting|running|succeeded|failed|unknown`；实例回执 `applied|pending|failed|unknown|restart_required`；激活计划 `pending|activating|active|restoring|completed|blocked|cancelled`；操作结果 `pending|activating|active|restoring|completed|blocked|cancelled`。`readback_mismatch` 是发布阶段的失败原因，不是阶段状态。发布成功、实例已加载和计划终态是不同事实，不能相互映射或压缩成单一“成功”。
 
 ### 4.5 发布、计划与失败语义
 
 必须分开“校验通过 → 配置中心写入成功 → 回读一致 → 实例已加载”。发布失败返回 publicationId、已发生阶段与重查入口；写超时为结果未知，不能自动重写或当作未写。回读不一致时不把它显示为 matched，更不自动覆盖外部修改。
+
+规则页错误码按当前 endpoint 声明投影为以下交互语义；每个 operation 实际允许的子集仍以 Console runtime contract 为准：
+
+| 稳定错误码 | HTTP | 规则页处理 |
+| --- | ---: | --- |
+| `invalid_request` | 400 | 请求/path/query 结构或关联 ID 无效；修正请求，不保留为配置中心业务失败。 |
+| `unauthenticated` | 401 | 会话失效；进入统一身份过期处理，不重放写命令。 |
+| `forbidden` / `csrf_failed` | 403 | 角色/绑定访问被拒或 CSRF/Origin 证明不匹配；禁止继续写入，不用隐藏按钮代替服务端拒绝。 |
+| `not_found` | 404 | HTTP 资源（绑定、版本、发布、计划等）不存在；清除该目标的旧详情，不切换到其他 binding。注意：操作查询 body 的 `status: "not-found"` 是 HTTP 200，表示原 requestKey 没有可见持久回执，不能据此换 key 重放。 |
+| `conflict` | 409 | 候选校验/差异所依据的基线或注册绑定来源 revision 已变化；重新读取并让操作者审阅，不自动覆盖。 |
+| `idempotency_conflict` | 409 | requestKey 与 body/header 不一致或同一 key 被用于不同内容；不可换新 key 自动重发，应先查询原操作并由操作者决策。 |
+| `validation_failed` | 422 | 候选 wire/命令结构无法接受；保留可修正输入并展示安全的字段问题。候选业务规则不满足通常由 HTTP 200 的 `RuleValidationReport.isPublishable=false/issues` 表达，不把“不可发布”误判为 transport failure。 |
+| `rate_limited` | 429 | 使用响应有界 `retryAfterMs` 提示；写命令先核查原 requestKey，不因冷却结束自动再提交。 |
+| `service_unavailable` | 503 | Console/provider/authority 暂不可用或可信回执无法形成；隐藏原始异常。写命令结果按未知处理并查询原 requestKey。 |
+
+规则命令 POST 的 HTTP 202 表示服务端已接受这一个幂等操作，不代表配置中心写入、回读或实例加载完成；状态经 `GET .../operations/{requestKey}` 查询，可能为 `pending/completed/rejected/not-found`。终态拒绝原因是有限枚举（`validation/conflict/not_found/unsupported/unavailable`）；其中 `rejected/conflict` 是已接受命令的业务回执，不是 HTTP 409。网络超时、取消或响应丢失同样保留为未知结果，始终用原 requestKey 核查，不盲目创建第二个操作。
 
 后台每次发布检查 binding 和当前基线，Consul 使用真实 CAS；Nacos 无等价原子条件写时只能重读比较并限制写者，不能宣称相同保证。草稿切规则、切绑定或离开页面前提示未保存；后台更新 active snapshot 不自动冲掉本地 dirty 草稿。
 
 计划须持久化，由后台调度：检查时间先后/时区歧义、重叠窗口、目标版本、明确恢复版本；重启后恢复、幂等执行，遇到外部新配置进入 blocked，不盲目回退。当前 Cluster 额度变更需重启的限制必须单列“待重启”，加载规则回执不证明新额度已执行。
 
 ### 4.6 当前实现与验收条件
+
+**授权边界：**规则绑定的普通快照/版本/发布事实读取要求有效会话，并由服务端逐请求检查该会话对目标 binding 的读取权限；读取和保存草稿、候选校验及差异预览要求 `rules:write`。注册 binding 与执行统一规则命令要求 `admin` 且具备 `rules:write`；读取规则命令操作要求 `admin` 并按原 actor、binding 和 request key 限定；读取绑定创建回执要求 `admin` + `rules:write`，并精确限定原 actor、binding 和 request key。客户端隐藏写入口只是 UX，不能替代这些服务端检查；缺少能力不得退回 Mock 或显示旧主体缓存。
 
 已完成五类相关草稿联合、条件字段与本地边界校验，以及完整规则集的纯新增/修改/删除/物化模型；编辑一条保留其余记录及源基线，临时表单 key 不冒充管理身份。规则标识按字面保留；来源列表/参数类型只做已明确的规范化。空规则集是显式整组候选，不等于读取故障。
 
@@ -248,11 +348,19 @@ Nacos 和 Consul 都是存储/分发载体，**不会因为使用 Consul 就不�
 
 新增内部 `RuleDeploymentPanel` 把版本内容、发布校验/写入/回读阶段、实例加载回执、后台计划分开读取和展示；发布/创建计划/取消计划使用共享 DialogFrame。发布弹窗固定捕获目标与源基线，期间源变更要求重新确认，不自动接受新基线；回滚是选历史内容创建新发布，不倒退运行身份。目标/恢复版本都须显式，重复本地时刻显示 UTC 选择，缺失分钟不能提交；待重启不计入生效覆盖。取消只针对待执行/阻塞计划，不暗示恢复已发生的发布。
 
-页面已在 StrictMode 下做实际控件、320px 日文与桌面截图验证，仍**没有接入 App 正式路由或 HTTP/Python**；绑定/草稿目录和未保存跨页保护待后续闭环。旧 demo 的本地 workbench/`VersionPlan` 仍待替换，不能把内部 Port 测试计作数据库持久化或真实发布验收。
+`RuleConsoleContainer` 已挂载正式 `/rules` 路由，通过 `createRuleSetHttp` 使用共享 Console transport；绑定注册、规则集/草稿/版本/发布/receipt/计划等 feature ports 与 HTTP handlers 均存在，demo 使用 MSW handler 拦截相同请求，不能据此声称 Python live 已验收。后台已有对应路由、解析器和 DTO，但真实 Nacos/Consul 发布 authority、异步 worker 的完整部署组合、真实配置中心写回与应用 Reporter/Collector receipt 仍受 B0.1/B0.3/B0.4/B0.5 边界约束。页面接线/Mock 路径已存在，不等于生产 provider、关系库并发与跨服务浏览器闭环完成。
 
 对接风险已按实际源代码核查：当前 `sentinel-source-nacos/codec.py` 并非五类 Java-compatible profile 的完整实现。Flow 使用 `scope/scopeReference` 而非 `strategy/refResource`；Degrade 对 count 取整数、从 exceptionRatio 取比例且 timeWindow 按毫秒；System/Authority/ParamFlow 也有不同字段语义。F6/B0 必须提供明确 profile/能力校验与转换，或拒绝不支持的字段；禁止沿用该 codec 的兼容性注释作为验收证据，禁止删字段后假报发布成功。Nacos/Consul 存储差异不能替代 runtime 能力校验。
 
 目标验收：两配置源读/写/冲突/离线；编辑一条保留整组其他规则；非法字段不落盘；同幂等键不重复发布；外部变更不被覆盖；未知实例不算生效；计划服务重启继续且不覆盖新日常配置；view 深链/API 均不可写。
+
+### 4.7 零流量规则目录与当前实例使用（目标功能）
+
+从已绑定配置读取到的规则立即展示，规则目录不依赖业务请求或实例指标。原生 JSON 与 managed 规则均观察当前实例加载，配置存在/当前加载/发布传播/请求效果分别表达，完整事实下的0与未知分开。
+
+页面布局、目录投影、关联已有配置、当前加载实例分栏和异常恢复统一由[详细设计 UI-R01](DASHBOARD_INTEGRATION_DESIGN.md#rules-catalog)、[UI-R02](DASHBOARD_INTEGRATION_DESIGN.md#rule-usage)主管。现有 reader/工作台与历史 publication receipt 的源码依据见该文§1.2；新当前状态观察的wire仍由独立协议主管，不能用页面详设替代协议冻结。
+
+`readRuleLoadObservationHistory` 的分页 DTO 字段为 `query/asOf/coverage/total/hasMore/items`；`query` 回显 `environmentId/appId/bindingId/instanceId/page/pageSize`。每个历史 item 含 `observationId/epochStatus/observation`；`epochStatus` 仅为 `superseded|revoked|no_current_epoch`，嵌套 observation 保留 `bindingId/instanceId/processId/processEpoch/profileId/loadState/eventKind/activeSnapshot/attempt/observedAt/receivedAt/freshness`。`activeSnapshot` 的成员是 `sourceRevision/canonicalRulesSha256/membershipComplete/members`，成员字段为 `ruleKind/fingerprintSha256`；`attempt` 含 `sourceRevision/canonicalRulesSha256/failureReason`。这些是历史事实字段，不能推断当前实例清单或当前使用状态。
 
 ## 5. 实时监控 `#/realtime`
 
@@ -262,28 +370,56 @@ Nacos 和 Consul 都是存储/分发载体，**不会因为使用 Consul 就不�
 
 ### 5.2 数据与接口
 
-`RealtimeBundle`：`query/window/asOf/summary: MetricReading[]/series: MetricSeries[]/annotations/streamStatus`。
-`StreamStatus`：`mode/liveState/lastFrameAt/quality/paused`。实时连接状态与浏览器 online 独立；UI 指标筛选可以本地隐藏已取得序列，若减少请求则缓存键需含 metrics。
+当前 wire 是 `MetricBundle`：`query/asOf/summary/series/annotations`。监控模式 `idle/polling/paused/stopped`、刷新间隔及最近一次本地请求状态属于 React `RealtimeMonitor` 的 UI/application state，不是服务端 DTO；浏览器 online 也不代表指标服务可用。当前未定义或实现 SSE `streamStatus/lastFrameAt` wire 字段。若 UI 减少请求指标集，查询缓存身份必须包含所请求的 metrics。
+`query.context` 为 `{environmentId,appId,instanceId,resource,scope,window:{from,to}}`，同一 query 另含 `metrics/stepMs`；`summary[]` 是 MetricReading，`series[]` 是带 `samples:[{at,value}]` 的 MetricSeries，二者均携带 `source/denominator/coverage/quality/metric/unit`，reading 另带 `value/sampledAt`。`coverage` 含 `expected/inventorySource/reporting`；annotation 为 `{id,kind,at,versionId?,publicationId?,incidentId?}`。空样本与 null value 是缺测，不等价于数值零。
+`scope` 的 wire 枚举为 `fleet`、`application`、`host`、`container`、`process`，依次表示全局、应用、主机、容器与进程范围；后三级必须由权威查询身份确定，不能通过应用指标复制或名称猜测。`metrics` 使用 `http_qps`、`resource_entry_rate`、`tps`、`rt_p95`、`blocked_ratio`、`cpu_ratio`、`memory_ratio`、`memory_bytes`；单位分别由返回项 `unit` 冻结。TPS 与 QPS 独立，未接入/无样本保持 null 与质量状态，不补零。
+每个 reading/series 的 `quality` wire 枚举为 `available|partial|stale|no_samples|not_integrated`；它描述样本完整性与新鲜度，不是资源可用状态，也不表示缺测值为零。
 
-| 动作          | 候选接口                                    | 结果                                              |
-| ------------- | ------------------------------------------- | ------------------------------------------------- |
-| 历史窗口/摘要 | `GET /metrics/query`                        | 同窗口 summary/series/annotations                 |
-| 实时刷新      | 同查询轮询，或 `GET /metrics/stream`（SSE） | 返回已聚合 Console 点，不是原始累计 registry 快照 |
-| 暂停/恢复     | 无写接口                                    | 取消订阅/停刷新，恢复重新补齐当前窗口             |
+当前查询边界：`environmentId/appId/instanceId/resource` 最长 200 个 UTF-16 code units；`metrics` 是逗号分隔的已选指标 wire 字符串，长度为 1–89；`stepMs` 为 1–604800000（最多 7 天）。时间窗口和采样步长组合仍受最多 1000 点限制；轮询周期是独立的客户端设置，不作为该查询参数的上限。
 
-SSE 候选 `id` 为不透明游标，`event` 区分 metrics/heartbeat/reset/error，data 是类型化帧；断线不保证无限历史回放，游标过期须重查。帧重复/乱序按序列身份处理；切筛选取消旧流，旧窗口帧不可写新缓存；窗口有界且卸载释放。具体帧 schema 待 Console 协议冻结，不复用 Reporter wire 的业务事件名。
+指标响应计数 `reporting/expected` 为非负整数，最大值为 9007199254740991；有效范围/分母不能以更大的不精确 JSON number 传输。
+
+| 动作          | 当前正式接口 | 结果 |
+| ------------- | --- | --- |
+| 历史窗口/摘要 | `GET /api/v1/metrics/query?environmentId&appId&instanceId&resource&scope&from&to&metrics&stepMs` | 返回严格匹配查询的 MetricBundle。 |
+| 实时刷新      | 同一查询轮询 | 当前 `RealtimeMonitor` 使用显式有界轮询；默认 5 秒，允许范围 100ms–60s，不代表采集端采样间隔。 |
+| 暂停/恢复     | 无写接口 | 暂停取消轮询，恢复按当前 selection 重新查询；不暂停服务端采集。 |
+
+当前 OpenAPI 与 React/Python 实现均未提供 `/api/v1/metrics/stream` SSE 操作，因此 SSE 不能作为已定协议或现阶段验收项；若将来新增流式传输，必须另行冻结帧 schema、游标/恢复与缓存隔离语义，再同步消费者和服务端合同。
 
 ### 5.3 当前实现与验收条件
 
-旧 App 仍是静态 fixture 游标回放，F6 会统一退役，不把旧 `StreamStatus` 宣称成真实网络状态。新内部入口 `realtime/monitoring.ts` 已新增 `RealtimePort`、`RealtimeSelection`、`RealtimeMonitor` 与 `LiveMonitoringPage`；后者只组合控制条、状态条、同窗摘要与曲线。选择应用/指标会重新查询当前监控页，不再隐式下钻应用页；实例/scope 选项待应用目录能力共同接线，完整 F4.11 尚不能勾选。
+正式 `/realtime` 路由已由 `RealtimeObservationContainer` 装配 Console metrics HTTP adapter、授权应用目录和 `RealtimeMonitor`；`LiveMonitoringPage` 组合控制条、状态条、同窗摘要与曲线。选择应用/指标会重新查询当前监控页，不再隐式下钻应用页；demo profile 的数据由 HTTP Mock 提供，Python 路由/DTO 已有，但真实 metrics/Collector authority 尚未装配时 live 必须呈现 unavailable/unknown，不能把它解释成真实网络健康或流量。
+
+Sentinel 内部已有可选的本地 metrics capture Adapter：它将 `MetricRegistry` 的入口快照和 `SystemMetricSampler` 的系统样本交给独立 `MetricsReportingPort`，由有界进程内缓冲合并待处理快照；组合与背压测试已覆盖。这个本地缓冲**不是** Console `readMetrics` 的数据源，也没有自动周期 Reporter、跨进程传输、Collector durable ack 或历史存储。故 live Dashboard 仍须由后续正式装配的权威 metrics reader 提供观测；未接入时必须保留 `not_integrated/unavailable`，不能把 Adapter 的本地队列或空序列解释为实时指标。
+
+`readMetrics` 每次请求都要求有效会话及 `metrics:view`。稳定 HTTP 失败按下表投影；HTTP adapter 只公开稳定错误码，不把服务端原始异常或基础设施消息展示给用户。
+
+| HTTP | 稳定错误码 | 页面行为与恢复 |
+| --- | --- | --- |
+| 400 | `invalid_request` | 请求/query 不合法；显示安全通用错误，不把它伪装成空指标。当前有界轮询仍按已配置周期继续请求；调用方应修正 selection/query。 |
+| 401 | `unauthenticated` | 清除该查询数据并转为未授权；Console transport 触发会话过期处理，用户需重新登录。 |
+| 403 | `forbidden` | 显示权限拒绝且不渲染指标；查询资源清除旧值。需由管理员授予 `metrics:view` 或切换有权限的会话。 |
+| 404 | `not_found` | 服务端权威确认目标不在当前目录；显示目标不存在，不把旧指标保留为当前值，用户需刷新目录并重新选择。 |
+| 410 | `target_retired` | 目标进程 incarnation 已退役；按权威缺失清除同一 query key 的旧指标，刷新目录并由用户显式重选活动实例，不自动切换到另一个进程。 |
+| 429 | `rate_limited` | 有旧成功值时标记为 stale，否则显示读取错误。若响应带合法 `retryAfterMs`，监控器按单调时钟记录最早下一次读取时刻；到期前的固定 polling tick 只跳过读取，到期后在首个正常 tick 恢复。无提示时仍按配置周期继续；改变 query identity 会清除旧 identity 的等待时间。 |
+| 503 | `service_unavailable` | 指标 reader/权威源未装配、暂不可用或查询身份不匹配；有旧成功值时只显示其原始窗口和 `asOf` 并标 stale，否则显示 unavailable/error。自动恢复只依赖下一次有界 polling tick。 |
+
+网络错误与超时不是上述 HTTP 错误码：保持同一 query key 的可信旧值并显示 stale，否则显示连接/读取失败；取消请求不作为故障提示。指标权限撤销与 incarnation 退役属于权威状态，不能沿用网络失败时的 last-known-good 数据。`retryAfterMs` 只约束该监控 owner 的下一次指标读取，不触发隐藏重试、并发 tick 或 UI 快速重试；暂停/恢复不会绕过尚未到期的服务端等待时间。
 
 轮询先行，不增加未经验证的 SSE 协议。底座 PollingStore 提供无 overlap 的 tick，QueryResource 提供有界超时、AbortSignal 与过期响应隔离；默认 5 秒、允许 100ms–60s 的显式间隔，每个 tick 只有一次只读尝试，无隐藏重放。调度 store 不持有第二份指标缓存，保留至多一个校验通过的窗口包，至多 1000 点/序列，恢复是重新取数而非循环历史游标。
 
 `windowMode=fixed` 保持实际 UTC 窗口；`rolling` 以最初窗口的时长/选定对象作为稳定逻辑 owner，每次读取用当前时钟形成独立的具体 MetricQuery/HTTP key。旧可信值保留自身 `query.window/asOf`，不能在刷新失败时改成新的时间假装新鲜；页面上下文与卡片/曲线均取这份值实际的窗口。暂停只停止浏览器读取并取消 pending，不通知采集器或 Engine；恢复立即读取最新窗口。切身份/撤能力首个发布清数据、停止 tick；改变环境/应用/指标/范围会取消旧 owner，迟到值不能写回。
 
-新入口目前通过内部 Port 逻辑和实际页面浏览器测试，未装配 App、HTTP 或 Python。准入、指标采集/真实聚合、在线状态与后端断网验收仍需 F6/B0；不从浏览器 online 认定 Collector 健康。具体失败与验证证据在推进清单更新。
+前端正式 App/HTTP adapter 与 demo HTTP Mock 已接线；Python metrics API 仍依赖宿主注入的权威 reader，当前无生产 Collector/指标持久化 authority。准入、指标采集/真实聚合、在线状态、断网及 React→Python live 端到端仍需 B0/F7 验收；不从浏览器 online 认定 Collector 健康。
 
 目标验收：无 histogram/TPS 埋点不造值；窗口与卡片一致；断线显示旧数据时间不伪装新鲜；恢复去重/补齐；暂停不导致无界缓存；权限拒绝不画空流量。
+
+### 5.4 外部主机指标来源选择（目标功能）
+
+HOST 指标由已登记Prometheus兼容查询源提供，现有Metrics V2 PROCESS查询保留。总览/实时监控的范围选择、空图/降级及来源语义由[详细设计 UI-M01](DASHBOARD_INTEGRATION_DESIGN.md#monitoring-pages)主管，单位、时间窗与接口分工见其[数据边界](DASHBOARD_INTEGRATION_DESIGN.md#data-boundaries)；不从主机指标推断TPS或逐规则命中。Host-scoped query 通过 `GET /api/v2/monitoring/sources/{sourceId}/host-metrics?from&to&stepMs` 读取；source 端点、认证与 selector 仅来自服务端保存配置，缺样和 stale 保留显式 quality，不降格为零。
+
+`readHostMetrics` 响应 DTO 为 `sourceId/environmentId/query/asOf/quality/reason/hosts`；`query` 含 `from/to/stepMs`。每台主机含 `hostId/identity/metrics`，`hostId` 最长 512；identity 项为 `name/value`（分别最长 128/256），metric 项为 `metric/unit/quality/reason/samples`，sample 为 `at/value`。主机集合上限 200，身份标签 1–10 个，且只允许固定四种 metric；metric `reason` 为 `source_disabled/target_rejected/authentication/timeout/transport/invalid_response/missing_samples/stale_samples/duplicate_series/conflicting_identity`，`quality` 为 `available/partial/stale/no_samples/not_integrated/unavailable`。缺样不补零。该响应只能表示 HOST scope，不冒充 PROCESS 观测。
 
 ## 6. 故障分析 `#/faults`
 
@@ -293,29 +429,54 @@ SSE 候选 `id` 为不透明游标，`event` 区分 metrics/heartbeat/reset/erro
 
 ### 6.2 数据与接口
 
-`IncidentSummary`：`incidentId/occurredAt/receivedAt/severity/category/appId/env/instanceId?/processEpoch?/sourceEventId?/publicationId?/titleCode/params`。
-`IncidentEvidence`：有限结构化观察事实、证据完整度和可读目标投影；事件关联规则采用 `relatedRule:{environmentId,appId,bindingId,versionId,publicationId}|null`，均为服务端规则/审计数据的权威 opaque identity，并必须与事件所属环境和应用一致；客户端不从标题、规则正文或应用名称推断。原始异常消息、traceback、frame locals 不进页面/协议。
+时间线 wire 记录 `ObservedIncident{id,environmentId,appId,instanceId,processEpoch,occurredAt,receivedAt,severity,category,sourceEventId,publicationId,caption}`；`caption` 是有限 `IncidentFact` 联合（资源压力、响应时间、规则发布、规则生效），不是 `titleCode/params` 任意文案。读取后前端 mapper 将 ISO UTC 时间转换成毫秒领域值 `occurredAtMs/receivedAtMs`。`IncidentPage` 还含 query echo、`asOf`、全范围 `statistics`、当前 items、筛选后的 `filteredTotal` 和 `nextCursor`。
+`query.context` 为 `{environmentId,appId,instanceId,resource:null,scope,window:{from,to}}`；统计对象为 `{total,critical,warning,info,ruleChanges,affectedApplications}`，独立于 severity/category/cursor。证据 `query` 另带 `eventId`；`facts[]` 每项是 `{id,source,at,fact}`。有限 fact 分支字段为 resource pressure 的 `metric/value/threshold`、response time 的 `valueMs/thresholdMs`，以及规则发布/生效的 `versionId`；不能输出任意文本或原始异常。
+筛选 wire 值固定为 severity `critical`、`warning`、`info`；scope `fleet`、`application`、`process`；category `resource`（资源压力）、`rt`（响应时间）、`rulePublished`（配置已发布）和 `ruleEffective`（实例已生效）。`rulePublished` 不代表 `ruleEffective`，两者不可合并；UI 的“全部”选项是省略筛选参数，不是服务端枚举。
 
-| 动作   | 候选接口                                           | 结果                                                        |
-| ------ | -------------------------------------------------- | ----------------------------------------------------------- |
-| 统计   | `GET /incidents?environmentId&appId&instanceId&from&to&severity&category&cursor&pageSize` | 响应携带当前环境/应用/实例/时间范围统计；不受 severity/category/cursor 影响 |
-| 时间线 | 同上                                                | 稳定倒序、服务端游标分页；同时间用 incidentId 作次排序；返回查询回显、filteredTotal 与 nextCursor |
-| 证据   | `GET /incidents/{incidentId}/evidence?environmentId&appId&instanceId&from&to&severity&category` | 按事件 ID、实例范围和活动筛选读取 IncidentEvidence + 有界关联事实；明确 complete/partial/unavailable |
-| 规则版本/发布审计 | `GET /rulesets/{bindingId}/versions/{versionId}` 与 `/publications/{publicationId}` | 从证据的精确 `relatedRule` 下钻；发布 receipts 继续使用规则页自己的分页读取，不把 incident 事件当作发布成功证明 |
-| 趋势对照 | `GET /metrics?...&from&to` | 使用事件同一 app/instance/window 查询独立指标序列；事件与管理事实只作时间相关标记，不做因果推断 |
-| 下钻   | 无写接口                                           | 保留事件窗口与 app/instance/event/version/publication；缺少确切目标时不渲染无效动作 |
+详情 wire 为 `IncidentEvidence{query,asOf,event,facts,completeness,suggestedViews,relatedRule}`；`relatedRule:{environmentId,appId,bindingId,versionId,publicationId}|null` 是服务端规则/审计数据的权威 opaque identity，并必须与事件所属环境、应用和发布事实一致，客户端不从 caption、规则正文或应用名称推断。原始异常消息、traceback、frame locals 不进页面/协议。
+
+| 动作 | 当前正式接口 | 结果 |
+| --- | --- | --- |
+| 统计与时间线 | `GET /api/v1/incidents?environmentId&scope&from&to&pageSize[&appId&instanceId&severity&category&cursor]` | 必须提供 `environmentId/scope/from/to/pageSize`；应用/实例身份按 scope 约束。全范围统计不受 severity/category/cursor 影响；稳定倒序由服务端提供，前端验证但不重排。 |
+| 事件证据 | `GET /api/v1/incidents/{incidentId}/evidence?environmentId&scope&from&to[&appId&instanceId&severity&category]` | 必须提供 `environmentId/scope/from/to`；按事件 ID 与查询范围读取有界证据，明确 `complete/partial/unavailable`。 |
+| 精确规则版本/发布记录 | `GET /api/v1/rulesets/{bindingId}/versions/{versionId}`、`GET /api/v1/rulesets/{bindingId}/publications/{publicationId}` | 仅从证据中的完整 `relatedRule` 下钻；publication receipts 继续使用规则页自己的分页读取，不把 incident 事件当作发布成功证明。 |
+| 趋势对照 | `GET /api/v1/metrics/query?...&from&to` | 使用事件同一环境/app/instance/scope/window 查询独立指标序列；事件与管理事实只作时间相关标记，不做因果推断。 |
+| 下钻 | 无写接口 | 保留事件窗口与 app/instance/event/version/publication；缺少确切目标时不渲染无效动作。 |
 
 category 是 Console 聚合分类，不增加 Reporter V1 event_kind。采集事件与发布审计用 sourceEventId/publicationId 关联去重；收到时间和发生时间分开，迟到/客户端时钟偏差可观察。存储保留期须由选定事件后端声明，暂不承诺无限历史。
 
 ### 6.3 当前实现与验收条件
 
-旧 App 的 Timeline/Evidence 仍按演示 date/HH:mm:ss 与固定窗口工作，最终替换在 F6。新增 `faults/observation.ts` 内部入口：`IncidentPort`、IncidentQuery/Page/Evidence 值对象、两个身份绑定读 owner，以及正式页面/筛选/时间线/证据组件。该页复用应用 feature 的授权实例目录 Port；实例选择将 `(environmentId, appId, instanceId)` 与 `process` scope 写入可分享 URL/query，不通过用户输入任意实例标识。HTTP/mock 按实例作用域过滤；IAB 验收了实例切换、筛选联动、刷新恢复和两页游标。真实 Python Console 与生产事件源仍未联调。
+正式 `/faults` 路由已装配 `IncidentObservationContainer` 与 incident HTTP adapter；页面按授权实例目录选择目标，并将 `(environmentId, appId, instanceId)` 与 `process` scope 写入可分享 URL/query，不通过用户输入任意实例标识。demo HTTP Mock 按实例作用域过滤；已有 IAB 场景覆盖实例切换、筛选联动、刷新恢复和两页游标。Python Console 的 Reporter 事件已由 mTLS 入口持久化到 SQL，默认 SQL identity composition 同时装配 timeline/evidence reader；当前详情只投影所选事件自身的一条结构化事实并标记 `partial`，不推断关联规则或补造相邻指标证据。新 reader 尚未完成浏览器 live 复验及目标部署环境验收。
 
 内部事件时间采用 UTC epoch 毫秒，发生时间限定观察窗 `[from,to)`，收到时间独立允许迟到或时钟偏差；不得用接收时间代替发生时间过滤。倒序按 occurredAt、同时间按 ID 代码点排序，前端校验但不在分页后重排。全范围统计与 severity/category 筛选结果、游标页分开；nextCursor 不重复当前 cursor，空页不能继续循环游标。
 
-标题/事实是有限、类型化的 code 参数联合，由呈现层三语映射，不接收任意原始异常/业务日志作标题。证据单列 source/at 与完整/部分/不可用状态，有界 100 条；建议仅提供存在的只读实例/指标/规则视图目标，没有自动修改或根因断言。Console 分类不改变 Reporter V1 event_kind。F6 冻结 JSON wire 时还须对额外字段、内容长度和来源脱敏实施运行校验，内部 TS 类型与语义谓词不是网络解码器。
+标题事实由有限 `IncidentFact` code 联合表达并由呈现层本地化，不接收任意原始异常/业务日志。证据单列 source/at 与完整/部分/不可用状态，有界 100 条；建议仅提供存在的只读实例/指标/规则视图目标，没有自动修改或根因断言。Console 分类不改变 Reporter V1 event_kind。现有 React wire schema 使用 strict object/discriminated union 并在 adapter 解码后执行 query/关联语义校验；Python query parser 拒绝未知、重复、缺少必需参数，serializer 使用显式字段投影。Console wire 已冻结至 0.19.0；协议冻结不代表生产 Collector 或浏览器 live E2E 已接入。
 
-页面显示当前选定环境/应用/实例/时间范围的统计、筛选结果总数与本页数量，过滤无结果仍保留范围统计。统计独立于 severity/category/cursor。选择事件是显式操作；游标翻页不替换或重复加载所选证据，改变环境/应用/实例/时间/级别/类别会清除选中事件并把 cursor 复位。游标只是不透明分页位置，不能由客户端算偏移或重排服务端页。收到时间、发生时间、读取时间、来源事件与发布记录各自展示；证据的 `relatedRule` 必须匹配事件 publication/version identity，规则导航定位到对应 binding/version/publication 的独立只读读取投影；趋势导航使用同 app/instance/UTC 窗口并以事实标记作时间对照，不展示根因断言。明确 404/410 清除旧证据，普通断网保持同 query 陈旧事实且安全提示；撤权首个通知清全部事实/统计。前端 mock 与 IAB 验收见 F4.14 记录；真实指标/规则/发布 API、Python Console 与生产网络仍需验收。
+页面显示当前选定环境/应用/实例/时间范围的统计、筛选结果总数与本页数量，过滤无结果仍保留范围统计。统计独立于 severity/category/cursor。选择事件是显式操作；游标翻页不替换或重复加载所选证据，改变环境/应用/实例/时间/级别/类别会清除选中事件并把 cursor 复位。游标只是不透明分页位置，不能由客户端算偏移或重排服务端页。收到时间、发生时间、读取时间、来源事件与发布记录各自展示；证据的 `relatedRule` 必须匹配事件 publication/version identity，规则导航定位到对应 binding/version/publication 的独立只读读取投影；趋势导航使用同 app/instance/UTC 窗口并以事实标记作时间对照，不展示根因断言。明确 404 `not_found` 清除旧证据，普通断网保持同 query 陈旧事实且安全提示；撤权首个通知清全部事实/统计。事件 API 不定义 410 `target_retired`；该码只用于带进程 incarnation 的实例观测/指标读取。前端 mock 与 IAB 验收见 F4.14 记录；真实指标/规则/发布 API、Python Console 与生产网络仍需验收。
+
+故障页两个读取 operation 均逐请求要求有效会话和 `metrics:view`；权限/基础设施原始详情不得下发到可见错误。稳定拒绝码与页面行为如下：
+
+当前查询边界：`environmentId/appId/instanceId/incidentId` 最长 200 个 UTF-16 code units；`pageSize` 为 1–100；不透明 `cursor` 为 1–512 个 UTF-16 code units。scope、severity、category 继续采用本节列出的有限枚举；详情证据仍有独立的最多 100 条事实边界。这些结构约束不代表事件历史保留时长。
+
+时间线响应计数 `total/critical/warning/info/ruleChanges/affectedApplications/filteredTotal` 均为非负整数，最大值为 9007199254740991；它们是筛选范围统计，不是当前页大小。
+
+| operationId | HTTP | 稳定错误码 | 页面行为与恢复 |
+| --- | --- | --- | --- |
+| `readIncidentTimeline` | 400 | `invalid_request` | query 缺失、重复、未知或取值非法；显示安全读取错误，不把非法请求当空时间线；仅同 key 旧值可按 stale 明示。 |
+| `readIncidentTimeline` | 401 | `unauthenticated` | Console transport 启动统一会话过期处理；清理受保护查询投影，不显示旧权限主体统计/事件。 |
+| `readIncidentTimeline` | 403 | `forbidden` | 清除旧查询投影并显示权限拒绝；不得用 Mock/空时间线遮盖缺少 `metrics:view`。 |
+| `readIncidentTimeline` | 404 | `not_found` | 所选环境/应用目标不存在；清除该 query 的旧统计/事件，不退回 fleet 或其他应用，需刷新授权目录并重新选择。 |
+| `readIncidentTimeline` | 429 | `rate_limited` | 有旧成功页时按 stale 展示其原 query/asOf，否则显示错误；无自动重试。若响应包含有界 `retryAfterMs`，共享查询反馈组件在到期前禁用人工刷新，到期后恢复。 |
+| `readIncidentTimeline` | 503 | `service_unavailable` | authority 未装配、不可用或响应身份与 query 不匹配；有旧成功页则保留为 stale 并保留原 query/asOf，否则显示不可用；不回退 Mock。 |
+| `readIncidentEvidence` | 400 | `invalid_request` | 事件 ID/query 不合法；显示安全读取错误，不隐式换选其他事件。 |
+| `readIncidentEvidence` | 401 | `unauthenticated` | 统一会话过期处理并清除受保护详情，不显示旧主体证据。 |
+| `readIncidentEvidence` | 403 | `forbidden` | 清除旧详情并显示权限拒绝；不可用 Mock 或时间线摘要替代受保护证据。 |
+| `readIncidentEvidence` | 404 | `not_found` | 事件不存在或不属于所选环境/应用/实例/时间/筛选范围；清除旧证据，不自动选时间线首条事件，用户需回到当前时间线显式选择。 |
+| `readIncidentEvidence` | 429 | `rate_limited` | 有旧同 key 证据时按 stale 展示并保留原 event/asOf，否则显示错误；无自动重试。若响应包含有界 `retryAfterMs`，共享查询反馈组件在到期前禁用人工刷新，到期后恢复。 |
+| `readIncidentEvidence` | 503 | `service_unavailable` | authority 未装配、不可用或返回身份不匹配；有旧同 key 证据则保留 stale，否则显示不可用；不借用别的事件证据。 |
+
+网络失败/超时与 503 一样不回退到 Mock；只允许保留同 key 且明确标 stale 的可信旧值。404、权限撤销和身份变化清除相应缓存；事件不属于本 query 时不得通过“首条事件”自动替代。UI 对 429 不自动重放；服务端返回合法 `retryAfterMs` 时，共享查询反馈组件会禁用人工刷新直至等待期结束，未返回该字段时不额外限制手动恢复。
 
 目标验收：跨日/时区/迟到时间正确；分页不改变总统计；同事件不重复统计；关联查不到明确不可用；展示“观察事实”而非未经证明的根因。
 
@@ -323,29 +484,84 @@ category 是 Console 聚合分类，不增加 Reporter V1 event_kind。采集事
 
 ### 7.1 功能与交互
 
-五子视图：connections、permissions、protocol、accounts、roles；账号/角色复用第 10/11 章，不另写一套逻辑。普通系统面板只读，setup 的初始登记与凭证录入不因此被取消。
+沿用现有系统子视图导航；账号/角色复用第 10/11 章，不另写一套逻辑。连接与采集区中的状态观察只读，配置源管理与新增监控源管理按 admin 授权提供受控写入；setup 的初始登记与凭证录入保留。实际视图 ID 以路由枚举为准。
 
 - 连接与采集：配置源、指标查询后端、Collector 真实连通性、最近探测、延迟与覆盖。
 - 权限与审计：当前会话能力、服务端固定角色、真实操作记录；不能用四步说明图冒充审计查询。
 - 协议与版本：Console/Reporter/Cluster 的支持版本和安装/配置状态，区分未配置、不兼容、降级、运行。
 
+新增监控数据源的管理和采集部署入口见本章 §7.4；原 Nacos/Consul 来源登记只负责规则，不代表监控已配置。
+`GET /api/v1/system/deployment-guides` 返回服务端 catalog revision、`existing/linux/kubernetes` readiness 与显式配置的 Runtime Collector 公布地址；地址不能从 request/bind 推导。当前 Linux/Kubernetes 仅为 `guide-only`，此页面说明不是经验证的安装模板。
+
+部署引导响应的字段为 `catalogRevision/runtimeCollector/paths`；`runtimeCollector` 含 `state/endpoint`，状态为 `configured|not_configured`；每个 path 含 `id/readiness/profileRevision`，`id` 为 `existing|linux|kubernetes`，`readiness` 为 `configuration-required|guide-only`。未显式配置 Collector 公布地址时 `endpoint=null`；不能从当前请求的 Host、Forwarded、bind 地址或浏览器位置推导。
+
 ### 7.2 数据与接口
 
-`ConnectionStatus`：`connectionId/kind/provider?/state/checkedAt/latencyMs?/coverage?/capabilities/reasonCode`；kind 与状态为协议枚举，毫秒不是“123 ms”字符串。
-`SystemCapabilities`：runtime profile 支持、存储 CAS/history/watch 与 source 身份分开；不带写凭证。
-`AuditEntry`：`auditId/at/actorId/action/targetId/result/requestId/publicationId?`；可按角色和操作追溯，不携带原始 payload。
-`ProtocolStatus`：`component/supportedVersions/activeVersion/compatibility/state`；静态协议知识与实时组件状态不是一份事实。
+实际连接观察 wire 为 `ConnectionObservation{id,kind,sourceId,provider,state,checkedAt,expiresAt,latencyMs,capabilities,reason}`；集合为 `{asOf,items}`。能力、状态与失败原因是有限枚举，时间为 UTC instant，耗时为数值毫秒；连接健康摘要不是浏览器在线状态。
+`ProtocolObservation{kind,supported,active,compatibility,observedAt}` 由 `{asOf,items}` 承载；静态支持版本与可能为空的运行时协商版本分开。
+逐 worker 协商读取返回 `{asOf,page,pageSize,total,items}`；每项含 `environmentId/appId/instanceId/processId/reporterId/boundary/collectorSupported/runtimeVersion/compatibility/observedAt`。Agent Reporting 与 Incident Event 分别读取且独立协商；无认证 hello 时 `runtimeVersion/observedAt` 为空、兼容状态为 `unknown`。不返回证书主体、PEM、私钥或凭证。
+`AuditRecord{id,occurredAt,actorId,action,targetId,result,requestId,environmentId,appId,bindingId,publicationId}`；查询为 `start/end/actorId/action/result/page/pageSize`，不携带原始 payload。当前角色与能力由会话读取投影提供；`admin/view` 角色名称和说明由前端固定领域目录与 i18n 展示。
+审计筛选 `action` 只接受 `account-create`、`account-role`、`account-status`、`password-change`、`system-initialize`、`rule-validate`、`source-register`、`source-update`、`source-delete`、`draft-save`、`draft-delete`、`version-freeze`、`rule-publish`、`plan-create`、`plan-cancel`、`plan-activate`、`plan-restore`、`rule-binding-create`、`host-association-create`、`host-association-delete`；`result` 只接受 `success`、`rejected`、`unknown`。这些是筛选与审计事实的 wire 值，不是任意操作名或原始错误文本；未选择筛选时省略对应 query 参数。
+审计响应为 `{query,asOf,total,items}`；`query` 回显规范化后的筛选与分页参数，`total` 是整个过滤结果的总数而非当前 `items` 数量。配置源检查请求为 `{sourceId,expectedRevision,source}`，`sourceId` 与 `expectedRevision` 必须同时为 `null`（检查尚未登记的候选）或同时为非空值（检查已登记来源的当前 revision）；只提供其中一个是 `400 invalid_request`，且不得调用 provider checker。编辑已有 source 时 revision 绑定当前候选检查，防止基于旧登记版本误显示可达；登记/更新 mutation 分别带 `name`，更新另带 `sourceId/expectedRevision`。删除 mutation 使用 `{kind:"delete",requestKey,sourceId,expectedRevision}`，不得附带 endpoint、provider、location 或凭证字段。来源 operation 完成时登记/更新分支返回脱敏 `record: SourceRecord`；删除分支只返回 `deletedSourceId`。两种分支均不含凭证或引用值；拒绝时用有限 `reason`，不得用原始 provider 错误代替。
 
-| 用例           | 候选接口                                         | 授权                                                              |
-| -------------- | ------------------------------------------------ | ----------------------------------------------------------------- |
-| 连接/覆盖      | `GET /system/connections`                        | 已登录，敏感部署信息脱敏                                          |
-| 能力与角色声明 | `GET /system/permissions`、`GET /roles`          | 当前用户可读；非任意自定义角色                                    |
-| 管理审计       | `GET /system/audit?from&to&action&page&pageSize` | admin                                                             |
-| 协议/版本状态  | `GET /system/protocols`                          | 已登录                                                            |
-| 已登记配置源   | `GET /system/sources`                            | admin；仅返回来源 ID/修订及脱敏连接元数据，不返回凭证或引用值     |
-| 测试候选连接   | `POST /system/sources/check`                     | admin + CSRF；只探测连接/读/条件写/watch 能力，不登记、不修改规则 |
-| 登记/条件更新  | `POST /system/sources/commands`                  | admin + CSRF + 原 requestKey；更新必须比较 source revision        |
-| 核查原来源命令 | `GET /system/sources/operations/{requestKey}`    | admin + 原操作者/操作归属；not-found/pending 不得解锁重发         |
+Prometheus 监控源是独立于 Nacos/Consul 规则源的 `/api/v2/monitoring/sources*` resource：目录只返回安全元数据；admin 可读取单源脱敏配置、测试固定 node-exporter profile、提交 create/update/set-enabled/delete 命令，并按原 `requestKey` 读取操作回执。endpoint 详情只回传 origin，不回传路径；凭证只在探测/写入请求中短暂提交，目录、详情、探测回执、命令回执和审计均不得回显凭证或引用值。启停命令只携带 sourceId、expectedRevision 与 enabled，避免重填凭证或覆盖 endpoint。
+
+监控源 wire 字段目录按 operation 投影如下：候选配置含 `sourceId/revision/displayName/environmentId/endpoint/provider/profile/authenticationMode/credentialConfigured/enabled/identityLabels/selectorLabels/scrapeIntervalSeconds/staleAfterSeconds`；selector 为 `{name,value}`。固定枚举为 `provider=prometheus-compatible`、`profile=node-exporter-v1`、认证模式 `none/direct-basic/direct-bearer/credential-reference`；探测输入另含 `credentials`（Basic 的 `username/password`、Bearer 的 `bearerToken`、引用的 `reference` 或 `null`）。写入中的 `credentialUpdate` 明确为 keep/replace/clear；`skipCheck` 只有显式跳过当前检查时为 true，回执必须标 `verified=false`。候选检查要求 `checkId` 与 fingerprint 绑定；缺少或不匹配回执拒绝为 `check_required/check_mismatch`。探测回执含 `checkId/sourceId/sourceRevision/checkedAt/expiresAt/candidateFingerprint/result`，其中 `result` 含 `connection/queryApi/profile/identity/failure`，`identity` 为 `observed/unique/missing/conflicting`。目录项含 `id/revision/displayName/environmentId/provider/profile/enabled/authenticationMode/credentialConfigured`；详情增加 `endpointOrigin/identityLabels/selectorLabels/scrapeIntervalSeconds/staleAfterSeconds`。管理回执含 `status/requestKey/sourceId/sourceRevision/enabled/verified/reason`；启停请求是最小 `{kind,requestKey,sourceId,expectedRevision,enabled}`。这些字段均由严格 runtime schema 冻结，秘密只在请求中出现。
+
+相关约束：selector `value` 最长 256；`staleAfterSeconds` 为 2–3600；Basic/Bearer/reference mutation 凭证字段最大 4096，check candidate 的 reference 上限 256；探测与详情共用同一身份映射/采集间隔范围。所有长度按 runtime schema 的 UTF-16 边界检查。
+
+审计 `total` 为非负安全整数，最大 9007199254740991；已登记来源响应的 `items` 最多 500 项，超量必须分页或拒绝，不可静默截断。
+当前查询边界：审计 `page` 为 1–1000000、`pageSize` 为 1–100；来源命令核查的 `requestKey` 为 1–128 个 UTF-16 code units。
+配置源检查与保存使用严格 provider/auth 联合：候选 `source` 含 `provider/endpoint` 及 Nacos `namespace` 或 Consul `datacenter`，`authentication` 的判别字段 `mode` 为 `none/credential-reference/direct`；Nacos direct 输入含 write-only `username/password`，Consul direct 输入含 write-only `aclToken`，引用模式只含 write-only `reference`。读取与命令 `record` 投影只公开 `authenticationMode/credentialConfigured` 及对应位置字段，不公开 `authentication`、`username/password/aclToken/reference`。
+
+当前请求体字符串边界也属于 wire 合同：来源 `endpoint` 最长 2048；`reference` 长度 1–512；`username` 长度 1–200；`password` 与 `aclToken` 长度 1–1024。检查连接与登记/更新均遵守相同范围；密码/令牌/引用字段仍仅在适用认证模式的单次请求体中出现，任何读取和回执都不回显。
+该联合中的 `provider` wire 值严格为小写 `nacos` 或 `consul`；该值用于 `checkRegisteredSource`、`mutateRegisteredSource` 请求中的候选来源，不得发送界面显示名或大小写变体。
+连接观察的 `state` 为 `available|unavailable|unconfigured|unknown`；来源检查的 `status` 为 `reachable|unreachable`，仅 `unreachable` 携带有限失败原因 `reason: connection|authentication|unsupported`。来源命令观察为 `completed|rejected|pending|not_found`，拒绝原因只允许 `validation|conflict|not_found|unavailable|source_in_use`。协议兼容项中的 `not-configured` 与连接状态 `unconfigured` 是不同字段上的 wire 值。
+协议观察的状态值还包括 `network|unsupported|not-configured|no-probe`；它们分别表达连通性失败、不支持、未配置协议及尚无探测事实，不能替代 `ConnectionObservation.state`。
+
+| 用例 | 当前正式接口 | 授权与语义 |
+| --- | --- | --- |
+| 规则范围目录 | `GET /api/v2/rules/binding-scopes` | 已登录；从持久化规则绑定及关联 source/target 投影；真正无绑定时返回空目录，authority 不可用时返回 503。 |
+| 当前身份、角色与能力 | `GET /api/v1/auth/me` | 当前会话事实；不从浏览器缓存推断权限。固定角色目录不单独请求。 |
+| 连接观察 | `GET /api/v1/system/connections` | 已登录；返回脱敏连接观察和读取时刻。 |
+| 协议/版本观察 | `GET /api/v1/system/protocols` | 已登录；支持集合与 active/compatibility/observedAt 分开。 |
+| Agent Reporting worker 协商观察 | `GET /api/v2/system/protocol-observations/agent-reporting?page&pageSize` | 已登录；逐 Reporter 展示 Collector 实际收到的认证协商事实，无握手为 `unknown`，不暴露证书主体。 |
+| 部署引导目录 | `GET /api/v1/system/deployment-guides` | `admin/view`；返回目录 revision、有限路径 readiness 与显式 Runtime Collector HTTPS 公布地址；不从 bind/request 推导，不执行安装。 |
+| Incident Event worker 协商观察 | `GET /api/v2/system/protocol-observations/incident-events?page&pageSize` | 已登录；独立读取 Incident Event 协商，不从 Agent Reporting 握手推断兼容性。 |
+| 管理审计 | `GET /api/v1/system/audit?start&end&actorId&action&result&page&pageSize` | admin；时间范围与页参数必填，actor/action/result 为可选筛选。 |
+| 已登记配置源 | `GET /api/v1/system/sources` | admin；只返回来源 ID/revision 与脱敏连接元数据，不返回凭证或引用值。 |
+| 测试候选连接 | `POST /api/v1/system/sources/check` | admin + CSRF；探测当前候选，不登记、不修改规则。 |
+| 登记/条件更新/删除 | `POST /api/v1/system/sources/commands` | admin + CSRF + 原 request key；register/update/delete 由 kind 区分，更新/删除必须携带 expected revision；仍被规则绑定引用时拒绝 `source_in_use`，不级联删除。 |
+| 核查原来源命令 | `GET /api/v1/system/sources/operations/{requestKey}` | admin + 原操作者/操作归属；查询 `not_found/pending` 不得解锁重发。 |
+| 监控源目录/详情 | `GET /api/v2/monitoring/sources`、`GET /api/v2/monitoring/sources/{sourceId}` | 目录可由 admin/view 读取；详情仅 admin，endpoint 只返回 origin。 |
+| 监控源探测/回执 | `POST /api/v2/monitoring/sources/check`、`GET /api/v2/monitoring/sources/checks/{checkId}` | 固定 profile 有界只读探测；探测回执只允许原账号与原会话读取。 |
+| 监控源管理/核查 | `POST /api/v2/monitoring/sources/commands`、`GET /api/v2/monitoring/sources/operations/{requestKey}` | create/update/set-enabled/delete 均为 revision-bound 命令；未知结果仅核查原 key。 |
+| 监控源目录/详情 | `GET /api/v2/monitoring/sources`、`GET /api/v2/monitoring/sources/{sourceId}` | 目录可由 admin/view 读取；详情仅 admin，endpoint 只返回 origin。 |
+| 监控源探测/回执 | `POST /api/v2/monitoring/sources/check`、`GET /api/v2/monitoring/sources/checks/{checkId}` | 固定 profile 有界只读探测；探测回执只允许原账号与原会话读取。 |
+| 监控源管理/核查 | `POST /api/v2/monitoring/sources/commands`、`GET /api/v2/monitoring/sources/operations/{requestKey}` | create/update/set-enabled/delete 均为 revision-bound 命令；未知结果仅核查原 key。 |
+| Prometheus 监控源目录 | `GET /api/v2/monitoring/sources` | 已登录；只返回脱敏目录元数据。 |
+| Prometheus 监控源详情/探测回执 | `GET /api/v2/monitoring/sources/{sourceId}`、`GET /api/v2/monitoring/sources/checks/{checkId}` | admin；详情不返回 endpoint path 或凭证，探测回执限原账号与会话读取。 |
+| 探测与管理命令 | `POST /api/v2/monitoring/sources/check`、`POST /api/v2/monitoring/sources/commands` | admin + CSRF；命令需 Idempotency-Key，保存与探测回执/审计原子提交。 |
+| 核查监控源命令 | `GET /api/v2/monitoring/sources/operations/{requestKey}` | admin + 原账号/原会话；未知写结果只查询原 key，不自动重放。 |
+| 主机与运行实例关联 | `GET /api/v2/monitoring/host-associations?environmentId&sourceId&appId&instanceId&page&pageSize`、`PUT /api/v2/monitoring/host-associations`、`DELETE /api/v2/monitoring/host-associations`、`GET /api/v2/monitoring/host-associations/operations/{requestKey}` | GET 允许只读会话；修改仅 admin + CSRF + 幂等 request key；关联不从 Prometheus labels 推断。 |
+
+系统管理端点的失败合同按运行时 `ConsoleEndpoint.errors` 精确区分，不把相同 HTTP 状态误合并为一种原因：
+
+主机/实例关联的 `GET` 响应目录包含 `environmentId/asOf/page/pageSize/total/associatedHostIds/hostIdsComplete/items`；关联项含 `sourceId/environmentId/hostId/appId/instanceId/processId/revision/provenance/currentEpoch/lastReceivedAt/reporterActive/createdAt`。PUT 请求字段为 `requestKey/environmentId/sourceId/hostId/appId/instanceId/expectedRevision`；DELETE 请求为 `requestKey/environmentId/appId/instanceId/expectedRevision`；删除结果只有 `removed`。操作回执为 `status/requestKey/result`，完成结果是关联项或 `{removed:true}`，not-found 只返回状态和 key。`Idempotency-Key` 必须等于 body `requestKey`。分页上限 page=10,000、pageSize=100，目录关联项最多 100 条；`associatedHostIds` 最多 200 项并以 `hostIdsComplete` 标明完整性。
+
+| 操作 | HTTP 状态与稳定错误码 |
+| --- | --- |
+| `readSystemConnections` | `400 invalid_request`、`401 unauthenticated`、`503 service_unavailable` |
+| `readSystemProtocols` | `400 invalid_request`、`401 unauthenticated`、`503 service_unavailable` |
+| `readAgentReportingProtocolObservations` | `400 invalid_request`、`401 unauthenticated`、`503 service_unavailable` |
+| `readIncidentEventProtocolObservations` | `400 invalid_request`、`401 unauthenticated`、`503 service_unavailable` |
+| `readSystemAudit` | `400 invalid_request`、`401 unauthenticated`、`403 forbidden`、`503 service_unavailable` |
+| `readRegisteredSources` | `400 invalid_request`、`401 unauthenticated`、`403 forbidden`、`503 service_unavailable` |
+| `checkRegisteredSource` | `400 invalid_request`、`401 unauthenticated`、`403 forbidden`、`403 csrf_failed`、`429 rate_limited`、`503 service_unavailable` |
+| `mutateRegisteredSource` | `400 invalid_request`、`401 unauthenticated`、`403 forbidden`、`403 csrf_failed`、`409 idempotency_conflict`、`422 validation_failed`、`429 rate_limited`、`503 service_unavailable`；已接受命令中的 `source_in_use` 是 `202 rejected` 业务回执 |
+| `readRegisteredSourceOperation` | `400 invalid_request`、`401 unauthenticated`、`403 forbidden`、`404 not_found`（非法 request key）、`429 rate_limited`、`503 service_unavailable` |
+
+`401` 走统一会话失效流程；`403` 保留拒绝语义并清除不得继续展示的受保护数据；`503` 只对读模型保留带原 `asOf` 的 stale 事实，不生成成功/健康假值。每个 HTTP 429 `rate_limited` 响应都必须带 `0..300000` 的有界整数 `retryAfterMs`，缺失或越界的响应视为协议错误，不作为合法限流事实接受。该值只作为最早允许人工重试的有界提示：检查连接、保存和检查原操作的按钮在期限内禁用，不自动重放；来源检查的冷却截止时间由 workflow 独立于当前候选检查结果持有，编辑字段或清除/失效旧检查结果不得缩短仍有效的等待期，期限内通过其他入口触发的检查也必须被拒绝。命令的 `409/422` 是请求幂等冲突/输入校验失败，不等同于已接受操作的业务拒绝回执。来源操作查询中的业务 `status: "not_found"` 仍是 HTTP 200 观察结果，既不是上表的非法 request key HTTP 404，也不证明原写操作回滚或允许重新发送。所有错误 UI、日志和快照均不得带 provider 原始异常、凭证或响应正文。
 
 补充第二配置源是独立管理能力。source-registration HTTP adapter、严格 wire schema、UTC mapper 和 4 个 API operations 已进入 OpenAPI 生成；正式 `SystemObservationContainer → SystemPage → SourceRegistryPanel` 现将配置源登记/修改面板装配到 connections tab，授权使用当前认证 identity 的 `sessionEpoch` 与 admin 事实，身份 owner 替换/卸载时释放 workflow。当前 demo 模式通过显式 MSW handlers 提供内存 Nacos 示例、Consul/Nacos 写入、条件 revision、原操作查询和合成检查；这不是 Python 后端或真实 provider 检查。生产 build 仍是 live-only，不能据 demo 页面推定“真实连接编辑已完成”。
 
@@ -355,47 +571,84 @@ category 是 Console 聚合分类，不增加 Reporter V1 event_kind。采集事
 
 ### 7.3 当前实现与验收条件
 
-旧 App 的 tab 由 URL `view` 控制，仍使用同步 fixture 连接及静态权限/交付说明；它将在 F6 退役，不是正常管理数据路径。
+正式系统页面由 app route owner 和 URL `view` 装配；connections、permissions、protocol、accounts、roles 是页面视图，不复制账号/角色业务逻辑。系统 observation 使用独立 health/protocol/audit Ports 与读取资源，连接展示探测/有效截止/读取 UTC、毫秒耗时、有限能力、脱敏失败；过期按后台读取瞬间判断，不把浏览器在线当健康。协议支持版、实际协商版、兼容性/时间独立校验。审计仅 admin 投影授权，有独立 UTC 半开范围、actor/action/result 与分页；只返回有限审计投影和原请求/发布关联，不含敏感正文。Python Console 已有 system API、已登记 source 的 SQL 投影/短期探测结果及默认 SQL 审计读取；未注入宿主 authority 时协议协商、Collector/metrics、实例清单等仍须 unavailable/unknown，不得从静态版本或 Mock 推断运行事实。
 
-正式内部入口 `system/observation.ts` 已有独立 health/protocol/audit Port 与读取资源、三类面板。连接展示探测/有效截止/读取 UTC、毫秒耗时、有限能力、脱敏失败；过期按后台读取瞬间判断，不把浏览器在线当健康。协议支持版、实际协商版、兼容性/时间独立校验。审计仅 admin 投影授权，有独立 UTC 半开范围、actor/action/result 与分页，Apply 非法条件不发请求；仅返回有限审计投影和原请求/发布关联，不含敏感正文。未接真实 `/system/*`、旧 App 或后台持久化，不能将内部组件验收表述为真实 API 已实现。
-
-配置源的纯 provider/auth/URL/凭证投影与 setup 共用 `shared/model/configurationSource`。正式页面已实际挂载 `SourceRegistryPanel` / Dialog / Fields / OperationFeedback 到 connections tab；正常编辑按已读 ID/revision 默认 keep，不回显密码/令牌/用户名/引用值，显式 replace 支持三种认证模式。切 provider 清除地址、位置和秘密并禁止 keep；测试结果随任一输入变化失效，测试不登记、不写规则、不授权发布，保存由后台重新验证。未知写结果清除临时秘密，只查原 requestKey，pending/not-found 不解锁重发；冲突保留可修正字段但不得静默采用新 revision 覆盖。source workflow 以当前认证 session owner 和 admin 事实授权，owner 失效时释放。demo handler 只持有脱敏配置事实及不可逆 keyed digest，不留存提交凭证；连接检查有明确的模拟说明且不会访问 provider。真实 Python 持久化/CAS/Secret 保护和浏览器渲染回归仍分别验收，证据见推进清单 §15.21。
+配置源的 provider/auth/URL/凭证投影与 setup 共用 `shared/model/configurationSource`。正式页面已挂载 `SourceRegistryPanel` / Dialog / Fields / OperationFeedback 到 connections tab；正常编辑按已读 ID/revision 默认 keep，不回显密码/令牌/用户名/引用值，显式 replace 支持三种认证模式。切 provider 清除地址、位置和秘密并禁止 keep；测试结果随任一输入变化失效，测试不登记、不写规则、不授权发布，保存由后台重新验证。删除采用单独确认交互并携带最新 revision；被 binding 引用时以安全业务回执拒绝，不级联删除；成功时立即从原 operation key 读取确认。未知写结果清除临时秘密，只查原 requestKey，pending/not-found 不解锁重发；冲突保留可修正字段但不得静默采用新 revision 覆盖。source workflow 以当前认证 session owner 和 admin 事实授权，owner 失效时释放。demo handler 仅模拟状态、不访问 provider；Python SQL registry、条件更新、探测保存与 revision 隔离已有局部实现/隔离服务证据，Nacos 认证 HTTPS trust-boundary 与自定义 CA composition 也有受控验收，但不代表生产 provider 全组合或部署验收。React live 联调和完整页面渲染仍未完成。
 
 目标验收：未知/不可达/权限失败分别显示；配置源健康不由浏览器 online 判定；非 admin 不看管理审计/账户写入口；URL 深链与刷新保留正确 tab；没有凭证回显。
+
+### 7.4 监控数据源登记与采集部署（目标功能）
+
+connections内增加监控数据源与采集/上报接入，沿用系统六子视图。admin登记查询端点/认证/身份映射并测试保存，view只读；主机采集采用外部Prometheus兼容后端和可执行部署引导。
+
+工作区布局见[UI-S01](DASHBOARD_INTEGRATION_DESIGN.md#connections)，三步弹窗、字段行为、检查/保存/冲突与未知结果见[UI-S02](DASHBOARD_INTEGRATION_DESIGN.md#monitoring-editor)，Collector与查询/抓取端点及Java/Go/Rust接入流程见[UI-S03](DASHBOARD_INTEGRATION_DESIGN.md#runtime-onboarding)。这些章节是增量功能/UI规则的唯一详细来源；当前source API继续只支持Nacos/Consul，新监控源API由Console契约主管单独定义。
 
 ## 8. 首次初始化 `#/setup`
 
 ### 8.1 功能与交互
 
-启动授权 → 系统存储 → 内置管理员 → 首个规则来源 → 确认并提交。启动授权是 F6 安全收敛新增的前置区域，不改变原配置四步：输入部署提供的一次性 operator code，确认 grant 后才允许 DB/source 连接检查和初始化；不能通过占据第一个匿名请求自动成为管理者。仅未初始化可达，无“返回登录”；完成后替换到 login，并永久关闭初始化操作。后端 bootstrap 状态才是事实，前端 stepIndex 只代表表单进度，不是数据库迁移状态。授权码与各类连接密码一样仅在临时输入中存在，确认/离开清理，不进 URL 或确认页。
+启动授权 → 系统存储 → 内置管理员 → 首个规则来源 → 确认并提交。仅当服务绑定字面 loopback 地址、所有允许的 Browser Origin 都是 loopback、且未配置可信反向代理时，页面自动申请本机初始化 grant，不显示也不要求 operator code；服务端仍验证实际客户端为 loopback、setup window 开放、Origin 与 CSRF。若绑定非 loopback、存在非 loopback Origin 或可信代理配置，则页面要求部署方提供的一次性 operator code，经受保护授权后才允许 DB/source 检查和初始化。不能通过匿名首个请求自动成为管理员。仅未初始化可达，无“返回登录”；完成后替换到 login，并永久关闭初始化操作。后端 bootstrap 状态才是事实，前端 stepIndex 只代表表单进度，不是数据库迁移状态。授权码与各类连接密码一样仅在临时输入中存在，确认/离开清理，不进 URL 或确认页。
 
 ### 8.2 数据与接口
 
-`BootstrapStatus`：phase/initialized/availableDatabaseKinds/availableAuthModes；不返回连接口令。
+`BootstrapSnapshot` 是判定 setup 的权威 wire：已初始化时只有 `{initialized:true}`；未初始化时返回 `{initialized:false,setupAvailable,operatorAuthorized}`。前端 wizard step 仅是表单进度，不属于服务端 phase，也不推断数据库迁移状态。
 `DatabaseDraft`：kind=postgresql/mysql/sqlite，网络库 host/port/database/username/password；sqlite 仅本地。
 `AdminDraft`：username/password，确认字段只在表单使用，不重复发送后台。
-`RuleSourceSetup`：provider/endpoint/namespace（Nacos）或 datacenter（Consul）、认证联合；具体 group/dataId/key 留到绑定登记或使用显式可见默认值，不允许暗中按资源名造 key。
+`RuleSourceSetup`：provider/endpoint/namespace（Nacos）或 datacenter（Consul）、认证联合；provider 的 wire 值严格为小写 `nacos` 或 `consul`；具体 group/dataId/key 留到绑定登记或使用显式可见默认值，不允许暗中按资源名造 key。
+`initializeConsole` 的请求 envelope 为 `{requestKey, input}`；`input` 内含 `{database, admin, source}`，确认密码不进入 envelope。`requestKey` 用于原请求的幂等关联，`input` 是本次提交的初始化候选，不是可在操作查询接口读取的配置回显。
 
-| 交互               | 既有身份草案路径（候选沿用）                  | 结果                                                                          |
-| ------------------ | --------------------------------------------- | ----------------------------------------------------------------------------- |
-| 强制路由判定       | `GET /system/bootstrap`                       | 未初始化 phase 或最小 ready 状态                                              |
-| 测试数据库         | `POST /system/bootstrap/database/validate`    | 不持久化业务数据；短时 validationRequestId + 脱敏摘要                         |
-| 测试规则源（补充） | `POST /system/bootstrap/rule-source/validate` | 连接、认证、读写能力及匿名警告，不执行规则覆盖                                |
-| 完成初始化         | `POST /system/bootstrap/initialize`           | 后台保存受保护安装配置、迁移、创建唯一内置 admin、登记 source，成功返回 ready |
+当前实现的输入边界以生成 OpenAPI 为准；下列字符串长度均按 UTF-16 code units 计，边界包含在允许范围内，连接检查与最终初始化复用相同字段约束：
 
-认证为互斥联合：`credential_reference`（部署可解析引用，不要求 KMS）；`direct`（Nacos username/password、Consul aclToken，一次录入后台保护）；`none`（明确匿名与风险）。切模式/来源需清理不适用敏感字段，不能提交所有模式凭证。
+| 字段 | 当前约束 |
+| --- | --- |
+| `operatorCode` | 最长 1024；不得放入 URL、持久化草稿或操作回执 |
+| 初始化 `requestKey` | 1–128；查询操作时使用原 key，不生成新的核查标识 |
+| 数据库 `host` / `port` / `database` / `username` / `password` | host 1–253；port 1–65535；database 与 username 1–200；password 1–1024 |
+| 首个管理员 `username` / `password` | username 1–200；password 8–32 UTF-16 码元；确认密码仅在浏览器本地校验 |
+| 规则源 `endpoint` | 最长 2048；仍须满足受控 HTTP(S) URL 语法 |
+| Nacos `namespace` / Consul `datacenter` | 最长 200；未选择的 provider 字段不得提交 |
+| 凭证引用 `reference` | 1–512；只表示部署侧 resolver key，不要求 KMS |
+| 直连认证 `username` / `password` / `aclToken` | username 1–200；password 与 aclToken 1–1024；按 provider/authentication 联合只提交适用字段 |
 
-database validate 不能靠一个 requestId 自动拥有永久可用 DSN：后台须定义其绑定的引导会话、参数摘要、短 TTL 与一次性消费；凭证只在受保护临时边界保存或 initialize 时重新提交。需由 bootstrap service 在未配置数据库时持久管理安装状态，不能要求先在未连接的数据库查询 initialized。
+| 交互 | 当前正式接口 | 结果 |
+| --- | --- | --- |
+| 强制路由判定 | `GET /api/v1/system/bootstrap` | 返回最小 BootstrapSnapshot；仅未初始化状态可包含 setupAvailable/operatorAuthorized。 |
+| 授权初始化 | `POST /api/v1/system/bootstrap/authorize` | 提交一次性 operatorCode，成功后建立后续 setup 操作所需授权，不创建默认管理员。 |
+| 本机初始化授权 | `POST /api/v1/system/bootstrap/authorize-local` | 空对象请求；只在服务端确认实际 peer 为 loopback、setup 开放及部署拓扑不信任代理时签发短期 grant，不授予 Console 管理会话。 |
+| 测试数据库 | `POST /api/v1/system/bootstrap/database-check` | 提交当前数据库候选，返回有限 reachable/unreachable 事实；不持久化业务配置。 |
+| 测试规则源 | `POST /api/v1/system/bootstrap/source-check` | 对当前来源候选做受控连接检查，不登记 source、不发布/覆盖规则。 |
+| 完成初始化 | `POST /api/v1/system/bootstrap/initialize` | 提交 database/admin/source 与 requestKey；返回带 requestKey 的 `pending/completed/rejected` 操作观察（含可用时的 operationId），不回显凭证。 |
+| 核查原初始化操作 | `GET /api/v1/system/bootstrap/operations/{requestKey}` | 以原 requestKey 查询 pending/completed/rejected/not-found；not-found 不授权重放或推断回滚。 |
+
+初始化页面各 operation 的 HTTP 失败码与 runtime endpoint 一一对应；命令回执内的 `rejected` 是 HTTP 200 的业务观察，不与传输层拒绝混淆：
+
+| operationId | HTTP 状态与稳定错误码 |
+| --- | --- |
+| `readBootstrap` | `400 invalid_request`、`503 service_unavailable` |
+| `authorizeBootstrap` | `400 invalid_request`、`403 forbidden`、`403 csrf_failed`、`409 conflict`、`429 rate_limited`、`503 service_unavailable` |
+| `checkBootstrapDatabase` | `400 invalid_request`、`403 bootstrap_unauthorized`、`403 csrf_failed`、`503 service_unavailable` |
+| `checkBootstrapSource` | `400 invalid_request`、`403 bootstrap_unauthorized`、`403 csrf_failed`、`503 service_unavailable` |
+| `initializeConsole` | `400 invalid_request`、`403 bootstrap_unauthorized`、`403 csrf_failed`、`409 idempotency_conflict`、`503 service_unavailable` |
+| `readInitialization` | `400 invalid_request`、`403 bootstrap_unauthorized`、`503 service_unavailable` |
+
+`database-check` 与 `source-check` 的成功响应是有限连接事实：可达时为 `{status: "reachable"}`；不可达时为 `{status: "unreachable", reason: "authentication" | "connection" | "unsupported"}`。`reason` 只用于选择安全、可本地化的提示，不返回驱动异常、服务端地址细节或凭证相关信息；检查器无法给出可信结果时走 HTTP `503 service_unavailable`，不能伪造为 `unreachable`。
+初始化命令回执的 wire `status` 为 `completed|rejected|pending|not-found`；拒绝 `reason` 为 `validation|setup-closed|dependency`。重复关闭初始化入口由 `403 bootstrap_unauthorized` 表达，不得与回执拒绝 `setup-closed` 或 HTTP 幂等冲突混为一个状态。
+
+初始化命令与核查结果未知时只能使用原 requestKey；`status: "not-found"` 是 HTTP 200 观察，不证明回滚。CSRF/授权失败不得变成 ready，HTTP 503 与 operation body 的 `rejected` 也须区分。bootstrap 未初始化状态读取失败不能当作“未初始化”，Live 不得退回 Mock。
+
+认证为互斥联合，wire 判别字段是 `authentication.mode`：`credential-reference` 携带 `reference`；`direct` 按 Nacos 携带 `username/password`、Consul 携带 `aclToken`；`none` 不带凭证字段。部署可解析引用不要求 KMS；direct 凭证只在一次提交中交给后台保护。切模式/来源需清理不适用敏感字段，不能提交所有模式凭证。initialize 的 `input.source` 使用同一来源联合。
+
+当前 `database-check` 不签发可复用 validation token，也不持久保存 DSN；检查结果仅是当前表单的连接观察，不能替代初始化事务的独立校验。`initialize` 必须再次携带数据库候选，由 bootstrap coordinator 在受保护初始化流程中创建/迁移目标库并提交首管理员与来源；未配置数据库时的授权窗口/安装状态由 bootstrap authority 管理，不能要求先连尚未配置的目标库读取 initialized。
 
 ### 8.3 失败与验收条件
 
-后台控制一次性窗口与并发锁；失败可恢复、不保留 ready 假状态、无默认密码，完成后再次初始化返回 409。部署受管密钥可来自文件/Kubernetes Secret，不必须接 KMS；保护位置/密钥缺失明确错误。连接校验防 SSRF、端口/协议限制和凭证泄露。
+后台控制一次性窗口与并发锁；失败可恢复、不保留 ready 假状态、无默认密码。初始化完成后 bootstrap authority 关闭 setup，后续初始化请求以 `403 bootstrap_unauthorized` 拒绝；`409 idempotency_conflict` 仅用于 requestKey/Idempotency-Key 不匹配或冲突，不能把它描述为重复初始化的通用状态。部署受管密钥可来自文件/Kubernetes Secret，不必须接 KMS；保护位置/密钥缺失明确错误。连接校验防 SSRF、端口/协议限制和凭证泄露。
 
 当前四步内容已拆为存储、管理员、规则源与确认组件。纯校验覆盖网络数据库必填项/严格整数端口、管理员密码长度/一致性、HTTP(S) 来源地址和三类互斥认证；提交只包含当前数据库/来源/认证分支，确认密码与其它分支秘密不进入载荷。切换数据库/来源/认证方式清理不适用凭据，切回不复活；SQLite 不提交网络参数。
 
-新增异步初始化入口与内部 Port/工作流已通过逻辑及真实 React/Astryx 页面交互测试，尚未装配到 App 的旧 demo 路径。该入口的连接测试只检查可达性，不创建 schema、不持久化配置；字段变化立即撤销旧检查结论。初始化提交具备 pending/已知失败/冲突/结果未知/核查/确认完成区分：服务端操作回执必须关联原 requestKey，且独立 bootstrap 确认已初始化，才通知路由进入登录并清理临时凭据。已知错误保留可修正表单，已发请求超时不重放；not-found 不能解释为已回滚，别人的初始化完成也不冒认为本次成功。
+初始化流程现由正式 `SetupRouteOwner` 路由装配，使用 Console HTTP adapter；demo profile 在 HTTP 边界模拟命令，live profile 不回落合成数据。该入口的连接测试不创建 schema、不持久化配置；字段变化立即撤销旧检查结论。初始化提交区分 pending/已知失败/冲突/结果未知/核查/确认完成：服务端操作回执必须关联原 requestKey，且独立 bootstrap 确认已初始化，才通知路由进入登录并清理临时凭据。已知错误保留可修正表单，已发请求超时不重放；not-found 不能解释为已回滚，别人的初始化完成也不冒认为本次成功。PostgreSQL 16/MySQL 8.4.11 的隔离数据库已覆盖迁移、并发初始化及授权首启 ASGI；仍不代表正式安装器/Secret 注入、生产入口/多 worker 和 React→Python 浏览器链路验收。
 
-F6 需把这些内部能力投影到唯一 HTTP 契约，包括原请求结果核查、初始化操作者的保护与授权、requestKey/operationId 生命周期；它们不是登录凭证，不能仅靠知道 ID 就读取初始化操作。初始化 body/密码不得作为服务端操作回执返回，HTTP 层的错误必须脱敏。当前逻辑和浏览器 Port double 不证明真实迁移/锁/加密/持久化，App demo 的测试连接提示与本地跳登录将在 F6 退役。
+这些能力现已投影到 Console HTTP 契约和 Python bootstrap adapter，包括原请求结果核查、初始化操作者的保护与授权、requestKey/operationId 生命周期；它们不是登录凭证，不能仅靠知道 ID 就读取初始化操作。初始化 body/密码不得作为服务端操作回执返回，HTTP 层的错误必须脱敏。真实数据库事务已有隔离库证据；部署 Secret 注入、生产 topology 与完整浏览器联调仍未验收，demo 的测试连接提示也不得当成真实 provider 结果。
 
 目标验收：未配置库可启动 setup；错误连接不变 ready；并发只能初始化一次；重启仍关闭 setup；服务故障不重新引导；三类认证与两生产 DB 都有真实边界验证。实际运行记录及未验证边界见 [推进清单 §13](process/R-DASHBOARD-前后端现状与推进清单.md)。
 
@@ -405,13 +658,24 @@ F6 需把这些内部能力投影到唯一 HTTP 契约，包括原请求结果�
 
 账号名/密码登录，无 setup 入口；会话成功后按安全 returnTo 返回可访问页面。导航壳需个人菜单/注销入口，不能把 avatar 永远跳账户管理当作个人账户。
 
-`LoginRequest`：username/password；`Session`：`account{accountId,username,roleId,status}/capabilities/expiresAt`。会话由后台生成，不由输入用户名映射角色；密码不得持久化，返回体不含密码/哈希。
+`LoginRequest`：username/password；`SessionIdentity`：`accountId/username/roleId/capabilities/sessionEpoch`。匿名或已失效会话由 `/api/v1/auth/me` 返回 `null`，当前 wire 不包含账号 status 或 expiresAt。会话由后台生成，不由输入用户名映射角色；密码不得持久化，返回体不含密码/哈希。
 
-| 动作          | 候选沿用接口        | 行为                                                                |
-| ------------- | ------------------- | ------------------------------------------------------------------- |
-| 登录          | `POST /auth/login`  | Cookie 会话 + Session；非法、停用、未知账号统一 invalid_credentials |
-| 刷新恢复/权限 | `GET /auth/me`      | 当前 Session；过期明确 401                                          |
-| 注销          | `POST /auth/logout` | 撤销会话、清客户端受保护缓存，返回 204                              |
+当前 `login` runtime schema 限制账号名为 1–200 个 UTF-16 code units、密码为 1–1024 个 UTF-16 code units（包含边界）；密码原样传输，不在客户端 trim 或归一化。该长度约束不放宽、不用于推断账号是否存在。
+
+| 动作 | 当前正式接口 | 行为 |
+| --- | --- | --- |
+| 登录 | `POST /api/v1/auth/login` | Cookie 会话 + SessionIdentity；非法、停用、未知账号使用统一安全登录拒绝语义。 |
+| 刷新恢复/权限 | `GET /api/v1/auth/me` | 返回当前 SessionIdentity 或 `null`；失效会话按身份路由合同处理。 |
+| 注销 | `POST /api/v1/auth/logout` | 撤销当前会话并清理 Cookie；客户端清空受保护缓存。 |
+
+| operationId | HTTP 状态与稳定错误码 |
+| --- | --- |
+| `readBootstrap` | `400 invalid_request`、`503 service_unavailable` |
+| `readSession` | `400 invalid_request`、`503 service_unavailable` |
+| `login` | `400 invalid_request`、`401 unauthenticated`、`403 csrf_failed`、`429 rate_limited`、`503 service_unavailable` |
+| `logout` | `400 invalid_request`、`401 unauthenticated`、`403 csrf_failed`、`503 service_unavailable` |
+
+登录 `429` 只有在返回合法有界 `retryAfterMs` 时才禁用提交到期前的用户重试；不得自动重放。`readSession` 对缺失、格式错误、过期或已撤销的 Cookie 返回 `200 null`，不返回 `401 unauthenticated`；会话权威不可用必须返回 `503`，不能伪装成匿名空态。受保护业务接口的 `401` 才清除受保护快照并走统一路由失效流程；登录拒绝保持账号存在性不可枚举；bootstrap/session `503` 是控制面不可用，不能显示匿名空态或 setup 成功态。
 
 ### 9.2 当前实现与验收条件
 
@@ -419,7 +683,7 @@ F6 需把这些内部能力投影到唯一 HTTP 契约，包括原请求结果�
 
 新入口在未知/不可用时不提供可提交登录，已确认未初始化且 setupAvailable 才通知 app 强制引导；不展示 setup 导航入口。错误凭证与禁止登录用相同安全文案，429 单独展示；已知失败保留可修正输入。超时写入不自动重放，只能显式核查当前 session，失败不恢复准入。POST 成功仍需独立会话回读与匹配；确认身份后清密码并按 sessionEpoch 只通知一次，站内安全回跳由 app 拥有。
 
-上述新入口已用实际浏览器/测试 Port 验证，未切入旧 App。旧 LoginPage 仍用 fixture 匹配角色、未知用户名默认 admin；SessionProvider 的 localStorage 演示角色无真实认证含义。两者在 F6 统一切线后删除，不能把新入口的局部通过当成生产守卫已闭环。
+正式 `/login` 路由由 `ConsoleLoginRoute` 接入唯一 `AuthenticationWorkflow` 和共享 Console transport；显式 demo profile 的认证结果由 HTTP Mock 提供，不能作为生产身份。Python SQL identity API 已在 PostgreSQL/MySQL 隔离实例验证登录、会话回读、改密后的旧 session 撤销及凭证 hash 存储；cookie/CSRF、生产 ingress、React→Python live 浏览器路径与两角色全路由矩阵仍需最终验收。
 
 目标验收：错误凭证、停用、过期/注销、refresh、view 直达管理 URL 被拒；会话身份只信后台，修改 localStorage 无法授权。
 
@@ -429,28 +693,44 @@ F6 需把这些内部能力投影到唯一 HTTP 契约，包括原请求结果�
 
 admin 查看账户列表、新增账号 Dialog、启停账号、跳角色绑定。业务输入只有**账号名、密码、角色**，没有显示名称，也不要求新增时确认密码；状态、内置标记、最近登录属于后台元数据。
 
-旧 demo 列表仍有带任意目标的“修改密码”链接，F6 退役；新内部 `AccountsPage` 仅提供角色绑定与状态命令，不提供管理员重置。个人改密见第 12 章，管理员重置他人密码不在本轮范围，不将目标 accountId 塞进个人改密请求。
+当前正式账户维护页面只提供账户创建、启停与角色绑定入口，不提供管理员重置他人密码；个人改密见第 12 章。管理员重置他人密码不在本轮范围，不将目标 accountId 塞进个人改密请求。
 
 ### 10.2 数据与接口
 
-`AccountSummary`：accountId/username/roleId/status/builtIn/lastLoginAt|null/revision；neverLoggedIn 使用 null，而非中文字符串。AccountCreate：username/password/roleId；返回后台创建的 ID 和摘要，不返回秘密。
+`AccountRecord`：`id/username/roleId/status/builtIn/lastLoginAt|null/revision/lastActiveAdmin`。`revision` 在线路上是十进制字符串，避免 SQL BIGINT 超出 JavaScript 安全整数精度；从未登录用 `lastLoginAt: null` 表示。列表返回 `AccountPage{items,page,pageSize,total}`。创建输入 `AccountCreateInput{username,password,roleId}`；账号密码只出现在创建请求体，不进入读取记录、命令回执或核查结果。密码限制为 **8–32 个 UTF-16 code units**（含边界），原样校验/传输，不 trim 或 Unicode 归一化；当前实现不额外要求字符类别组合。
 
-| 动作 | 候选沿用接口                               | 规则                                                    |
-| ---- | ------------------------------------------ | ------------------------------------------------------- |
-| 列表 | `GET /accounts?page&pageSize&query&status` | admin；服务端分页/筛选                                  |
-| 新增 | `POST /accounts`                           | admin + Idempotency-Key；唯一用户名与强度后台校验       |
-| 启停 | `PATCH /accounts/{accountId}`              | status + revision；不能停用最后有效 admin，停用撤销会话 |
-| 角色 | 导航 roles                                 | 传目标 ID，不修改个人会话身份                           |
+当前查询边界：账号列表 `page` 为 1–1000000、`pageSize` 为 1–100、`search` 最长 200 个 UTF-16 code units；`accountId` 为 1–200，账号命令 `requestKey` 为 1–128 个 UTF-16 code units。账户页输入在该上限内截断，且不会拆开补充平面 Unicode 字符；workflow 在发起读取前会 trim `search` 的首尾空白，HTTP 查询 parser 保留收到的原始值，SQL 目录按大小写不敏感的字面子串匹配，并将 `%`、`_`、反斜杠当作普通字符转义，而不是 SQL LIKE 通配符。直接调用 API 的客户端应自行按 UI 语义 trim 并满足 wire 长度上限。
+
+账号列表响应 `total` 为非负整数，最大值为 9007199254740991；其含义是所有匹配账户的总数，不是当前 `items` 长度。
+
+| 动作 | 当前正式接口 | 规则 |
+| --- | --- | --- |
+| 列表 | `GET /api/v1/accounts?page&pageSize&search[&status]` | 必须提供 `page/pageSize/search`，可选 `status=active\|disabled`；服务端分页/筛选；需管理员会话和 `x-request-id`。 |
+| 详情 | `GET /api/v1/accounts/{accountId}` | 需管理员会话；未知目标以 `200 null` 明确表达，不回退到其他账号。 |
+| 新增、启停、角色变更 | `POST /api/v1/accounts/commands` | 一个带 `kind` 的联合命令入口：`create` 携带 `input{username,password,roleId}`；`status` 携带 `accountId/revision/status`；`role` 携带 `accountId/revision/roleId`。需管理员会话、CSRF 证明和 `x-request-id`；`Idempotency-Key` 必须与 body 的 `requestKey` 相同。状态/角色命令以 revision 做条件更新。从 `active` 禁用账号时，服务端在同一事务内撤销该账号所有现有会话；之后重新启用不会恢复旧 session/Cookie，账号必须重新认证。 |
+| 命令核查 | `GET /api/v1/accounts/operations/{requestKey}` | 只读核查原操作者的命令；结果为 `completed/rejected/not-found`。`not-found` 只是观察结果，不证明写入回滚，也不授权重放。 |
+
+| operationId | HTTP 状态与稳定错误码 |
+| --- | --- |
+| `listAccounts` | `400 invalid_request`、`401 unauthenticated`、`403 forbidden`、`503 service_unavailable` |
+| `readAccount` | `400 invalid_request`、`401 unauthenticated`、`403 forbidden`、`503 service_unavailable` |
+| `mutateAccount` | `400 invalid_request`、`401 unauthenticated`、`403 forbidden`、`403 csrf_failed`、`409 idempotency_conflict`、`503 service_unavailable` |
+| `readAccountOperation` | `400 invalid_request`、`401 unauthenticated`、`403 forbidden`、`503 service_unavailable` |
+
+账号业务拒绝（如 username taken、last admin、built-in、revision conflict）由 HTTP 200 命令观察的 `rejected.reason` 表达；传输层 `409 idempotency_conflict` 只表示幂等键/请求冲突。账号详情缺失为 HTTP 200 `null`，操作核查 `not-found` 为 HTTP 200，均不等于 HTTP 404。401/403 清理当前受保护投影；写入结果未知不得重放或将错误伪装为目录空结果。
+账号命令拒绝原因的 wire 枚举为 `username_taken|last_admin|built_in|validation|conflict|not_found`；账户记录 `roleId` 仅为 `admin|view`。页面文案可本地化，但不能改写或合并这些稳定原因值。
+
+写命令同步返回最终 `completed` 或 `rejected` 回执；网络响应丢失时前端进入结果未知并通过原 `requestKey` 核查。最后有效管理员保护由后台事务负责，不能由页面预检查替代。列表/详情/回执都只投影安全账号字段，不返回密码或密码摘要。
 
 删除/重置链接虽出现在旧身份契约，当前 UI 不存在；不将它们列为本轮页面已有功能。纳入首版前需补确认交互、安全合同和测试。
 
 ### 10.3 状态与验收条件
 
-新 `CreateAccountDialog` 共用 DialogFrame/AccountFields；验证失败保持输入并显示安全反馈；网络/5xx/畸形回执不关闭成“已创建”，进入结果未知并禁止再次提交。仅收到与 requestKey/目标及预期字段一致的完成回执才清除 mounted 表单并关闭；目录由唯一 workflow 失效/回读，刷新失败不能把已确认提交改为可重复的失败。账号名重复/最后管理员/内置账号/版本冲突单独处理。字段级服务端问题投影在 F6 冻结 wire 时落实，不假称已完备。
+新 `CreateAccountDialog` 共用 DialogFrame/AccountFields；验证失败保持输入并显示安全反馈；网络/5xx/畸形回执不关闭成“已创建”，进入结果未知并禁止再次提交。仅收到与 requestKey/目标及预期字段一致的完成回执才清除 mounted 表单并关闭；目录由唯一 workflow 失效/回读，刷新失败不能把已确认提交改为可重复的失败。账号名重复/最后管理员/内置账号/版本冲突单独处理。当前账号领域拒绝使用有限 `rejected.reason`；只有 endpoint contract 实际返回 `issues[{field,reason}]` 时才显示字段级问题，不从领域拒绝或原始异常猜字段位置。
 
-`AccountManagementWorkflow` 的 directory/detail/mutation 绑定当前 accountId/sessionEpoch；仅当前 admin 可读写。分页与筛选走 async Port，状态变更先确认，命令携带 revision，服务端生成 ID；公开操作身份不含密码。操作核查为有界、可取消的只读请求；not-found 不是回滚证明，不能解锁再次写入。内部 Port/页面已做测试替身验证，未挂旧 App，不能冒称持久化或 Python 联调。
+`AccountManagementWorkflow` 的 directory/detail/mutation 绑定当前 accountId/sessionEpoch；正式 route owner 通过 Console HTTP adapter 接线，仅当前 admin 可读写。分页与筛选走 async Port，状态变更先确认，命令携带 revision，服务端生成 ID；公开操作身份不含密码。操作核查为有界、可取消的只读请求；not-found 不是回滚证明，不能解锁再次写入。demo 命令只更新可重建的 HTTP mock 状态，不代表持久化；Python SQL identity command 和 PostgreSQL/MySQL 隔离数据库验收已覆盖账号/最后管理员边界，React→Python 真实页面联调仍未验收。
 
-F0 已修创建回调中的非法 Hook：事件使用组件顶层取得的 gateway；临时演示启动 Hook 由 App 唯一装配，AccountStore 按 gateway 身份幂等初始化，页面导航不回灌示例。新增/改角色/启停在同一浏览器文档内跨页保留；刷新仍重建示例，不宣称持久化。目标验收仍需：跨页/刷新读取持久事实；创建失败不插入列表；重试只一账号；view API 与深链不可新增/启停；最后管理员并发保护由 DB 事务保证。
+当前验收仍需确认跨页/刷新读取真实持久事实、view API 与深链不可新增/启停、创建失败不插入列表/重试不重复，以及生产服务端审计和多会话授权一致性；demo 刷新后重建状态不作为持久化承诺。
 
 ## 11. 角色绑定 `#/roles` / 系统 roles 子视图
 
@@ -458,17 +738,22 @@ F0 已修创建回调中的非法 Hook：事件使用组件顶层取得的 gatew
 
 admin 明确选择目标账号，查看当前角色/状态，绑定固定 admin 或 view。没有自建角色/能力编辑；新内部入口采用**显式保存/放弃**，radio 只改本地草稿，不即时持久化。草稿包含 accountId/revision/baseRoleId/roleId；保存携带原 baseline revision。额外 reason 字段尚无当前 UI 消费者，不在内部 Port 伪造，F6 按页面与审计需求收敛。
 
-读 AccountSummary 和 `RoleSummary{roleId,capabilities}`；label/description 前端翻译，后台不返回唯一中文角色名称。
+读取同一 `AccountRecord`。可绑定角色固定为前端身份模型定义的 `admin` / `view`，名称与说明由 i18n 资源展示；账号 API 只返回账号当前 `roleId`，没有独立角色目录或 capability 编辑接口。角色草稿结构 `accountId/revision/baseRoleId/roleId`，保存时转换成统一账号命令 `kind=role`，携带目标 ID 与基线 revision。
 
-| 动作         | 候选沿用接口                                         | 规则                                             |
-| ------------ | ---------------------------------------------------- | ------------------------------------------------ |
-| 账号选择     | `GET /accounts`、`GET /accounts/{accountId}`（补充） | admin；未知 ID 返回不存在，不回落改第一个账号    |
-| 固定角色目录 | `GET /roles`                                         | 固定 admin/view，不接受任意 capability 写入      |
-| 保存         | `PUT /accounts/{accountId}/role`                     | roleId/reason/revision → 更新后的 AccountSummary |
+| 动作 | 当前正式接口 | 规则 |
+| --- | --- | --- |
+| 账号选择 | `GET /api/v1/accounts?page&pageSize&search[&status]` 与 `GET /api/v1/accounts/{accountId}` | 管理员分页目录和目标详情；未知 ID 返回 `null`，不回退第一个账号。 |
+| 固定角色选项 | 无独立 HTTP 接口 | `admin/view` 是前端固定领域枚举和本地化展示，不从服务端动态加载，也不能编辑 capability。 |
+| 保存 | `POST /api/v1/accounts/commands` | `kind=role`，传 `requestKey/accountId/revision/roleId`；`Idempotency-Key` 与 `requestKey` 一致，另需 CSRF 证明。成功回执返回更新后的安全 `AccountRecord`；拒绝回执不返回伪造的新记录。 |
+| 核查 | `GET /api/v1/accounts/operations/{requestKey}` | 对结果未知的保存核查原操作；`not-found` 不意味着可安全重放。 |
+
+本页复用 §10 的账号 endpoint 与错误矩阵；固定角色选项没有独立 API。账号详情 `null`、操作核查 body `not-found`、服务端拒绝回执和 HTTP 403/409 是不同状态。角色命令的 401/403 清理会话主体不再授权的草稿；network/timeout/5xx 后只核查原操作，不以刷新或重新选择自动产生第二次写入。
 
 ### 11.2 当前实现与验收条件
 
-旧 demo radio 仍直接改本地 store，F6 退役。新 `RoleManagementPage` 通过同一 AccountManagementWorkflow 读取显式 URL 目标；未选/不存在不 fallback，停用/内置/最后 admin 保护由纯策略提示及 command 双层校验。`RoleEditor` 按账号 ID 挂载而不按 revision 重建，刷新不抹掉未保存草稿；409 保留选择，主动读最新后重新决定。切账号有未保存确认，unknown 禁换目标/重放并可核查原操作；全局路由离开保护和系统 tab 复用在 F6 真实装配时完成。后台授权、最后 admin 事务、会话撤销与审计仍未实现。
+正式 `RoleManagementPage` 通过同一 `AccountManagementWorkflow` 读取显式 URL 目标，并挂载于独立 roles 路由和 system 子视图；未选/不存在不 fallback，停用/内置/最后 admin 保护由纯策略提示及 command 双层校验。`RoleEditor` 按账号 ID 挂载而不按 revision 重建，刷新不抹掉未保存草稿；409 保留选择，主动读最新后重新决定。切账号有未保存确认，unknown 禁换目标/重放并可核查原操作。Python SQL identity API 已实现受授权的账号角色命令；隔离 PostgreSQL/MySQL 验收证明最后 active admin 并发不变量，但会话能力何时刷新/撤销及 React live 多会话路径仍待验收。
+
+显式 demo profile 由 app-owned HTTP Mock 拦截同一账号命令：角色保存会更新该 Mock assembly 内的账号记录/revision 与原操作结果，便于演示目录回读和幂等核查；它不是数据库持久化。Mock 登录主体由单独的本地演示身份状态提供，角色命令不会模拟服务端 session 撤销、能力刷新或多 worker 一致性。因此 demo 页面只能证明前端命令/目录状态路径，不能证明 live 会话在角色变更后的授权效果；该效果仍由 Python 服务端合同与真实联调验收。
 
 目标验收：改角色后会话能力按后台策略失效/刷新，不因缓存继续允许写；并发不能移除最后 active admin；未知账号不改他人；返回账户页显示最新角色；view 不见保存入口且 API 拒绝。
 
@@ -478,7 +763,13 @@ admin 明确选择目标账号，查看当前角色/状态，绑定固定 admin 
 
 当前登录用户输入旧密码、新密码、确认新密码；确认仅本地防输错。页面主体显示自身 username，不能任意从 URL 选择目标。
 
-`PasswordChangeForm`：current/new/confirm；wire `POST /api/v1/auth/password` 仅接收 `currentPassword/newPassword`。成功返回 HTTP 200 `{sessionDisposition: "reauthenticate"}`；后端事务修改哈希并撤销该账号所有 session，然后清除当前 session/CSRF Cookie，前端仅在确认回执后清空字段并跳转重新登录。当前密码错误返回 HTTP 400 `current_password_invalid`，不修改哈希、不撤销 session；缺失/失效 session 仍返回 HTTP 401 `unauthenticated`；弱密码返回 422 `validation_failed`。连续输错达到部署配置的尝试阈值后返回 HTTP 429 `rate_limited` 和有界 `retryAfterMs`；改密桶按已认证账号的用途隔离 HMAC 标识，不存储原始账号，且不与登录 IP 桶互相清理。客户端确认字段不进入 wire。PostgreSQL/MySQL 并发与生产部署验收仍未完成。
+`PasswordChangeForm`：current/new/confirm；wire `POST /api/v1/auth/password` 仅接收 `currentPassword/newPassword`。新密码长度为 **8–32 个 UTF-16 code units**（含边界），原样校验/传输，不 trim 或 Unicode 归一化；当前密码验证保留旧凭证的传输上限，以便历史密码较长的账号仍可登录并修改。当前实现不额外要求字符类别组合。JSON 中的孤立 surrogate escape 在共享请求解析层按 HTTP 400 `invalid_request` 拒绝，不进入密码策略或哈希流程；合法 Unicode 新密码超出长度上限按 HTTP 422 `validation_failed` 拒绝。成功返回 HTTP 200 `{sessionDisposition: "reauthenticate"}`；后端事务修改哈希并撤销该账号所有 session，然后清除当前 session/CSRF Cookie，前端仅在确认回执后清空字段并跳转重新登录。当前密码错误返回 HTTP 400 `current_password_invalid`，不修改哈希、不撤销 session；缺失/失效 session 仍返回 HTTP 401 `unauthenticated`。连续输错达到部署配置的尝试阈值后返回 HTTP 429 `rate_limited` 和有界 `retryAfterMs`；改密桶按已认证账号的用途隔离 HMAC 标识，不存储原始账号，且不与登录 IP 桶互相清理。客户端确认字段不进入 wire。改密并发竞争、多 worker/生产部署以及完整浏览器路径仍未验收；PG/MySQL 的隔离 SQL/ASGI happy/reject/session-revocation 路径已有证据。
+
+| operationId | HTTP 状态与稳定错误码 |
+| --- | --- |
+| `changeOwnPassword` | `400 invalid_request`、`400 current_password_invalid`、`401 unauthenticated`、`403 csrf_failed`、`422 validation_failed`、`429 rate_limited`、`503 service_unavailable` |
+
+`current_password_invalid` 只反馈当前密码错误并保留可修正输入；`429` 尊重有界 `retryAfterMs`，期限内禁用人工提交，不自动重发；`401/403` 按 session/CSRF 边界处理。当前改密合同不定义 `409 conflict`：该操作没有目标 revision 或可安全比较的命令身份，不把通用命令的 conflict 状态误当成本接口语义。若未来需要表达并发改密冲突，须先由服务端协议定义稳定错误码、原子判定条件及可恢复行为，再扩展客户端。请求一旦发出后遇网络、超时、取消或 `503`，客户端不再次发送密码命令；因没有密码操作回执查询 API，必须通过重新认证核实，不以页面错误推断变更未提交。
 
 ### 12.2 当前实现与验收条件
 
@@ -486,13 +777,13 @@ admin 明确选择目标账号，查看当前角色/状态，绑定固定 admin 
 
 内部 `OwnPasswordPort` 的 receipt 只接受实际服务端返回的受控 `sessionDisposition`；当前 Console 实现固定返回 `reauthenticate`，并撤销全部 session。未知写入不提供 reset/replay：超时/5xx/提交后取消保留不确定性，用户重新登录核实；已知当前密码错误、弱密码与服务端限速分别反馈并保留可修正输入。Console 当前密码错误与 session 401 使用不同稳定码；改密服务在凭证校验前读取 SQL 共享限流状态，错误密码原子累计，达到封锁期则不再执行密码 hash 验证，并映射为 `429 rate_limited`。它复用部署显式配置的阈值/窗口/封锁时长，但以账号作用域 HMAC digest 形成独立桶；正确当前密码验证后清除该账号失败状态。PostgreSQL/MySQL 生产事务、跨 worker 部署与页面→Python 实际链路仍需验收。换会话取消观察，迟到成功不能提交给新 owner。
 
-新入口已用实际页面和测试 Port 验证，本轮未装配到旧 demo App；旧任意目标演示页与账户列表链接仍待 F6 统一退役，不能据内部入口宣称整个应用已安全接线。密码不进入 snapshot/URL/storage/日志/事件；后端哈希、撤销和权限仍待 B0。
+正式 `/change-password` 路由由 `ConsoleOwnPasswordRoute` 接入唯一认证 owner 与 live/mock 共用的 Console HTTP adapter；页面不读取任意 accountId。密码不进入 snapshot/URL/storage/日志/事件。Python 已有 Argon2id 哈希、账号作用域失败限速、密码更新与全账号 session 撤销，并通过 PG/MySQL 隔离 ASGI 验证；未覆盖的生产部署、并发/多 worker 和浏览器到 Python live 路径仍保留在 B0/F7 验收中。
 
 目标验收：旧密码错误不更改哈希；本人改密与管理员重置不混用；成功按后台定义撤销其他会话；过期跳登录；刷新无明文；URL 改 account 不可更改他人密码。
 
 ## 13. 协议交付与页面设计完成条件
 
-工程执行以 2026-10-07 确认顺序为准：先完成前端页面职责、业务规则、状态与样式边界，再从完整页面用例统一抽取通信 DTO/操作并集中实现 HTTP Mock，最后实现 Python Console 与真实联调。当前正式路由已经改为 feature-owned Console HTTP adapter；页面交互全量验收和 Mock 状态闭环仍未完成。前期可用内部异步 Port 与测试替身验证页面，不把内部 Port 或生成的 draft machine contract 冒充成已签字 wire。
+工程执行仍以 2026-10-07 确认的分层顺序为背景：页面职责、业务规则、状态与样式实现之后，Console wire 已迭代并冻结为 0.17.0；前端正式路由使用 feature-owned Console HTTP adapter，页面交互全量验收和 Mock 状态闭环仍未完成。后续实现不得把内部 Port 与已冻结 wire 混为一谈，也不得未经版本/owner 审批修改 wire。
 
 先按上述用例确认功能，再生成/维护统一 OpenAPI 与 JSON Schema、成功/失败样例及 Python/TypeScript 契约测试；不能只靠 TS 泛型 `as T` 接受网络响应。每个 operation 关联页面动作、输入、响应、权限、错误、副作用、幂等和分页/时间语义。
 
@@ -504,28 +795,49 @@ admin 明确选择目标账号，查看当前角色/状态，绑定固定 admin 
 
 ### 13.1 页面动作到当前 machine operations 的映射
 
-下表将页面章节与目前生成的 `docs/protocol/console-api.openapi.json` operationId 对位，供 Python Console 按能力实现；共享 operation 不代表页面各自拥有副本。路径、请求/回执细节以 `features/<feature>/api/*Contract.ts` 和生成 OpenAPI 为准。当前合同仍为 `draft-partial`，后端实现前必须通过逐页动作审核并继续确认 profile/能力边界。
+下表将页面章节与目前生成的 `docs/protocol/console-api.openapi.json` operationId 对位，供 Python Console 按能力实现；共享 operation 不代表页面各自拥有副本。路径、请求/回执细节以 `features/<feature>/api/*Contract.ts` 和生成 OpenAPI 为准。当前 wire 冻结至 0.13.0；尚未完成的实现与 provider/profile 边界按推进清单继续验收。
 
 | 页面章节                   | 当前 HTTP 能力/operationId                                                                                                                                                                                                                                                                                          | 代码责任入口                                                                         | 当前限制                                                     |
+| §4 规则 | `readRuleBindingObservedStates`、`readRuleLoadObservations`、`readRuleLoadObservationHistory` | `features/rules/api/ruleSet*` | 配置源快照状态与实例加载观察是不同事实；历史查询只读 durable observations。 |
+| §7 系统管理 | `readSystemDeploymentGuides`、`readHostAssociations`、`putHostAssociation`、`deleteHostAssociation`、`readHostAssociationOperation`、`readMonitoringSources`、`readMonitoringSource`、`readMonitoringSourceCheck`、`checkMonitoringSource`、`mutateMonitoringSource`、`readMonitoringSourceOperation` | `features/system/api/*` | Prometheus source 是监控查询连接，不是规则 source；运行时 Collector 公布地址必须显式配置；当前 Linux/Kubernetes readiness 为 guide-only。 |
+| §8 首次初始化 | `authorizeLocalBootstrap` | `features/identity/api/bootstrapSetup*` | 仅 loopback 部署拓扑可请求，不收 operator code。 |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
 | §2 总览                    | `readObservationCatalog`（共享），`readFleet`                                                                                                                                                                                                                                                                       | `features/overview/api/fleet*`；应用目录由 `applications` feature 提供               | mock fleet，不是真实采集                                     |
 | §3 应用与实例              | `readObservationCatalog`（共享），`readInstanceCatalog`，`readInstanceObservation`                                                                                                                                                                                                                                  | `features/applications/api/*`                                                        | 没有真实 Agent inventory/metrics                             |
-| §4 规则                    | `readRuleBindings`、`readRuleDrafts`、`readRuleDraft`、`readRuleOperation`、`readRuleActivationPlans`、`readRulePublications`、`readRulePublication`、`readRulePublicationReceipts`、`readRuleSetSnapshot`、`readRuleVersions`、`readRuleVersion`、`mutateRuleSet`、`compareRuleCandidate`、`validateRuleCandidate` | `features/rules/api/ruleSet*`                                                        | Python Nacos/Consul CAS/回读、codec 对齐与集群实际生效未验证 |
-| §5 实时监控                | `readObservationCatalog`（共享），`readMetrics`                                                                                                                                                                                                                                                                     | `features/realtime/api/metrics*`                                                     | HTTP Mock 可演示；生产数据采集/SSE 未接                      |
-| §6 故障分析                | `readObservationCatalog`（共享），`readIncidentTimeline`，`readIncidentEvidence`                                                                                                                                                                                                                                    | `features/faults/api/incident*`                                                      | Python 事件仓储/Reporting 消费未实现                         |
-| §7 系统管理                | `readSystemConnections`、`readSystemProtocols`、`readSystemAudit`、`readRegisteredSources`、`checkRegisteredSource`、`mutateRegisteredSource`、`readRegisteredSourceOperation`                                                                                                                                      | `features/system/api/*`                                                              | Python 探测、Secret vault、权限审计/CAS 未实现               |
-| §8 首次初始化              | `readBootstrap`、`authorizeBootstrap`、`checkBootstrapDatabase`、`checkBootstrapSource`、`initializeConsole`、`readInitialization`                                                                                                                                                                                  | `features/identity/api/*` + `app/router/SetupRouteOwner`                             | 无真实 MySQL/PostgreSQL 初始化或一次性窗口                   |
+| §4 规则                    | `createRuleBinding`、`readBindingRegistration`、`readRuleBindings`、`readRuleBindingScopes`、`readRuleCatalog`、`refreshRuleCatalog`、`readRuleSetSnapshot`、`readRulePublicationTarget`、`readRuleDrafts`、`readRuleDraft`、`readRuleOperation`、`readRuleActivationPlans`、`readRulePublications`、`readRulePublication`、`readRulePublicationReceipts`、`readRuleVersions`、`readRuleVersion`、`mutateRuleSet`、`compareRuleCandidate`、`validateRuleCandidate`、`readRuleBindingObservedStates`、`readRuleLoadObservations`、`readRuleLoadObservationHistory` | `features/rules/api/ruleSet*` 与 binding scope adapter | Scope catalog 来自持久化 binding/source/target authority，不从 Reporter 推断；规则目录从配置源投影读取，有界刷新只更新 SQL 读模型；Consul/Nacos 的 provider 与实例级验收限制见下文 |
+| §5 实时监控                | `readObservationCatalog`（共享），`readMetrics`、`readHostMetrics`                                                                                                                                                                                                                                                                     | `features/realtime/api/metrics*`                                                     | demo HTTP Mock 与前端轮询路径已接；生产指标 reader/Collector 未装配；当前按 polling-first 设计，不把 SSE 缺失列作阻塞 |
+| §6 故障分析                | `readObservationCatalog`（共享），`readIncidentTimeline`，`readIncidentEvidence`                                                                                                                                                                                                                                    | `features/faults/api/incident*`                                                      | mTLS Reporter 事件与 SQL timeline/evidence authority 已装配；evidence 目前仅为事件自身事实，周边指标/规则关联与 live 页面仍待验收 |
+| §7 系统管理                | `readSystemConnections`、`readSystemProtocols`、`readAgentReportingProtocolObservations`、`readIncidentEventProtocolObservations`、`readSystemAudit`、`readSystemDeploymentGuides`、`readRegisteredSources`、`checkRegisteredSource`、`mutateRegisteredSource`、`readRegisteredSourceOperation`、`readMonitoringSources`、`readMonitoringSource`、`readMonitoringSourceCheck`、`checkMonitoringSource`、`mutateMonitoringSource`、`readMonitoringSourceOperation`、`readHostAssociations`、`putHostAssociation`、`deleteHostAssociation`、`readHostAssociationOperation` | `features/system/api/*` | 规则来源与 Prometheus 监控源是独立资源；API 0.17.0 增加服务端引导 readiness 与显式 Runtime Collector 公布地址读取；真实 provider、SQL dialect 与 live 页面仍待验收 |
+| §8 首次初始化              | `readBootstrap`、`authorizeBootstrap`、`authorizeLocalBootstrap`、`checkBootstrapDatabase`、`checkBootstrapSource`、`initializeConsole`、`readInitialization` | `features/identity/api/*` + `app/router/SetupRouteOwner` | 本机首次授权仅限 loopback 拓扑；数据库迁移、并发初始化与部署授权仍按验收清单分层验证 |
 | §9 登录                    | `login`、`logout`、`readSession`                                                                                                                                                                                                                                                                                    | identity HTTP + app authentication owner                                             | cookie/CSRF/限速需 Python 部署验收                           |
-| §10 账户维护、§11 角色绑定 | `listAccounts`、`readAccount`、`readAccountOperation`、`mutateAccount`                                                                                                                                                                                                                                              | identity `accountManagement*`；角色是账户 command 的受限变化，不单独复制 role 表协议 | 数据库事务、最后 admin 并发和跨会话撤权未验证                |
-| §12 本人改密               | `changeOwnPassword`（并由登录/session 核实当前 actor）                                                                                                                                                                                                                                                              | identity `ownPassword*`                                                              | 哈希、会话处置及密码拒绝策略未接 Python                      |
+| §10 账户维护、§11 角色绑定 | `listAccounts`、`readAccount`、`readAccountOperation`、`mutateAccount`                                                                                                                                                                                                                                              | identity `accountManagement*`；角色是账户 command 的受限变化，不单独复制 role 表协议 | PostgreSQL/MySQL 隔离事务已验证最后管理员并发保护；真实页面到 Python 的权限、角色变更和跨会话一致性仍未完整验收 |
+| §12 本人改密               | `changeOwnPassword`（并由登录/session 核实当前 actor）                                                                                                                                                                                                                                                              | identity `ownPassword*`                                                              | PostgreSQL/MySQL 隔离 ASGI 已验证 Argon2id 持久化及旧会话撤销；生产部署和浏览器路径、拒绝/限速等完整策略矩阵仍未验收 |
 
-43 paths 由 12 个 capability family 生成；`pending=[]` 表示目前被导出的 operation family 都有 machine contract，不代表页面动作冻结。有界字符串使用标准 `maxLength` 并附加 `x-max-utf16-code-units`，显式表达 JavaScript/Python 共用的 UTF-16 长度边界。`applicationScope.ts` 尚保留演示应用目录；live 目录必须由授权 `readObservationCatalog` 提供，不能在 URL 解析处继续回退成固定 app。
+### 13.1.1 页面 Mock 工厂与 Python 权威数据责任
+
+demo Mock 仅在 HTTP transport 边界拦截与 live 相同的 method/path；页面、workflow 和 feature API 不得直接导入 handler、scenario 或固定示例数据。下表用于实现定位，不构成第二套 wire contract；字段、错误、权限和幂等仍以对应页面章节及 OpenAPI 为准。Mock factory 位于显式 demo assembly 中，live 构建不得打包这些 factory。
+
+| 页面章节 | demo HTTP Mock 工厂 | scenario / 状态归属 | Python Console 权威事实与待完成接入 |
+| --- | --- | --- | --- |
+| §2 总览 | `createFleetMockHandlers` + `createApplicationsMockHandlers` | `MOCK_APPLICATION_SCENARIO`；应用目录与总览共用应用事实 | Fleet 查询边界已有实现；生产 Agent inventory/metrics authority 尚未接入，缺失数据必须保持 unavailable。 |
+| §3 应用与实例 | `createApplicationsMockHandlers` | `MOCK_APPLICATION_SCENARIO` | Instance catalog/observation reader 与接口边界已有；生产 Agent inventory、incarnation 与指标事实源尚未装配。 |
+| §4 规则 | `createRuleSetMockHandlers` | `MOCK_RULE_SCENARIO`；草稿、版本、发布与计划属于同一个隔离 demo assembly | SQL 元数据、publication worker/provider adapter 已分层实现；生产 provider 安全部署、Nacos/Consul 全组合及实例级激活 receipt/authority 仍未全部验收。 |
+| §5 实时监控 | `createRealtimeMockHandlers` | `MOCK_OBSERVATION_SCENARIO` | metrics read contract 与 reader Port 已有；生产 Reporter→Collector ingress/store 和真实指标 authority 尚未装配，不得用零值替代 unavailable。 |
+| §6 故障分析 | `createIncidentMockHandlers` | `MOCK_INCIDENT_SCENARIO` | Incident query/read-model 边界已有；生产事件 Collector、事件持久化和权威 evidence 尚未接入。 |
+| §7 系统管理 | `createSystemMockHandlers`（组合 system observation 与 source registration handlers） | `MOCK_SYSTEM_SCENARIO`；登记来源 reader 供规则 Mock 查询 | SQL 配置源登记、审计和受控 probe 已有局部实现；生产 probe 部署、Collector/实例 inventory 与协商协议事实仍未完整装配。 |
+| §8 首次初始化 | `createIdentityMockHandlers` | `MOCK_BOOTSTRAP_PROFILE` 与显式浏览器本地 Mock 状态 | bootstrap authorization、database/source checks、initialize 与 receipt 路由已有；生产 secret delivery、部署 topology/ingress 和真实页面联调尚未完成。 |
+| §9 登录 | `createIdentityMockHandlers` | 同一 identity scenario 的登录用户、session 和限流演示状态 | Python cookie/CSRF/session/限流接口与 SQL adapter 已有；生产 ingress/proxy、多 worker 配置和 React live 页面链路仍待验收。 |
+| §10 账户维护 | `createAccountManagementMockHandlers` | `createMockIdentityScenario` 账号目录与命令状态 | SQL 账户目录和账号命令已有 PostgreSQL/MySQL 隔离事务证据；生产部署、多 worker 与 mounted live 页面验收尚未完成。 |
+| §11 角色绑定 | `createAccountManagementMockHandlers` | 与账户维护共用同一账号/角色状态，不另造角色事实 | 角色变更复用账户 command 与 SQL 授权/审计；跨会话生产部署和 React→Python live 一致性仍待验收。 |
+| §12 本人改密 | `createAccountManagementMockHandlers`（含 `/auth/password` demo handler） | 与账户/session 共用 identity scenario；密码只存在于显式本地 demo 状态 | Argon2id、密码限流和会话撤销已有隔离数据库/ASGI 证据；生产部署与页面 live E2E 尚未完成。 |
+
+49 paths 由 12 个 capability family 生成；`pending=[]` 表示目前被导出的 operation family 都有 machine contract，不代表页面动作冻结。有界字符串使用标准 `maxLength` 并附加 `x-max-utf16-code-units`，显式表达 JavaScript/Python 共用的 UTF-16 长度边界。旧 `applicationScope.ts` 已不存在，路由解析不内置演示应用 ID；显式 demo 的合成应用目录由 app-owned mock scenario 提供，live 目录由授权 `readObservationCatalog` 返回。路由模型仍支持接收可选 application scope，但实际目录数据责任在应用/Console 查询，不在 URL parser。
 
 ### 13.2 网关迁移现状与实现边界
 
 网关决定现已在前端源码落实：旧 `FixtureGateway`、同步页面/exports 与未挂载 HTTP 雏形已退役；正式 route owners 使用新的 feature HTTP adapters，并共享同一个 Console transport。demo mock 在 HTTP boundary 拦截，live 请求同一 adapter 的 Python API。Nacos/Consul 连接信息、凭证、完整数组 codec 和配置源写回属于 Python provider，不在浏览器中直连。
 
-前端交付仍有未完成项：页面状态/失败矩阵和交互视觉验收、Mock command 跨页面状态一致性、应用目录演示残留、OpenAPI 最终签字，以及完整浏览器验收。此处静态源/transport 检查不能替代真实渲染；Codex 内置浏览器局部观察也不替代完整 CDP E2E。
+前端交付仍有未完成项：页面状态/失败矩阵和交互视觉验收、Mock command 跨页面状态一致性，以及完整浏览器验收。Console API/OpenAPI 0.17.0 已冻结；这不代表所有操作均已接入生产权威数据源。应用目录不再从旧 URL fallback 模块读取固定演示数据；demo 数据仅存在于显式 mock assembly，但其跨页面一致性与 live catalog 浏览器验收仍开放。静态源/transport 检查不能替代真实渲染；Codex 内置浏览器局部观察也不替代完整端到端验收。
 
 ### 13.3 Python Console 目标责任
 

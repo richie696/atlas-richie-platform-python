@@ -1320,10 +1320,10 @@ TPS 必须有业务事务埋点，p95/p99 必须有可聚合 RT 分布数据，�
   事件；原始 RT、circuit state 和通用指标必须先定义独立 per-kind schema、完成
   privacy/cardinality 评审后作为 V2 进入，不得以宽 payload 临时塞入。
 - **子任务** (M6.5.1-6 全部 [x] 实施完成, commits `57f740a` + `ebf3f9a` + `2c97b3d`):
-  - [x] M6.5.1 先完成 `docs/protocol/上报协议-01-envelope-v1.md`：冻结 V1 schema、
-    transport 基线、版本协商、实例身份、批次确认、错误码、认证和跨语言兼容策略；major
-    mismatch 返回稳定协议错误，禁止静默忽略字段或猜测降级解析。Python `Protocol`
-    不是该网络协议的替代物。
+  - [x] M6.5.1 先完成 `docs/protocol/上报协议-01-envelope-v1.md`：仅冻结 V1 event
+    envelope schema 及其跨语言兼容要求。配套 transport 文档中的版本协商、实例身份、批次确认、
+    错误码和认证是候选设计，transport 仍待 owner 签字；不得将当前 Reporter
+    实现或模拟测试描述为已冻结的网络合同。Python `Protocol` 不是该网络协议的替代物。
     - 状态 (2026-09-13): V1 schema frozen (5-owner sign-off), 7 字段 ingress envelope +
       6 个 event_kind + 3 个 per-kind payload + 11 错误码 + ReasonClass 7 冻结枚举.
       见 `docs/protocol/reporting-protocol-01-envelope-v1.md` + `上报协议-01-envelope-v1.md`
@@ -1332,9 +1332,12 @@ TPS 必须有业务事务埋点，p95/p99 必须有可聚合 RT 分布数据，�
     连续 sequence、capture time、当前 active `source_id` + rule snapshot version、受限
     指标点、事件和 dropped count；Source 切换必须上报稳定事件，inactive Source version
     不进入协议。定义 Collector ack 的最大连续 sequence / 缺口 / 过期语义。
-    - 状态 (2026-09-13): batch frozen (5-owner sign-off), 双约束 (256 events OR 64 KiB),
-      强制单一 identity/generation, FIFO + Ack + duplicate_count.
-      见 `docs/protocol/reporting-protocol-02-transport-v1.md` + `上报协议-02-transport-v1.md`.
+    - 状态 (2026-09-13, 历史实现记录): Reporter batch 已按双约束 (256 events / 64 KiB)、
+      单一 identity/generation、FIFO + Ack + duplicate_count 实现。复核发现，现有 5-owner
+      freeze record 实际只冻结 envelope schema；`reporting-protocol-02-transport-v1.md` 与
+      `上报协议-02-transport-v1.md` 仍明确标记 transport pending owner sign-off，因此
+      “batch frozen (5-owner sign-off)”不是当前可证事实。Collector 不得把该 transport
+      宣称为已正式冻结的跨语言生产合同；B0.4 当前内部实现须保持 draft 边界并记录此限制。
   - [x] M6.5.3 实现 Reporter：有界队列、批量、deadline、backoff、断线重连、显式
     overflow policy、关闭时限内 best-effort flush。网络缓慢或 collector 不可达不得
     阻塞 Engine / ASGI / HTTPX 请求路径。
@@ -1366,14 +1369,13 @@ TPS 必须有业务事务埋点，p95/p99 必须有可聚合 RT 分布数据，�
       15 outbox tests 全过 (含多线程并发 emit + DROP_OLDEST 静默淘汰 + overflow
       拒绝). 高基数输入 / queue 满 / 跨进程 验证留 1.0 publish 前 worker 后台跑
       (M6.5 跨进程验收段), 不阻塞 M6.5.1-6 实施收口.
-- **真实验收** (M6.5 跨进程验收, 2026-09-14 完成): 两个独立 Agent 进程
-  向真实 Collector 上报; 注入重复、乱序、断线和重启后, 聚合结果不双计数, Reporter 也未
-  阻塞受保护请求. 验收 demo 只证明协议和 collector, 不宣称已交付聚合 Dashboard / Web UI.
-  7 跨进程测试全过 (`tests/reporting/test_cross_process.py`): 多 Reporter
-  实例隔离 / Duplicate dedup / Out-of-order 全部接受 / Disconnect 不断阻塞
-  / Collector 重启恢复 / Restart 新 instance_id 接管 / Non-blocking
-  (Collector 慢时 emit() 仍 < 10ms). 0 主包 regression (sentinel main 359
-  passed + 4 skipped).
+- **Reporter + Fake Collector 模拟验收** (2026-09-14 历史记录):
+  `tests/reporting/test_cross_process.py` 实际使用同一测试进程中的多个 Reporter 对象和
+  `_FakeCollector` asyncio HTTP server，不是两个 OS 级 Agent 进程，也不是生产/跨语言
+  Collector。它验证 identity 隔离、重复/乱序、断线恢复、重启和非阻塞行为；7 个用例
+  证明的是受控模拟链路，不作为真实 Collector 或跨进程验收证据。HTTP request target
+  现由测试显式校验为 draft transport 定义的 `/reporting/v1/events`。
+  该记录不代表 Collector Python 写入实现、聚合 Dashboard / Web UI 或跨语言部署完成。
 - **Exit Criteria**：协议 spec、schema 兼容测试、client / collector contract suite 与
   跨进程 demo 全部归档；无业务敏感字段与无界缓存；Token Server 关闭时 Reporting
   仍能按自身合同工作，反之亦然。
@@ -1383,7 +1385,7 @@ TPS 必须有业务事务埋点，p95/p99 必须有可聚合 RT 分布数据，�
 
 ### M6.5.7 [x] 冻结 Agent Reporting 事件 envelope 与子协议挂载 (2026-09-13 Frozen, 5-owner 签收完成)
 - **目标**：冻结 Reporter 通道的**事件 envelope** schema, 使 M6.1 内部
-  `RuleSourceActivation` fact 与 M6.5 健康 / 指标事件能够在同一父协议下
+  `RuleSourceActivation` fact 与 M6.5 健康 / 规则执行事件能够在同一父协议下
   表达；M6.1 阶段**不**冻结 envelope, 推迟到本任务。
 - **明确范围**：
   - Reporter → Collector ingress envelope schema: `protocol_version` /
@@ -1444,6 +1446,21 @@ TPS 必须有业务事务埋点，p95/p99 必须有可聚合 RT 分布数据，�
   - 1.0 publish 前: `atlas-richie-contracts` 加 `atlas_richie.reporting.v1`
     包 (Python 投影), 跨语言 contract test (Go / Java SDK mock 跑同
     spec) — 留 worker / Mavis 实施
+
+### M6.5.8 [ ] Agent Metrics Reporting V2（Dashboard B0.4 前置扩展）
+- **范围说明**：M6.5 / M6.5.7 的 `[x]` 只代表 Reporting V1 事件 envelope 与已记录的 Reporter 事件切片；**不**代表通用指标 wire、生产 Collector、SQL 历史 store 或 Dashboard 真实指标已完成。V1 schema 保持不变，指标走独立 V2 typed payload，不向 V1 宽塞字段。
+- **当前决策与实现状态**：指标 producer/meaning/unit/scope/denominator 由产品 owner 于 2026-10-13 确认；D2–D12 schema/wire、clock/identity、mTLS、durable ACK、SQL dialect 范围和跨语言边界已由产品 owner 于 2026-10-14 按 [`ADR-SEN-020`](../protocol/ADR-SEN-020-metrics-v2-freeze.md) 授权冻结并实施。T04.0 的正式 `atlas-richie.metrics/v2` typed contract、machine-readable JSON Schema、稳定错误码、共享 Python/Java/Go fixtures 与 conformance tests 已验收，证据见 Dashboard 推进清单 §15.1143。`reporting-protocol-04-metrics-v2-proposal.md` 保留为历史提案；生产 Reporter/Collector、SQL durable history 和真实发送仍未完成。
+- **子任务**：
+  - [x] M6.5.8a（2026-10-13）：产品 owner 已按 `docs/protocol/reporting-protocol-04-metrics-v2-proposal.md` §4.1 冻结 Dashboard metric 的 producer、meaning、unit、scope 与分母边界：HTTP QPS 统计已完成响应并包含 4xx/5xx；resource entry rate = admitted + blocked；TPS 仅显式业务埋点；RT p95 取同一 HTTP 边界合并直方图且缺失/溢出时 unavailable；blocked ratio 分母缺失时 unavailable；CPU/内存仅 process scope，采集条件不足时 unavailable。此项不冻结 wire/schema/transport，M6.5.8b 及后续子项仍开放。
+  - [x] M6.5.8b D13 local Adapter sub-decision（2026-10-13）：允许有界内存状态更新短暂等待互斥锁；满容量直接拒绝而不等待，不做网络/数据库 I/O，不承诺 wait-free 或硬实时延迟，保持当前精确丢弃/合并计数，不改用 try-lock/drop。见决策票 D13 与推进清单 §15.1079；此决定不冻结 Metrics V2 wire 或授权生产发送。
+  - [x] M6.5.8b 产品决策冻结（2026-10-14）：产品 owner 明确授权按 D2–D12 ballot 候选值冻结并实施，详见 [`ADR-SEN-020`](../protocol/ADR-SEN-020-metrics-v2-freeze.md) 与 ballot 决策记录。冻结包括 UUID process epoch、monotonic elapsed clock、精确 12 个 histogram bounds、单 reporter 资源/载荷上限、1s cadence/3 interval stale/10s rebaseline、mTLS principal enrollment、durable idempotent ACK、SQLite/PostgreSQL/MySQL SQL Adapter、24h raw + 30d minute rollup 与严格跨语言 schema。该批准不是虚构的独立角色签字，也不是运行验收；安全、方言和跨语言实现测试仍为 production-readiness gate。
+  - [x] M6.5.8b schema/codec 落地（2026-10-14）：冻结 V2 typed schema、`atlas-richie.metrics/v2` machine-readable JSON Schema 与稳定错误代码已落在 `foundation/contracts`；拒绝 unknown/duplicate fields 与非规范值，后续字段变更必须提升 schema revision/protocol identifier 并记录 ADR。对应 Dashboard 执行清单 T04.0，验收证据见 §15.1143。
+  - [x] M6.5.8c Python/Java/Go 共享夹具合同（2026-10-14）：三语言验证器使用同一批冻结正负 fixtures，按 UUID epoch、12 bounds 与冻结错误分类验收。Python 82 passed，Go test/vet 通过，Java 接受 4 个 valid 并拒绝 23 个 invalid fixtures；语言验证器仍是 test-only，不等于生产 SDK。对应 Dashboard 执行清单 T04.0，验收证据见 §15.1143。此门槛关闭只允许后续 Reporter 实现，不表示已启用生产发送。
+  - [ ] M6.5.8d 依赖 M6.5.8b/c：实现仅做有界本地入队（允许短 mutex、满容量拒绝、无网络/数据库 I/O）的 Reporter/outbox、mTLS enrollment Collector、durable SQL receipt/history 与 `MetricsReader` composition；存储经 consumer-owned Port、SQLAlchemy Adapter、ingest/query Facade 组合；SQLite/PostgreSQL/MySQL 共享 adapter contract，方言差异只在窄 SQL dialect adapter / migration。仅在确有共同持久化模板且测试证明方言步骤不同时采用 Template Method hooks；不把数据库判断塞进指标业务服务。V1 `event_kind` 和 Console HTTP API 0.4.0 不被隐式改变。
+    - 数据库方言现状：`RuntimeDatabaseEngineProvider` 的当前白名单仅有 MySQL/PostgreSQL；SQLite 出现在 bootstrap/migration/test 路径，但尚未接入该 runtime provider。补齐 SQLite runtime composition 是 M6.5.8d 明确交付，不能将 bootstrap/test 支持算作运行时支持。
+  - [ ] M6.5.8e 验证多 reporter 聚合、counter reset/new epoch、乱序/重复、stale/partial/unavailable、数据库重启、权限隔离和 retention；最终通过 B0.5 React→Python E2E。
+- **边界**：Consul 仅作为规则配置中心，不是指标事实源或时序库；Console 配置的 SQL DB（包含用户要求的 MySQL 支持）承载持久化历史。指标 V2 必须先有权威采集和身份绑定，缺失时继续显式 `not_integrated`，不返回示例零值。
+- **关联**：Dashboard B0.4、B0.5；当前审查记录见 `docs/process/R-DASHBOARD-前后端现状与推进清单.md` §15.606。
 
 ### M6.6 [ ] Per-process Dashboard Web UI（2026-09-14 重新打开；不包含独立规则控制台）
 - **重新打开状态 (2026-09-14)**: richie696 显式反馈 "dashboard 应用除外,

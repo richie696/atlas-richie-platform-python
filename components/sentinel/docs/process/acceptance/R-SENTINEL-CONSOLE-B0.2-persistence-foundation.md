@@ -756,6 +756,21 @@ Focused local evidence (Python 3.12.14):
 - SQLite and mocks only; no real PostgreSQL/MySQL, browser, full E2E, or remote
   configuration center was used. Full E2E remains reserved for final acceptance.
 
+**Current worktree re-verification (2026-10-13, Python 3.13.15):**
+`test_runtime_database_engine_provider`, publication/activation worker
+lifecycles, and bootstrap initialization API tests: **30 passed**. The new
+worker-after-setup lifecycle also uses the real encrypted
+`RuntimeDatabaseLocatorFileStore`: the ASGI process starts with no locator,
+the publication worker and activation-plan scheduler retry without warnings,
+setup writes an encrypted locator file, and both workers observe it on the
+next poll without a process restart. They share one lazily created file-backed
+SQLite engine and each executes `SELECT 1`. The test checks that the persisted
+file does not contain the synthetic database hostname or password. This
+exercises the real local locator persistence boundary; the injected SQLite
+engine factory and migration remain test-only and do not replace the
+PostgreSQL/MySQL acceptance gates above. `compileall` and `git diff --check`
+passed; Ruff was unavailable in this environment.
+
 The bridge is internal infrastructure and preserves only the `connect()` and
 `begin()` methods already used by the SQL adapters. It does not constitute a
 production launcher, operator-code provisioner, distributed bootstrap grant or
@@ -973,3 +988,206 @@ the loopback-only disposable database. Therefore this is real-dialect
 persistence evidence, not acceptance of DNS pinning, production TLS, ingress,
 or secret-delivery configuration. No browser or configuration center was used;
 B0.2 remains open.
+
+## Installed-wheel CLI startup in closed first-run mode (2026-10-10)
+
+The current Console wheel plus its runtime and optional Uvicorn server
+dependencies were installed into a disposable isolated target. The packaged
+`python -m atlas_richie.sentinel_console serve` module entry point and generated
+`bin/sentinel-console serve` console script were each launched with synthetic
+deployment keys/state under `/private/tmp`, bound only to `127.0.0.1`, and
+stopped after checking the HTTP responses:
+
+- `GET /` returned the packaged HTML with **200**.
+- `GET /api/v1/system/bootstrap` with a valid request ID returned
+  `initialized=false` with **200**.
+- The setup window remained closed; no SQL database or configuration center
+  was contacted.
+
+This proves the installed artifact can start and serve the closed/uninitialized
+first-run shell. It does not prove authorized initialization against
+PostgreSQL/MySQL, production TLS/proxy/multi-worker behavior, deployment secret
+delivery, or React-to-Python browser E2E. B0.2 remains open.
+
+## Setup-window CAS across independent local worker processes (2026-10-11)
+
+Re-ran `tests/test_setup_window_file_store.py`, including
+`test_independent_worker_processes_compare_and_swap_one_setup_window`. Two
+spawned processes read the same revision and race opposite updates against a
+temporary local POSIX directory. Exactly one write succeeds, the other receives
+`SetupWindowRevisionConflict`, and a fresh read matches the winning revision
+and value.
+
+- `uv run --extra test pytest -q tests/test_setup_window_file_store.py` —
+  **13 passed**.
+- `git diff --check` — passed.
+
+This is local multi-process advisory-lock/CAS evidence only. It does not prove
+the behavior of a deployment-specific shared volume, cross-host locking, or
+production ingress/secret delivery; no database or Docker container was used.
+B0.2 remains open.
+
+## Shared SQL login cooldown across app instances — test design (2026-10-12)
+
+| Risk | Layer and setup | Action | Required evidence |
+| --- | --- | --- | --- |
+| Login throttling is accidentally process-local or loses concurrent first failures | Real disposable MySQL/PostgreSQL; two separately composed SQL identity ASGI apps with independent engine pools, same HMAC key/policy, and the same synthetic remote client | Both apps concurrently receive a wrong-password request from the same client; an app then receives a correct password from that client | Both in-flight attempts retain generic `401 unauthenticated`; the subsequent correct attempt returns `429 rate_limited` with bounded positive `retryAfterMs`, proving the shared SQL row serialized both concurrent failures before valid credential acceptance |
+| Raw identity material is persisted | Inspect only the unique limiter row created by this test | Compare stored subject digest with a locally derived HMAC and inspect row fields | Exactly one matching digest row records the threshold/block state; neither client address nor username is stored; cleanup deletes that digest and synthetic account |
+| One app can clear another app's cooldown | Same two real app/pool compositions | Directly expire only this test's block row, then authenticate successfully through App B | Login succeeds and the shared HMAC row is deleted; this uses controlled test-data mutation, not a production clock override |
+| Separate OS workers lose concurrent first failures | Real disposable MySQL; two spawned worker processes with independent async engines and one synthetic digest | Release both processes together; each records two failures for that digest | Both workers exit successfully; one durable row reaches exactly the configured threshold and is blocked; cleanup deletes only that digest |
+| HTTP login cooldown is accidentally process-local despite a multi-worker CLI starting | Real disposable MySQL/PostgreSQL; two independent production CLI processes with distinct loopback ports, same runtime locator, HMAC key, policy, and SQL database | Send one invalid login to process A, one to process B, then another to process B | A and B each return the first generic 401; B's second request returns bounded 429 and the shared SQL row is exactly at threshold. This proves the limit is shared across process boundaries rather than merely proving that two worker processes started |
+
+No Nacos/Consul or browser is involved in this slice. It supplements—not
+replaces—the separate final React-to-Python E2E and does not close B0.2.
+
+### Implementation evidence
+
+- Added the same acceptance to the opt-in PostgreSQL and MySQL suites. It builds
+  two independent SQL-composed ASGI apps backed by separate engine pools and
+  uses a fixed synthetic client address with the same deployment HMAC key.
+- Disposable MySQL **8.4.11** run: `./tools/with_disposable_e2e_dependencies.sh
+  uv run --extra test --extra mysql pytest -q
+  tests/test_mysql_migration_acceptance.py::MySQLConsoleMigrationAcceptanceTest::test_sql_login_cooldown_is_shared_across_app_instances`
+  — **1 passed**. Two concurrent invalid attempts through different apps
+  returned generic 401; a correct password through the second app returned
+  bounded `429 rate_limited`; a different client authenticated; after the
+  exact test row's cooldown was expired, the original client authenticated and
+  its HMAC row was cleared.
+- The SQL assertion confirmed the expected HMAC digest and threshold row; raw
+  username/client address were not persisted. SQLite limiter regression:
+  **7 passed**. Ruff lint, touched test-module format checks, extracted helper
+  formatting, `compileall`, and `git diff --check` passed.
+- The harness-created MySQL and Consul containers were checked by exact name
+  after exit and were absent. PostgreSQL has the same opt-in test but was not
+  run in this slice.
+
+This proves shared throttling across independent app compositions/connection
+pools on MySQL, not separate OS processes, production ingress/proxy identity,
+PostgreSQL parity, or React-to-Python browser E2E. B0.2 remains open.
+
+### Spawned worker process acceptance (2026-10-12)
+
+The app-instance scenario above proves HTTP behavior across separate engine
+pools within one test process. A second opt-in MySQL case now starts two
+independent Python `spawn` workers, each creating its own async engine and
+recording two failures against the same synthetic digest after a shared start
+gate opens. The parent process verifies one durable row has exactly four
+failures and a non-null block expiry, then deletes only that digest row.
+
+- Disposable MySQL 8.4.11: `./tools/with_disposable_e2e_dependencies.sh uv run
+  --extra test --extra mysql pytest -q
+  tests/test_mysql_migration_acceptance.py::MySQLConsoleMigrationAcceptanceTest::test_sql_login_cooldown_serializes_across_processes`
+  — **1 passed**.
+- Ruff lint, formatting of the new helper excerpt and touched acceptance class,
+  `compileall`, and `git diff --check` passed. The exact temporary MySQL and
+  Consul container names were checked after exit and were absent.
+
+This validates SQL-backed failure-count serialization across separate local
+OS processes against disposable MySQL. It is not an HTTP load test across
+Uvicorn workers, a multi-host/shared-network deployment test, or production
+proxy identity acceptance; B0.2 remains open.
+
+### Spawned worker process acceptance on PostgreSQL (2026-10-13)
+
+The process-level limiter helper is now dialect-neutral and is exercised by
+both production database acceptance classes. PostgreSQL uses the same isolated
+TLS runner as the other persistence tests; two `spawn` workers each record two
+failures against one synthetic client digest. The parent confirms one durable
+row reaches `failure_count=4` and a non-null `blocked_until_ms`, then deletes
+only that digest row.
+
+- Disposable PostgreSQL 16: `tools/with_disposable_postgresql_acceptance.sh uv
+  run --extra test --extra postgres pytest -q
+  tests/test_postgresql_acceptance.py::PostgreSQLConsoleAcceptanceTest::test_sql_login_cooldown_serializes_across_processes`
+  — **1 passed**.
+- Disposable MySQL 8.4.11 regression after making the helper dialect-neutral:
+  `tools/with_disposable_e2e_dependencies.sh uv run --extra test --extra mysql
+  pytest -q
+  tests/test_mysql_migration_acceptance.py::MySQLConsoleMigrationAcceptanceTest::test_sql_login_cooldown_serializes_across_processes`
+  — **1 passed**.
+
+This proves database-dialect parity for local cross-process SQL serialization,
+not distinct Uvicorn-worker HTTP routing, NFS/RWX or multi-host behavior,
+production ingress/proxy identity, or browser-to-Python E2E. Runner-owned
+containers and temporary CA material are removed by their respective owners;
+B0.2 remains open.
+
+### Two Uvicorn workers serve MySQL-backed login cooldown over HTTP (2026-10-13)
+
+The PostgreSQL dual-worker HTTP acceptance in the tracker now has a MySQL
+dialect counterpart. Run from `components/sentinel/sentinel-console`:
+
+```text
+tools/with_disposable_e2e_dependencies.sh uv run --no-sync --extra test \
+  --extra mysql pytest -q --tb=short \
+  tests/test_mysql_migration_acceptance.py::MySQLConsoleMigrationAcceptanceTest::test_two_uvicorn_workers_serve_mysql_login_cooldown_over_http
+```
+
+Result: **1 passed in 3.55s** against disposable TLS MySQL 8.4.11 and Consul
+1.21.1. The test starts the real `python -m atlas_richie.sentinel_console
+serve` CLI with exactly two Uvicorn workers and an initialized runtime locator,
+sends concurrent invalid login requests (two `401` responses), then verifies
+the subsequent request is denied with `429 rate_limited` and the SQL row has
+one client digest with `failure_count=2`. It also asserts that both Uvicorn
+server processes actually started. Test-owned MySQL
+`sentinel-e2e-mysql-bf0e02414964b7224fcca2d6b93656fe` and Consul
+`sentinel-e2e-consul-bf0e02414964b7224fcca2d6b93656fe` were absent after the
+runner exited.
+
+This closes only the local MySQL dual-worker HTTP limiter slice. It does not
+prove PostgreSQL/MySQL multi-host or NFS/RWX coordination, production ingress
+identity/TLS, external secret delivery, or React-to-Python browser E2E; B0.2
+remains open.
+
+### Two Uvicorn workers serve PostgreSQL-backed login cooldown over HTTP (2026-10-13)
+
+Run from `components/sentinel/sentinel-console`:
+
+```text
+tools/with_disposable_postgresql_acceptance.sh uv run --no-sync --extra test \
+  --extra postgres pytest -q --tb=short \
+  tests/test_postgresql_acceptance.py::PostgreSQLConsoleAcceptanceTest::test_two_uvicorn_workers_serve_postgresql_login_cooldown_over_http
+```
+
+Result: **1 passed in 3.46s** against the disposable PostgreSQL service created
+by the owner runner. The acceptance starts the real `python -m
+atlas_richie.sentinel_console serve` CLI with exactly two Uvicorn workers,
+sends concurrent invalid login requests, and verifies the shared SQL-backed
+cooldown over HTTP plus both server processes. The runner-owned PostgreSQL
+container and temporary CA were removed on exit; a post-run container query
+found no `sentinel-e2e-postgres-*`, `sentinel-e2e-mysql-*`, or
+`sentinel-e2e-consul-*` containers.
+
+Together with the MySQL result above, this closes the local PostgreSQL/MySQL
+dual-worker HTTP limiter parity slice. It does not prove multi-host or NFS/RWX
+coordination, production ingress identity/TLS, external secret delivery, or
+React-to-Python browser E2E; B0.2 remains open.
+
+### Independent Console processes share login cooldown over HTTP (2026-10-13)
+
+The prior dual-worker cases asserted that both Uvicorn worker processes started,
+but requests through a shared listener did not identify which PID served each
+request. The strengthened acceptance now keeps that startup assertion for CLI A
+(two workers) and starts an independent CLI B (one worker) against the same
+disposable SQL database and runtime policy. It sends one failed login to A,
+then one to B, then another to B. B's final request can be rate-limited only if
+the SQL state written through A is visible across the separate CLI process.
+
+- Disposable MySQL 8.4.11 + Consul 1.21.1:
+  `tools/with_disposable_e2e_dependencies.sh uv run --no-sync --extra test
+  --extra mysql pytest -q --tb=short
+  tests/test_mysql_migration_acceptance.py::MySQLConsoleMigrationAcceptanceTest::test_two_uvicorn_workers_serve_mysql_login_cooldown_over_http`
+  — **1 passed in 3.56s**.
+- Disposable PostgreSQL 16:
+  `tools/with_disposable_postgresql_acceptance.sh uv run --no-sync --extra test
+  --extra postgres pytest -q --tb=short
+  tests/test_postgresql_acceptance.py::PostgreSQLConsoleAcceptanceTest::test_two_uvicorn_workers_serve_postgresql_login_cooldown_over_http`
+  — **1 passed in 3.36s**.
+- In both cases A→B→B returned **401 / 401 / 429**; the shared SQL row ended
+  at `failure_count=2`. CLI A logs exactly two started server processes and
+  CLI B exactly one. Both owner runners removed their disposable containers;
+  a post-run query found no `sentinel-e2e-(mysql|postgres|consul)-*` containers.
+
+This is direct local cross-CLI-process HTTP evidence for SQL-backed cooldown,
+not a multi-host/NFS/RWX, production ingress/identity, external-secret, or
+React-to-Python browser E2E acceptance. B0.2 remains open.

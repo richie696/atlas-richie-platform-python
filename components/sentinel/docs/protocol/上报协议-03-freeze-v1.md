@@ -1,8 +1,8 @@
 # Atlas Richie 事件上报 Envelope Schema V1 冻结记录
 
 > **Protocol**: `atlas-richie-agent-reporting`
-> **Version**: 1.0 (Frozen)
-> **Status**: Frozen — 5-owner 签收完成 (2026-09-13)
+> **Version**: 1.0 Envelope Schema (Frozen)
+> **Status**: Envelope schema 已冻结 — 5 位 schema owner 已签收 (2026-09-13)；transport 仍为草案
 > **Date**: 2026-09-13
 > **Authors**: Atlas Richie Team &lt;[team@atlas-richie.com](mailto:team@atlas-richie.com)&gt;
 > **License**: Apache-2.0
@@ -13,7 +13,7 @@
 
 ## 摘要 (Abstract)
 
-本文档记录 Atlas Richie Agent Reporting Envelope Schema 的 V1 冻结候选。
+本文档记录 Atlas Richie Agent Reporting Envelope Schema 已完成的 V1 冻结。
 它是 [`上报协议-01-envelope-v1.md`](./上报协议-01-envelope-v1.md) 的 sign-off 记录, 也是
 Reporter 和 Collector **必须**遵守的 schema 级合同。
 
@@ -21,12 +21,13 @@ Reporter 和 Collector **必须**遵守的 schema 级合同。
 序列化规则, 在 [`上报协议-01-envelope-v1.md`](./上报协议-01-envelope-v1.md) 中规定。
 外层 transport, 鉴权, batching 和 sequence 语义在
 [`上报协议-02-transport-v1.md`](./上报协议-02-transport-v1.md) 中规定。本文档只记录冻结事件本身,
-以及由此带来的不可变性保证。
+以及由此带来的不可变性保证。**本记录只冻结 envelope schema，不冻结外层 transport**；
+[`上报协议-02-transport-v1.md`](./上报协议-02-transport-v1.md) 仍待 transport 冻结与 owner 签字。
 
 ## 本备忘录状态 (Status of This Memo)
 
-本文档记录 Atlas Richie Agent Reporting Envelope Schema 的 V1 冻结候选。
-在全部 owner 签字前，它不是已发布或不可变的 wire contract。
+本文档记录 Atlas Richie Agent Reporting Envelope Schema 的 V1 冻结及 §5 中的
+schema owner 签收；该冻结不覆盖仍待冻结和签字的外层 transport。
 
 ## 版权声明 (Copyright Notice)
 
@@ -59,6 +60,9 @@ bump、ADR 和新的 5-owner 签字，**不得**改变：
 - 序列化规则 (UTF-8 字符串, ISO 8601 微秒时间, 小写 UUID, 基于 key 的
   object 解析)。
 - 大小限制 (envelope ≤ 16 KB; 参见 `上报协议-02-transport-v1.md` §3.4)。
+
+本声明只冻结 envelope schema。`上报协议-02-transport-v1.md` 中的 transport、鉴权、
+batch、sequence 和 ack 规则**未由本记录冻结**。
 
 ## 2. 不可变性保证
 

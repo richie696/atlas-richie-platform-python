@@ -1,6 +1,6 @@
 # B0.1 — Ruleset command HTTP slice
 
-Status: **typed HTTP boundary, SQLite-backed save/delete/freeze/version-read, explicit SQL mutation composition, and SQL binding-directory read adapter implemented; binding registration/write workflow, provider publication, and production deployment acceptance remain open**.
+Status: **typed rule-command HTTP boundary, SQL draft/version mutation, binding-directory read and admin registration with durable receipt are implemented; provider publication is composed for explicitly configured deployments and verified through installed CLI acceptance; production deployment policy/operations and final React→Python browser acceptance remain open**.
 
 ## Contract and boundary
 
@@ -34,8 +34,12 @@ authoritative exact-binding reader. A SQL composition factory and deployment
 key configuration are available; `build_sql_identity_app(...)` accepts these
 inputs as a pair and rejects partial wiring or mixing them with a separately
 supplied authority. The composition does not invent a binding from a
-browser-supplied identifier. Publish and activation-plan commands persist a
-finite `unsupported` result without provider side effects.
+browser-supplied identifier. In this initial `POST .../commands` adapter,
+`publish` and activation-plan variants persist a finite `unsupported` result
+without provider side effects. This is distinct from the subsequently
+implemented `/publications` and `/plans` routes and SQL workers, whose
+configured Nacos/Consul execution is covered by installed-CLI evidence in
+checklist §15.1010–§15.1011, §15.1040–§15.1041, and §15.1057–§15.1068.
 
 The first-run deployment configuration must load the independent rule-command
 key ring from the existing environment contract and accept the exact-binding
@@ -43,15 +47,19 @@ reader only as an explicit host-owned dependency. Key material without that
 reader, or a reader without the complete key ring, is a configuration error;
 the Console must not silently drop either input or manufacture binding facts.
 
-This is not the production rule authority end state. It does not persist
-publication/plan lifecycle facts, perform Nacos or Consul writes/read-back, run
-a scheduler, or prove PostgreSQL/MySQL and
-multi-worker transaction semantics. It therefore does not claim that rules can
-be published or become active in running applications.
+This initial draft/version SQL slice is not, by itself, the production rule
+authority end state. Later slices persist publication/plan lifecycle facts
+and perform provider writes/read-back through explicitly configured
+Nacos/Consul workers; the installed-CLI, PostgreSQL/MySQL evidence is recorded
+in the checklist sections cited above. These results do not validate
+customer-specific production target policy, credential delivery/rotation,
+network topology, ingress, or final React→Python browser acceptance. The
+`/commands` variants above remain distinct from the dedicated publication/plan
+routes.
 
 ## Focused verification
 
-- Latest grouped focused run of mutation store, parsing, draft API, version API,
+- Historical grouped focused run of the initial mutation store, parsing, draft API, version API,
   and SQL identity composition: **32 passed**.
 - Covers admin/CSRF checks before writes, exact-binding kind/profile validation,
   five typed rule kinds including empty arrays, create/update/delete CAS,
@@ -70,17 +78,23 @@ be published or become active in running applications.
 
 ## Coverage update
 
-The source maximum increases from **38/42** to **40/42** registered
-OpenAPI method/path operations. The two missing routes are bootstrap
-initialization and its original-operation lookup. No real database,
-configuration center, browser, or external service was accessed.
+At the time of this initial slice, the static source maximum increased from
+**38/42** to **40/42** registered OpenAPI method/path operations; the two
+missing routes then were bootstrap initialization and its original-operation
+lookup. This is historical coverage, not the current contract/runtime status:
+the current checklist records **44 paths / 45 operations** and route/method
+parity coverage in §15.599 and §15.992. Route registration/parity alone does
+not prove that optional authorities are configured in a deployment.
 
-## Durable draft-command slice — test design
+## Durable draft-command slice — initial test design and evidence (historical)
 
-The current SQL authority supports `save_draft`, `delete_draft`, and
-`freeze_version`. `publish` and plan commands return durable `unsupported`
-receipts until their complete workflow facts and provider coordination are
-implemented. No accepted response may imply that a provider was written.
+This section records the original draft/version SQL acceptance design. At that
+stage, the `/commands` authority supported `save_draft`, `delete_draft`, and
+`freeze_version`; its `publish` and plan variants returned durable
+`unsupported` receipts. Do not read this historical test-design snapshot as a
+description of the later dedicated publication/plan APIs and workers. No
+accepted response may imply a provider write unless that operation used the
+configured provider path and its durable receipt/read-back.
 
 | Risk | Isolated persistence/API assertion |
 | --- | --- |
@@ -95,13 +109,14 @@ implemented. No accepted response may imply that a provider was written.
 | Binding directory availability and session revocation | Exact binding lookup runs without an open SQL transaction; a session revoked during that lookup is rejected by the second authorization check before any draft/operation/audit write |
 | Transaction boundary | Draft state, operation receipt, and audit commit together; DB failure leaves none of them committed |
 
-The focused evidence is SQLite migration/transaction coverage with an injected
-test binding directory. The exact-binding mutation port still accepts an
-explicit deployment-owned reader; the separate SQL directory reader now exists
-for the list endpoint. No admin API/UI currently creates or updates directory
-metadata, so the SQL directory remains empty unless populated by a trusted host
-workflow. PostgreSQL and MySQL concurrency/dialect acceptance remains a
-milestone gate.
+The focused evidence at that time was SQLite migration/transaction coverage
+with an injected test binding directory. The exact-binding mutation port then
+accepted an explicit deployment-owned reader; the separate SQL directory
+reader was added for the list endpoint. The later admin binding-registration
+API and standard SQL composition now populate/read that directory; PG/MySQL
+registration concurrency and idempotency are recorded in checklist §15.455
+and §15.1048. This historical test-design paragraph does not describe the
+current directory state.
 
 ## SQL binding-directory authority — test design before implementation
 
@@ -156,8 +171,10 @@ composition, and deployment configuration. Source/test `compileall` and
 and stateful dashboard form (§15.453–§15.454). This follow-up wires the
 canonical SQL reader into the standard first-run CLI when the command key ring
 is configured, without requiring custom Python composition code; see §15.458.
-Provider publication, worker/deployment acceptance, wheel-served UI, and final
-browser E2E remain open.
+Configured provider publication and worker acceptance are recorded in
+checklist §15.1010–§15.1011 and later recovery sections; the current React
+production build is also served from the installed wheel (§15.1049). Production
+deployment policy/topology and final browser E2E remain open.
 
 ## Standard CLI SQL reader composition — 2026-10-10
 

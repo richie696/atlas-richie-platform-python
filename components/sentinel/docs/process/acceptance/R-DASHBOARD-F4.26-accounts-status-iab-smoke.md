@@ -18,6 +18,21 @@ Status: partial rendered acceptance; F4.26 remains open.
 
 ## Remaining
 
+- 2026-10-12 real MySQL + SQL-composed ASGI HTTP acceptance now covers the backend
+  boundary previously missing here. Two independent administrator cookie/CSRF
+  sessions concurrently demote themselves through `POST /api/v1/accounts/commands`;
+  exactly one command completes and the other receives a durable `last_admin`
+  rejection. The remaining administrator reads its own receipt through
+  `GET /api/v1/accounts/operations/{request_key}`. It then submits a status command
+  with the stale revision of the changed account and receives a durable `conflict`
+  receipt. Persisted assertions verify one active administrator, the final
+  admin/view roles, three operation records, and three audit records. The successful
+  demotion actor cannot read the admin-only receipt after the command because its
+  role has correctly changed to `view`; the test therefore verifies that completed
+  result at the database boundary. Focused command passed against disposable MySQL
+  8.4.11 + Consul 1.21.1 and the harness confirmed cleanup. This is HTTP/SQL
+  integration evidence, not mounted React or final IAB E2E.
+
 - 2026-10-10 account-directory protection explanation: added a presentation projection
   from the existing `accountStatusIssue` policy and rendered its existing localized
   `management.builtIn` / `management.lastAdmin` copy beside the disabled action.
@@ -53,3 +68,44 @@ Status: partial rendered acceptance; F4.26 remains open.
   replay was used.
 - Python Console/API authorization, relational transactions, and concurrent
   uniqueness/last-admin invariants remain B0 work. F4.26 is not checked.
+
+### 2026-10-12 current mounted IAB outcome
+
+- On the primary IAB dev port (`127.0.0.1:5173`), the account directory first
+  showed a read failure; an explicit retry did not change it. A full page refresh
+  under the same admin session then rendered the admin/viewer rows and the
+  built-in admin protection explanation.
+- A single confirmed `viewer` disable command transitioned the Dialog to
+  `result-unknown`. Two read-only “Check operation” attempts did not resolve it;
+  confirm/cancel stayed disabled. The original tab was retained for later
+  reconciliation. No duplicate command was sent and the tab was not refreshed or
+  closed.
+- A second tab showed the default viewer-active directory, but its own
+  `createAppConsoleMockAssembly()` creates an independent in-memory authority;
+  it cannot authoritatively settle the first tab's operation.
+- The app-level HTTP comparison now exercises the real app auth owner, account
+  adapter, workflow, and complete app Mock handlers. `ACCOUNT-APP-MOCK-STATUS`
+  passed **1/1**, including viewer disable→enable, completed receipts and
+  directory read-back. This does not override the mounted unknown result.
+- F4.26 remains open. The current browser exposes no request/response observer to
+  identify the original command/lookup outcome, and Python live/real shared-store
+  authorization remains B0 work.
+- A later IAB inventory no longer listed the original unknown-operation tab. We
+  did not intentionally refresh or close it, but cannot claim the browser owner
+  remains available for interactive reconciliation. No duplicate command was
+  sent; the outcome is still unresolved.
+
+### 2026-10-12 final mounted re-verification
+
+- In a new Codex IAB tab at `127.0.0.1:5173`, the page explicitly identified
+  itself as local Mock/demo. The built-in admin disable control was disabled and
+  explained. Viewer status change required a confirmation Dialog; confirming
+  disable refreshed the list to `已停用`, and confirming enable refreshed it back
+  to `启用`. The Mock account was restored to its original enabled state.
+- This mounted result supersedes the earlier statement that no mounted status
+  command succeeded in the test tab. It does not erase the separate earlier
+  unknown command event in another IAB owner, nor does Mock prove Python page
+  integration. F4.26 is now closed for the frontend command/UI scope based on
+  this mounted confirmation/read-back plus §15.225, §15.490 and real MySQL/ASGI
+  command conflict evidence in §15.879; React→Python browser acceptance remains
+  in B0.5.

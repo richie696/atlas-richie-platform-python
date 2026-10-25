@@ -26,8 +26,10 @@ Collector 接收事件, 按 `(instance_id, startup_epoch, sequence)` 去重,
 
 ## 本备忘录状态 (Status of This Memo)
 
-本文档是待签字的跨语言 schema 草案；在 freeze record 完成全部签字前，不得
-作为已发布 Standards Track 合同实现。
+本文档中的 V1 envelope schema 已按
+[`上报协议-03-freeze-v1.md`](./上报协议-03-freeze-v1.md) 冻结。
+该状态不代表外层 transport、认证、批处理或序列语义已冻结；这些内容仍是
+待独立 owner 签收的草案。
 
 ## 版权声明 (Copyright Notice)
 

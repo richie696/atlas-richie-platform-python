@@ -7,8 +7,8 @@
 Dashboard 阅读入口：
 
 - [规则控制台与运行观测设计](DASHBOARD_CONTROL_PLANE.md)：总体产品边界与规则/指标语义。
-- [页面能力与接口设计](Dashboard页面能力与接口设计.md)：11 个页面的功能、交互、数据与接口候选（草案）。
-- [Console API 契约](CONSOLE_API_CONTRACT.md)：待收敛/冻结的通信契约，不能将现有草案当作已实现服务。
+- [页面能力与接口设计](Dashboard页面能力与接口设计.md)：11 个页面的功能、交互与数据需求；页面设计仍需实现与验收。
+- [Console API 契约](CONSOLE_API_CONTRACT.md)：Console API wire 0.19.0 已冻结；冻结不代表 Python 全量实现、生产部署或 E2E 已通过。
 
 **目录结构**:
 

@@ -28,9 +28,11 @@ metrics and audit consumers.
 
 ## Status of This Memo
 
-This document is a cross-language schema draft pending sign-off. It MUST NOT
-be implemented as a released Standards Track contract until its freeze record
-contains all required signatures. Distribution of this memo is unlimited.
+The V1 envelope schema in this document is frozen as recorded in
+[`reporting-protocol-03-freeze-record-v1.md`](./reporting-protocol-03-freeze-record-v1.md).
+This status does not freeze the outer transport, authentication, batching, or
+sequence semantics; those remain a draft pending their own owner sign-off.
+Distribution of this memo is unlimited.
 
 ## Copyright Notice
 

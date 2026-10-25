@@ -797,6 +797,14 @@ class SystemMetricSampler(Protocol):
 默认主包不安装 psutil。需要 CPU/load 规则时显式安装并配置对应采样器。
 采样器每个周期最多运行一次，结果带 sampled_at 和 stale_after。过期指标不得继续用于拒绝。
 
+运行时 ``SystemSnapshot`` 是不可变采样值：``at_ns`` 必须是非负整数，
+``degraded`` 必须为布尔值；CPU、load、event-loop lag、in-flight/completed
+rate 与 memory ratio 必须为有限非负数或 ``None``，CPU ratio 范围为 0–1；
+``memory_bytes`` 必须为非负整数或 ``None``。缺失值只能用 ``None`` 表示，
+不得用负数、NaN、无穷或布尔数值编码 unavailable。违反这些输入约束时，
+构造快照直接拒绝；采样器应在边界处将无法取得/不受支持的测量转换为 ``None``，
+并按采样结果设置 degraded 状态。
+
 加载依赖 CPU/load 的规则但没有配置对应采样器属于配置错误，快照不得生效。
 Engine 正常运行后采样器的暂时失败才按 degraded health 处理，并跳过依赖失效指标的判断。
 
@@ -1358,16 +1366,18 @@ Reporting 是异步事实流，不是准入请求：上报失败、限速或 col
 
 #### 13.3.1 协议边界和数据最小化
 
-每个批次至少包含 protocol version、instance_id、启动 epoch、递增 sequence、采集时间、
-当前 active Source 的 `source_id` 与规则快照 version，以及受控的 Sentinel 指标 / 事件。
-不活跃或已禁用 Source 的 version 不进入协议；Source 切换必须作为可观测的
+当前唯一冻结的跨语言事实是 V1 **事件 envelope**（7 个字段及其 per-kind payload）。
+Reporter 与 Collector 之间的 transport、认证、batch/ack 和实例指标时间序列仍待
+transport owner 签字；在此之前，不能把设计目标表述为已冻结或已接线能力。V1 envelope
+允许的 Source 身份/版本只出现在对应事件 payload 中，不代表每个 batch 都携带当前活动
+Source 快照。不活跃或已禁用 Source 的 version 不进入事件；Source 切换必须作为可观测的
 事件上报（具体事件名由 M6.5.7 冻结的 `event_kind` 枚举定义，M6.1 阶段
 不预设字符串常量；详见 `docs/rule_source_activation.md` 与 §M6.5.7）。
-协议族可以在经评审的 per-kind schema 中表达通过、拒绝、RT、异常分类、熔断状态、
-规则切换和 Reporter 自身丢弃计数；**当前 V1 只冻结** source 健康 / 切换和
-`APPLIED` / `BLOCKED` / `FAILED` 规则执行事件。原始 RT、circuit state 或通用
-metrics 需要独立 schema、privacy/cardinality 评审和 V2，不得通过宽 payload 提前
-塞入。业务请求体、响应体、用户身份、认证凭证、完整规则正文和任意业务日志不得
+协议族未来可以在经评审的 per-kind schema 中表达通过、拒绝、RT、异常分类、熔断状态、
+规则切换和 Reporter 自身丢弃计数；**当前 V1 仅冻结** source 健康 / 切换和
+`APPLIED` / `BLOCKED` / `FAILED` 规则执行事件，不包含通用指标或原始 RT 序列。通用
+metrics 需要独立 schema、privacy/cardinality 评审和明确的版本决策，不得通过宽 payload
+提前塞入。业务请求体、响应体、用户身份、认证凭证、完整规则正文和任意业务日志不得
 进入该协议。错误事件只能包含稳定 error class 和不超过 64 bytes 的脱敏 reason；禁止
 原始异常消息、traceback、stack frame、frame locals 或任意 SDK 错误正文。
 
@@ -1389,6 +1399,9 @@ metrics 需要独立 schema、privacy/cardinality 评审和 V2，不得通过宽
   不在请求协程中等待网络恢复；关闭时只在预设 deadline 内 best-effort flush。
 - 生产部署必须使用 mTLS、OAuth client credentials 或等价的实例身份认证，并将
   instance identity 与租户 / 环境隔离绑定；仅本地开发可显式启用 loopback insecure 模式。
+- 当前 V1 transport 文档仍是待签字草案，候选方案为 loopback 明文 + 共享密钥；它不满足
+  上述生产实例认证要求。V1 envelope 冻结不授权跨主机生产上报；在 transport 独立完成
+  owner sign-off、实现与安全验收之前，远程生产 Reporter/Collector 链路必须保持禁用。
 - mTLS 证书重载和 OAuth credential renewal 由 transport 使用的 credential provider
   负责；Reporter 不实现私有 renewal 状态机。rotation 期间若 transport 暂不可用，按
   普通网络中断处理：有界退避、既定 overflow policy 与 dropped 计数，绝不阻塞请求路径。
@@ -1400,7 +1413,7 @@ metrics 需要独立 schema、privacy/cardinality 评审和 V2，不得通过宽
 
 用户已确定以配置中心为线上规则事实来源，控制台需要支持 Nacos 与 Consul 规则编辑后回写，而不是仅修改 Engine 内存。独立管理服务与 per-process Dashboard 分开部署；它通过选定的配置中心发布完整快照，通过实例回执与已接入的指标后端展示生效进度和跨实例趋势。主包不引入 Nacos/Consul SDK、Web 框架或 TSDB。
 
-首页和实例页需要清楚区分 host、container、process、instance、application 范围，展示资源压力、HTTP QPS、业务 TPS、平均 RT/分位数以及规则阻断等变动曲线。未埋点的 TPS、未采集的主机 CPU、缺少 histogram 的 p95/p99 必须显示「未接入/不可用」，不能用 0 或其他指标推断。当前 `MetricRegistry` 的累计计数与累计平均 RT、默认 `SystemMetricSampler` 的有限采样尚不足以交付所有这些曲线；所需的时间序列、指标口径和来源见 [DASHBOARD_CONTROL_PLANE.md](DASHBOARD_CONTROL_PLANE.md)。
+首页和实例页需要清楚区分 host、container、process、instance、application 范围，展示资源压力、HTTP QPS、业务 TPS、平均 RT/分位数以及规则阻断等变动曲线。未埋点的 TPS、未采集的主机 CPU、缺少 histogram 的 p95/p99 必须显示「未接入/不可用」，不能用 0 或其他指标推断。当前 `MetricRegistry` 可从 Engine entry 终态累计 admitted/blocked/success/failure/cancelled 与 RT sum/count，并保留有界延迟 histogram，但仍不是时间序列或窗口查询，也未实现 p95/p99 估算口径；默认 `SystemMetricSampler` 的有限采样同样不足以交付所有曲线。所需的数据范围、质量状态、时间序列和来源见 [DASHBOARD_CONTROL_PLANE.md](DASHBOARD_CONTROL_PLANE.md)。
 
 ## 14. Cluster：全局准入控制面
 
@@ -1917,6 +1930,7 @@ M1 建立基线，后续里程碑只能在批准阈值内回归。首次基线�
 | ADR-SEN-017 | Token 值对象若需远程 lease 字段，只能以可选 additive field 和安全默认值向后兼容扩展 | Accepted |
 | ADR-SEN-018 | 1.x 不支持 WSGI/同步阻塞 Engine；部署与认证边界见 M6.7 评估 | Accepted |
 | ADR-SEN-019 | 规则控制台独立于运行时库；Nacos/Consul 为规则源，权限仅 `metrics:view` 与 `rules:write`；详细接口与实施计划仍待评审 | Accepted（产品边界） |
+| ADR-SEN-020 | Metrics V2 typed reporting、mTLS 身份绑定、durable idempotent ACK、24h raw/30d rollup 与可扩展 SQL adapter boundary | Accepted（产品 owner 授权冻结 2026-10-14；实现/安全/方言验收仍开放） |
 
 后续实现如果需要改变 Accepted 决策，必须先更新本表、说明原因、迁移影响和验证计划，
 不能在代码中静默偏离设计。
