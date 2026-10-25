@@ -5562,7 +5562,7 @@
                             "type": "string",
                             "minLength": 8,
                             "maxLength": 32,
-                            "pattern": "^(?![\\s\\S]{1025})",
+                            "pattern": "^(?![\\s\\S]{33})",
                             "writeOnly": true,
                             "x-max-utf16-code-units": 32
                           }
@@ -8949,7 +8949,7 @@
                             "type": "string",
                             "minLength": 8,
                             "maxLength": 32,
-                            "pattern": "^(?![\\s\\S]{1025})",
+                            "pattern": "^(?![\\s\\S]{33})",
                             "writeOnly": true,
                             "x-max-utf16-code-units": 32
                           },
@@ -9131,7 +9131,7 @@
                         "type": "string",
                         "minLength": 8,
                         "maxLength": 32,
-                        "pattern": "^(?![\\s\\S]{1025})",
+                        "pattern": "^(?![\\s\\S]{33})",
                         "writeOnly": true,
                         "x-max-utf16-code-units": 32
                       }
@@ -11021,7 +11021,7 @@
                     "type": "string",
                     "minLength": 8,
                     "maxLength": 32,
-                    "pattern": "^(?![\\s\\S]{1025})",
+                    "pattern": "^(?![\\s\\S]{33})",
                     "writeOnly": true,
                     "x-max-utf16-code-units": 32
                   }

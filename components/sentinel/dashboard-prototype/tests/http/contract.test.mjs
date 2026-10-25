@@ -19,6 +19,7 @@ import {
   AccountCreateInputSchema,
   AccountRecordSchema,
 } from "../../src/features/identity/api/accountManagementWire";
+import { NewAccountPasswordSchema } from "../../src/features/identity/api/accountPasswordWire";
 import { OWN_PASSWORD_ENDPOINT } from "../../src/features/identity/api/ownPasswordHttp";
 import {
   diffFromWire,
@@ -57,6 +58,48 @@ import {
   ConsoleErrorSchema,
   OpaqueIdentifierSchema,
 } from "../../src/core/api/protocol/common";
+
+test("PASSWORD-CONTRACT: all new-password schemas declare and enforce 8–32 UTF-16 units", () => {
+  const document = createConsoleOpenApi();
+  const requestSchema = (path) =>
+    document.paths[path].post.requestBody.content["application/json"].schema;
+  const commands = requestSchema("/api/v1/accounts/commands").oneOf;
+  const create = commands.find((variant) => variant.properties.kind.const === "create");
+  const reset = commands.find((variant) => variant.properties.kind.const === "reset_password");
+  const fields = [
+    requestSchema("/api/v1/auth/password").properties.newPassword,
+    requestSchema("/api/v1/system/bootstrap/initialize").properties.input.properties.admin
+      .properties.password,
+    create.properties.input.properties.password,
+    reset.properties.password,
+  ];
+  for (const schema of fields) {
+    assert.equal(schema.minLength, 8);
+    assert.equal(schema.maxLength, 32);
+    assert.equal(schema["x-max-utf16-code-units"], 32);
+    assert.equal(schema.writeOnly, true);
+    const pattern = new RegExp(schema.pattern);
+    for (const [value, valid] of [
+      ["a".repeat(7), false],
+      ["a".repeat(8), true],
+      ["a".repeat(32), true],
+      ["a".repeat(33), false],
+      ["😀".repeat(16), true],
+      ["😀".repeat(17), false],
+    ]) {
+      const declared =
+        [...value].length >= schema.minLength &&
+        [...value].length <= schema.maxLength &&
+        pattern.test(value);
+      assert.equal(declared, valid);
+      assert.equal(NewAccountPasswordSchema.safeParse(value).success, valid);
+    }
+  }
+  const login = requestSchema("/api/v1/auth/login").properties.password;
+  const current = requestSchema("/api/v1/auth/password").properties.currentPassword;
+  assert.equal(login.maxLength, 1024);
+  assert.equal(current.maxLength, 1024);
+});
 
 test("CONSOLE-DOC: published contract counts match the runtime registry and generated OpenAPI", () => {
   const document = createConsoleOpenApi();
@@ -133,7 +176,7 @@ test("CONSOLE-MACHINE: same runtime registry yields 68 operations across 64 uniq
   );
   assert.equal(
     createHash("sha256").update(frozenArtifact).digest("hex"),
-    "7dd8b29d722cb18c65735997d5f11bdfe8890a1b7c7c3069448a8d0e62bceea7",
+    "c9c6f08797fc6dc3bf3efa7ed9a0bf753a2f99d7d265a991d1233278c9a31d33",
     "Console API 0.19.0 wire changed; review and advance the contract version explicitly",
   );
   const contract = readFileSync(

@@ -8,7 +8,7 @@ import {
 import { NO_WIRE_BOUNDARY_BLANK } from "../../../core/api/protocol/wireString";
 import { ConfigurationSourceInputSchema } from "../../../shared/api/configurationSourceWire";
 import { WriteOnlySecretSchema } from "../../../shared/api/writeOnlySecretWire";
-import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "../model/passwordPolicy";
+import { NewAccountPasswordSchema } from "./accountPasswordWire";
 import { UsernameSchema } from "./identityAccessWire";
 
 export const BootstrapAuthorizationInputSchema = z.strictObject({
@@ -34,7 +34,7 @@ export const SetupSubmissionSchema = z.strictObject({
   database: SetupStorageSchema,
   admin: z.strictObject({
     username: UsernameSchema,
-    password: WriteOnlySecretSchema.min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
+    password: NewAccountPasswordSchema,
   }),
   source: ConfigurationSourceInputSchema,
 });

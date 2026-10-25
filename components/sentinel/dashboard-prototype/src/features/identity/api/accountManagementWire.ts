@@ -9,10 +9,9 @@ import {
   UtcInstantSchema,
   utf16BoundedString,
 } from "../../../core/api/protocol/common";
-import { WriteOnlySecretSchema } from "../../../shared/api/writeOnlySecretWire";
 import { ACCOUNT_STATUS, IDENTITY_ROLE } from "../model/account";
 import { ACCOUNT_SEARCH_MAX_LENGTH } from "../model/accountManagement";
-import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "../model/passwordPolicy";
+import { NewAccountPasswordSchema } from "./accountPasswordWire";
 import { RoleIdSchema, UsernameSchema } from "./identityAccessWire";
 
 const MAX_ACCOUNT_REVISION = "9223372036854775807";
@@ -60,7 +59,7 @@ export const AccountPageSchema = z.strictObject({
 });
 export const AccountCreateInputSchema = z.strictObject({
   username: UsernameSchema,
-  password: WriteOnlySecretSchema.min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
+  password: NewAccountPasswordSchema,
   roleId: RoleIdSchema,
 });
 export const AccountMutationSchema = z.discriminatedUnion("kind", [
@@ -88,7 +87,7 @@ export const AccountMutationSchema = z.discriminatedUnion("kind", [
     requestKey: RequestKeySchema,
     accountId: OpaqueIdentifierSchema,
     revision: AccountRevisionSchema,
-    password: WriteOnlySecretSchema.min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
+    password: NewAccountPasswordSchema,
   }),
   z.strictObject({
     kind: z.literal("delete"),

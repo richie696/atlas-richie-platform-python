@@ -9,6 +9,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+!components/sentinel/dashboard-prototype/scripts/build/
 develop-eggs/
 dist/
 downloads/

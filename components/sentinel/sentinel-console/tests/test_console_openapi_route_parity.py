@@ -10,8 +10,6 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from atlas_richie.sentinel_console.api.account_commands import (
     _REQUEST_KEY_PATTERN as _ACCOUNT_REQUEST_KEY_PATTERN,
 )
@@ -76,11 +74,11 @@ from atlas_richie.sentinel_console.api.rule_binding_parsing import (
 from atlas_richie.sentinel_console.api.rule_binding_parsing import (
     _REQUIRED as _RULE_BINDING_REQUIRED,
 )
-from atlas_richie.sentinel_console.api.rule_commands import (
-    _REQUEST_KEY as _RULE_REQUEST_KEY_PATTERN,
-)
 from atlas_richie.sentinel_console.api.rule_binding_states import (
     _QUERY_KEYS as _RULE_BINDING_STATES_QUERY_FIELDS,
+)
+from atlas_richie.sentinel_console.api.rule_commands import (
+    _REQUEST_KEY as _RULE_REQUEST_KEY_PATTERN,
 )
 from atlas_richie.sentinel_console.api.rule_load_observations import (
     _QUERY_KEYS as _RULE_LOAD_OBSERVATIONS_QUERY_FIELDS,
@@ -127,6 +125,7 @@ from atlas_richie.sentinel_console.domain.system_protocols import (
     ProtocolBoundary,
     ProtocolCompatibility,
 )
+from httpx import ASGITransport, AsyncClient
 
 _HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 _OPENAPI_PATH = Path(__file__).resolve().parents[2] / "docs" / "protocol"
@@ -135,7 +134,7 @@ _OPENAPI_08_PATH = _OPENAPI_PATH.with_name("console-api-0.8.0.openapi.json")
 _OPENAPI_12_PATH = _OPENAPI_PATH.with_name("console-api-0.12.0.openapi.json")
 _OPENAPI_11_PATH = _OPENAPI_PATH.with_name("console-api-0.11.0.openapi.json")
 _OPENAPI_10_PATH = _OPENAPI_PATH.with_name("console-api-0.10.0.openapi.json")
-_CONTRACT_DOC_PATH = _OPENAPI_PATH.parents[1] / "CONSOLE_API_CONTRACT.md"
+_CONTRACT_DOC_PATH = _OPENAPI_PATH.parents[1] / "contract" / "Console-API-契约.md"
 
 
 def test_openapi_freeze_metadata_matches_console_contract_approval() -> None:
@@ -201,10 +200,37 @@ _NEW_PASSWORD_MIN_UTF16_UNITS = 8
 _NEW_PASSWORD_MAX_UTF16_UNITS = 32
 _LEGACY_PASSWORD_MIN_UTF16_UNITS = 12
 _LEGACY_PASSWORD_MAX_UTF16_UNITS = 1024
-_NEW_PASSWORD_SAMPLE_PLACEHOLDER = "<approved-new-password-sample>"
+_LEGACY_NEW_PASSWORD_SAMPLE = "synthetic-new-password-0123456789"
+_APPROVED_NEW_PASSWORD_SAMPLE = "synthetic-new-password-0123"
 
 # summary / description 是文档字段，不是 wire 形状的一部分。
 _DOCUMENTATION_OPERATION_FIELDS = ("summary", "description")
+
+_APPROVED_AUDIT_ACTIONS = frozenset(
+    {
+        "account-password-reset",
+        "local-admin-password-recovery",
+        "account-delete",
+        "source-delete",
+        "deployment-dependencies-migrated",
+        "reporter-certificate-rotated",
+        "monitoring-source-create",
+        "monitoring-source-update",
+        "monitoring-source-delete",
+        "monitoring-source-enable",
+        "monitoring-source-disable",
+        "host-association-create",
+        "host-association-delete",
+        "target-configure",
+    }
+)
+_APPROVED_ACCOUNT_SEMANTICS = frozenset(
+    {
+        "reset_password requires a single new password and current revision; deletes all target sessions without enabling a disabled account. The current admin may reset their own password, including the built-in admin; confirmed self-reset requires reauthentication. Self-delete remains prohibited.",
+        "delete is a soft deletion: hide the account from directory/detail, reserve its username, revoke sessions and retain audit/publication references. Its final receipt contains only the disabled safe snapshot.",
+        "Built-in accounts cannot be disabled, demoted, deleted, or reset by another admin. The current admin may reset their own built-in password. Self-delete rejects with self_operation; last active admin deletion is prohibited. These checks run in the transaction, independent of UI hints.",
+    }
+)
 
 
 def _widen_new_password_fields(node: object) -> object:
@@ -223,6 +249,8 @@ def _widen_new_password_fields(node: object) -> object:
             node["minLength"] = _LEGACY_PASSWORD_MIN_UTF16_UNITS
             node["maxLength"] = _LEGACY_PASSWORD_MAX_UTF16_UNITS
             node["x-max-utf16-code-units"] = _LEGACY_PASSWORD_MAX_UTF16_UNITS
+            if node.get("pattern") == r"^(?![\s\S]{33})":
+                node["pattern"] = r"^(?![\s\S]{1025})"
         for value in node.values():
             _widen_new_password_fields(value)
     elif isinstance(node, list):
@@ -232,22 +260,38 @@ def _widen_new_password_fields(node: object) -> object:
 
 
 def _normalize_new_password_sample_values(node: object) -> object:
-    """Neutralize narrowed new-password sample values so the approved 0.19.0 delta may change them.
-
-    0.19.0 把新口令从 12–1024 收窄到 8–32 UTF-16 码元，冻结样例里的口令值必须随之收窄，
-    否则样例自身不再满足现行 schema。样例值不是 wire 形状：只要求该字段仍然存在且仍是口令字段，
-    因此把两侧的样例值统一成占位符后再比较（契约 §23：历史兼容门禁按精确路径/值白名单
-    允许本节已批准增量）。
-    """
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if key == "newPassword" and isinstance(value, str):
-                node[key] = _NEW_PASSWORD_SAMPLE_PLACEHOLDER
-            else:
-                _normalize_new_password_sample_values(value)
-    elif isinstance(node, list):
-        for item in node:
-            _normalize_new_password_sample_values(item)
+    """Normalize only the four exact paths and two reviewed synthetic sample values."""
+    paths = [
+        (
+            "requestBody",
+            "content",
+            "application/json",
+            "examples",
+            example,
+            "value",
+            "newPassword",
+        )
+        for example in (
+            "change_own_password_and_reauthenticate",
+            "change_own_password_rejects_wrong_current_password",
+        )
+    ] + [
+        ("x-contract-examples", index, "request", "body", "newPassword")
+        for index in (0, 1)
+    ]
+    for path in paths:
+        parent = node
+        try:
+            for key in path[:-1]:
+                parent = parent[key]
+        except (KeyError, IndexError, TypeError):
+            # The structural comparison must reject missing historical facts.
+            continue
+        if isinstance(parent, dict) and parent.get("newPassword") in (
+            _LEGACY_NEW_PASSWORD_SAMPLE,
+            _APPROVED_NEW_PASSWORD_SAMPLE,
+        ):
+            parent["newPassword"] = _LEGACY_NEW_PASSWORD_SAMPLE
     return node
 
 
@@ -266,26 +310,77 @@ def _list_item_identity(item: object) -> tuple[str, str] | None:
     return None
 
 
-def _project_onto_previous(previous: object, node: object) -> object:
-    """Reduce `node` to exactly the surface `previous` declared.
+def _allowed_list_additions(
+    operation_id: str, location: tuple[str, ...]
+) -> frozenset[str]:
+    """The complete allowlist for changes to existing operations in frozen releases."""
+    if operation_id == "mutateAccount" and location == ("x-semantic-rules",):
+        return _APPROVED_ACCOUNT_SEMANTICS
+    if operation_id == "mutateMonitoringSource" and location == ("x-semantic-rules",):
+        return frozenset(
+            {
+                "Deleting a source referenced by a persisted host association is durably rejected with reason source_in_use."
+            }
+        )
+    prefix = ("responses", "200", "content", "application/json", "schema")
+    if operation_id == "readSystemAudit" and location in {
+        ("parameters", "name=action", "schema", "enum"),
+        (*prefix, "properties", "items", "items", "properties", "action", "enum"),
+        (*prefix, "properties", "query", "properties", "action", "anyOf", "0", "enum"),
+    }:
+        return _APPROVED_AUDIT_ACTIONS
+    index = (
+        "1"
+        if operation_id == "mutateAccount"
+        else "2"
+        if operation_id == "readAccountOperation"
+        else None
+    )
+    if index is not None and location == (
+        *prefix,
+        "oneOf",
+        index,
+        "properties",
+        "reason",
+        "enum",
+    ):
+        return frozenset({"self_operation"})
+    if operation_id in {"mutateMonitoringSource", "readMonitoringSourceOperation"}:
+        status = "202" if operation_id == "mutateMonitoringSource" else "200"
+        if location == (
+            "responses",
+            status,
+            "content",
+            "application/json",
+            "schema",
+            "properties",
+            "reason",
+            "enum",
+        ):
+            return frozenset({"source_in_use"})
+    return frozenset()
 
-    后续 contract 增量带来的新增内容（新增请求变体、新增响应枚举值、新增语义规则、
-    新增响应状态码）在此被移除，剩下的比较因此保持严格：旧版声明过的任何形状变化
-    都会让等值断言失败。
-    """
+
+def _project_onto_previous(
+    previous: object, node: object, operation_id: str, location: tuple[str, ...] = ()
+) -> object:
+    """Remove only approved additions; missing declarations always fail closed."""
     if isinstance(previous, dict) and isinstance(node, dict):
-        projected: dict[str, object] = {}
-        for key, old_value in previous.items():
-            if key not in node:
-                projected[key] = old_value
-                continue
-            projected[key] = _project_onto_previous(old_value, node[key])
-        return projected
+        assert previous.keys() == node.keys(), (operation_id, location, "field drift")
+        return {
+            key: _project_onto_previous(
+                old_value, node[key], operation_id, (*location, key)
+            )
+            for key, old_value in previous.items()
+        }
     if isinstance(previous, list) and isinstance(node, list):
         if all(not isinstance(item, (dict, list)) for item in previous):
-            missing = [value for value in previous if value not in node]
-            assert not missing, f"已声明的值消失了: {missing}"
-            return previous
+            allowed = _allowed_list_additions(operation_id, location)
+            projected = [
+                item for item in node if item in previous or item not in allowed
+            ]
+            assert projected == previous, (operation_id, location, "value drift")
+            return projected
         identities = [_list_item_identity(item) for item in previous]
         if all(identity is not None for identity in identities):
             available = {
@@ -293,22 +388,52 @@ def _project_onto_previous(previous: object, node: object) -> object:
                 for item in node
                 if (identity := _list_item_identity(item)) is not None
             }
-            projected_items: list[object] = []
+            assert len(available) == len(node), (
+                operation_id,
+                location,
+                "duplicate identity",
+            )
+            permitted = (
+                {("kind", "reset_password"), ("kind", "delete")}
+                if operation_id == "mutateAccount"
+                and location
+                == ("requestBody", "content", "application/json", "schema", "oneOf")
+                else set()
+            )
+            assert set(available) - set(identities) <= permitted, (
+                operation_id,
+                location,
+                "unapproved variant",
+            )
+            result = []
             for item, identity in zip(previous, identities):
                 assert identity is not None
-                counterpart = available.get(identity)
-                if counterpart is None:
-                    projected_items.append(item)
-                    continue
-                projected_items.append(_project_onto_previous(item, counterpart))
-            return projected_items
-        projected_items = []
-        for index, item in enumerate(previous):
-            if index >= len(node):
-                projected_items.append(item)
-                continue
-            projected_items.append(_project_onto_previous(item, node[index]))
-        return projected_items
+                assert identity in available, (
+                    operation_id,
+                    location,
+                    identity,
+                    "missing variant",
+                )
+                result.append(
+                    _project_onto_previous(
+                        item,
+                        available[identity],
+                        operation_id,
+                        (*location, "=".join(identity)),
+                    )
+                )
+            return result
+        assert len(previous) == len(node), (
+            operation_id,
+            location,
+            "array length drift",
+        )
+        return [
+            _project_onto_previous(
+                item, node[index], operation_id, (*location, str(index))
+            )
+            for index, item in enumerate(previous)
+        ]
     return node
 
 
@@ -318,7 +443,7 @@ def _assert_historical_operation_compatible(
     path: str,
     method: str,
 ) -> None:
-    """Frozen operations stay wire-equivalent; only approved 0.19.0 deltas may differ.
+    """Frozen operations retain every declaration except enumerated approved deltas.
 
     0.19.0（契约文档 §23）对**既有** operation 做了两类已批准改动：
 
@@ -326,19 +451,35 @@ def _assert_historical_operation_compatible(
        （此前 12–1024）。当前密码与连接凭证保留各自上限。
     2. **账号生命周期扩展**：新增请求变体（`reset_password` / `delete`）、响应原因新增
        `self_operation`，以及新增语义规则。
+    3. **既有冻结增量**：审计动作的明确扩展，以及 §22 批准的监控源 `source_in_use`
+       拒绝原因与对应语义规则，仅在指定 operation/schema 路径允许。
 
     除此之外，旧 operation 声明过的每一个请求变体、响应枚举值、语义规则、参数和
     schema 形状都必须还在；任何丢失或形状变化都判失败。
     """
-    comparable = _widen_new_password_fields(copy.deepcopy(current))
-    comparable = _normalize_new_password_sample_values(comparable)
-    previous = _normalize_new_password_sample_values(copy.deepcopy(previous))
+    comparable = copy.deepcopy(current)
+    if (path, method) in {
+        ("/api/v1/system/bootstrap/initialize", "post"),
+        ("/api/v1/accounts/commands", "post"),
+        ("/api/v1/auth/password", "post"),
+    }:
+        comparable = _widen_new_password_fields(comparable)
+    if (path, method) == ("/api/v1/auth/password", "post"):
+        comparable = _normalize_new_password_sample_values(comparable)
+        previous = _normalize_new_password_sample_values(copy.deepcopy(previous))
     declared = {
         key: value
         for key, value in previous.items()
         if key not in _DOCUMENTATION_OPERATION_FIELDS
     }
-    projected = _project_onto_previous(declared, comparable)
+    comparable = {
+        key: value
+        for key, value in comparable.items()
+        if key not in _DOCUMENTATION_OPERATION_FIELDS
+    }
+    projected = _project_onto_previous(
+        declared, comparable, str(previous["operationId"])
+    )
     assert projected == declared, (path, method)
 
 
@@ -644,8 +785,8 @@ def test_openapi_declares_the_complete_operation_permission_matrix() -> None:
         "mutateRegisteredSource": ("admin", ()),
         "readRegisteredSourceOperation": ("admin", ()),
         "checkMonitoringSource": ("admin", ()),
-            "mutateMonitoringSource": ("admin", ()),
-            "readMonitoringSourceOperation": ("admin", ()),
+        "mutateMonitoringSource": ("admin", ()),
+        "readMonitoringSourceOperation": ("admin", ()),
         "readMonitoringSources": (None, ()),
         "readMonitoringSource": ("admin", ()),
         "createRuleBinding": ("admin", ("rules:write",)),
@@ -1447,16 +1588,33 @@ def test_observation_and_rule_openapi_query_parameters_match_runtime_allowlists(
         "readAgentReportingProtocolObservations": {"page", "pageSize"},
         "readIncidentEventProtocolObservations": {"page", "pageSize"},
         "readRuleBindings": _RULE_BINDING_REQUIRED | _RULE_BINDING_OPTIONAL,
-        "readRuleCatalog": {"environmentId", "appId", "kind", "search", "page", "pageSize"},
+        "readRuleCatalog": {
+            "environmentId",
+            "appId",
+            "kind",
+            "search",
+            "page",
+            "pageSize",
+        },
         "readRuleBindingObservedStates": _RULE_BINDING_STATES_QUERY_FIELDS,
         "readRuleLoadObservations": _RULE_LOAD_OBSERVATIONS_QUERY_FIELDS,
         "readRulePublicationReceipts": {"page", "pageSize"},
         "readHostMetrics": {"from", "to", "stepMs"},
         "readHostAssociations": {
-            "environmentId", "sourceId", "appId", "instanceId", "page", "pageSize"
+            "environmentId",
+            "sourceId",
+            "appId",
+            "instanceId",
+            "page",
+            "pageSize",
         },
         "readRuleLoadObservationHistory": {
-            "environmentId", "appId", "bindingId", "instanceId", "page", "pageSize"
+            "environmentId",
+            "appId",
+            "bindingId",
+            "instanceId",
+            "page",
+            "pageSize",
         },
     }
     operations = {
