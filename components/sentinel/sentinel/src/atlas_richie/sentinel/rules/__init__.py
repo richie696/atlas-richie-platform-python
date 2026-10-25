@@ -18,12 +18,20 @@ from __future__ import annotations
 from .index import IndexedRule, RuleIndex
 from .repository import EventSubscriber, RuleRepository
 from .selector import ResourceSelector, SelectorKind
-from .snapshot import RuleSnapshot, RuleSnapshotAppliedEvent, RuleVersion
+from .snapshot import (
+    RuleSnapshot,
+    RuleSnapshotAppliedEvent,
+    RuleTargetKind,
+    RuleTargetProvenance,
+    RuleVersion,
+)
 
 __all__ = [
     "RuleVersion",
     "RuleSnapshot",
     "RuleSnapshotAppliedEvent",
+    "RuleTargetKind",
+    "RuleTargetProvenance",
     "ResourceSelector",
     "SelectorKind",
     "IndexedRule",

@@ -42,21 +42,19 @@ Design points:
 
 from __future__ import annotations
 
-import asyncio
 import contextvars
-import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from ..errors import SentinelError
 from ..model.argument import InvocationArguments
 from ..model.context import SentinelContext
 from ..model.decision import SlotLease
-from ..model.enums import EngineState
-from ..model.outcome import Outcome, OutcomeKind
+from ..model.outcome import Outcome
 from ..model.resource import Resource
-from ..errors import SentinelError
 
 if TYPE_CHECKING:
+    from .slot import Slot
     from .sentinel_engine import SentinelEngine
 
 
@@ -94,28 +92,35 @@ class EntryLease:
     """
 
     _leases: list[tuple[int, SlotLease]] = field(default_factory=list)
+    _entered_slots: list["Slot"] = field(default_factory=list)
     _released: bool = False
     _release_errors: list[BaseException] = field(default_factory=list)
+    _started_at_ns: int | None = None
     # Per-entry contextvars token: stored on the lease (NOT on the
     # Engine) so that concurrent entries in different asyncio.Tasks
     # do not clobber each other's tokens. Reset in
     # ``SentinelEngine._finalize_entry``.
     _context_token: contextvars.Token | None = None
 
-    def push(self, order: int, lease: SlotLease) -> None:
+    def push(self, slot: "Slot", lease: SlotLease) -> None:
         """中文
         ----
-        追加一个 Slot 发放的 lease。Engine 在每个 Slot enter 成功后调用。
+        追加 Slot 发放的 lease。Engine 在每个 Slot enter 成功后调用。
 
         English
         --------
-        Push a lease returned by a Slot. Called by the Engine after
-        each Slot ``enter`` success.
+        Push a lease and its Slot after the Slot ``enter`` succeeds.
         """
         if self._released:
             # Entry 已经退出,不应该再 push;忽略但不抛
             return
-        self._leases.append((order, lease))
+        self._leases.append((slot.order, lease))
+        self._entered_slots.append(slot)
+
+    @property
+    def entered_slots(self) -> tuple["Slot", ...]:
+        """Return Slots that admitted this entry, in execution order."""
+        return tuple(self._entered_slots)
 
     @property
     def leases(self) -> list[tuple[int, SlotLease]]:
@@ -259,7 +264,7 @@ class EntryRequest:
                 args=self._args,
                 lease=self._lease,
             )
-        except SentinelError as e:
+        except SentinelError:
             # Slot 拒绝 / Engine lifecycle 错误:
             # Engine 内部已构造 BLOCKED outcome,直接挂到 entry 上后
             # 重抛 — 用户既可以 except FlowBlocked,也可以读 entry.outcome

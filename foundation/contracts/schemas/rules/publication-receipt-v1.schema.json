@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-richie.dev/contracts/sentinel/rule-publication-receipt/v1/schema.json",
+  "title": "Atlas Richie Sentinel Rule Publication Receipt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "receipt_id",
+    "process_epoch",
+    "sequence",
+    "binding_id",
+    "publication_id",
+    "target_version_id",
+    "target_payload_sha256",
+    "state",
+    "reason",
+    "source_revision",
+    "observed_at"
+  ],
+  "properties": {
+    "protocol_version": {
+      "const": "atlas-richie.sentinel.rule-publication-receipt/v1"
+    },
+    "receipt_id": { "$ref": "#/$defs/uuidV4" },
+    "process_epoch": { "$ref": "#/$defs/uuidV4" },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "binding_id": { "$ref": "#/$defs/identifier" },
+    "publication_id": { "$ref": "#/$defs/identifier" },
+    "target_version_id": { "$ref": "#/$defs/identifier" },
+    "target_payload_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "state": {
+      "enum": ["applied", "pending", "failed", "unknown", "restart_required"]
+    },
+    "reason": {
+      "enum": [
+        "decode_rejected",
+        "digest_mismatch",
+        "apply_failed",
+        "source_unavailable",
+        "stale_sequence",
+        "restart_required",
+        null
+      ]
+    },
+    "source_revision": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[\\x20-\\x7E]+$" }
+      ]
+    },
+    "observed_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"
+    },
+    "uuidV4": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "failed" } } },
+      "then": {
+        "properties": {
+          "reason": {
+            "enum": ["decode_rejected", "digest_mismatch", "apply_failed", "source_unavailable", "stale_sequence"]
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "state": { "const": "restart_required" } } },
+      "then": { "properties": { "reason": { "const": "restart_required" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": { "enum": ["applied", "pending", "unknown"] }
+        }
+      },
+      "then": { "properties": { "reason": { "type": "null" } } }
+    }
+  ]
+}

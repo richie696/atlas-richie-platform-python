@@ -1,0 +1,126 @@
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: sentinel-t003-console-nodeport
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 1
+        container:
+          image: __SENTINEL_REGISTRY_HOST__/sentinel-acceptance/envoy@sha256:eb2c01c13125d1629637cb4e4cce7207009fb7cc2c8027f9742758549d15b6f4
+      envoyService:
+        type: NodePort
+        externalTrafficPolicy: Cluster
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: sentinel-t003-console
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: sentinel-t003-console-nodeport
+    namespace: envoy-gateway-system
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: sentinel-t003-console
+  namespace: sentinel-t003-console-20261019
+  labels:
+    app.kubernetes.io/part-of: atlas-richie-sentinel-acceptance
+spec:
+  gatewayClassName: sentinel-t003-console
+  listeners:
+    - name: https
+      hostname: sentinel-t003.local
+      port: 8443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: sentinel-t003-console-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: sentinel-t003-console
+  namespace: sentinel-t003-console-20261019
+  labels:
+    app.kubernetes.io/part-of: atlas-richie-sentinel-acceptance
+spec:
+  parentRefs:
+    - name: sentinel-t003-console
+      sectionName: https
+  hostnames:
+    - sentinel-t003.local
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: console
+          port: 8000
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: sentinel-t003-test-selfsigned
+  namespace: sentinel-t003-console-20261019
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sentinel-t003-test-ca
+  namespace: sentinel-t003-console-20261019
+spec:
+  isCA: true
+  commonName: sentinel-t003-test-ca
+  secretName: sentinel-t003-test-ca
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: sentinel-t003-test-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: sentinel-t003-test-ca
+  namespace: sentinel-t003-console-20261019
+spec:
+  ca:
+    secretName: sentinel-t003-test-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sentinel-t003-console-tls
+  namespace: sentinel-t003-console-20261019
+spec:
+  secretName: sentinel-t003-console-tls
+  commonName: sentinel-t003.local
+  dnsNames:
+    - sentinel-t003.local
+    - sentinel-t003-rotated.local
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: sentinel-t003-test-ca
+    kind: Issuer
+    group: cert-manager.io

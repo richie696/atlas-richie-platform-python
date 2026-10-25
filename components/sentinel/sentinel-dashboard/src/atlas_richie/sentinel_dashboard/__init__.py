@@ -1,326 +1,165 @@
-"""Sentinel Dashboard (M5.1) — per-process embedded 管理 API。
+"""Atlas Richie Sentinel Dashboard v2 (M6.6).
 
 中文
 ----
-``SentinelDashboard`` 是 per-process 控制面,提供 REST 端点:
+per-process 嵌入管理 API + HTML UI (Web 管理页面).
 
-- ``GET /health`` — 进程健康
-- ``GET /metrics`` — MetricRegistry 全部 snapshot
-- ``GET /rules`` — RuleRepository 当前生效规则
-- ``GET /rules/<rule_id>`` — 单个 rule 详情
-- ``GET /state`` — Engine 状态 / in-flight / last_error
-- ``POST /admin/rules/reload`` — 触发 RuleSource 重新拉(只读默认
-  禁用,需配 ``allow_admin=True``)
-- ``POST /admin/breaker/<rule_id>/reset`` — DegradeSlot.force_reset
+``SentinelDashboard`` (Facade) 聚合 ``SentinelEngine`` /
+``MetricRegistry`` / ``RuleRepository`` (主包 1.0 公共 API) 为单一管理
+入口, 启动 uvicorn ASGI server 暴露 6 JSON API + 6 HTML 页面 + 1 SSE:
 
-设计要点(PLANNING §M5.1 / §M5.2):
+- JSON API (backward compat):
+  - ``GET /health`` — 进程健康
+  - ``GET /metrics`` — MetricRegistry snapshots
+  - ``GET /rules`` — 当前生效规则
+  - ``GET /rules/{rule_id}`` — 单个 rule
+  - ``GET /state`` — engine state + in_flight + last_error + rules_count
+  - ``POST /admin/rules/reload`` — 触发 RuleSource reload
+  - ``POST /admin/breaker/{rule_id}/reset`` — DegradeSlot.force_reset
+- HTML 页面:
+  - ``GET /`` — dashboard 总览
+  - ``GET /rules`` — 规则列表
+  - ``GET /rules/{rule_id}`` — 规则详情
+  - ``GET /metrics`` — 实时 metrics (SSE 5s 推送)
+  - ``GET /settings`` — dashboard 配置
+  - ``GET /audit`` — 审计日志
+- SSE:
+  - ``GET /sse/metrics`` — 5s 推一次 metrics snapshot
+- Static:
+  - ``/static/*`` — CSS / JS / favicon
 
-- **默认 loopback + read-only**:bind ``127.0.0.1``,admin 端点返回 403
-  除非 ``allow_admin=True``(避免误用把生产服务暴露)
-- **写操作认证授权审计**:admin 操作要求 ``auth_token`` 匹配
-  ``admin_token``;记录审计日志到 ``self._audit_log``
-- **零 3rd-party**:std http.server(用 ``socketserver`` + ``ThreadingMixIn``,
-  简单同步;生产建议换 ``uvicorn`` / ``starlette``,M5.4 加迁移)
-- **per-process**:每个 SentinelEngine 1 个 Dashboard;不跨进程
+设计要点 (M6.6 v2, 详见 ``docs/process/M6.6-DASHBOARD-AGGREGATOR-EVAL.md``):
+
+- **Facade**: 1 个 ``SentinelDashboard`` 对象 = 1 个 admin 入口
+- **Decorator**: admin 鉴权 + audit log 中间件 (Starlette Middleware)
+- **依赖 (extension wheel, 主包 0 3rd-party 不变)**:
+  - Starlette + Jinja2 + uvicorn (开发) / hypercorn (生产, optional)
+- **Bind**: 127.0.0.1 默认 (loopback, M6.7 ADR-SEN-018 决策一致)
+- **不做**:
+  - 不出 ``sentinel-dashboard-aggregator`` (跨进程聚合, 留 1.x 候选)
+  - 不出 Collector Python (Java/Go 服务端独立仓)
 
 English
 --------
-Sentinel Dashboard (M5.1) — per-process embedded admin API.
+Per-process embedded admin API + HTML UI (Web admin page).
 
-``SentinelDashboard`` is the per-process control plane, exposes REST
-endpoints:
+``SentinelDashboard`` is a Facade aggregating ``SentinelEngine`` /
+``MetricRegistry`` / ``RuleRepository`` into a single admin entry,
+running uvicorn ASGI server exposing 6 JSON APIs + 6 HTML pages +
+1 SSE + static files.
 
-- ``GET /health`` — process health.
-- ``GET /metrics`` — all MetricRegistry snapshots.
-- ``GET /rules`` — current active rules from RuleRepository.
-- ``GET /rules/<rule_id>`` — single rule details.
-- ``GET /state`` — Engine state / in-flight / last_error.
-- ``POST /admin/rules/reload`` — trigger RuleSource re-pull
-  (read-only by default; needs ``allow_admin=True``).
-- ``POST /admin/breaker/<rule_id>/reset`` — DegradeSlot.force_reset.
-
-Design points (PLANNING §M5.1 / §M5.2):
-
-- **Default loopback + read-only**: bind ``127.0.0.1``; admin
-  endpoints return 403 unless ``allow_admin=True``.
-- **Write auth + audit**: admin ops require ``auth_token`` matches
-  ``admin_token``; logged to ``self._audit_log``.
-- **Zero 3rd-party**: stdlib http.server (socketserver +
-  ThreadingMixIn); production should swap to uvicorn / starlette
-  (M5.4 migration).
-- **per-process**: 1 Dashboard per SentinelEngine; not cross-process.
+Designed for per-process use: 1 engine + 1 dashboard, loopback bind
+by default. Cross-process aggregator is deferred to 1.x candidate.
 """
-
 from __future__ import annotations
 
-import json
-import threading
+import asyncio
 from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
-from urllib.parse import urlparse
 
-from atlas_richie.sentinel.engine import SentinelEngine
-from atlas_richie.sentinel.model import EngineState
-from atlas_richie.sentinel.metrics import MetricRegistry
-from atlas_richie.sentinel.rules.repository import RuleRepository
-from atlas_richie.sentinel.source.rule_source import RuleSource
-from atlas_richie.sentinel.slots.degrade import DegradeSlot
-
-
-@dataclass(slots=True)
-class _AuditEntry:
-    """中文
-    ----
-    审计日志条目。
-
-    English
-    --------
-    Audit log entry.
-    """
-
-    at_ns: int
-    op: str
-    actor: str
-    detail: str
+from .app import build_app
+from .state import DashboardState
 
 
 @dataclass(slots=True)
 class SentinelDashboard:
-    """中文
+    """per-process Web 管理页面 (HTML + JSON).
+
+    中文
     ----
-    per-process 管理 API。
+    ``start()`` 在后台 task 启动 uvicorn server (loopback only by
+    default). ``aclose()`` 优雅关闭 (drain + cancel task).
+
+    1 个 ``SentinelDashboard`` 实例 = 1 个 Facade. 不支持同进程多
+    dashboard (port 冲突 + 1 engine 1 dashboard 是 1.0 设计).
 
     English
     --------
-    Per-process admin API.
+    ``start()`` launches uvicorn server in background task (loopback
+    only by default). ``aclose()`` graceful shutdown.
+
+    1 ``SentinelDashboard`` instance = 1 Facade. Multiple dashboards
+    in same process not supported (port conflict + 1-engine-1-dashboard
+    is 1.0 design).
     """
 
-    engine: SentinelEngine
-    metric_registry: MetricRegistry
-    rule_repository: RuleRepository
-    rule_source: Optional[RuleSource] = None
-    degrade_slot: Optional[DegradeSlot] = None
+    engine: Any  # SentinelEngine
+    metric_registry: Any  # MetricRegistry
+    rule_repository: Any  # RuleRepository
+    rule_source: Optional[Any] = None  # RuleSource (admin reload 用)
+    degrade_slot: Optional[Any] = None  # DegradeSlot (admin reset 用)
     host: str = "127.0.0.1"
     port: int = 8719
     allow_admin: bool = False
     admin_token: str = ""
     audit_log: list = field(default_factory=list)
+    _state: Optional[DashboardState] = field(default=None, init=False, repr=False)
+    _app: Any = field(default=None, init=False, repr=False)
     _server: Any = field(default=None, init=False, repr=False)
-    _thread: Any = field(default=None, init=False, repr=False)
+    _task: Optional[asyncio.Task] = field(default=None, init=False, repr=False)
 
-    def _audit(self, op: str, actor: str, detail: str) -> None:
-        import time
-        self.audit_log.append(
-            _AuditEntry(at_ns=time.time_ns(), op=op, actor=actor, detail=detail)
-        )
-        # Cap audit log to last 1000 entries
-        if len(self.audit_log) > 1000:
-            self.audit_log = self.audit_log[-1000:]
-
-    def _check_admin(self, auth_header: str) -> tuple[bool, str]:
-        """中文
-        ----
-        检查 admin token;失败返 (False, "Forbidden")。
-
-        English
-        --------
-        Check admin token; fail returns (False, "Forbidden").
-        """
-        if not self.allow_admin:
-            return False, "admin disabled"
-        if not self.admin_token:
-            return False, "admin not configured"
-        # Expect "Authorization: Bearer <token>"
-        if not auth_header.startswith("Bearer "):
-            return False, "missing bearer"
-        if auth_header[len("Bearer "):] != self.admin_token:
-            return False, "invalid token"
-        return True, "ok"
-
-    def start(self) -> None:
-        """中文
-        ----
-        启动 HTTP server(后台线程);绑 ``127.0.0.1`` 默认。
-
-        English
-        --------
-        Start HTTP server (background thread); bind ``127.0.0.1`` by
-        default.
-        """
-        if self._server is not None:
+    async def start(self) -> None:
+        """启动 ASGI server (后台 task)."""
+        if self._task is not None:
             return
-        outer = self
+        import uvicorn
 
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, format, *args):  # noqa: A002
-                return  # suppress default logging
-
-            def do_GET(self):  # noqa: N802
-                self._handle("GET")
-
-            def do_POST(self):  # noqa: N802
-                self._handle("POST")
-
-            def _handle(self, method: str) -> None:
-                parsed = urlparse(self.path)
-                path = parsed.path
-                if method == "GET":
-                    body, status = self._dispatch_get(path)
-                else:
-                    auth = self.headers.get("Authorization", "")
-                    ok, reason = outer._check_admin(auth)
-                    if not ok:
-                        body = json.dumps({"error": reason}).encode()
-                        self._send(status=403, body=body)
-                        outer._audit("denied", self.client_address[0], f"{method} {path}")
-                        return
-                    body, status = self._dispatch_post(path)
-                    outer._audit(
-                        "admin",
-                        self.client_address[0],
-                        f"{method} {path}",
-                    )
-                self._send(status=status, body=body)
-
-            def _send(self, *, status: int, body: bytes) -> None:
-                self.send_response(status)
-                self.send_header("content-type", "application/json")
-                self.send_header("content-length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-            def _dispatch_get(self, path: str) -> tuple[bytes, int]:
-                if path == "/health":
-                    return (
-                        json.dumps(
-                            {
-                                "status": "ok",
-                                "engine_state": outer.engine.state.value,
-                                "in_flight": outer.engine.in_flight,
-                            }
-                        ).encode(),
-                        200,
-                    )
-                if path == "/metrics":
-                    snaps = outer.metric_registry.iter_snapshots()
-                    return (
-                        json.dumps(
-                            [
-                                {
-                                    "labels": dict(snap.labels),
-                                    "admitted": snap.admitted,
-                                    "blocked": snap.blocked,
-                                    "succeeded": snap.succeeded,
-                                    "failed": snap.failed,
-                                    "cancelled": snap.cancelled,
-                                    "avg_rt_ns": snap.avg_rt_ns,
-                                }
-                                for snap in snaps
-                            ]
-                        ).encode(),
-                        200,
-                    )
-                if path == "/rules":
-                    return (
-                        json.dumps(
-                            dict(
-                                outer.rule_repository.current_index.snapshot_rules()
-                            ),
-                            default=str,
-                        ).encode(),
-                        200,
-                    )
-                if path.startswith("/rules/"):
-                    rid = path[len("/rules/"):]
-                    rules = outer.rule_repository.current_index.snapshot_rules()
-                    if rid in rules:
-                        return (
-                            json.dumps({rid: rules[rid]}, default=str).encode(),
-                            200,
-                        )
-                    return (
-                        json.dumps({"error": "rule not found"}).encode(),
-                        404,
-                    )
-                if path == "/state":
-                    return (
-                        json.dumps(
-                            {
-                                "engine_state": outer.engine.state.value,
-                                "in_flight": outer.engine.in_flight,
-                                "last_error": (
-                                    str(outer.engine.last_error)
-                                    if outer.engine.last_error
-                                    else None
-                                ),
-                                "rules_count": len(
-                                    outer.rule_repository.current_index
-                                ),
-                            }
-                        ).encode(),
-                        200,
-                    )
-                return (
-                    json.dumps({"error": "not found", "path": path}).encode(),
-                    404,
-                )
-
-            def _dispatch_post(self, path: str) -> tuple[bytes, int]:
-                if path == "/admin/rules/reload":
-                    if outer.rule_source is None:
-                        return (
-                            json.dumps({"error": "no rule_source configured"}).encode(),
-                            400,
-                        )
-                    snap = outer.rule_source.latest()
-                    if snap is None:
-                        return (
-                            json.dumps({"error": "no snapshot"}).encode(),
-                            500,
-                        )
-                    applied = outer.rule_repository.apply_snapshot(snap)
-                    return (
-                        json.dumps({"applied": applied}).encode(),
-                        200 if applied else 500,
-                    )
-                if path.startswith("/admin/breaker/") and path.endswith("/reset"):
-                    rid = path[len("/admin/breaker/"):-len("/reset")]
-                    if outer.degrade_slot is None:
-                        return (
-                            json.dumps({"error": "no degrade_slot"}).encode(),
-                            400,
-                        )
-                    outer.degrade_slot.force_reset(rid)
-                    return (
-                        json.dumps({"reset": rid}).encode(),
-                        200,
-                    )
-                return (
-                    json.dumps({"error": "not found", "path": path}).encode(),
-                    404,
-                )
-
-        self._server = ThreadingHTTPServer((self.host, self.port), Handler)
-        self._thread = threading.Thread(
-            target=self._server.serve_forever, daemon=True, name="sentinel-dashboard"
+        self._state = DashboardState(
+            engine=self.engine,
+            metric_registry=self.metric_registry,
+            rule_repository=self.rule_repository,
+            rule_source=self.rule_source,
+            degrade_slot=self.degrade_slot,
+            host=self.host,
+            port=self.port,
+            allow_admin=self.allow_admin,
+            admin_token=self.admin_token,
+            audit_log=self.audit_log,
         )
-        self._thread.start()
+        self._app = build_app(self._state)
+        # 把 state 注入 app.state, route handlers 从 request.app.state.dashboard 拿
+        self._app.state.dashboard = self._state
+        config = uvicorn.Config(
+            self._app,
+            host=self.host,
+            port=self.port,
+            log_level="warning",
+            access_log=False,
+            lifespan="on",
+        )
+        self._server = uvicorn.Server(config)
+        self._task = asyncio.create_task(
+            self._server.serve(), name="sentinel-dashboard"
+        )
+        # 等 server 启动 (poll 状态)
+        for _ in range(100):  # max 5s
+            await asyncio.sleep(0.05)
+            if self._server.started:
+                return
+        # 启动失败
+        if not self._server.started:
+            await self.aclose()
+            raise RuntimeError(
+                f"SentinelDashboard failed to start on {self.host}:{self.port}"
+            )
 
-    def stop(self) -> None:
-        """中文
-        ----
-        停止 HTTP server(幂等)。
-
-        English
-        --------
-        Stop HTTP server (idempotent).
-        """
+    async def aclose(self) -> None:
+        """关闭 ASGI server (graceful)."""
         if self._server is not None:
-            self._server.shutdown()
-            self._server.server_close()
-            self._server = None
-            self._thread = None
+            self._server.should_exit = True
+        if self._task is not None:
+            try:
+                await asyncio.wait_for(self._task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                self._task.cancel()
+                try:
+                    await self._task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            self._task = None
+        self._server = None
+        self._app = None
+        self._state = None
 
 
-__all__ = ["SentinelDashboard", "_AuditEntry"]
+__all__ = ["SentinelDashboard", "DashboardState"]

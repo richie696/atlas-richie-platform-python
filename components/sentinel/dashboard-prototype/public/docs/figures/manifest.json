@@ -1,0 +1,200 @@
+{
+  "viewport": {
+    "width": 1280,
+    "height": 900
+  },
+  "figures": [
+    {
+      "name": "overview",
+      "locale": "zh-CN",
+      "path": "docs/figures/zh-CN/overview.png",
+      "bytes": 303241,
+      "digest": "b737d98895af6923",
+      "converged": true
+    },
+    {
+      "name": "applications",
+      "locale": "zh-CN",
+      "path": "docs/figures/zh-CN/applications.png",
+      "bytes": 249850,
+      "digest": "50cc7b8d858f8b4b",
+      "converged": true
+    },
+    {
+      "name": "hosts",
+      "locale": "zh-CN",
+      "path": "docs/figures/zh-CN/hosts.png",
+      "bytes": 159358,
+      "digest": "60db94cb20848e0c",
+      "converged": true
+    },
+    {
+      "name": "rules",
+      "locale": "zh-CN",
+      "path": "docs/figures/zh-CN/rules.png",
+      "bytes": 254276,
+      "digest": "a90b83e9308b7564",
+      "converged": true
+    },
+    {
+      "name": "realtime",
+      "locale": "zh-CN",
+      "path": "docs/figures/zh-CN/realtime.png",
+      "bytes": 287724,
+      "digest": "6a9cd18f1de2811e",
+      "converged": true
+    },
+    {
+      "name": "faults",
+      "locale": "zh-CN",
+      "path": "docs/figures/zh-CN/faults.png",
+      "bytes": 405887,
+      "digest": "f229b4153b9a1796",
+      "converged": true
+    },
+    {
+      "name": "system-connections",
+      "locale": "zh-CN",
+      "path": "docs/figures/zh-CN/system-connections.png",
+      "bytes": 334788,
+      "digest": "563b1e24f964aae5",
+      "converged": true
+    },
+    {
+      "name": "accounts",
+      "locale": "zh-CN",
+      "path": "docs/figures/zh-CN/accounts.png",
+      "bytes": 209467,
+      "digest": "8ce09fe92fefea73",
+      "converged": true
+    },
+    {
+      "name": "overview",
+      "locale": "en-US",
+      "path": "docs/figures/en-US/overview.png",
+      "bytes": 314176,
+      "digest": "57271119d9117af5",
+      "converged": true
+    },
+    {
+      "name": "applications",
+      "locale": "en-US",
+      "path": "docs/figures/en-US/applications.png",
+      "bytes": 247788,
+      "digest": "a929aaef6bae13a1",
+      "converged": true
+    },
+    {
+      "name": "hosts",
+      "locale": "en-US",
+      "path": "docs/figures/en-US/hosts.png",
+      "bytes": 155867,
+      "digest": "153664c72d2642be",
+      "converged": true
+    },
+    {
+      "name": "rules",
+      "locale": "en-US",
+      "path": "docs/figures/en-US/rules.png",
+      "bytes": 244193,
+      "digest": "07e6e62e5ac2ed43",
+      "converged": true
+    },
+    {
+      "name": "realtime",
+      "locale": "en-US",
+      "path": "docs/figures/en-US/realtime.png",
+      "bytes": 296531,
+      "digest": "0aeb86600b7f6d0b",
+      "converged": true
+    },
+    {
+      "name": "faults",
+      "locale": "en-US",
+      "path": "docs/figures/en-US/faults.png",
+      "bytes": 358608,
+      "digest": "d802a93cb7ae2d40",
+      "converged": true
+    },
+    {
+      "name": "system-connections",
+      "locale": "en-US",
+      "path": "docs/figures/en-US/system-connections.png",
+      "bytes": 339058,
+      "digest": "33b947b67c2b6afc",
+      "converged": true
+    },
+    {
+      "name": "accounts",
+      "locale": "en-US",
+      "path": "docs/figures/en-US/accounts.png",
+      "bytes": 206413,
+      "digest": "7e07e6c26992fe18",
+      "converged": true
+    },
+    {
+      "name": "overview",
+      "locale": "ja-JP",
+      "path": "docs/figures/ja-JP/overview.png",
+      "bytes": 319757,
+      "digest": "1d70677b30831f05",
+      "converged": true
+    },
+    {
+      "name": "applications",
+      "locale": "ja-JP",
+      "path": "docs/figures/ja-JP/applications.png",
+      "bytes": 262277,
+      "digest": "5a0ffcc90109a36d",
+      "converged": true
+    },
+    {
+      "name": "hosts",
+      "locale": "ja-JP",
+      "path": "docs/figures/ja-JP/hosts.png",
+      "bytes": 167057,
+      "digest": "3b9f5c9f7a221d3f",
+      "converged": true
+    },
+    {
+      "name": "rules",
+      "locale": "ja-JP",
+      "path": "docs/figures/ja-JP/rules.png",
+      "bytes": 261621,
+      "digest": "f94b9c0663fcb407",
+      "converged": true
+    },
+    {
+      "name": "realtime",
+      "locale": "ja-JP",
+      "path": "docs/figures/ja-JP/realtime.png",
+      "bytes": 305881,
+      "digest": "60e4957406b0cbc4",
+      "converged": true
+    },
+    {
+      "name": "faults",
+      "locale": "ja-JP",
+      "path": "docs/figures/ja-JP/faults.png",
+      "bytes": 415394,
+      "digest": "1981ccde87213642",
+      "converged": true
+    },
+    {
+      "name": "system-connections",
+      "locale": "ja-JP",
+      "path": "docs/figures/ja-JP/system-connections.png",
+      "bytes": 347533,
+      "digest": "d640914abec10d5e",
+      "converged": true
+    },
+    {
+      "name": "accounts",
+      "locale": "ja-JP",
+      "path": "docs/figures/ja-JP/accounts.png",
+      "bytes": 223315,
+      "digest": "193bb1f955b480ca",
+      "converged": true
+    }
+  ]
+}

@@ -73,11 +73,12 @@ header matching), `_freeze_headers` (mapping freeze),
 from __future__ import annotations
 
 import json
-from secrets import token_hex
+import ssl
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
+from secrets import token_hex
 from types import MappingProxyType
-from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any, Mapping, Sequence
 from urllib.parse import urlencode
 
@@ -141,7 +142,10 @@ _UNSET = object()
 
 def _freeze_headers(headers: Mapping[str, str] | None) -> Mapping[str, str]:
     values = dict(headers or {})
-    if any(not isinstance(name, str) or not isinstance(value, str) for name, value in values.items()):
+    if any(
+        not isinstance(name, str) or not isinstance(value, str)
+        for name, value in values.items()
+    ):
         raise TypeError("HTTP headers must map strings to strings")
     return MappingProxyType(values)
 
@@ -156,7 +160,9 @@ def header_value(headers: Mapping[str, str], name: str) -> str | None:
     """
 
     expected = name.casefold()
-    return next((value for key, value in headers.items() if key.casefold() == expected), None)
+    return next(
+        (value for key, value in headers.items() if key.casefold() == expected), None
+    )
 
 
 def with_header(headers: Mapping[str, str], name: str, value: str) -> Mapping[str, str]:
@@ -168,7 +174,11 @@ def with_header(headers: Mapping[str, str], name: str, value: str) -> Mapping[st
     case-insensitive header.
     """
 
-    values = {key: existing for key, existing in headers.items() if key.casefold() != name.casefold()}
+    values = {
+        key: existing
+        for key, existing in headers.items()
+        if key.casefold() != name.casefold()
+    }
     values[name] = value
     return MappingProxyType(values)
 
@@ -179,13 +189,22 @@ def _text_pairs(
     field_name: str,
 ) -> tuple[tuple[str, str], ...]:
     pairs = tuple(values.items()) if isinstance(values, Mapping) else tuple(values)
-    if any(not isinstance(key, str) or not key or not isinstance(value, str) for key, value in pairs):
-        raise TypeError(f"{field_name} must contain non-empty string keys and string values")
+    if any(
+        not isinstance(key, str) or not key or not isinstance(value, str)
+        for key, value in pairs
+    ):
+        raise TypeError(
+            f"{field_name} must contain non-empty string keys and string values"
+        )
     return pairs
 
 
 def _with_content_type(headers: Mapping[str, str], value: str) -> Mapping[str, str]:
-    return headers if header_value(headers, _CONTENT_TYPE_HEADER) else with_header(headers, _CONTENT_TYPE_HEADER, value)
+    return (
+        headers
+        if header_value(headers, _CONTENT_TYPE_HEADER)
+        else with_header(headers, _CONTENT_TYPE_HEADER, value)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,9 +227,14 @@ class MultipartPart:
             raise ValueError("multipart part name must be non-empty and header-safe")
         if not isinstance(self.content, bytes):
             raise TypeError("multipart content must be bytes")
-        for value, label in ((self.filename, "filename"), (self.media_type, "media_type")):
+        for value, label in (
+            (self.filename, "filename"),
+            (self.media_type, "media_type"),
+        ):
             if value is not None and (not value or "\r" in value or "\n" in value):
-                raise ValueError(f"multipart {label} must be non-empty and header-safe when present")
+                raise ValueError(
+                    f"multipart {label} must be non-empty and header-safe when present"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,7 +252,9 @@ class HttpTimeout:
     pool: float = DEFAULT_POOL_TIMEOUT_SECONDS
 
     def __post_init__(self) -> None:
-        if any(value <= 0 for value in (self.connect, self.read, self.write, self.pool)):
+        if any(
+            value <= 0 for value in (self.connect, self.read, self.write, self.pool)
+        ):
             raise ValueError("all timeout values must be positive")
 
 
@@ -248,14 +274,21 @@ class HttpClientOptions:
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
     follow_redirects: bool = False
     headers: Mapping[str, str] = field(default_factory=dict)
+    ssl_context: ssl.SSLContext | None = None
 
     def __post_init__(self) -> None:
         if self.max_connections <= 0 or self.max_keepalive_connections < 0:
-            raise ValueError("connection limits must be non-negative and max_connections positive")
+            raise ValueError(
+                "connection limits must be non-negative and max_connections positive"
+            )
         if self.max_keepalive_connections > self.max_connections:
             raise ValueError("max_keepalive_connections cannot exceed max_connections")
         if self.max_response_bytes <= 0:
             raise ValueError("max_response_bytes must be positive")
+        if self.ssl_context is not None and not isinstance(
+            self.ssl_context, ssl.SSLContext
+        ):
+            raise TypeError("ssl_context must be an ssl.SSLContext or None")
         object.__setattr__(self, "headers", _freeze_headers(self.headers))
 
 
@@ -286,10 +319,14 @@ class HttpRequest:
             raise TypeError("HTTP content must be bytes or None")
         object.__setattr__(self, "method", method)
         object.__setattr__(self, "headers", _freeze_headers(self.headers))
-        object.__setattr__(self, "query", _text_pairs(self.query, field_name="query parameters"))
+        object.__setattr__(
+            self, "query", _text_pairs(self.query, field_name="query parameters")
+        )
 
     @classmethod
-    def get(cls, url: str, *, headers: Mapping[str, str] | None = None) -> "HttpRequest":
+    def get(
+        cls, url: str, *, headers: Mapping[str, str] | None = None
+    ) -> "HttpRequest":
         """构造一个 GET 请求。
 
         Args:
@@ -306,7 +343,9 @@ class HttpRequest:
         return cls(HttpMethod.GET, url, headers or {})
 
     @classmethod
-    def post(cls, url: str, *, headers: Mapping[str, str] | None = None) -> "HttpRequest":
+    def post(
+        cls, url: str, *, headers: Mapping[str, str] | None = None
+    ) -> "HttpRequest":
         """构造一个 POST 请求。
 
         Args:
@@ -323,7 +362,9 @@ class HttpRequest:
         return cls(HttpMethod.POST, url, headers or {})
 
     @classmethod
-    def put(cls, url: str, *, headers: Mapping[str, str] | None = None) -> "HttpRequest":
+    def put(
+        cls, url: str, *, headers: Mapping[str, str] | None = None
+    ) -> "HttpRequest":
         """构造一个 PUT 请求。
 
         Args:
@@ -340,7 +381,9 @@ class HttpRequest:
         return cls(HttpMethod.PUT, url, headers or {})
 
     @classmethod
-    def patch(cls, url: str, *, headers: Mapping[str, str] | None = None) -> "HttpRequest":
+    def patch(
+        cls, url: str, *, headers: Mapping[str, str] | None = None
+    ) -> "HttpRequest":
         """构造一个 PATCH 请求。
 
         Args:
@@ -357,7 +400,9 @@ class HttpRequest:
         return cls(HttpMethod.PATCH, url, headers or {})
 
     @classmethod
-    def delete(cls, url: str, *, headers: Mapping[str, str] | None = None) -> "HttpRequest":
+    def delete(
+        cls, url: str, *, headers: Mapping[str, str] | None = None
+    ) -> "HttpRequest":
         """构造一个 DELETE 请求。
 
         Args:
@@ -449,9 +494,16 @@ class HttpRequest:
         --------
         Append a single query parameter.
         """
-        return self._replace(query=(*self.query, *_text_pairs(((name, value),), field_name="query parameters")))
+        return self._replace(
+            query=(
+                *self.query,
+                *_text_pairs(((name, value),), field_name="query parameters"),
+            )
+        )
 
-    def with_query_params(self, values: Mapping[str, str] | Sequence[tuple[str, str]]) -> "HttpRequest":
+    def with_query_params(
+        self, values: Mapping[str, str] | Sequence[tuple[str, str]]
+    ) -> "HttpRequest":
         """追加多个 query 参数。
 
         Args:
@@ -464,7 +516,9 @@ class HttpRequest:
         --------
         Append multiple query parameters.
         """
-        return self._replace(query=(*self.query, *_text_pairs(values, field_name="query parameters")))
+        return self._replace(
+            query=(*self.query, *_text_pairs(values, field_name="query parameters"))
+        )
 
     def with_timeout(self, timeout: HttpTimeout) -> "HttpRequest":
         """为单次请求覆盖超时。
@@ -486,7 +540,9 @@ class HttpRequest:
             raise TypeError("timeout must be an HttpTimeout")
         return self._replace(timeout=timeout)
 
-    def with_content(self, content: bytes | None, *, media_type: str | None = None) -> "HttpRequest":
+    def with_content(
+        self, content: bytes | None, *, media_type: str | None = None
+    ) -> "HttpRequest":
         """设置请求体并按需设置 `Content-Type`。
 
         Args:
@@ -504,9 +560,13 @@ class HttpRequest:
         Set the request body, optionally setting Content-Type
         when it isn't already set.
         """
-        if media_type is not None and (not isinstance(media_type, str) or not media_type.strip()):
+        if media_type is not None and (
+            not isinstance(media_type, str) or not media_type.strip()
+        ):
             raise ValueError("media_type must be a non-blank string when present")
-        headers = _with_content_type(self.headers, media_type) if media_type else self.headers
+        headers = (
+            _with_content_type(self.headers, media_type) if media_type else self.headers
+        )
         return self._replace(headers=headers, content=content)
 
     def with_json(self, value: Any) -> "HttpRequest":
@@ -523,7 +583,9 @@ class HttpRequest:
         Serialise `value` to JSON and set Content-Type to
         `application/json; charset=utf-8`.
         """
-        content = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode(_UTF_8)
+        content = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode(
+            _UTF_8
+        )
         return self.with_content(content, media_type=_JSON_CONTENT_TYPE)
 
     def with_xml(self, value: str) -> "HttpRequest":
@@ -558,9 +620,15 @@ class HttpRequest:
         `SOAPAction` header.
         """
         request = self._with_text_content(envelope, _SOAP_CONTENT_TYPE)
-        return request.with_header(_SOAP_ACTION_HEADER, action) if action is not None else request
+        return (
+            request.with_header(_SOAP_ACTION_HEADER, action)
+            if action is not None
+            else request
+        )
 
-    def with_form(self, values: Mapping[str, str] | Sequence[tuple[str, str]]) -> "HttpRequest":
+    def with_form(
+        self, values: Mapping[str, str] | Sequence[tuple[str, str]]
+    ) -> "HttpRequest":
         """把键值对编码为 `application/x-www-form-urlencoded` body。
 
         Args:
@@ -574,10 +642,14 @@ class HttpRequest:
         URL-encode key/value pairs as
         `application/x-www-form-urlencoded` body.
         """
-        encoded = urlencode(_text_pairs(values, field_name="form values")).encode(_UTF_8)
+        encoded = urlencode(_text_pairs(values, field_name="form values")).encode(
+            _UTF_8
+        )
         return self.with_content(encoded, media_type=_FORM_CONTENT_TYPE)
 
-    def with_multipart(self, parts: Sequence[MultipartPart], *, boundary: str | None = None) -> "HttpRequest":
+    def with_multipart(
+        self, parts: Sequence[MultipartPart], *, boundary: str | None = None
+    ) -> "HttpRequest":
         """用 `parts` 构造 `multipart/form-data` body。
 
         Args:
@@ -597,13 +669,17 @@ class HttpRequest:
         """
         boundary = boundary or token_hex(DEFAULT_MULTIPART_BOUNDARY_BYTES)
         if not boundary or any(character.isspace() for character in boundary):
-            raise ValueError("multipart boundary must be non-empty and contain no whitespace")
+            raise ValueError(
+                "multipart boundary must be non-empty and contain no whitespace"
+            )
         if not parts:
             raise ValueError("multipart request requires at least one part")
         if any(not isinstance(part, MultipartPart) for part in parts):
             raise TypeError("multipart parts must be MultipartPart values")
         body = _encode_multipart(tuple(parts), boundary)
-        return self.with_content(body, media_type=f"{MediaType.MULTIPART_FORM}; boundary={boundary}")
+        return self.with_content(
+            body, media_type=f"{MediaType.MULTIPART_FORM}; boundary={boundary}"
+        )
 
     def _with_text_content(self, value: str, media_type: str) -> "HttpRequest":
         if not isinstance(value, str):
@@ -707,7 +783,9 @@ class HttpResponse:
         try:
             return self.body.decode(encoding)
         except UnicodeDecodeError as error:
-            raise HttpDecodeError("response body is not valid text", method=self.method, url=self.url) from error
+            raise HttpDecodeError(
+                "response body is not valid text", method=self.method, url=self.url
+            ) from error
 
     def json(self) -> Any:
         """把 body 解析为 JSON。
@@ -726,7 +804,9 @@ class HttpResponse:
         try:
             return json.loads(self.body)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise HttpDecodeError("response body is not valid JSON", method=self.method, url=self.url) from error
+            raise HttpDecodeError(
+                "response body is not valid JSON", method=self.method, url=self.url
+            ) from error
 
 
 class HttpStreamResponse:
@@ -814,12 +894,16 @@ class HttpStreamResponse:
         self._require_open()
         return self
 
-    def __exit__(self, _exc_type: object, _exc_value: object, _traceback: object) -> None:
+    def __exit__(
+        self, _exc_type: object, _exc_value: object, _traceback: object
+    ) -> None:
         self.close()
 
     def _require_open(self) -> None:
         if self._closed:
-            raise HttpStreamClosedError("HTTP response stream is closed", method=self.method, url=self.url)
+            raise HttpStreamClosedError(
+                "HTTP response stream is closed", method=self.method, url=self.url
+            )
 
 
 class AsyncHttpStreamResponse:
@@ -910,9 +994,13 @@ class AsyncHttpStreamResponse:
         self._require_open()
         return self
 
-    async def __aexit__(self, _exc_type: object, _exc_value: object, _traceback: object) -> None:
+    async def __aexit__(
+        self, _exc_type: object, _exc_value: object, _traceback: object
+    ) -> None:
         await self.aclose()
 
     def _require_open(self) -> None:
         if self._closed:
-            raise HttpStreamClosedError("HTTP response stream is closed", method=self.method, url=self.url)
+            raise HttpStreamClosedError(
+                "HTTP response stream is closed", method=self.method, url=self.url
+            )

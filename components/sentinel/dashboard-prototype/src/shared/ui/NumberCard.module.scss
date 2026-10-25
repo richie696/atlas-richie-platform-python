@@ -1,0 +1,49 @@
+// Private presentation ownership; colors are supplied by the selected skin.
+.number-card {
+  background: linear-gradient(
+    150deg,
+    var(--sentinel-color-number-card-background),
+    var(--sentinel-color-number-card-background-2)
+  );
+  border: 1px solid var(--sentinel-color-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 30px var(--sentinel-color-number-card-box-shadow);
+}
+.number-card {
+  padding: 15px 17px;
+  min-height: 105px;
+}
+.number-card > span {
+  font-size: 11px;
+  color: var(--sentinel-color-number-card-color);
+}
+.number-card strong {
+  display: block;
+  font-size: 26px;
+  margin: 8px 0 3px;
+  letter-spacing: -0.04em;
+}
+.number-card small {
+  font-size: 11px;
+  font-weight: 450;
+  margin-left: 5px;
+  color: var(--sentinel-color-number-card-color-2);
+}
+.number-card p {
+  font-size: 11px;
+  margin: 0;
+  color: var(--sentinel-color-number-card-color-3);
+}
+@media (max-width: 560px) {
+  .number-card {
+    padding: 12px;
+    min-height: 93px;
+  }
+  .number-card strong {
+    font-size: 21px;
+  }
+  .number-card small {
+    display: block;
+    margin-left: 0;
+  }
+}

@@ -1,0 +1,62 @@
+name: Dashboard frontend
+
+on:
+  pull_request:
+    paths:
+      - "components/sentinel/dashboard-prototype/**"
+      - ".github/workflows/dashboard.yml"
+  push:
+    branches: [main]
+    paths:
+      - "components/sentinel/dashboard-prototype/**"
+      - ".github/workflows/dashboard.yml"
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Select the validation scope
+        type: choice
+        options:
+          - fast
+          - milestone
+        default: fast
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-fast:
+    if: github.event_name != 'workflow_dispatch' || inputs.scope == 'fast'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: components/sentinel/dashboard-prototype
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.18.0"
+          cache: npm
+          cache-dependency-path: components/sentinel/dashboard-prototype/package-lock.json
+      - run: npm ci
+      - name: Fast engineering checks
+        run: npm run check:fast
+
+  frontend-milestone:
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'milestone'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: components/sentinel/dashboard-prototype
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.18.0"
+          cache: npm
+          cache-dependency-path: components/sentinel/dashboard-prototype/package-lock.json
+      - run: npm ci
+      - name: Full non-browser milestone gate
+        run: npm run check:milestone

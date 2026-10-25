@@ -1,0 +1,23 @@
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "atlas-richie-sentinel-reporter-incidents"
+version = "0.1.0"
+description = "Optional Sentinel Incident Event V1 reporter and HTTPS/mTLS adapter."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Atlas Richie" }]
+dependencies = [
+  "atlas-richie-contracts>=0.2.0,<0.3.0",
+  "atlas-richie-http>=0.2.0,<0.3.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0,<9.0", "pytest-asyncio>=0.21,<1.0"]
+
+[tool.uv.build-backend]
+module-name = "atlas_richie.sentinel_reporter_incidents"
+module-root = "src"

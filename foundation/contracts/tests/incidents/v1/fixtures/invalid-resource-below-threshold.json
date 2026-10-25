@@ -1,0 +1,1 @@
+{"event_id":"72000000-0000-0000-0000-000000000006","fact":{"kind":"resource_pressure","metric":"cpu_ratio","threshold":0.9,"value":0.89},"occurred_at":"2026-10-15T04:00:00.000000Z","process_epoch":"71000000-0000-0000-0000-000000000001","protocol_version":"atlas-richie.incident-events/v1","severity":"warning"}

@@ -1,9 +1,9 @@
-"""Nacos data-id → :class:`RuleSnapshot` 解码 (M6.1.3)。
+"""Nacos data-id 与 :class:`RuleSnapshot` 之间的纯规则转换。
 
 中文
 ----
-**职责**: 把 Nacos 配置中心返回的 5 个 data-id 原始 JSON (每个对应一种
-rule) 解码成主包 :class:`RuleSnapshot` 格式。
+**职责**: 在 Nacos 五类 data-id JSON 与主包 :class:`RuleSnapshot` 之间
+执行纯数据转换；本模块不负责网络读写。
 
 **不**做的事:
 
@@ -64,10 +64,16 @@ conversion; modify main-package rule dataclass fields.
 from __future__ import annotations
 
 import json
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
-from atlas_richie.sentinel.rules.authority import AuthorityRule, AuthorityStrategy
+from atlas_richie.contracts.rules.managed_publication.v1 import (
+    ManagedRuleKind,
+    ManagedRulePublicationError,
+    decode_managed_rule_publication,
+)
 from atlas_richie.sentinel.errors import SentinelConfigurationError
+from atlas_richie.sentinel.rules.authority import AuthorityRule, AuthorityStrategy
 from atlas_richie.sentinel.rules.degrade import DegradeRule, DegradeStrategy
 from atlas_richie.sentinel.rules.flow import (
     FlowBehavior,
@@ -81,11 +87,15 @@ from atlas_richie.sentinel.rules.param_flow import (
     ParamFlowRule,
 )
 from atlas_richie.sentinel.rules.selector import ResourceSelector, SelectorKind
-from atlas_richie.sentinel.rules.snapshot import RuleSnapshot, RuleVersion
+from atlas_richie.sentinel.rules.snapshot import (
+    RuleSnapshot,
+    RuleTargetKind,
+    RuleTargetProvenance,
+    RuleVersion,
+)
 from atlas_richie.sentinel.rules.system import SystemRule, SystemStrategy
 
 from .config import NacosRuleSourceConfig, NacosSourceError
-
 
 # ---------------------------------------------------------------------------
 # 公开异常 (M6.1.4)
@@ -95,24 +105,25 @@ from .config import NacosRuleSourceConfig, NacosSourceError
 class NacosCodecError(Exception):
     """Codec 公共异常根类 (M6.1.4)。
 
-    中文
-    ----
-    公开异常树根; 子类:
+        中文
+        ----
+        公开异常树根; 子类:
 
     - :class:`NacosDecodeError` — JSON 解析 / 字段缺失 / 类型错
+    - :class:`NacosEncodeError` — Sentinel 规则无法无损表示为 Nacos wire
 
-    公开理由: extension 测试可以 ``pytest.raises`` 验证字段缺失 /
-    类型错映射到 DECODE 分类。
+        公开理由: extension 测试可以 ``pytest.raises`` 验证字段缺失 /
+        类型错映射到 DECODE 分类。
 
-    English
-    --------
-    Public exception root. Subclass :class:`NacosDecodeError` covers
-    JSON / field / type errors. Public so extension tests can
-    ``pytest.raises`` and assert error class → NacosSourceError
-    mapping.
+        English
+        --------
+        Public exception root. Subclass :class:`NacosDecodeError` covers
+        JSON / field / type errors. Public so extension tests can
+        ``pytest.raises`` and assert error class → NacosSourceError
+        mapping.
     """
 
-    nacos_error: NacosSourceError
+    nacos_error: NacosSourceError | None = None
 
     def __init__(self, message: str, *, data_id: str | None = None) -> None:
         super().__init__(message)
@@ -126,6 +137,14 @@ class NacosDecodeError(NacosCodecError):
     nacos_error = NacosSourceError.DECODE
 
 
+class NacosEncodeError(NacosCodecError):
+    """A Sentinel rule cannot be represented losslessly by the Nacos profile."""
+
+    def __init__(self, message: str, *, data_id: str, rule_id: str) -> None:
+        super().__init__(message, data_id=data_id)
+        self.rule_id = rule_id
+
+
 # ---------------------------------------------------------------------------
 # 5 个 rule_type 字符串常量 (与 config._RULE_TYPE_DATA_ID_SUFFIX key 一致)
 # ---------------------------------------------------------------------------
@@ -136,21 +155,39 @@ _RULE_TYPE_PARAM_FLOW = "param_flow"
 _RULE_TYPE_SYSTEM = "system"
 _RULE_TYPE_AUTHORITY = "authority"
 
+_MANAGED_KIND_TO_RULE_TYPE: dict[ManagedRuleKind, str] = {
+    ManagedRuleKind.FLOW: _RULE_TYPE_FLOW,
+    ManagedRuleKind.DEGRADE: _RULE_TYPE_DEGRADE,
+    ManagedRuleKind.SYSTEM: _RULE_TYPE_SYSTEM,
+    ManagedRuleKind.AUTHORITY: _RULE_TYPE_AUTHORITY,
+    ManagedRuleKind.PARAM: _RULE_TYPE_PARAM_FLOW,
+}
+
 # Per-rule-type required JSON field names. 缺一不可 (PLANNING 资源上限
 # default-deny); 5 类固定, 不通过"自动发现"扩展。
 _REQUIRED_RULE_FIELDS: dict[str, tuple[str, ...]] = {
     _RULE_TYPE_FLOW: (
-        "resource", "grade", "count",
+        "resource",
+        "grade",
+        "count",
     ),
     _RULE_TYPE_DEGRADE: (
-        "resource", "grade", "count", "timeWindow",
+        "resource",
+        "grade",
+        "count",
+        "timeWindow",
     ),
     _RULE_TYPE_PARAM_FLOW: (
-        "resource", "grade", "paramIdx", "count",
+        "resource",
+        "grade",
+        "paramIdx",
+        "count",
     ),
     _RULE_TYPE_SYSTEM: (),  # 校验时按 strategy 单独算
     _RULE_TYPE_AUTHORITY: (
-        "resource", "limitApp", "strategy",
+        "resource",
+        "limitApp",
+        "strategy",
     ),
 }
 
@@ -221,7 +258,9 @@ def _coerce_list(data_id: str, payload: Any) -> list[dict[str, Any]]:
 #   AuthorityStrategy: 0 = ALLOW_LIST (Java: "WHITE"), 1 = DENY_LIST (Java: "BLACK")
 
 
-def _coerce_enum(value: Any, enum_cls: type, int_map: dict[int, str], data_id: str, field: str) -> Any:
+def _coerce_enum(
+    value: Any, enum_cls: type, int_map: dict[int, str], data_id: str, field: str
+) -> Any:
     """把 Nacos 字段值 (str 或 int) 转成 enum 实例; 不匹配 → 抛 NacosDecodeError。"""
     if isinstance(value, enum_cls):
         return value
@@ -234,11 +273,12 @@ def _coerce_enum(value: Any, enum_cls: type, int_map: dict[int, str], data_id: s
                 return enum_cls(value.lower())
             except ValueError:
                 raise NacosDecodeError(
-                    f"{data_id}: {field}={value!r} is not a valid "
-                    f"{enum_cls.__name__}",
+                    f"{data_id}: {field}={value!r} is not a valid {enum_cls.__name__}",
                     data_id=data_id,
                 )
-    if isinstance(value, int):
+    # ``bool`` is an ``int`` subclass in Python, but JSON ``true``/``false``
+    # are not valid numeric enum codes. Accept only an exact integer here.
+    if type(value) is int:
         mapped = int_map.get(value)
         if mapped is None:
             raise NacosDecodeError(
@@ -254,19 +294,261 @@ def _coerce_enum(value: Any, enum_cls: type, int_map: dict[int, str], data_id: s
 
 
 _FLOW_GRADE_INT = {0: "concurrency", 1: "qps"}
-_FLOW_BEHAVIOR_INT = {0: "reject", 1: "warm_up", 2: "reject"}  # behavior 与 control 同源
+_FLOW_BEHAVIOR_INT = {
+    0: "reject",
+    1: "warm_up",
+    2: "reject",
+}  # behavior 与 control 同源
 _FLOW_CONTROL_INT = {0: "reject", 1: "warm_up", 2: "queue"}
 _FLOW_SCOPE_INT = {
-    0: "direct", 1: "origin", 2: "associated_resource", 3: "call_path",
+    0: "direct",
+    1: "origin",
+    2: "associated_resource",
+    3: "call_path",
 }
 _DEGRADE_STRATEGY_INT = {
-    0: "slow_call_ratio", 1: "error_ratio", 2: "error_count", 3: "slow_call_count",
+    0: "slow_call_ratio",
+    1: "error_ratio",
+    2: "error_count",
+    3: "slow_call_count",
 }
 _AUTHORITY_STRATEGY_INT = {0: "allow_list", 1: "deny_list"}
 _SYSTEM_STRATEGY_INT = {0: "direct", 1: "adaptive_capacity"}
 _PARAM_FLOW_SOURCE_INT = {
-    0: "positional", 1: "keyword", 2: "header", 3: "query", 4: "cookie", 5: "custom",
+    0: "positional",
+    1: "keyword",
+    2: "header",
+    3: "query",
+    4: "cookie",
+    5: "custom",
 }
+_FLOW_GRADE_WIRE = {FlowGrade.CONCURRENCY: 0, FlowGrade.QPS: 1}
+_FLOW_CONTROL_WIRE = {
+    FlowControl.REJECT: 0,
+    FlowControl.WARM_UP: 1,
+    FlowControl.QUEUE: 2,
+}
+_FLOW_SCOPE_WIRE = {
+    FlowScope.DIRECT: 0,
+    FlowScope.ORIGIN: 1,
+    FlowScope.ASSOCIATED_RESOURCE: 2,
+    FlowScope.CALL_PATH: 3,
+}
+_DEGRADE_STRATEGY_WIRE = {
+    DegradeStrategy.SLOW_CALL_RATIO: 0,
+    DegradeStrategy.ERROR_RATIO: 1,
+    DegradeStrategy.ERROR_COUNT: 2,
+    DegradeStrategy.SLOW_CALL_COUNT: 3,
+}
+_AUTHORITY_STRATEGY_WIRE = {
+    AuthorityStrategy.ALLOW_LIST: 0,
+    AuthorityStrategy.DENY_LIST: 1,
+}
+_AUTHORITY_UNUSED_LIMIT_APP = "default"
+_SYSTEM_STRATEGY_WIRE = {
+    SystemStrategy.DIRECT: 0,
+    SystemStrategy.ADAPTIVE_CAPACITY: 1,
+}
+_PARAM_FLOW_PROFILE_GRADE = 1
+_PARAM_FLOW_SOURCE_WIRE = {
+    ParameterSource.POSITIONAL: 0,
+    ParameterSource.KEYWORD: 1,
+    ParameterSource.HEADER: 2,
+    ParameterSource.QUERY: 3,
+    ParameterSource.COOKIE: 4,
+    ParameterSource.CUSTOM: 5,
+}
+
+
+def encode_rule_snapshot(
+    snapshot: RuleSnapshot,
+    *,
+    config: NacosRuleSourceConfig,
+) -> Mapping[str, str]:
+    """Encode a complete snapshot into the five deterministic Nacos JSON values.
+
+    The returned mapping is keyed by configured data-id. Unsupported or
+    lossy values fail closed; no network or Nacos SDK call is performed.
+    """
+    grouped: dict[str, list[dict[str, object]]] = {
+        _RULE_TYPE_FLOW: [],
+        _RULE_TYPE_DEGRADE: [],
+        _RULE_TYPE_PARAM_FLOW: [],
+        _RULE_TYPE_SYSTEM: [],
+        _RULE_TYPE_AUTHORITY: [],
+    }
+    for mapping_id, rule in snapshot.rules.items():
+        supported_rule_types = (
+            FlowRule,
+            DegradeRule,
+            ParamFlowRule,
+            SystemRule,
+            AuthorityRule,
+        )
+        if not isinstance(rule, supported_rule_types):
+            raise NacosEncodeError(
+                "snapshot contains an unsupported rule value",
+                data_id=config.data_id_for(_RULE_TYPE_FLOW),
+                rule_id=str(mapping_id),
+            )
+        if rule.rule_id != mapping_id:
+            kind = _rule_type(rule)
+            raise NacosEncodeError(
+                "snapshot mapping identity does not match the rule identity",
+                data_id=config.data_id_for(kind),
+                rule_id=rule.rule_id,
+            )
+        kind = _rule_type(rule)
+        grouped[kind].append(_encode_rule(rule, config.data_id_for(kind)))
+
+    encoded: dict[str, str] = {}
+    for kind, rules in grouped.items():
+        rules.sort(key=lambda item: str(item["id"]))
+        data_id = config.data_id_for(kind)
+        try:
+            encoded[data_id] = json.dumps(
+                rules,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        except (TypeError, ValueError) as exc:
+            raise NacosEncodeError(
+                "snapshot contains a value outside the Nacos JSON profile",
+                data_id=data_id,
+                rule_id="snapshot",
+            ) from exc
+    return encoded
+
+
+def _rule_type(
+    rule: FlowRule | DegradeRule | ParamFlowRule | SystemRule | AuthorityRule,
+) -> str:
+    match rule:
+        case FlowRule():
+            return _RULE_TYPE_FLOW
+        case DegradeRule():
+            return _RULE_TYPE_DEGRADE
+        case ParamFlowRule():
+            return _RULE_TYPE_PARAM_FLOW
+        case SystemRule():
+            return _RULE_TYPE_SYSTEM
+        case AuthorityRule():
+            return _RULE_TYPE_AUTHORITY
+    raise TypeError("unsupported rule value")
+
+
+def _encode_rule(
+    rule: FlowRule | DegradeRule | ParamFlowRule | SystemRule | AuthorityRule,
+    data_id: str,
+) -> dict[str, object]:
+    match rule:
+        case FlowRule():
+            if rule.behavior is not _decode_flow_behavior(rule.control):
+                raise _encode_error(
+                    rule, data_id, "Nacos stores flow behavior and control together"
+                )
+            body: dict[str, object] = {
+                "id": rule.rule_id,
+                "resource": rule.selector.pattern,
+                "priority": rule.priority,
+                "grade": _FLOW_GRADE_WIRE[rule.grade],
+                "count": rule.threshold,
+                "controlBehavior": _FLOW_CONTROL_WIRE[rule.control],
+                "scope": _FLOW_SCOPE_WIRE[rule.scope],
+                "maxQueueingTimeMs": rule.max_queueing_time_ms,
+                "warmUpPeriodSec": rule.warm_up_period_sec,
+            }
+            if rule.scope_reference is not None:
+                body["scopeReference"] = rule.scope_reference
+            return body
+        case DegradeRule():
+            count = (
+                rule.slow_call_threshold_ms
+                if rule.strategy
+                in (DegradeStrategy.SLOW_CALL_RATIO, DegradeStrategy.SLOW_CALL_COUNT)
+                else rule.error_count_threshold
+            )
+            return {
+                "id": rule.rule_id,
+                "resource": rule.selector.pattern,
+                "priority": rule.priority,
+                "grade": _DEGRADE_STRATEGY_WIRE[rule.strategy],
+                "count": count,
+                "timeWindow": rule.recovery_timeout_ms,
+                "exceptionRatio": rule.error_ratio_threshold,
+                "errorCountThreshold": rule.error_count_threshold,
+                "slowCallThresholdMs": rule.slow_call_threshold_ms,
+                "slowRatioThreshold": rule.slow_call_ratio_threshold,
+                "minRequestAmount": rule.minimum_request_count,
+                "statIntervalMs": rule.stat_window_ms,
+                "recoveryTimeout": rule.half_open_probe_count,
+            }
+        case ParamFlowRule():
+            return {
+                "id": rule.rule_id,
+                "resource": rule.selector.pattern,
+                "priority": rule.priority,
+                "grade": _PARAM_FLOW_PROFILE_GRADE,
+                "paramKeyType": _PARAM_FLOW_SOURCE_WIRE[rule.source],
+                "paramIdx": rule.arg_index,
+                "paramKey": rule.arg_key,
+                "extractorId": rule.extractor_id,
+                "count": rule.threshold,
+                "controlIntervalMs": rule.stat_window_ms,
+                "maxQueueingTimeMs": rule.max_distinct_values,
+                "idleTtlMs": rule.idle_ttl_ms,
+                "overflow": rule.overflow_error,
+            }
+        case SystemRule():
+            body = {
+                "id": rule.rule_id,
+                "priority": rule.priority,
+                "strategy": _SYSTEM_STRATEGY_WIRE[rule.strategy],
+                "minRt": rule.min_stable_rt_ms,
+                "maxThread": rule.max_concurrent_adaptive,
+            }
+            optional_fields = (
+                ("highestSystemLoad", rule.max_cpu_usage),
+                ("avgLoad", rule.max_load),
+                ("maxRt", rule.max_event_loop_lag_ms),
+                ("qps", rule.max_in_flight_qps),
+            )
+            body.update(
+                {name: value for name, value in optional_fields if value is not None}
+            )
+            return body
+        case AuthorityRule():
+            return {
+                "id": rule.rule_id,
+                "resource": rule.selector.pattern,
+                "priority": rule.priority,
+                "limitApp": _AUTHORITY_UNUSED_LIMIT_APP,
+                "strategy": _AUTHORITY_STRATEGY_WIRE[rule.strategy],
+                "origins": list(rule.origins),
+                "defaultDeny": rule.default_deny_unresolved,
+            }
+    raise _encode_error(rule, data_id, "snapshot contains an unsupported rule value")
+
+
+def _decode_flow_behavior(control: FlowControl) -> FlowBehavior:
+    match control:
+        case FlowControl.REJECT:
+            return FlowBehavior.REJECT
+        case FlowControl.WARM_UP:
+            return FlowBehavior.WARM_UP
+        case FlowControl.QUEUE:
+            return FlowBehavior.REJECT
+
+
+def _encode_error(rule: object, data_id: str, message: str) -> NacosEncodeError:
+    rule_id = getattr(rule, "rule_id", "unknown")
+    return NacosEncodeError(
+        message,
+        data_id=data_id,
+        rule_id=str(rule_id),
+    )
 
 
 def _decode_flow(data_id: str, items: list[dict[str, Any]]) -> dict[str, FlowRule]:
@@ -282,21 +564,32 @@ def _decode_flow(data_id: str, items: list[dict[str, Any]]) -> dict[str, FlowRul
                 )
         try:
             grade = _coerce_enum(
-                item["grade"], FlowGrade, _FLOW_GRADE_INT, data_id, "grade",
+                item["grade"],
+                FlowGrade,
+                _FLOW_GRADE_INT,
+                data_id,
+                "grade",
             )
             behavior = _coerce_enum(
                 item.get("controlBehavior", "reject"),
-                FlowBehavior, _FLOW_BEHAVIOR_INT,
-                data_id, "controlBehavior",
+                FlowBehavior,
+                _FLOW_BEHAVIOR_INT,
+                data_id,
+                "controlBehavior",
             )
             control = _coerce_enum(
                 item.get("controlBehavior", "reject"),
-                FlowControl, _FLOW_CONTROL_INT,
-                data_id, "controlBehavior",
+                FlowControl,
+                _FLOW_CONTROL_INT,
+                data_id,
+                "controlBehavior",
             )
             scope = _coerce_enum(
                 item.get("scope", 0),
-                FlowScope, _FLOW_SCOPE_INT, data_id, "scope",
+                FlowScope,
+                _FLOW_SCOPE_INT,
+                data_id,
+                "scope",
             )
             scope_ref = item.get("scopeReference")
             rule = FlowRule(
@@ -321,7 +614,9 @@ def _decode_flow(data_id: str, items: list[dict[str, Any]]) -> dict[str, FlowRul
     return out
 
 
-def _decode_degrade(data_id: str, items: list[dict[str, Any]]) -> dict[str, DegradeRule]:
+def _decode_degrade(
+    data_id: str, items: list[dict[str, Any]]
+) -> dict[str, DegradeRule]:
     """``-degrade-rules.json`` → :class:`DegradeRule` 字典。
 
     中文
@@ -343,14 +638,22 @@ def _decode_degrade(data_id: str, items: list[dict[str, Any]]) -> dict[str, Degr
                 )
         try:
             strategy = _coerce_enum(
-                item["grade"], DegradeStrategy, _DEGRADE_STRATEGY_INT,
-                data_id, "grade",
+                item["grade"],
+                DegradeStrategy,
+                _DEGRADE_STRATEGY_INT,
+                data_id,
+                "grade",
             )
             # count 字段按 strategy 分流
             count_value = int(item["count"])
-            if strategy in (DegradeStrategy.SLOW_CALL_RATIO, DegradeStrategy.SLOW_CALL_COUNT):
+            if strategy in (
+                DegradeStrategy.SLOW_CALL_RATIO,
+                DegradeStrategy.SLOW_CALL_COUNT,
+            ):
                 slow_call_threshold_ms = count_value
-                error_count_threshold = int(item.get("errorCountThreshold", count_value))
+                error_count_threshold = int(
+                    item.get("errorCountThreshold", count_value)
+                )
             else:
                 # ERROR_RATIO / ERROR_COUNT
                 slow_call_threshold_ms = int(item.get("slowCallThresholdMs", 0))
@@ -361,9 +664,7 @@ def _decode_degrade(data_id: str, items: list[dict[str, Any]]) -> dict[str, Degr
                 priority=int(item.get("priority", 0)),
                 strategy=strategy,
                 slow_call_threshold_ms=slow_call_threshold_ms,
-                slow_call_ratio_threshold=float(
-                    item.get("slowRatioThreshold", 0.0)
-                ),
+                slow_call_ratio_threshold=float(item.get("slowRatioThreshold", 0.0)),
                 error_count_threshold=error_count_threshold,
                 error_ratio_threshold=float(item.get("exceptionRatio", 0.0)),
                 minimum_request_count=int(item.get("minRequestAmount", 5)),
@@ -396,8 +697,10 @@ def _decode_param_flow(
         try:
             source = _coerce_enum(
                 item.get("paramKeyType", 0),
-                ParameterSource, _PARAM_FLOW_SOURCE_INT,
-                data_id, "paramKeyType",
+                ParameterSource,
+                _PARAM_FLOW_SOURCE_INT,
+                data_id,
+                "paramKeyType",
             )
             rule = ParamFlowRule(
                 rule_id=str(item.get("id", f"{data_id}#{i}")),
@@ -422,17 +725,17 @@ def _decode_param_flow(
     return out
 
 
-def _decode_system(
-    data_id: str, items: list[dict[str, Any]]
-) -> dict[str, SystemRule]:
+def _decode_system(data_id: str, items: list[dict[str, Any]]) -> dict[str, SystemRule]:
     """``-system-rules.json`` → :class:`SystemRule` 字典。"""
     out: dict[str, SystemRule] = {}
     for i, item in enumerate(items):
         try:
             strategy = _coerce_enum(
                 item.get("strategy", 0),
-                SystemStrategy, _SYSTEM_STRATEGY_INT,
-                data_id, "strategy",
+                SystemStrategy,
+                _SYSTEM_STRATEGY_INT,
+                data_id,
+                "strategy",
             )
             rule = SystemRule(
                 rule_id=str(item.get("id", f"{data_id}#{i}")),
@@ -443,21 +746,11 @@ def _decode_system(
                     if "highestSystemLoad" in item
                     else None
                 ),
-                max_load=(
-                    float(item["avgLoad"])
-                    if "avgLoad" in item
-                    else None
-                ),
+                max_load=(float(item["avgLoad"]) if "avgLoad" in item else None),
                 max_event_loop_lag_ms=(
-                    float(item["maxRt"])
-                    if "maxRt" in item
-                    else None
+                    float(item["maxRt"]) if "maxRt" in item else None
                 ),
-                max_in_flight_qps=(
-                    float(item["qps"])
-                    if "qps" in item
-                    else None
-                ),
+                max_in_flight_qps=(float(item["qps"]) if "qps" in item else None),
                 min_stable_rt_ms=float(item.get("minRt", 1.0)),
                 max_concurrent_adaptive=int(item.get("maxThread", 1000)),
             )
@@ -485,8 +778,11 @@ def _decode_authority(
                 )
         try:
             strategy = _coerce_enum(
-                item["strategy"], AuthorityStrategy, _AUTHORITY_STRATEGY_INT,
-                data_id, "strategy",
+                item["strategy"],
+                AuthorityStrategy,
+                _AUTHORITY_STRATEGY_INT,
+                data_id,
+                "strategy",
             )
             origins_raw = item.get("origins", ())
             if isinstance(origins_raw, (list, tuple, set)):
@@ -646,8 +942,102 @@ def decode_rule_snapshot(
     return snapshot, warnings
 
 
+def decode_managed_rule_snapshot(
+    data_ids: Mapping[str, bytes | str],
+    rule_version: RuleVersion,
+    *,
+    config: NacosRuleSourceConfig,
+) -> RuleSnapshot:
+    """Decode all explicitly configured managed targets as one snapshot.
+
+    A valid envelope with the exact inner bytes ``[]`` is authoritative empty
+    rules. A missing, empty, or invalid provider value rejects the whole
+    candidate so callers can retain the last-known-good snapshot.
+    """
+    bindings = config.managed_bindings
+    if bindings is None:
+        raise ValueError("managed Nacos bindings must be explicitly configured")
+
+    rules: dict[str, Any] = {}
+    provenance: list[RuleTargetProvenance] = []
+    for binding in bindings:
+        rule_type = _MANAGED_KIND_TO_RULE_TYPE[binding.rule_kind]
+        data_id = config.data_id_for(rule_type)
+        if data_id not in data_ids:
+            raise NacosDecodeError(
+                "managed Nacos snapshot is missing a configured target",
+                data_id=data_id,
+            )
+        content = data_ids[data_id]
+        try:
+            envelope_bytes = (
+                content if isinstance(content, bytes) else content.encode("utf-8")
+            )
+            if not envelope_bytes.strip():
+                raise ValueError("empty managed envelope")
+            publication = decode_managed_rule_publication(envelope_bytes)
+        except (AttributeError, UnicodeEncodeError, ValueError) as error:
+            safe_reason = (
+                error.code.value
+                if isinstance(error, ManagedRulePublicationError)
+                else "invalid_envelope"
+            )
+            raise NacosDecodeError(
+                f"managed Nacos target rejected ({safe_reason})",
+                data_id=data_id,
+            ) from None
+
+        if (
+            publication.binding_id != binding.binding_id
+            or publication.rule_kind is not binding.rule_kind
+            or publication.profile_id != binding.profile_id
+        ):
+            raise NacosDecodeError(
+                "managed Nacos envelope identity does not match configured binding",
+                data_id=data_id,
+            )
+
+        try:
+            decoded_items = json.loads(publication.rule_payload.decode("utf-8"))
+            items = _coerce_list(data_id, decoded_items)
+            typed_rules = _DECODERS[rule_type](data_id, items)
+        except (UnicodeDecodeError, json.JSONDecodeError, NacosCodecError):
+            raise NacosDecodeError(
+                "managed Nacos rule payload failed the selected native decoder",
+                data_id=data_id,
+            ) from None
+        if set(rules).intersection(typed_rules):
+            raise NacosDecodeError(
+                "managed Nacos targets contain duplicate rule identities",
+                data_id=data_id,
+            )
+        rules.update(typed_rules)
+        provenance.append(
+            RuleTargetProvenance(
+                binding_id=publication.binding_id,
+                publication_id=publication.publication_id,
+                target_version_id=publication.target_version_id,
+                publication_sequence=publication.publication_sequence,
+                rule_kind=RuleTargetKind(publication.rule_kind.value),
+                profile_id=publication.profile_id,
+                payload_sha256=publication.payload_sha256,
+            )
+        )
+
+    return RuleSnapshot(
+        version=rule_version,
+        rules=rules,
+        applied_at_ns=0,
+        source_id=config.source_id,
+        provenance=tuple(provenance),
+    )
+
+
 __all__ = [
     "NacosCodecError",
     "NacosDecodeError",
+    "NacosEncodeError",
+    "decode_managed_rule_snapshot",
     "decode_rule_snapshot",
+    "encode_rule_snapshot",
 ]

@@ -1,0 +1,465 @@
+#!/usr/bin/env node
+/**
+ * Dashboard 视觉基线捕获 / 校验工具。
+ *
+ * 中文
+ * ----
+ * 重建页面时必须证明「展示效果不变」。本工具连接已运行的 Codex 内置浏览器，对每条路由和
+ * 关键交互状态捕获两样东西，并**分别**比较：
+ *
+ * 1. **归一化 DOM**：class 名决定实际样式，因此 DOM 归一化后逐字节相等，可以证明
+ *    「这次改动没有动到影响渲染的结构与类名」，并且容易定位到差异元素。
+ * 2. **整页 PNG**：按 png-diff 的比例与通道差容差比较，保留真实错位而允许
+ *    浏览器会话间的微小字形栅格化抖动；不只比较文件摘要。
+ *
+ * **两个信号必须分开看。** DOM 相等但 PNG 不等 = 纯 CSS 层的回归：结构没动，
+ * 但布局坏了。真实踩过的坑：Astryx `Button` 在 children 外包了一层盒子，
+ * 使 `.event` 的四列 grid 只剩一个 grid item，事件行内容被塞进 12px 首列逐字
+ * 换行——DOM 完全没变，DOM 比对全绿，但页面是错的。所以只比 DOM 是不够的。
+ *
+ * 归一化会抹掉的只有**与展示无关**的渲染期噪声：
+ * - Vite 注入的 HMR 脚本与 style 标签内容；
+ * - `data-backend-node-id`（Astryx 每次渲染重新生成）；
+ * - `data-pressable-container`（Astryx 在 hydration 之后才补，捕获时机相关）；
+ * - React 自动控件/图表实例 id（按首次出现编号，保留 id/label/ARIA/SVG 引用关系）。
+ * 业务自行指定的 id 和 SVG 引用仍保留；仅比较不含 raw-dom 的历史快照时使用
+ * 明示证据限制的旧归一化路径，不能声称旧快照验证了引用完整性。
+ * stylex 生成的 `x…` class 名**保留**，因为它们决定实际样式。
+ *
+ * 用法：
+ * ```bash
+ * node tests/visual/capture-baseline.mjs capture <outDir>   # 捕获基线
+ * node tests/visual/capture-baseline.mjs compare <baseDir> <newDir>
+ * ONLY=realtime,faults node tests/visual/capture-baseline.mjs capture <outDir>
+ * # 有意接受某个用例的渲染变化（修复布局 bug 时使用，会记录在输出里）
+ * ACCEPT_RENDER=faults node tests/visual/capture-baseline.mjs compare <baseDir> <newDir>
+ * ```
+ * 需要 dev server 已在 `BASE_URL`（默认 http://localhost:5173）运行。
+ */
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { connectIabBrowser } from "../e2e/cdp.mjs";
+import { DEFAULT_TOLERANCE, diffPng } from "./png-diff.mjs";
+import { normalizeDom, normalizeLegacyDom } from "./dom-normalization.mjs";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+/** 捕获视口。CDP 模式下由 `Emulation.setDeviceMetricsOverride` 施加。 */
+const VIEWPORT = { width: 1280, height: 900 };
+const BASE_URL = process.env.BASE_URL ?? "http://localhost:5173";
+
+/**
+ * 「页面已渲染」的判据。
+ *
+ * 不能等 `.app-shell`：登录页与系统初始化页**刻意不套应用壳**（E2E 里断言它们
+ * 没有 `.topbar`），等它会永远超时——踩过一次。判据退回「React 已挂载出内容」，
+ * 对全部 29 个用例都成立。
+ */
+const APP_READY = `(() => {
+  const root = document.getElementById("root");
+  return !!root && root.children.length > 0 && !root.querySelector('[data-route-state="loading"]');
+})()`;
+/**
+ * 采集矩阵。
+ *
+ * 中文
+ * ----
+ * 除了 11 条路由，还覆盖会改变渲染结果的筛选上下文：时间窗口、单/多实例 scope、
+ * 语言、身份子页。仅覆盖路由本身会漏掉「切语言后时间范围标签失配」这类回归。
+ */
+const CASES = [
+  { name: "overview-fleet", hash: "#/overview?app=all&range=1h" },
+  { name: "overview-15m", hash: "#/overview?app=all&range=15m" },
+  { name: "overview-single-app", hash: "#/overview?app=order-service&range=1h" },
+  { name: "applications", hash: "#/applications?app=order-service&range=1h" },
+  { name: "applications-15m", hash: "#/applications?app=order-service&range=15m" },
+  // 只有 order-service 有实例示例数据（`hasInstanceSamples`）。选另一个应用会走
+  // `hasInstanceSamples === false` 分支，那两句文案（`applications.summary.noSamples`
+  // 与 `applications.note.matrixScope`）此前**没有任何用例覆盖**——它们是按条件
+  // 渲染的，而两个 applications 用例都固定选 order-service，永远走不到。
+  { name: "applications-no-samples", hash: "#/applications?app=payment-service&range=1h" },
+  { name: "rules", hash: "#/rules?app=order-service&range=1h" },
+  // 规则页的类型筛选受控于 URL `view`。五个类型各一个用例 + 非法值回落。
+  { name: "rules-filter-flow", hash: "#/rules?app=order-service&range=1h&view=flow" },
+  { name: "rules-filter-degrade", hash: "#/rules?app=order-service&range=1h&view=degrade" },
+  { name: "rules-filter-system", hash: "#/rules?app=order-service&range=1h&view=system" },
+  { name: "rules-filter-authority", hash: "#/rules?app=order-service&range=1h&view=authority" },
+  { name: "rules-filter-param", hash: "#/rules?app=order-service&range=1h&view=param" },
+  { name: "rules-invalid-view", hash: "#/rules?app=order-service&range=1h&view=bogus" },
+  { name: "realtime", hash: "#/realtime?app=all&range=1h" },
+  { name: "realtime-15m", hash: "#/realtime?app=all&range=15m" },
+  { name: "faults", hash: "#/faults?app=all&range=1h" },
+  { name: "faults-15m", hash: "#/faults?app=all&range=15m" },
+  { name: "login", hash: "#/login" },
+  { name: "setup", hash: "#/setup" },
+
+  // 系统管理的 5 个 tab 各自一个用例。tab 状态进 URL query（`view=<tab id>`），
+  // 所以它们能被直接捕获。tab 还在组件 state 里的时代，这些面板的改动没有任何
+  // 自动回归保护——基线只覆盖得到默认 tab。
+  { name: "system-connections", hash: "#/system?app=all&range=1h&view=connections" },
+  { name: "system-permissions", hash: "#/system?app=all&range=1h&view=permissions" },
+  { name: "system-protocol", hash: "#/system?app=all&range=1h&view=protocol" },
+  { name: "system-accounts", hash: "#/system?app=all&range=1h&view=accounts" },
+  { name: "system-roles", hash: "#/system?app=all&range=1h&view=roles" },
+  // 无 `view` 时应回落到默认 tab，且不产生多余的 query
+  { name: "system-default-tab", hash: "#/system?app=all&range=1h" },
+  // 非法 view 必须回落到默认 tab，而不是「就近猜一个」
+  { name: "system-invalid-view", hash: "#/system?app=all&range=1h&view=bogus" },
+
+  { name: "accounts", hash: "#/accounts?app=all&range=1h&account=account-admin" },
+  { name: "roles", hash: "#/roles?app=all&range=1h&account=account-view" },
+  { name: "change-password", hash: "#/change-password?app=all&range=1h&account=account-admin" },
+];
+
+/**
+ * 用例过滤。
+ *
+ * 多个 feature 并行重建时，每个 worker 只校验自己负责的路由：其余路由此刻可能正
+ * 处于其他 worker 的中间态，纳入比较只会产生无法归因的误报。用 `ONLY=a,b` 指定。
+ */
+const ONLY = process.env.ONLY
+  ? new Set(
+      process.env.ONLY.split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    )
+  : null;
+
+/**
+ * 声明接受的渲染变化。
+ *
+ * 只在**刻意修复布局缺陷**时使用（此时 DOM 正确但像素应当改变）。它把「我知道这
+ * 个用例的渲染会变，且这是有意的」变成一次显式声明并留在命令输出里，而不是让
+ * 差异被悄悄重新基线化。
+ */
+const ACCEPT_RENDER = process.env.ACCEPT_RENDER
+  ? new Set(
+      process.env.ACCEPT_RENDER.split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    )
+  : new Set();
+
+/**
+ * 声明接受某个用例的 **DOM 变化**。
+ *
+ * 中文
+ * ----
+ * DOM 与像素是独立门禁；两者都不能替代交互正确性。有意的结构或文案变更
+ * （例如登录页加一句演示账号说明）必须能被显式记录，而不是靠「换个基线目录」
+ * 让它变绿——后者是静默的，而静默重新基线化会让人以为这次变更从未发生。
+ *
+ * **必须同时给 `DOM_CHANGE_REASON`**，否则直接报错退出：接受一个自己说不出原因的
+ * DOM 变化，和不接受它的差别只剩下一个绿色输出。
+ */
+const ACCEPT_DOM = process.env.ACCEPT_DOM
+  ? new Set(
+      process.env.ACCEPT_DOM.split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    )
+  : new Set();
+
+/** 接受 DOM 变化时必须给出的原因，会打印在输出里。 */
+const DOM_CHANGE_REASON = process.env.DOM_CHANGE_REASON ?? "";
+
+if (ACCEPT_DOM.size > 0 && !DOM_CHANGE_REASON.trim()) {
+  throw new Error(
+    "ACCEPT_DOM 需要同时提供 DOM_CHANGE_REASON：接受一个说不出原因的 DOM 变化，" +
+      "与不接受它只差一个绿色输出。",
+  );
+}
+
+/**
+ * 渲染容差。可用 `TOLERANCE_RATIO` / `TOLERANCE_MAX_DELTA` 覆盖。
+ *
+ * 默认值来自既有浏览器基线：抗锯齿抖动上限约 0.0077% 像素 / 通道差 44；
+ * 真实布局回归是 0.68% / 通道差 233。阈值取抖动上限的约 6 倍与 1.8 倍。
+ */
+const TOLERANCE = Object.freeze({
+  ratio: Number(process.env.TOLERANCE_RATIO ?? DEFAULT_TOLERANCE.ratio),
+  maxDelta: Number(process.env.TOLERANCE_MAX_DELTA ?? DEFAULT_TOLERANCE.maxDelta),
+});
+
+/** 按过滤器筛选用例。 */
+function selectedCases() {
+  return ONLY ? CASES.filter((item) => ONLY.has(item.name)) : CASES;
+}
+
+/**
+ * 截一张图并等到**渲染收敛**。
+ *
+ * 中文
+ * ----
+ * 页面里存在懒绘制（Astryx 的 `content-visibility: auto`），视口下缘的内容按需补绘。
+ * 截图若早于补绘完成，那一带会画成页面背景色；晚于则画成面板底色。两种结果都是
+ * **合法渲染**，但捕获到哪一个是随机的——同一份代码 8 次采样里 5 次落在 A、3 次落在
+ * B，这会让像素门禁变成随机噪声，而失败信息指向的区域其实与被测改动无关。
+ *
+ * 修法不是去猜绘制时序，而是**拒绝接受未收敛的捕获**：连续两次截图一致才算数。
+ * 收敛后记录的就是稳定态，基线与比对才重新有意义。代价约 1.7 倍截图时间。
+ *
+ * 逐字节比较足够：像素完全相同则 PNG 编码结果也完全相同（实测同态两次 md5 一致）。
+ *
+ * @param browser 由 `connectIabBrowser()` 得到的 CDP 会话，**整个捕获共用一个**。
+ */
+async function captureSettled(page, testCase, outDir) {
+  const finalPath = path.join(outDir, `${testCase.name}.png`);
+  const url = `${BASE_URL}/${testCase.hash}`;
+
+  let previous = null;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    // 每次都重新导航 + 清存储：实例被复用，不这么做就会把上一个用例的
+    // localStorage（语言偏好、演示会话）带进来。
+    await page.clearStorage(new URL(BASE_URL).origin);
+    await page.goto(url);
+    await page.waitFor(APP_READY, { label: testCase.name });
+    await page.waitForStableLayout();
+    const current = await page.screenshot();
+    if (previous !== null && current.equals(previous)) {
+      writeFileSync(finalPath, current);
+      return { attempts: attempt, converged: true };
+    }
+    previous = current;
+  }
+  // 5 次仍未收敛：采用最后一次，并如实标记，让比对阶段知道这条不可靠。
+  writeFileSync(finalPath, previous);
+  return { attempts: 5, converged: false };
+}
+
+async function captureCase(page, testCase, outDir) {
+  const url = `${BASE_URL}/${testCase.hash}`;
+  await page.clearStorage(new URL(BASE_URL).origin);
+  await page.goto(url);
+  await page.waitFor(APP_READY, { label: testCase.name });
+  await page.waitForStableLayout();
+  const raw = await page.html();
+  writeFileSync(path.join(outDir, `${testCase.name}.raw-dom`), raw, "utf8");
+  const dom = normalizeDom(raw);
+  writeFileSync(path.join(outDir, `${testCase.name}.html`), dom, "utf8");
+
+  const shot = await captureSettled(page, testCase, outDir);
+  return { name: testCase.name, bytes: dom.length, ...shot };
+}
+
+async function capture(outDir) {
+  if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
+  const browser = await connectIabBrowser({ viewport: VIEWPORT });
+  const results = [];
+  try {
+    const page = await browser.newPage();
+    for (const testCase of selectedCases()) {
+      let result;
+      try {
+        result = await captureCase(page, testCase, outDir);
+      } catch (error) {
+        // 单个用例失败不该毁掉整轮——这正是超时+重试没能兜住的那类损失
+        // （缺 per-case 隔离时，一个卡住就把前面已捕获的结果一起丢掉）。
+        process.stdout.write(
+          `  ✗ ${testCase.name.padEnd(24)} 捕获失败：${String(error?.message ?? error)}\n`,
+        );
+        result = { name: testCase.name, bytes: 0, attempts: 0, converged: false, failed: true };
+      }
+      results.push(result);
+      // 收敛信息必须可见：静默重采会让人以为一次就稳定，而那正是本工具出过问题的地方。
+      const settle = result.converged
+        ? `settle=${result.attempts}`
+        : `⚠ 未收敛(重试 ${result.attempts} 次)`;
+      process.stdout.write(
+        `  ${result.failed || !result.converged ? "✗" : "✓"} ${result.name.padEnd(24)} dom=${result.bytes}B  ${settle}\n`,
+      );
+    }
+  } finally {
+    // 仅关闭本工具创建的页面和 CDP 连接；Codex 内置浏览器本身保持运行。
+    await browser.close();
+  }
+  const incomplete = results.filter((result) => result.failed || !result.converged);
+  if (incomplete.length > 0)
+    throw new Error(`Capture incomplete: ${incomplete.map((result) => result.name).join(", ")}`);
+  return results.length;
+}
+
+function firstDifference(baseline, candidate) {
+  const limit = Math.min(baseline.length, candidate.length);
+  let index = 0;
+  while (index < limit && baseline[index] === candidate[index]) index += 1;
+  const start = Math.max(0, index - 120);
+  return {
+    index,
+    baselineLength: baseline.length,
+    candidateLength: candidate.length,
+    baselineExcerpt: baseline.slice(start, index + 160),
+    candidateExcerpt: candidate.slice(start, index + 160),
+  };
+}
+
+/** 截图内容摘要。摘要相同即像素级完全一致，可跳过像素扫描。 */
+function renderDigest(filePath) {
+  return createHash("sha256").update(readFileSync(filePath)).digest("hex").slice(0, 16);
+}
+
+/**
+ * 比较两张截图的渲染结果。
+ *
+ * 不直接比摘要：抗锯齿与字体栅格化在不同浏览器会话之间有极少量抖动
+ * （实测同一页面两次捕获最多 89 像素 / 0.0077% / 最大通道差 44），而真实布局
+ * 回归的量级是 7849 像素 / 0.68% / 最大通道差 233。改用容差像素比对，两个条件
+ * 任一超限才判为回归。
+ */
+function compareRender(name, basePng, newPng) {
+  if (!existsSync(basePng) || !existsSync(newPng)) {
+    return { state: "截图缺失", failure: { reason: "基线或当前 PNG 缺失，不能证明渲染一致" } };
+  }
+  if (renderDigest(basePng) === renderDigest(newPng)) {
+    return { state: "渲染一致", failure: null };
+  }
+  const result = diffPng(basePng, newPng, TOLERANCE);
+  if (!result.beyondTolerance) {
+    return {
+      state: `渲染一致(容差内 ${result.differing}px)`,
+      failure: null,
+    };
+  }
+  if (ACCEPT_RENDER.has(name)) {
+    return {
+      state: `渲染变化(已声明接受 ${result.differing}px)`,
+      failure: null,
+      accepted: true,
+    };
+  }
+  const region = result.bbox
+    ? `区域 x${result.bbox[0]}-${result.bbox[2]} y${result.bbox[1]}-${result.bbox[3]}`
+    : "全图";
+  return {
+    state: result.sizeMismatch
+      ? "渲染不同(尺寸变化)"
+      : `渲染不同 ${result.differing}px/${(result.ratio * 100).toFixed(4)}% Δ${result.maxDelta}`,
+    failure: {
+      reason: result.sizeMismatch
+        ? `渲染不同：尺寸从 ${result.baselineSize} 变为 ${result.candidateSize}`
+        : `渲染不同：${result.differing} 像素（${(result.ratio * 100).toFixed(4)}%），最大通道差 ${result.maxDelta}，${region}`,
+    },
+  };
+}
+
+function compare(baseDir, newDir) {
+  if (!existsSync(baseDir)) throw new Error(`基线目录不存在: ${baseDir}`);
+  const caseNames = readdirSync(baseDir)
+    .filter((name) => name.endsWith(".html"))
+    .map((name) => name.replace(/\.html$/, ""))
+    .filter((name) => !ONLY || ONLY.has(name))
+    .sort();
+  if (caseNames.length === 0) throw new Error(`基线目录没有 .html 快照: ${baseDir}`);
+
+  const failures = [];
+  const acceptedDom = [];
+  const acceptedRender = [];
+  let domEqual = 0;
+  let renderEqual = 0;
+
+  for (const name of caseNames) {
+    const baseHtml = path.join(baseDir, `${name}.html`);
+    const newHtml = path.join(newDir, `${name}.html`);
+    const basePng = path.join(baseDir, `${name}.png`);
+    const newPng = path.join(newDir, `${name}.png`);
+
+    if (!existsSync(newHtml)) {
+      failures.push({ name, reason: "新快照缺失该用例" });
+      process.stdout.write(`  ✗ ${name.padEnd(24)} 快照缺失\n`);
+      continue;
+    }
+
+    // Apply the same noise policy to older captures without rewriting them.
+    const baseRaw = path.join(baseDir, `${name}.raw-dom`),
+      newRaw = path.join(newDir, `${name}.raw-dom`);
+    const rawAvailable = existsSync(baseRaw) && existsSync(newRaw);
+    const normalize = rawAvailable ? normalizeDom : normalizeLegacyDom;
+    const baseline = normalize(readFileSync(rawAvailable ? baseRaw : baseHtml, "utf8"));
+    const candidate = normalize(readFileSync(rawAvailable ? newRaw : newHtml, "utf8"));
+    if (!rawAvailable)
+      process.stdout.write(
+        `  历史快照 ${name}: 旧 ID 已被抹掉，DOM 检查不证明原始 ID/ARIA；当前关系另由浏览器用例验证\n`,
+      );
+    const domOk = baseline === candidate;
+    const domAccepted = !domOk && ACCEPT_DOM.has(name);
+    if (domOk) domEqual += 1;
+    else if (domAccepted) acceptedDom.push(name);
+    else failures.push({ name, reason: "DOM 不等价", ...firstDifference(baseline, candidate) });
+
+    // DOM 相等但渲染不同 = 纯 CSS 层回归。这是最容易漏掉的一类。
+    const render = compareRender(name, basePng, newPng);
+    if (render.failure) {
+      failures.push({ name, reason: render.failure.reason });
+    } else if (render.accepted) {
+      acceptedRender.push(name);
+    } else if (render.state.startsWith("渲染一致")) {
+      renderEqual += 1;
+    }
+
+    process.stdout.write(
+      `  ${(domOk || domAccepted) && !render.failure ? "✓" : "✗"} ${name.padEnd(24)} ` +
+        `DOM ${domOk ? "等价" : domAccepted ? "变化(已声明接受)" : "不等价"} · ${render.state}\n`,
+    );
+  }
+
+  const newCases = readdirSync(newDir)
+    .filter((name) => name.endsWith(".html"))
+    .map((name) => name.replace(/\.html$/, ""))
+    .filter((name) => !caseNames.includes(name))
+    .filter((name) => !ONLY || ONLY.has(name));
+  for (const name of newCases) {
+    failures.push({ name, reason: "新增了基线中不存在的用例" });
+  }
+
+  process.stdout.write(
+    `\n用例 ${caseNames.length} 个 · DOM 等价 ${domEqual} 个 · 渲染一致 ${renderEqual} 个`,
+  );
+  if (acceptedDom.length > 0) {
+    process.stdout.write(
+      ` · 已声明接受的 DOM 变化: ${acceptedDom.join(", ")}（${DOM_CHANGE_REASON}）`,
+    );
+  }
+  if (acceptedRender.length > 0) {
+    process.stdout.write(` · 已声明接受的渲染变化: ${acceptedRender.join(", ")}`);
+  }
+  process.stdout.write("\n");
+  if (failures.length > 0) {
+    process.stdout.write("\n差异详情:\n");
+    for (const failure of failures) {
+      process.stdout.write(`\n[${failure.name}] ${failure.reason}\n`);
+      if (failure.baselineExcerpt !== undefined) {
+        process.stdout.write(
+          `  首个差异位置: ${failure.index} (基线 ${failure.baselineLength}B vs 当前 ${failure.candidateLength}B)\n`,
+        );
+        process.stdout.write(`  基线: …${failure.baselineExcerpt}…\n`);
+        process.stdout.write(`  当前: …${failure.candidateExcerpt}…\n`);
+      }
+    }
+  }
+  return failures.length;
+}
+
+const [command, ...rest] = process.argv.slice(2);
+// 顶层 await：`capture()` 现在是 async（CDP 模式要等浏览器起来）。改回同步 +
+// `process.exit(0)` 会直接杀掉还没 settle 的 promise，捕获会静默地少几个用例。
+if (command === "capture") {
+  const outDir = rest[0];
+  if (!outDir) throw new Error("用法: capture <outDir>");
+  process.stdout.write(
+    `捕获基线 -> ${outDir} (${selectedCases().length} 个用例)${ONLY ? ` [ONLY=${[...ONLY].join(",")}]` : ""}\n`,
+  );
+  const count = await capture(outDir);
+  process.stdout.write(`\n完成: ${count} 个用例\n`);
+  process.exit(0);
+} else if (command === "compare") {
+  const [baseDir, newDir] = rest;
+  if (!baseDir || !newDir) throw new Error("用法: compare <baseDir> <newDir>");
+  const failures = compare(baseDir, newDir);
+  process.exit(failures > 0 ? 1 : 0);
+} else {
+  throw new Error("用法: capture <outDir> | compare <baseDir> <newDir>");
+}

@@ -1,0 +1,43 @@
+// Private presentation ownership; colors are supplied by the selected skin.
+.table-scroll {
+  max-width: 100%;
+  min-width: 0;
+}
+.data-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+.data-table th {
+  background: var(--sentinel-color-data-table-background);
+  color: var(--sentinel-color-data-table-color);
+  font-weight: 550;
+  padding: 10px 12px;
+  border-right: 1px solid var(--sentinel-color-data-table-border-right);
+}
+.data-table td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--sentinel-color-data-table-border-bottom);
+  color: var(--sentinel-color-data-table-color-2);
+}
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.data-table tr:global(.selected) td {
+  background: var(--sentinel-color-data-table-background-2);
+}
+.data-table :global(.link-button) {
+  font-size: 12px;
+}
+.data-table tbody tr:hover td {
+  background-color: var(--sentinel-color-data-table-background-color);
+}
+.table-note {
+  font-size: 11px;
+  color: var(--sentinel-color-text-muted);
+  margin: 0;
+  padding: 9px 14px;
+  border-top: 1px solid var(--sentinel-color-border);
+}

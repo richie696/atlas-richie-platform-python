@@ -168,6 +168,11 @@ class _HttpxClientFactory:
                 max_keepalive_connections=options.max_keepalive_connections,
             ),
             follow_redirects=options.follow_redirects,
+            verify=(
+                options.ssl_context
+                if options.ssl_context is not None
+                else True
+            ),
         )
 
     @staticmethod
@@ -180,6 +185,11 @@ class _HttpxClientFactory:
                 max_keepalive_connections=options.max_keepalive_connections,
             ),
             follow_redirects=options.follow_redirects,
+            verify=(
+                options.ssl_context
+                if options.ssl_context is not None
+                else True
+            ),
         )
 
 

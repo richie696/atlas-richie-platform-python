@@ -1,0 +1,40 @@
+:root {
+  font-family: var(--sentinel-font-body);
+  color: var(--sentinel-color-text-primary);
+  background: var(--sentinel-color-background-base);
+  font-synthesis: none;
+}
+* {
+  box-sizing: border-box;
+}
+html {
+  scroll-behavior: smooth;
+  scroll-padding-block-start: var(--sentinel-navigation-scroll-offset);
+}
+body {
+  margin: 0;
+  background: var(--sentinel-page-background-image), var(--sentinel-color-background-base);
+  -webkit-font-smoothing: antialiased;
+}
+button,
+input,
+select {
+  font: inherit;
+}
+button {
+  cursor: pointer;
+}
+// Kept in identical cascade order for this structural move; scope/keyboard review belongs to F3.3.
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--sentinel-color-accent);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}

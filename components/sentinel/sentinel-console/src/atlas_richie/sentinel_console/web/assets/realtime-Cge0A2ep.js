@@ -1,0 +1,1 @@
+const t={"realtime.intro.description":"トラフィック、応答時間、遮断、リソース圧迫がどの順に起きたかを同じ時間軸で確認します。","realtime.intro.title":"リアルタイム監視"};export{t as default};

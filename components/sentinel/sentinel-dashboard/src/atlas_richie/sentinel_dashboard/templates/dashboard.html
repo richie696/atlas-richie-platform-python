@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Atlas Richie Sentinel{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>Engine Status</h1>
+  <div class="status-grid">
+    <div class="status-card">
+      <div class="label">State</div>
+      <div class="value state-{{ engine_state }}">{{ engine_state }}</div>
+    </div>
+    <div class="status-card">
+      <div class="label">In Flight</div>
+      <div class="value">{{ in_flight }}</div>
+    </div>
+    <div class="status-card">
+      <div class="label">Rules</div>
+      <div class="value">{{ rules_count }}</div>
+    </div>
+    <div class="status-card">
+      <div class="label">Endpoint</div>
+      <div class="value endpoint"><code>http://{{ host }}:{{ port }}/</code></div>
+    </div>
+  </div>
+  {% if last_error %}
+  <div class="error-card">
+    <div class="label">Last Error</div>
+    <pre>{{ last_error }}</pre>
+  </div>
+  {% endif %}
+</section>
+
+<section class="metrics-summary">
+  <h2>Metrics Summary</h2>
+  <div class="metric-grid">
+    <div class="metric-card metric-admitted">
+      <div class="label">Admitted</div>
+      <div class="value">{{ total_admitted }}</div>
+    </div>
+    <div class="metric-card metric-blocked">
+      <div class="label">Blocked</div>
+      <div class="value">{{ total_blocked }}</div>
+    </div>
+    <div class="metric-card metric-failed">
+      <div class="label">Failed</div>
+      <div class="value">{{ total_failed }}</div>
+    </div>
+  </div>
+  <p class="hint">实时 metrics 见 <a href="/dashboard/metrics">Metrics</a> 页面 (SSE 5s 推送).</p>
+</section>
+{% endblock %}

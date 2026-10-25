@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sentinel isolated browser probe</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import "/src/core/styles/index.scss";
+      import { loadAstryxLocaleCatalog } from "/src/app/i18n/astryxLocaleCatalogs.ts";
+      import { i18nReady } from "/src/app/i18n/config.ts";
+      import { readStoredLocale } from "/src/app/i18n/locales.ts";
+      await loadAstryxLocaleCatalog(readStoredLocale());
+      await i18nReady;
+      window.__sentinelProbeReady = true;
+    </script>
+  </body>
+</html>

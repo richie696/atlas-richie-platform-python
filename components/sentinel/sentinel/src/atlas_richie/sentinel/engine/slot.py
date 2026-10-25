@@ -43,6 +43,7 @@ from typing import Protocol, runtime_checkable
 
 from ..model.argument import InvocationArguments
 from ..model.context import SentinelContext
+from ..model.decision import SlotLease
 from ..model.outcome import Outcome
 from ..model.resource import Resource
 
@@ -163,7 +164,8 @@ class Slot(Protocol):
 
     子接口:
 
-    - ``on_entry_complete(outcome)`` — Engine 在 entry 完成时通知 Slot;
+    - ``on_entry_complete(outcome)`` — Engine 在 entry 完成时通知已放行该
+      entry 的 Slot; admission 阶段拒绝时,只通知此前已放行的 Slot。
       DegradeSlot 用它来统计 success / failure 计数,ParamFlowSlot 用
       它来更新热点参数统计;**不抛**异常(失败要 swallow 到 metrics)
 
@@ -182,10 +184,11 @@ class Slot(Protocol):
 
     Sub-interface:
 
-    - ``on_entry_complete(outcome)`` — Engine notifies the Slot when
-      entry completes; DegradeSlot uses it for success/failure counts,
-      ParamFlowSlot for hot-spot parameter statistics; **must not**
-      raise (failures are swallowed to metrics).
+    - ``on_entry_complete(outcome)`` — Engine notifies Slots that admitted
+      the entry; if admission is later blocked, only earlier admitted Slots
+      are notified. DegradeSlot uses it for success/failure counts,
+      ParamFlowSlot for hot-spot parameter statistics; **must not** raise
+      (failures are swallowed to metrics).
     """
 
     @property

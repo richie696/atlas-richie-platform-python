@@ -1,0 +1,6 @@
+// Sole product stylesheet entry. Astryx vendor sheets remain owned by AstryxProvider.
+// Feature and shared presentation rules are loaded only through their owned modules.
+@use "structural-tokens";
+@use "skins/dark";
+@use "reset";
+@use "astryx";

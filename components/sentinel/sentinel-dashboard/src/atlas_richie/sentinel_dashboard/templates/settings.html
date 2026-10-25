@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Settings — Atlas Richie Sentinel{% endblock %}
+{% block content %}
+<section>
+  <h1>Dashboard Settings</h1>
+  <p class="hint">read-only. 修改需要重新构造 <code>SentinelDashboard</code> 实例.</p>
+  <table class="settings-table">
+    <tr>
+      <th>Bind Host</th>
+      <td><code>{{ host }}</code></td>
+    </tr>
+    <tr>
+      <th>Bind Port</th>
+      <td><code>{{ port }}</code></td>
+    </tr>
+    <tr>
+      <th>Allow Admin</th>
+      <td>
+        {% if allow_admin %}
+        <span class="badge badge-ok">enabled</span>
+        {% else %}
+        <span class="badge badge-muted">disabled</span>
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>Admin Token</th>
+      <td>
+        {% if admin_token_set %}
+        <span class="badge badge-ok">set</span>
+        {% else %}
+        <span class="badge badge-muted">not set</span>
+        {% endif %}
+        <span class="hint">(值不外泄, 仅显示是否设置)</span>
+      </td>
+    </tr>
+    <tr>
+      <th>Audit Log Size</th>
+      <td><code>{{ audit_log_size }}</code> / 1000 cap</td>
+    </tr>
+  </table>
+</section>
+{% endblock %}

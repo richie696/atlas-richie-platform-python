@@ -1,0 +1,9 @@
+{
+  "protocol_version": "atlas-richie.reporting/v1",
+  "error_code": "MALFORMED_ENVELOPE",
+  "message": "field 'sequence' must be int64, got string",
+  "details": {
+    "field": "sequence",
+    "got_type": "string"
+  }
+}

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Atlas Richie Sentinel Dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🛡️</span>
+      <span class="name">Atlas Richie Sentinel</span>
+      <span class="version">v0.3.0</span>
+    </div>
+    <nav class="nav">
+      <a href="/" {% if request.url.path == "/" %}class="active"{% endif %}>Dashboard</a>
+      <a href="/dashboard/rules" {% if request.url.path.startswith("/dashboard/rules") %}class="active"{% endif %}>Rules</a>
+      <a href="/dashboard/metrics" {% if request.url.path == "/dashboard/metrics" %}class="active"{% endif %}>Metrics</a>
+      <a href="/dashboard/settings" {% if request.url.path == "/dashboard/settings" %}class="active"{% endif %}>Settings</a>
+      <a href="/dashboard/audit" {% if request.url.path == "/dashboard/audit" %}class="active"{% endif %}>Audit</a>
+    </nav>
+  </header>
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="footer">
+    <span>loopback-only · admin disabled by default · audit capped 1000</span>
+  </footer>
+  <script src="/static/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

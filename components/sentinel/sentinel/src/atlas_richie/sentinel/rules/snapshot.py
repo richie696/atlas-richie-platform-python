@@ -47,9 +47,62 @@ from __future__ import annotations
 import enum
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Mapping
+
+_PROVENANCE_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
+_PROVENANCE_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_MAX_SAFE_JSON_INTEGER = 9_007_199_254_740_991
+
+
+class RuleTargetKind(enum.StrEnum):
+    """Supported rule categories for one independently published target."""
+
+    FLOW = "flow"
+    DEGRADE = "degrade"
+    SYSTEM = "system"
+    AUTHORITY = "authority"
+    PARAM = "param"
+
+
+@dataclass(frozen=True, slots=True)
+class RuleTargetProvenance:
+    """Immutable provenance for one exact managed rule target."""
+
+    binding_id: str
+    publication_id: str
+    target_version_id: str
+    publication_sequence: int
+    rule_kind: RuleTargetKind
+    profile_id: str
+    payload_sha256: str
+
+    def __post_init__(self) -> None:
+        for value in (
+            self.binding_id,
+            self.publication_id,
+            self.target_version_id,
+            self.profile_id,
+        ):
+            if (
+                not isinstance(value, str)
+                or _PROVENANCE_IDENTIFIER_PATTERN.fullmatch(value) is None
+            ):
+                raise ValueError("rule target provenance identifier is invalid")
+        if (
+            type(self.publication_sequence) is not int
+            or not 1 <= self.publication_sequence <= _MAX_SAFE_JSON_INTEGER
+        ):
+            raise ValueError("rule target publication sequence is invalid")
+        if not isinstance(self.rule_kind, RuleTargetKind):
+            raise TypeError("rule target kind must use RuleTargetKind")
+        if (
+            not isinstance(self.payload_sha256, str)
+            or _PROVENANCE_SHA256_PATTERN.fullmatch(self.payload_sha256) is None
+        ):
+            raise ValueError("rule target payload digest is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,9 +151,7 @@ class RuleVersion:
         if self.epoch < 0:
             raise ValueError(f"RuleVersion.epoch must be >= 0 (got {self.epoch})")
         if self.revision < 0:
-            raise ValueError(
-                f"RuleVersion.revision must be >= 0 (got {self.revision})"
-            )
+            raise ValueError(f"RuleVersion.revision must be >= 0 (got {self.revision})")
         if len(self.checksum) != 64:
             raise ValueError(
                 f"RuleVersion.checksum must be 64-char SHA-256 hex "
@@ -136,7 +187,9 @@ class RuleVersion:
         if not isinstance(other, RuleVersion):
             return NotImplemented
         return (self.epoch, self.revision, self.checksum) < (
-            other.epoch, other.revision, other.checksum,
+            other.epoch,
+            other.revision,
+            other.checksum,
         )
 
 
@@ -171,6 +224,7 @@ class RuleSnapshot:
     rules: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     applied_at_ns: int = 0
     source_id: str = ""
+    provenance: tuple[RuleTargetProvenance, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.rules, MappingProxyType):
@@ -179,6 +233,13 @@ class RuleSnapshot:
             raise ValueError(
                 f"RuleSnapshot.applied_at_ns must be >= 0 (got {self.applied_at_ns})"
             )
+        if not isinstance(self.provenance, tuple) or len(self.provenance) > 5:
+            raise ValueError("RuleSnapshot.provenance must be a bounded tuple")
+        if any(not isinstance(item, RuleTargetProvenance) for item in self.provenance):
+            raise TypeError("RuleSnapshot.provenance contains an invalid value")
+        binding_ids = tuple(item.binding_id for item in self.provenance)
+        if len(binding_ids) != len(set(binding_ids)):
+            raise ValueError("RuleSnapshot.provenance binding IDs must be unique")
 
 
 class RuleSnapshotAppliedEvent:
@@ -194,17 +255,26 @@ class RuleSnapshotAppliedEvent:
     dataclass + engine-internal ``_emit_event`` placeholder).
     """
 
-    __slots__ = ("version", "rule_count", "at_ns")
+    __slots__ = ("at_ns", "provenance", "rule_count", "version")
 
-    def __init__(self, version: RuleVersion, rule_count: int, at_ns: int) -> None:
+    def __init__(
+        self,
+        version: RuleVersion,
+        rule_count: int,
+        at_ns: int,
+        provenance: tuple[RuleTargetProvenance, ...] = (),
+    ) -> None:
         self.version = version
         self.rule_count = rule_count
         self.at_ns = at_ns
+        self.provenance = provenance
 
 
 # Re-export for convenience
 __all__ = [
     "RuleVersion",
+    "RuleTargetKind",
+    "RuleTargetProvenance",
     "RuleSnapshot",
     "RuleSnapshotAppliedEvent",
 ]

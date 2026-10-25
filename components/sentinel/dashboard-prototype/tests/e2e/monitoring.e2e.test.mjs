@@ -1,0 +1,180 @@
+import { before, after, test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { E2E_BASE_URL, connectIabBrowser } from "./cdp.mjs";
+import { mountReactProbe } from "./probeHarness.mjs";
+let browser;
+before(async () => {
+  browser = await connectIabBrowser();
+});
+after(async () => {
+  await browser?.close();
+});
+async function withPage(run) {
+  const page = await browser.newPage();
+  try {
+    await page.clearStorage(new URL(E2E_BASE_URL).origin);
+    await mountReactProbe(page, E2E_BASE_URL, {
+      id: "monitor-probe",
+      modulePath: "/tests/e2e/probes/RealtimeMonitoringProbe.tsx",
+      componentName: "RealtimeMonitoringProbe",
+      topologyFactoryName: "createRealtimeProbeTopology",
+      cleanupName: "__monitorCleanup",
+      topologyName: "__monitorTopology",
+    });
+    await page.waitFor(`!!document.querySelector('#monitor-probe [data-metric-card]')`);
+    await run(page);
+    assert.deepEqual(page.consoleErrors, []);
+    await page.eval("window.__monitorCleanup()");
+  } finally {
+    await page.close();
+  }
+}
+const summary = (page) =>
+  page.eval(
+    `JSON.parse(document.querySelector('#monitor-probe [data-monitor-probe-summary]').textContent)`,
+  );
+const state = (page, status) =>
+  page.waitFor(
+    `JSON.parse(document.querySelector('#monitor-probe [data-monitor-probe-summary]').textContent).status===${JSON.stringify(status)}`,
+  );
+const click = (page, text) => page.clickByText(text, "#monitor-probe button");
+const quiet = (page) => page.eval("new Promise(resolve=>setTimeout(resolve,700))");
+async function select(page, label, value) {
+  const selector = await page.eval(
+    `[...document.querySelectorAll('#monitor-probe label')].find(node=>node.textContent===${JSON.stringify(label)}).htmlFor`,
+  );
+  await page.click("#" + selector.replace(/[^a-zA-Z0-9_-]/g, (x) => "\\" + x));
+  await page.waitFor(
+    `[...document.querySelectorAll('[role=option]')].some(node=>node.textContent.trim()===${JSON.stringify(value)}&&node.getBoundingClientRect().width>0&&node.getBoundingClientRect().height>0)`,
+  );
+  const index = await page.eval(
+    `[...document.querySelectorAll('[role=option]')].findIndex(node=>node.textContent.trim()===${JSON.stringify(value)}&&node.getBoundingClientRect().width>0&&node.getBoundingClientRect().height>0)`,
+  );
+  await page.click("[role=option]", { index });
+}
+test("MONITOR rendered: pause only stops browser refresh; resume reads latest rolling window without replay cursor or overlap", async () =>
+  withPage(async (page) => {
+    assert.match(await page.text("#monitor-probe [data-monitor-status]"), /后台采集与流控继续运行/);
+    await click(page, "暂停刷新");
+    const paused = await summary(page);
+    await quiet(page);
+    assert.equal((await summary(page)).reads, paused.reads);
+    await page.click("#monitor-probe [data-monitor-advance]");
+    await click(page, "恢复并读取最新窗口");
+    await page.waitFor(
+      `JSON.parse(document.querySelector('#monitor-probe [data-monitor-probe-summary]').textContent).window?.toMs===${Date.parse("2026-10-07T00:11:00Z")}`,
+    );
+    await click(page, "暂停刷新");
+    assert.equal((await summary(page)).maxActive, 1);
+    assert.equal((await summary(page)).mode, "paused");
+  }));
+test("MONITOR rendered: application/metric selection requery same page; fixed window remains stable and unavailable TPS stays honest", async () =>
+  withPage(async (page) => {
+    await select(page, "应用", "app-two");
+    await page.waitFor(
+      `JSON.parse(document.querySelector('#monitor-probe [data-monitor-probe-summary]').textContent).selected.context.appId==='app-two'`,
+    );
+    await page.waitFor(
+      `document.querySelector('#monitor-probe [data-metric-card=http_qps]')?.textContent.includes('84')`,
+    );
+    assert.match(await page.text("#monitor-probe .intro"), /实时监控/);
+    await select(page, "指标", "业务 TPS");
+    await page.waitFor(`document.querySelectorAll('#monitor-probe [data-metric-card]').length===1`);
+    assert.match(await page.text("#monitor-probe [data-metric-card=tps]"), /尚未接入/);
+    await select(page, "窗口方式", "固定历史窗口");
+    await state(page, "partial");
+    await click(page, "暂停刷新");
+    const fixed = (await summary(page)).selected.context.window;
+    await page.click("#monitor-probe [data-monitor-advance]");
+    await click(page, "恢复并读取最新窗口");
+    await state(page, "partial");
+    await click(page, "暂停刷新");
+    assert.deepEqual((await summary(page)).window, fixed);
+  }));
+test("MONITOR rendered: offline stale retains original timestamps, explicit recovery is read only; revoke and invalid queries hide old samples", async () =>
+  withPage(async (page) => {
+    await click(page, "暂停刷新");
+    const original = (await summary(page)).window;
+    await page.click("#monitor-probe [data-monitor-advance]");
+    await page.click("#monitor-probe [data-monitor-mode=offline]");
+    await click(page, "恢复并读取最新窗口");
+    await state(page, "stale");
+    assert.deepEqual((await summary(page)).window, original);
+    assert.match(await page.text("#monitor-probe"), /不能代表当前状态/);
+    assert.doesNotMatch(await page.text("#monitor-probe"), /PRIVATE-MONITOR-ERROR/);
+    await page.click("#monitor-probe [data-monitor-mode=success]");
+    await click(page, "重试读取");
+    await page.waitFor(
+      `JSON.parse(document.querySelector('#monitor-probe [data-monitor-probe-summary]').textContent).window?.toMs>${original.toMs}`,
+    );
+    await state(page, "partial");
+    await page.click("#monitor-probe [data-monitor-revoke]");
+    await state(page, "denied");
+    await page.waitFor(
+      `document.querySelector('#monitor-probe [data-metric-card]')?.dataset.quality==='unavailable'`,
+    );
+    assert.equal(await page.count("#monitor-probe [data-metric-card][data-quality=available]"), 0);
+    const reads = (await summary(page)).reads;
+    await quiet(page);
+    assert.equal((await summary(page)).reads, reads);
+  }));
+test("MONITOR rendered: one pending poll, pause cancels and late values cannot publish; disposal stops requests, invalid selection does not read", async () =>
+  withPage(async (page) => {
+    await click(page, "暂停刷新");
+    await page.click("#monitor-probe [data-monitor-mode=held]");
+    await click(page, "恢复并读取最新窗口");
+    await state(page, "refreshing");
+    const pending = (await summary(page)).reads;
+    await quiet(page);
+    assert.equal((await summary(page)).reads, pending);
+    await click(page, "暂停刷新");
+    assert.equal((await summary(page)).active, 0);
+    assert.ok((await summary(page)).aborts >= 1);
+    await page.click("#monitor-probe [data-monitor-release]");
+    await quiet(page);
+    assert.equal((await summary(page)).reads, pending);
+    await page.click("#monitor-probe [data-monitor-mode=success]");
+    await page.click("#monitor-probe [data-monitor-invalid]");
+    await page.waitFor(
+      `document.querySelector('#monitor-probe').textContent.includes('查询范围或指标不合法')`,
+    );
+    assert.equal(await page.count("#monitor-probe [data-metric-card]"), 0);
+    assert.equal((await summary(page)).reads, pending);
+    await page.eval("window.__monitorTopology.monitor.dispose()");
+    await quiet(page);
+    assert.equal((await summary(page)).reads, pending);
+  }));
+test("MONITOR rendered: real charts, UTC window/source/coverage, responsive 320px Japanese layout and pixel evidence", async () =>
+  withPage(async (page) => {
+    await click(page, "暂停刷新");
+    await page.send("Emulation.setDeviceMetricsOverride", {
+      width: 1280,
+      height: 1400,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await page.waitFor(
+      `[...document.querySelectorAll('#monitor-probe .plot svg')].some(node=>node.getBoundingClientRect().width>300)`,
+    );
+    const directory = artifactDirectory("sentinel-f4-observation-20261007");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(`${directory}/monitor-desktop.png`, await page.screenshot());
+    await page.send("Emulation.setDeviceMetricsOverride", {
+      width: 320,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await page.eval(
+      `(async()=>{const {changeLocale}=await import('/src/app/i18n/changeLocale.ts');await changeLocale('ja-JP');await Promise.all(document.getAnimations().filter(animation=>animation.playState==='running'&&Number.isFinite(animation.effect?.getTiming().iterations)).map(animation=>animation.finished.catch(()=>{})));})()`,
+    );
+    await page.waitFor(`!!document.querySelector('#monitor-probe [data-metric-card]')`);
+    await page.eval(
+      `document.querySelector('#monitor-probe').scrollIntoView({block:'start',behavior:'instant'})`,
+    );
+    assert.ok(await page.eval("document.documentElement.scrollWidth<=321"));
+    assert.match(await page.text("#monitor-probe"), /未接続|サンプルカバレッジ/);
+    writeFileSync(`${directory}/monitor-narrow-ja.png`, await page.screenshot());
+  }));
+import { artifactDirectory } from "./artifacts.mjs";

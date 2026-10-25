@@ -68,9 +68,16 @@ conventions listed above (full data-id via
 
 from __future__ import annotations
 
-from .codec import NacosCodecError, NacosDecodeError
+from .codec import (
+    NacosCodecError,
+    NacosDecodeError,
+    NacosEncodeError,
+    decode_managed_rule_snapshot,
+    encode_rule_snapshot,
+)
 from .config import (
     NacosAuth,
+    NacosManagedRuleBinding,
     NacosRuleSourceConfig,
     NacosSourceError,
     NacosSourceState,
@@ -84,6 +91,7 @@ __all__ = [
     "__version__",
     # M6.1.2 (done): 不可变 config + 值对象 + 状态 / 错误 enum
     "NacosAuth",
+    "NacosManagedRuleBinding",
     "NacosTLS",
     "NacosRuleSourceConfig",
     "NacosSourceState",
@@ -91,6 +99,9 @@ __all__ = [
     # M6.1.3 (done): 5 类 rule data-id → RuleSnapshot 解码
     "NacosCodecError",
     "NacosDecodeError",
+    "NacosEncodeError",
+    "decode_managed_rule_snapshot",
+    "encode_rule_snapshot",
     # M6.1.3 - M6.1.5 (done): 完整生命周期 + 错误分类 + aclose
     "NacosRuleSource",
 ]

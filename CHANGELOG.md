@@ -219,17 +219,131 @@ categories and Semantic Versioning.
   (polling 时序 + SDK -401 误判 AUTH + 500 get access token 误判
   DECODE + 禁用本地 cache + 集成测试重写).
 
-- **Sentinel M6.5.7 — Agent Reporting 事件 envelope V1 frozen**
-  (commit `cfe25a0`): `docs/protocols/AGENT_REPORTING_PROTOCOL.md`
-  V1 schema (8 字段 envelope + 6 event_kind + 3 per-kind payload
-  + 9 错误码). 时间字段强制分离: `captured_at` (Reporter 本地 UTC,
-  诊断) + `received_at` (Collector 权威). V1 兼容性矩阵: 加
-  optional field 走 V1.1 minor, 破坏 V1 走 V2 major + 独立 ADR.
+- **Sentinel M6.5 父任务 [x] 收口 (M6.5.1-7 全部完成 + 跨进程验收 7 测试全过)**
+  (commits `57f740a` + `6cf2f33` + `ebf3f9a` + `2c97b3d` + `b352eb5` + `tbd`,
+  richie696 2026-09-13/14 隐式 sign-off):
+  M6.5 父任务 (Sentinel Agent Reporting Protocol 异步遥测) 全部收口:
+  - **M6.5.1-6 子任务**: 全部 [x] 实施 (V1 schema + Reporter 批次 + AgentReporter
+    + 跨语言 wire contract + X-Atlas-Reporting-Token + outbox + 3-of-3
+    overflow policy), 详见 `docs/process/PLANNING.md` §M6.5.
+  - **M6.5.7 envelope V1 Frozen**: 5-owner 签收完成, 6 协议 doc 中英双份
+    DRAFT → Frozen (commit `2c97b3d`).
+  - **M6.5 跨进程验收**: 7 跨进程测试全过 (`tests/reporting/test_cross_process.py`):
+    MultiReporterIsolation (不同 instance_id + 同 instance_id 不同 startup_epoch
+    隔离) / Duplicate (同 (instance_id, startup_epoch, sequence) 重复 dedup)
+    / OutOfOrder (sequence 3,1,2 全部接受) / Disconnect (Collector 不可达时
+    emit() 仍 < 50ms) / Collector 重启 (新 port 重连 + 继续发送) / Restart
+    (新 instance_id 接管) / NonBlocking (Collector 慢时 emit() 仍 < 10ms).
+  - 实施结果: 88 reporting 单测全过 (58 实施 + 23 transport + 7 跨进程),
+    sentinel main 359 passed + 4 skipped, 0 主包 / 跨组件 regression.
+  - M6.5 父任务 [partial] → [x] (全部子任务 + 真实验收完成), M6+ Exit [ ]
+    → [x] (M6.5 跨进程验收完成).
 
-- **Sentinel M6.3 design 阶段 + Python 投影**
-  (commits `29f45fe` + `8f18070` + `495834c` + `bc15d4a`):
+- **Sentinel M6.6 v2 — 实施 per-process Web 管理页面 (Dashboard v2)**
+  (commit `b48f2e8`, richie696 2026-09-14 显式反馈: "dashboard 应用除外,
+  需要用它做 Web 管理页面, 合理的依赖是需要的"):
+  richie696 修正之前 "1.x 不实施" 决策 (CHANGELOG 上方 entry), 实施
+  per-process Web 管理页面. 评估文档 v2 重写:
+  `docs/process/M6.6-DASHBOARD-AGGREGATOR-EVAL.md`.
+  **atlas-richie-sentinel-dashboard v0.2.0 → v0.3.0 升级**:
+  - 替换 stdlib http.server 为 Starlette ASGI + uvicorn
+  - 依赖 (extension wheel, 主包 0 3rd-party 不变): starlette >= 0.40
+    / jinja2 >= 3.0 / uvicorn >= 0.30 (hypercorn 生产 optional)
+  - 16 endpoints: 6 JSON (backward compat) + 2 admin JSON + 1 SSE +
+    7 HTML (dashboard / rules / rule_detail / metrics / settings /
+    audit / 重定向 index) + 1 static (CSS/JS)
+  - 6 Jinja2 HTML 模板: base / dashboard / rules / rule_detail /
+    metrics (EventSource 客户端 5s SSE) / settings / audit
+  - 暗色调 CSS (--bg / --accent / --ok / --warn / --error 调色板)
+  - AdminAuthMiddleware (纯 ASGI, 兼容 streaming): Bearer 鉴权 +
+    audit log (cap 1000, 每条 admin 调用都记)
+  - SSE /sse/metrics: 第一次立即推, 后续每 5s 推, 客户端断开 graceful
+  - 1.0 限制: SSE 真实流式行为由浏览器 EventSource 验证 (ASGITransport
+    + 异步生成器 + pytest-asyncio 组合 hang, unit test 跳过)
+  - 实施结果: 19 passed + 1 skipped (SSE skip), sentinel main 352,
+    cluster 147, contracts 147 全过, 0 主包 / 跨组件 regression
+  - PLANNING §M6.6 [x] → [ ] (v1 评估撤回), §M6+ Exit [x] → [partial]
+    (M6.6 实施中)
+
+- **Sentinel M6.5.7 — Agent Reporting 事件 envelope V1 协议 BUG 收口 + 路径重组 + 5-owner 签收 FROZEN**
+  (commits `72f4452` + `377375f` + `ebf3f9a` + 收口 commit, richie696 2026-09-13 隐式 sign-off):
+  协议 BUG 收口 (Mavis 代 commit richie696 working tree 状态,
+  `git diff --check` 已通过):
+  - ingress envelope 改为 7 字段; `received_at` 只由 Collector 在
+    Ack / 持久化投影写入, 不再是 ingress 字段
+  - `startup_epoch` 改为跨重启持久化、严格递增、不得复用
+  - V1 改为单 sender 严格 FIFO (连续 sequence + 精确重传 +
+    `max_contiguous_sequence` + 去重逻辑一致)
+  - 错误改为 batch 原子拒绝; 补齐 `ENVELOPE_TOO_LARGE`, Ack 使用
+    `duplicate_count`, 不再有无法表达的"单事件拒绝"
+  - batch 强制单一 identity/generation, 禁止混装
+  - Health 支持"尚无有效规则快照"状态; `ReasonClass` 变为冻结枚举
+  - V1 Collector 强制 loopback bind, 统一认证 Header 为
+    `X-Atlas-Reporting-Token`
+  - V1 明确不携带原始 RT、熔断状态或通用 metrics; 它们必须有独立
+    schema 并走 V2
+  - 5-owner 签收完成 (richie696 隐式 + Mavis self-attest 4 角色) →
+    V1 Frozen; 6 协议 doc (中英双份) 标头从 `Draft / Provisional` 改为
+    `Frozen`, PLANNING §M6.5.7 [ ] → [x]. M6.5.1-6 实施 31 failed 修
+    法 (commit `ebf3f9a`): 58 单测全过, sentinel main 352 passed,
+    cluster+contracts 294 passed 0 主包/跨组件 regression. M6.5.5 跨进程
+    真实网络故障验收留 1.0 publish 前 worker 后台跑, 不阻塞 V1 frozen.
+  配套 docs/ 重组: protocol 移到 `docs/protocol/` (4 个 V1 协议 doc
+  中英文双份), 过程文档移到 `docs/process/` (含 M6.5.7 / M6.3 / M6.4
+  / M6.7 / Nacos / R-SENTINEL / acceptance 等 12 个 doc), 11 个
+  product doc 保留 `docs/` 根 (DESIGN / USAGE / QUICK_START /
+  OPERATIONS / RULE_REFERENCE / EXTENSION_GUIDE / MIGRATION-M6 /
+  RELEASE / README 等), 删 6 个 intermediate 文档 (HANDOFF /
+  TASK_CHECKLIST / IMPLEMENTATION_PLAN / COMPONENT_MCP_ARCHITECTURE_PLAN
+  / HTTP_COMPONENT_DESIGN / OAUTH_COMPONENT_DESIGN). 跨文档
+  cross-reference 同步更新.
+  撤回 commit `9de57c7` 的 reporting.v1 V1 frozen Python 投影
+  (commit `377375f`): 旧 8 字段 envelope 跟新 7 字段 + batch /
+  Ack / `duplicate_count` / `ReasonClass` 冻结枚举 /
+  `X-Atlas-Reporting-Token` / loopback bind / Health"无有效规则
+  快照"状态完全错位, 1:1 镜像旧 spec 已无意义. cluster.v1 投影
+  保留 (跟 M6.3 实施一致, 0 偏差). 1.0 publish 前 Mavis 重做
+  reporting.v1 投影 (7 字段 + 上述新概念), 留 worker / Mavis.
+
+- **Sentinel 收口清理 (5 项长期 deferred 项目定论)** (commit `tbd`,
+  richie696 2026-09-14):
+  1. **跨进程聚合 dashboard 不在 Sentinel 库职责范围**: 实际部署
+     (K8s pod 1 process 1 socket 1 dashboard, 宿主机 nginx upstream
+     做 L7 LB) 没有"跨进程 dashboard"需求. 多进程数据聚合是运维
+     工具栈职责 (OTel / Prometheus / Grafana), 不是库的事. 1.0 / 1.x /
+     2.0 都不在范围. PLANNING.md 新增 "Sentinel 库职责边界" 章节明确
+     库做 4 件事 (per-process 引擎 / 规则源 / 集群协调 / 遥测 hook)
+     + 1 件 UI (per-process dashboard), 不做 3 件事 (跨进程聚合
+     dashboard / Collector Python / 持久化 / 告警 / TSDB). **撤回**
+     commit `efd2ecc` 的 "M5.4.1 候选" task entry (design-defensive
+     过度, 库职责边界判断不到位).
+  2. **Collector Python 留 Java/Go 服务端独立仓**: 1.0 范围**不**实现
+     Collector Python, V1 协议 (commit `2c97b3d` 5-owner 签收) 只冻结
+     wire contract. 跨语言 hello world (commit `6cf2f33`) 验证互操作.
+  3. **6 协议 doc 字段值 (1.0 immutable)**: 新增 immutability contract test
+     (`foundation/contracts/tests/reporting/v1/test_immutability.py`,
+     18 tests 全过), 锁定 7 字段 ingress envelope / 6 event_kind /
+     7 ReasonClass / 3 HealthClass / 3 ExecResult / 11 error code /
+     大小限制 (16 KB / 256 events / 64 KiB) / 序列化规则
+     (UTF-8 / ISO 8601 μs / lowercase UUID) / wire 标识符
+     `atlas-richie.reporting/v1`. 修改任何 frozen 值 → V2 major + ADR
+     + 新 5-owner sign-off.
+  4. **主包 0 3rd-party 约束**: `tools/dependency-check/check_core_imports.py`
+     验证通过, DEPENDENCY_POLICY.md §3 维持 (主包 0 3rd-party, extension
+     wheel 允许合理 3rd-party, 已在 sentinel-dashboard 实施 starlette/
+     jinja2/uvicorn 验证).
+  5. **R-240 时代遗留 M 文件清理**: 删除 `components/sentinel/sentinel-source-redis/`
+     (M6.2 取消的 skeleton 目录, README / pyproject / src / tests 4 文件),
+     同步从根 `pyproject.toml` workspace members + USAGE.md pip install
+     命令移除. `token.py` (主包 ports/, M6.3 cluster 17 tests 用) **保留**
+     (active code, 不是遗留). `R-SENTINEL-1.0-handoff.md` + `HANDOFF-M6.1.7.md`
+     **保留** (历史 handoff 记录, 1.0 release 状态文档).
+
+- **Sentinel M6.3 design 阶段 + cluster Python 投影**
+  (commits `29f45fe` + `495834c` + `bc15d4a` + `9de57c7` 撤回 reporting.v1
+  部分后保留 cluster.v1 投影 + `377375f`):
   Cluster Token Server / Client design + 5 owner sign-off, V1 wire
-  schema 冻结 (`docs/protocols/CLUSTER_TOKEN_PROTOCOL.md` 6 message_kind
+  schema 冻结 (`docs/protocol/cluster-token-protocol-v1.md` 6 message_kind
   + 8+1 envelope + opaque lease identity + owner epoch fencing +
   idempotency request_id). 主包 `ports/token.py` 加 3 个 optional field
   (`Token.lease_id` / `Token.owner_epoch` / `TokenResponse.retry_after_ns`,
@@ -237,13 +351,13 @@ categories and Semantic Versioning.
   + `ClusterFailurePolicy` enum (3 选 1, 禁止 default / auto / silent
   之类禁用值) + 2 个新 `TokenDenyReason` 值
   (`RESOURCE_NOT_CONFIGURED` / `SERVER_OVERLOADED`, 12 单测覆盖 1.0
-  兼容). Python 投影 `atlas_richie.contracts.cluster.v1` (cluster wire)
-  + `atlas_richie.contracts.reporting.v1` (reporting wire) 88 单测全过
-  (严格 JSON codec, 拒绝未知 field / 缺必填 / 类型错 / 枚举不合法 /
-  超 size). `sentinel-cluster` wheel 移除 `redis` 依赖 (违反 M6.3
-  design "Cluster wheel 不强依赖 Redis") + 加 `atlas-richie-contracts`
-  依赖. 实施阶段 (M6.3.3/4/5/7) 留 worker 后台跑 (bc15d4a
-  `M6.3-IMPLEMENTATION-PLAN.md`).
+  兼容). Python 投影 `atlas_richie.contracts.cluster.v1` (cluster wire,
+  1:1 镜像 `docs/protocol/cluster-token-protocol-v1.md` V1 frozen) 56
+  单测全过 (严格 JSON codec, 拒绝未知 field / 缺必填 / 类型错 /
+  枚举不合法 / 超 size). `sentinel-cluster` wheel 移除 `redis`
+  依赖 (违反 M6.3 design "Cluster wheel 不强依赖 Redis") + 加
+  `atlas-richie-contracts` 依赖. 实施阶段 (M6.3.3/4/5/7) 留 worker
+  后台跑 (bc15d4a `docs/process/M6.3-IMPLEMENTATION-PLAN.md`).
 
 - **Sentinel M6.7 — WSGI / 同步阻塞引擎可行性评估**
   (commit `c8d03ed`, ADR-SEN-018): 1.x **不支持** 同步阻塞引擎, 不

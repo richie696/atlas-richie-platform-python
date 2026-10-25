@@ -1,0 +1,244 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sentinel-t003-console-20261019
+  labels:
+    app.kubernetes.io/part-of: atlas-richie-sentinel-acceptance
+    purpose: disposable-console-shared-state-acceptance
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: console-shared-state
+  namespace: sentinel-t003-console-20261019
+  labels:
+    app.kubernetes.io/part-of: atlas-richie-sentinel-acceptance
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: console
+  namespace: sentinel-t003-console-20261019
+  labels:
+    app.kubernetes.io/name: sentinel-console
+    app.kubernetes.io/part-of: atlas-richie-sentinel-acceptance
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-console
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sentinel-console
+        app.kubernetes.io/part-of: atlas-richie-sentinel-acceptance
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: sentinel-console
+              topologyKey: kubernetes.io/hostname
+      initContainers:
+        - name: prepare-shared-state
+          image: __SENTINEL_REGISTRY_HOST__/atlas-richie/sentinel-console@sha256:72584c4b9d46e584cb58454a8d9c4a545b52c53f57e743384b65fd0094ea08fc
+          imagePullPolicy: Always
+          command: ["sh", "-ec", "mkdir -p /var/lib/sentinel && chown 10001:10001 /var/lib/sentinel && chmod 0770 /var/lib/sentinel"]
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER"]
+          volumeMounts:
+            - name: shared-state
+              mountPath: /var/lib/sentinel
+      containers:
+        - name: console
+          image: __SENTINEL_REGISTRY_HOST__/atlas-richie/sentinel-console@sha256:72584c4b9d46e584cb58454a8d9c4a545b52c53f57e743384b65fd0094ea08fc
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: console-runtime-config
+          env:
+            - name: SENTINEL_CONSOLE_BIND_HOST
+              value: 0.0.0.0
+            - name: SENTINEL_CONSOLE_PORT
+              value: "8000"
+            - name: SENTINEL_CONSOLE_WORKERS
+              value: "1"
+            - name: SENTINEL_CONSOLE_POSTGRESQL_ROOT_CERTIFICATE
+              value: /etc/sentinel/certs/postgres-ca.crt
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: shared-state
+              mountPath: /var/lib/sentinel
+            - name: postgres-ca
+              mountPath: /etc/sentinel/certs
+              readOnly: true
+      volumes:
+        - name: shared-state
+          persistentVolumeClaim:
+            claimName: console-shared-state
+        - name: postgres-ca
+          secret:
+            secretName: postgres-tls
+            items:
+              - key: ca.crt
+                path: postgres-ca.crt
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: console
+  namespace: sentinel-t003-console-20261019
+  labels:
+    app.kubernetes.io/name: sentinel-console
+    app.kubernetes.io/part-of: atlas-richie-sentinel-acceptance
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: sentinel-console
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: sentinel-t003-console-20261019
+  labels:
+    app.kubernetes.io/name: sentinel-acceptance-postgres
+    app.kubernetes.io/part-of: atlas-richie-sentinel-acceptance
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: sentinel-acceptance-postgres
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: sentinel-t003-console-20261019
+  labels:
+    app.kubernetes.io/name: sentinel-acceptance-postgres
+    app.kubernetes.io/part-of: atlas-richie-sentinel-acceptance
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-acceptance-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sentinel-acceptance-postgres
+        app.kubernetes.io/part-of: atlas-richie-sentinel-acceptance
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: __SENTINEL_REGISTRY_HOST__/sentinel-e2e/postgres:16.10@sha256:2c72031ac25606bf94fd2fece7c35efdf263a48b08446950034f0725653f4efc
+          imagePullPolicy: Always
+          args:
+            - -c
+            - ssl=on
+            - -c
+            - ssl_cert_file=/etc/postgres/tls/tls.crt
+            - -c
+            - ssl_key_file=/etc/postgres/tls/tls.key
+          env:
+            - name: POSTGRES_DB
+              value: sentinel_t003
+            - name: POSTGRES_USER
+              value: sentinel_t003
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-runtime-config
+                  key: POSTGRES_PASSWORD
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["sh", "-ec", "pg_isready -U sentinel_t003 -d sentinel_t003"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: postgres-tls
+              mountPath: /etc/postgres/tls
+              readOnly: true
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: postgres-tls
+          secret:
+            secretName: postgres-tls
+            defaultMode: 0440

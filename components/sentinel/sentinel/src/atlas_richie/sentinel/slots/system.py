@@ -52,9 +52,11 @@ from ..errors import SystemBlocked
 from ..model.argument import InvocationArguments
 from ..model.context import SentinelContext
 from ..model.decision import SlotLease
-from ..model.resource import Resource, ResourceKind, TrafficType
+from ..model.outcome import Outcome, OutcomeKind
+from ..model.resource import Resource, TrafficType
 from ..ports.system_metric_sampler import (
     DefaultSystemMetricSampler,
+    SystemMetricLifecycle,
     SystemMetricSampler,
     SystemSnapshot,
 )
@@ -70,8 +72,8 @@ class SystemSlot(Slot):
 
         sampler = DefaultSystemMetricSampler()
         engine.add_slot(SystemSlot(rules_index=..., sampler=sampler))
-        # Engine 在 _run_slot_chain_enter 时调 sampler.record_enter(),
-        # 在 _finalize_entry 时调 sampler.record_complete(success=...)
+        # SystemSlot 在获准后调 sampler.record_enter(),
+        # Engine 通知该 Slot entry 终态时调 record_complete(success=...)
 
     English
     --------
@@ -81,9 +83,8 @@ class SystemSlot(Slot):
 
         sampler = DefaultSystemMetricSampler()
         engine.add_slot(SystemSlot(rules_index=..., sampler=sampler))
-        # Engine calls sampler.record_enter() during
-        # _run_slot_chain_enter, and sampler.record_complete() in
-        # _finalize_entry.
+        # SystemSlot records admitted requests; Engine's terminal callback
+        # lets it update sampler.record_complete(success=...).
     """
 
     @property
@@ -100,10 +101,13 @@ class SystemSlot(Slot):
         # SystemRule 没有 selector (ADR-SEN-015),不接受 RuleIndex;
         # 直接接 list[SystemRule] (按 priority 排序,调用方负责)
         self._rules_index = rules_index
-        self._system_rules = sorted(
-            system_rules or [], key=lambda r: -r.priority
+        self._system_rules = sorted(system_rules or [], key=lambda r: -r.priority)
+        self._sampler = sampler if sampler is not None else DefaultSystemMetricSampler()
+        self._sampler_lifecycle = (
+            self._sampler
+            if isinstance(self._sampler, SystemMetricLifecycle)
+            else None
         )
-        self._sampler = sampler or DefaultSystemMetricSampler()
         self._last_error: BaseException | None = None
         self._last_snapshot: SystemSnapshot | None = None
 
@@ -171,6 +175,7 @@ class SystemSlot(Slot):
             return _NoopSystemLease()
         rules = self._resolve_rules(resource)
         if not rules:
+            self._record_enter()
             return _NoopSystemLease()
         snap = self._sample()
         if snap.degraded:
@@ -182,10 +187,24 @@ class SystemSlot(Slot):
                 )
             except RuntimeError as e:
                 self._last_error = e
+            self._record_enter()
             return _NoopSystemLease()
         for rule in rules:
             self._check_rule(rule, resource, snap)
+        self._record_enter()
         return _NoopSystemLease()
+
+    def _record_enter(self) -> None:
+        if self._sampler_lifecycle is not None:
+            self._sampler_lifecycle.record_enter()
+
+    def on_entry_complete(self, outcome: Outcome) -> None:
+        """Update optional sampler accounting for a completed admitted entry."""
+        if self._sampler_lifecycle is None:
+            return
+        self._sampler_lifecycle.record_complete(
+            success=outcome.kind is OutcomeKind.SUCCEEDED
+        )
 
     def _check_rule(
         self, rule: SystemRule, resource: Resource, snap: SystemSnapshot

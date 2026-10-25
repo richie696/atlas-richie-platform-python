@@ -32,14 +32,19 @@ English
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+import re
+from collections.abc import Mapping  # noqa: F401  (used in docstring type annotations)
+from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import StrEnum
-from typing import Mapping  # noqa: F401  (used in docstring type annotations)
 
+from atlas_richie.contracts.rules.managed_publication.v1 import ManagedRuleKind
+
+_MANAGED_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 
 # ---------------------------------------------------------------------------
 # Public value objects (公开值对象)
+
 
 @dataclass(frozen=True, slots=True)
 class NacosAuth:
@@ -103,6 +108,7 @@ class NacosTLS:
 # ---------------------------------------------------------------------------
 # State / Error enums (公开状态机 / 错误分类 — M6.1.4 落地)
 
+
 class NacosSourceState(StrEnum):
     """NacosRuleSource 状态机 (operator observability 用)。
 
@@ -139,6 +145,25 @@ class NacosSourceError(StrEnum):
     EMPTY = "empty"
     DECODE = "decode"
     NETWORK = "network"
+
+
+@dataclass(frozen=True, slots=True)
+class NacosManagedRuleBinding:
+    """Explicit managed-envelope identity for one Nacos rule target."""
+
+    binding_id: str
+    rule_kind: ManagedRuleKind
+    profile_id: str
+
+    def __post_init__(self) -> None:
+        for value in (self.binding_id, self.profile_id):
+            if (
+                not isinstance(value, str)
+                or _MANAGED_IDENTIFIER_PATTERN.fullmatch(value) is None
+            ):
+                raise ValueError("managed Nacos binding identity is invalid")
+        if not isinstance(self.rule_kind, ManagedRuleKind):
+            raise TypeError("managed Nacos rule kind must use ManagedRuleKind")
 
 
 # ---------------------------------------------------------------------------
@@ -206,13 +231,14 @@ class NacosRuleSourceConfig:
     reconnect_max: timedelta = field(default=timedelta(seconds=30))
     # polling 间隔 (M6.1.7 改造: 1.0 SDK 3.2.0 改 polling 模式)
     poll_interval: timedelta = field(default=timedelta(seconds=1))
+    # ``None`` retains byte-for-byte legacy native-array handling. A tuple
+    # explicitly opts this source into a complete five-target managed profile.
+    managed_bindings: tuple[NacosManagedRuleBinding, ...] | None = None
 
     def __post_init__(self) -> None:
         # identity 校验
         if not isinstance(self.source_id, str) or not self.source_id:
-            raise ValueError(
-                "NacosRuleSourceConfig.source_id must be a non-empty str"
-            )
+            raise ValueError("NacosRuleSourceConfig.source_id must be a non-empty str")
         # endpoint 校验
         if not isinstance(self.server_addresses, tuple) or not self.server_addresses:
             raise ValueError(
@@ -225,13 +251,9 @@ class NacosRuleSourceConfig:
                     f"address: {addr!r}"
                 )
         if not isinstance(self.namespace, str) or not self.namespace:
-            raise ValueError(
-                "NacosRuleSourceConfig.namespace must be a non-empty str"
-            )
+            raise ValueError("NacosRuleSourceConfig.namespace must be a non-empty str")
         if not isinstance(self.group, str) or not self.group:
-            raise ValueError(
-                "NacosRuleSourceConfig.group must be a non-empty str"
-            )
+            raise ValueError("NacosRuleSourceConfig.group must be a non-empty str")
         # rule binding 校验
         if not isinstance(self.data_id_prefix, str) or not self.data_id_prefix:
             raise ValueError(
@@ -260,6 +282,28 @@ class NacosRuleSourceConfig:
                 f"(got {poll_ms:.0f}ms); lower limit is a resource-cap "
                 f"guard against hot-loop misuse (ADR-SEN-007 追加)"
             )
+        if self.managed_bindings is not None:
+            if (
+                not isinstance(self.managed_bindings, tuple)
+                or len(self.managed_bindings) != len(_RULE_TYPE_DATA_ID_SUFFIX)
+                or any(
+                    not isinstance(item, NacosManagedRuleBinding)
+                    for item in self.managed_bindings
+                )
+            ):
+                raise ValueError(
+                    "managed Nacos profile requires exactly five typed bindings"
+                )
+            if {item.rule_kind for item in self.managed_bindings} != set(
+                ManagedRuleKind
+            ):
+                raise ValueError(
+                    "managed Nacos profile must bind each rule kind exactly once"
+                )
+            if len({item.binding_id for item in self.managed_bindings}) != len(
+                self.managed_bindings
+            ):
+                raise ValueError("managed Nacos binding IDs must be unique")
 
     def data_id_for(self, rule_type: str) -> str:
         """按 PLANNING M6.1 约定生成完整 data_id。

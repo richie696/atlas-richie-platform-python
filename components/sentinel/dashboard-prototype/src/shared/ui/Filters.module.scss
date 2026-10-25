@@ -1,0 +1,41 @@
+// Private presentation ownership; colors are supplied by the selected skin.
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  min-height: 61px;
+  padding: 10px 15px;
+  margin: 0 0 17px;
+  border: 1px solid var(--sentinel-color-border);
+  border-radius: 8px;
+  background: var(--sentinel-color-filters-background);
+  min-width: 0;
+  flex-wrap: wrap;
+  > :not(.sample-age) {
+    flex: 1 1 150px;
+    min-width: 0;
+  }
+}
+.sample-age {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--sentinel-color-sample-age-color);
+  font-size: 12px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+@media (max-width: 850px) {
+  .filters {
+    gap: 9px;
+  }
+  .sample-age {
+    display: none;
+  }
+}
+@media (max-width: 560px) {
+  .filters {
+    margin-bottom: 13px;
+    padding: 9px;
+  }
+}

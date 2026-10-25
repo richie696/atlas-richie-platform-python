@@ -1,0 +1,14 @@
+{
+  "protocol_version": "atlas-richie.reporting/v1",
+  "event_kind": "RULE_SOURCE_ACTIVATED",
+  "event_payload": {
+    "source_id": "nacos-prod",
+    "rule_version_epoch": 1726000000,
+    "rule_version_revision": 0,
+    "rule_version_checksum": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  },
+  "instance_id": "550e8400-e29b-41d4-a716-446655440000",
+  "startup_epoch": 0,
+  "sequence": 1,
+  "captured_at": "2026-09-13T10:00:00.123456Z"
+}

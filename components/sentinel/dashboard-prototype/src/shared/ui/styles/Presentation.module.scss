@@ -1,0 +1,199 @@
+// Private presentation ownership; colors are supplied by the selected skin.
+.live-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sentinel-color-positive);
+  box-shadow: 0 0 12px var(--sentinel-color-live-dot-box-shadow);
+}
+.muted {
+  color: var(--sentinel-color-muted-color);
+  font-size: 11px;
+}
+.alert-hero {
+  display: flex;
+  align-items: center;
+  gap: 17px;
+  min-width: 0;
+  background: linear-gradient(
+    110deg,
+    var(--sentinel-color-alert-hero-background),
+    var(--sentinel-color-alert-hero-background-2)
+  );
+  border: 1px solid var(--sentinel-color-alert-hero-border);
+  border-radius: 8px;
+  padding: 16px 21px;
+  min-height: 115px;
+}
+.alert-icon {
+  display: grid;
+  place-items: center;
+  width: 45px;
+  height: 45px;
+  border-radius: 50%;
+  background: var(--sentinel-color-alert-icon-background);
+  color: var(--sentinel-color-alert-icon-color);
+  flex: none;
+}
+.alert-hero h2 {
+  font-size: 20px;
+  margin: 4px 0 4px;
+  white-space: nowrap;
+}
+.alert-hero > div:not(.alert-icon) {
+  min-width: 0;
+  flex: 1 1 200px;
+  overflow-wrap: anywhere;
+}
+.alert-hero h2 em {
+  font-style: normal;
+  color: var(--sentinel-color-alert-hero-color);
+}
+.alert-hero p {
+  margin: 0;
+  color: var(--sentinel-color-alert-hero-color-2);
+  font-size: 11px;
+}
+.alert-hero :global(.primary-button) {
+  margin-left: auto;
+  /* Keep the Astryx button's label and trailing icon on one line. */
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+.green {
+  color: var(--sentinel-color-positive) !important;
+}
+.red {
+  color: var(--sentinel-color-negative) !important;
+}
+.amber {
+  color: var(--sentinel-color-warning) !important;
+}
+.scope-empty {
+  min-height: 395px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  color: var(--sentinel-color-scope-empty-color);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.inline-note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--sentinel-color-inline-note-color);
+  background: var(--sentinel-color-inline-note-background);
+  border: 1px solid var(--sentinel-color-inline-note-border);
+  border-radius: 5px;
+  padding: 11px 12px;
+  font-size: 11px;
+  margin-bottom: 14px;
+}
+.inline-note:global(.invalid) {
+  background: var(--sentinel-color-inline-note-background-2);
+  border-color: var(--sentinel-color-inline-note-border-color);
+  color: var(--sentinel-color-inline-note-color-2);
+}
+.empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--sentinel-color-empty-color);
+  font-size: 12px;
+}
+.key-value {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--sentinel-color-key-value-border-bottom);
+  font-size: 12px;
+}
+.key-value span {
+  color: var(--sentinel-color-key-value-color);
+}
+.key-value b {
+  color: var(--sentinel-color-key-value-color-2);
+  text-align: right;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.divider {
+  height: 1px;
+  background: var(--sentinel-color-border);
+  margin: 13px 16px;
+}
+.number-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 13px;
+  margin-bottom: 17px;
+}
+.bottom-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 17px 0;
+  padding: 13px 15px;
+  background: var(--sentinel-color-bottom-note-background);
+  border: 1px solid var(--sentinel-color-bottom-note-border);
+  border-radius: 5px;
+  color: var(--sentinel-color-bottom-note-color);
+  font-size: 12px;
+}
+.bottom-note svg {
+  flex: none;
+}
+.bottom-note :global(.link-button) {
+  margin-left: auto;
+}
+@media (max-width: 1250px) {
+  .alert-hero h2 {
+    white-space: normal;
+  }
+}
+@media (max-width: 850px) {
+  .number-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .alert-hero {
+    flex-wrap: wrap;
+  }
+  .alert-hero :global(.primary-button) {
+    margin-left: 62px;
+  }
+}
+@media (max-width: 560px) {
+  .alert-hero {
+    padding: 13px;
+    gap: 10px;
+  }
+  .alert-icon {
+    width: 38px;
+    height: 38px;
+  }
+  .alert-hero h2 {
+    font-size: 17px;
+  }
+  .alert-hero p {
+    line-height: 1.5;
+  }
+  .alert-hero :global(.primary-button) {
+    margin-left: 48px;
+  }
+  .number-grid {
+    gap: 8px;
+  }
+  .bottom-note {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .bottom-note :global(.link-button) {
+    margin-left: 24px;
+  }
+}

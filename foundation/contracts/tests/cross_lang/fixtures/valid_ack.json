@@ -1,0 +1,13 @@
+{
+  "protocol_version": "atlas-richie.reporting/v1",
+  "batch_id": "550e8400-e29b-41d4-a716-446655440001",
+  "received_at": "2026-09-13T10:00:00.456789Z",
+  "ack_sequences": [
+    {
+      "instance_id": "550e8400-e29b-41d4-a716-446655440000",
+      "startup_epoch": 0,
+      "max_contiguous_sequence": 1
+    }
+  ],
+  "duplicate_count": 0
+}

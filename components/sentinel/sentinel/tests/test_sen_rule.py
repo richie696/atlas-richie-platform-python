@@ -59,9 +59,10 @@ from atlas_richie.sentinel.rules.selector import (
 from atlas_richie.sentinel.rules.snapshot import (
     RuleSnapshot,
     RuleSnapshotAppliedEvent,
+    RuleTargetKind,
+    RuleTargetProvenance,
     RuleVersion,
 )
-
 
 # ---------------------------------------------------------------------------
 # Test fixtures: minimal "Rule" objects that satisfy the RuleIndex contract
@@ -182,6 +183,7 @@ class RuleSnapshotImmutabilityTest(unittest.TestCase):
         )
         # MappingProxyType — read-only at runtime.
         from types import MappingProxyType
+
         self.assertIsInstance(snap.rules, MappingProxyType)
         with self.assertRaises(TypeError):
             snap.rules["r2"] = _Rule("r2")  # type: ignore[index]
@@ -274,9 +276,15 @@ class RuleIndexTest(unittest.TestCase):
         # Glob `orders-*` matches `orders-api` so the glob rule should
         # appear after exact and prefix in the result.
         rules = {
-            "glob": _Rule("glob", priority=10, selector=ResourceSelector.glob("orders-*")),
-            "prefix": _Rule("prefix", priority=10, selector=ResourceSelector.prefix("orders-")),
-            "exact": _Rule("exact", priority=10, selector=ResourceSelector.exact("orders-api")),
+            "glob": _Rule(
+                "glob", priority=10, selector=ResourceSelector.glob("orders-*")
+            ),
+            "prefix": _Rule(
+                "prefix", priority=10, selector=ResourceSelector.prefix("orders-")
+            ),
+            "exact": _Rule(
+                "exact", priority=10, selector=ResourceSelector.exact("orders-api")
+            ),
         }
         idx = RuleIndex(rules)  # type: ignore[arg-type]
         found = [r.rule_id for r in idx.find("orders-api")]
@@ -298,7 +306,9 @@ class RuleIndexTest(unittest.TestCase):
 class RuleRepositoryApplyTest(unittest.TestCase):
     def test_first_apply_succeeds(self) -> None:
         repo = RuleRepository()
-        v = RuleVersion(epoch=1, revision=0, checksum=RuleVersion.compute_checksum({"a": 1}))
+        v = RuleVersion(
+            epoch=1, revision=0, checksum=RuleVersion.compute_checksum({"a": 1})
+        )
         snap = _make_snapshot(v, {"r1": _Rule("r1")})
         self.assertTrue(repo.apply_snapshot(snap))
         self.assertEqual(repo.last_version, v)
@@ -328,8 +338,12 @@ class RuleRepositoryApplyTest(unittest.TestCase):
 
     def test_newer_version_replaces(self) -> None:
         repo = RuleRepository()
-        v1 = RuleVersion(epoch=1, revision=0, checksum=RuleVersion.compute_checksum({"v": 1}))
-        v2 = RuleVersion(epoch=1, revision=1, checksum=RuleVersion.compute_checksum({"v": 2}))
+        v1 = RuleVersion(
+            epoch=1, revision=0, checksum=RuleVersion.compute_checksum({"v": 1})
+        )
+        v2 = RuleVersion(
+            epoch=1, revision=1, checksum=RuleVersion.compute_checksum({"v": 2})
+        )
         repo.apply_snapshot(_make_snapshot(v1, {"r1": _Rule("r1")}))
         self.assertTrue(repo.apply_snapshot(_make_snapshot(v2, {"r2": _Rule("r2")})))
         self.assertEqual(repo.last_version, v2)
@@ -337,13 +351,82 @@ class RuleRepositoryApplyTest(unittest.TestCase):
         self.assertEqual(list(repo.current_index.find("r1")), [])
         self.assertEqual(len(list(repo.current_index.find("r2"))), 1)
 
+    def test_rules_and_target_provenance_are_swapped_together(self) -> None:
+        repo = RuleRepository()
+        events: list[RuleSnapshotAppliedEvent] = []
+        repo.subscribe(events.append)
+        v1 = RuleVersion(epoch=1, revision=1, checksum="a" * 64)
+        provenance1 = RuleTargetProvenance(
+            binding_id="binding-flow",
+            publication_id="publication-1",
+            target_version_id="target-1",
+            publication_sequence=1,
+            rule_kind=RuleTargetKind.FLOW,
+            profile_id="managed-flow-v1",
+            payload_sha256="b" * 64,
+        )
+        first = RuleSnapshot(
+            version=v1,
+            rules={"r1": _Rule("r1")},
+            source_id="managed-source",
+            provenance=(provenance1,),
+        )
+        self.assertTrue(repo.apply_snapshot(first))
+        self.assertEqual(events[-1].provenance, (provenance1,))
+        index1 = repo.current_index
+        applied1 = repo.current_snapshot
+        self.assertIsNotNone(applied1)
+        self.assertEqual(applied1.provenance, (provenance1,))
+
+        v2 = RuleVersion(epoch=1, revision=2, checksum="c" * 64)
+        provenance2 = RuleTargetProvenance(
+            binding_id="binding-flow",
+            publication_id="publication-2",
+            target_version_id="target-2",
+            publication_sequence=2,
+            rule_kind=RuleTargetKind.FLOW,
+            profile_id="managed-flow-v1",
+            payload_sha256="b" * 64,
+        )
+        second = RuleSnapshot(
+            version=v2,
+            rules={"r1": _Rule("r1")},
+            source_id="managed-source",
+            provenance=(provenance2,),
+        )
+        self.assertTrue(repo.apply_snapshot(second))
+
+        self.assertEqual(events[-1].provenance, (provenance2,))
+        self.assertIs(repo.current_snapshot.provenance[0], provenance2)
+        self.assertEqual(
+            tuple(item.rule_id for item in repo.current_index.find("r1")),
+            tuple(item.rule_id for item in index1.find("r1")),
+        )
+        self.assertIsNot(repo.current_index, index1)
+
+        older = RuleSnapshot(
+            version=v1,
+            rules={"r2": _Rule("r2")},
+            source_id="managed-source",
+            provenance=(provenance1,),
+        )
+        index_before_rejection = repo.current_index
+        snapshot_before_rejection = repo.current_snapshot
+        self.assertFalse(repo.apply_snapshot(older))
+        self.assertIs(repo.current_index, index_before_rejection)
+        self.assertIs(repo.current_snapshot, snapshot_before_rejection)
+
     def test_older_version_rejected(self) -> None:
         repo = RuleRepository()
         v1 = RuleVersion(epoch=1, revision=1, checksum=RuleVersion.compute_checksum({}))
-        v_old = RuleVersion(epoch=1, revision=0, checksum=RuleVersion.compute_checksum({}))
+        v_old = RuleVersion(
+            epoch=1, revision=0, checksum=RuleVersion.compute_checksum({})
+        )
         repo.apply_snapshot(_make_snapshot(v1, {"r1": _Rule("r1")}))
         # Trying to apply a strictly older version (revision 0 < 1).
-        self.assertFalse(repo.apply_snapshot(_make_snapshot(v_old, {"r2": _Rule("r2")})))
+        self.assertFalse(
+            repo.apply_snapshot(_make_snapshot(v_old, {"r2": _Rule("r2")}))
+        )
         self.assertIsInstance(repo.last_error, RuleSnapshotError)
         # last-known-good is preserved.
         self.assertEqual(repo.last_version, v1)
@@ -441,10 +524,14 @@ class RuleRepositoryIntegrationTest(unittest.TestCase):
         v1 = RuleVersion(epoch=1, revision=0, checksum=RuleVersion.compute_checksum({}))
         v2 = RuleVersion(epoch=1, revision=1, checksum=RuleVersion.compute_checksum({}))
         repo.apply_snapshot(
-            _make_snapshot(v1, {"old": _Rule("old", selector=ResourceSelector.exact("r"))})
+            _make_snapshot(
+                v1, {"old": _Rule("old", selector=ResourceSelector.exact("r"))}
+            )
         )
         repo.apply_snapshot(
-            _make_snapshot(v2, {"new": _Rule("new", selector=ResourceSelector.exact("r"))})
+            _make_snapshot(
+                v2, {"new": _Rule("new", selector=ResourceSelector.exact("r"))}
+            )
         )
         found = [r.rule_id for r in repo.current_index.find("r")]
         self.assertEqual(found, ["new"])

@@ -1,0 +1,37 @@
+// Private presentation ownership; colors are supplied by the selected skin.
+.status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: auto;
+  line-height: 1.2;
+  padding: 4px 9px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.status-healthy {
+  background: var(--sentinel-color-status-healthy-background);
+  color: var(--sentinel-color-status-healthy-color);
+}
+.status-critical {
+  background: var(--sentinel-color-status-critical-background);
+  color: var(--sentinel-color-status-critical-color);
+}
+.status-warning {
+  background: var(--sentinel-color-status-warning-background);
+  color: var(--sentinel-color-status-warning-color);
+}
+.status-blue {
+  background: var(--sentinel-color-status-blue-background);
+  color: var(--sentinel-color-status-blue-color);
+}
+.status-purple {
+  background: var(--sentinel-color-status-purple-background);
+  color: var(--sentinel-color-status-purple-color);
+}
+.status-info {
+  background: var(--sentinel-color-status-info-background);
+  color: var(--sentinel-color-status-info-color);
+}

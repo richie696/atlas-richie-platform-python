@@ -1,0 +1,14 @@
+{
+  "overview.intro.description": "アプリケーション視点で全体のトラフィックと防御状況を確認し、注目すべきサービスをすばやく特定します。",
+  "overview.intro.title": "全体ランタイム概観",
+  "overview.hostMonitoring.title": "ホスト監視",
+  "overview.hostMonitoring.description": "ホストリソースは登録済みの Prometheus クエリソースから取得し、アプリケーションのプロセス指標とは分けて表示します。",
+  "overview.hostMonitoring.loading": "監視ソースの登録を読み込んでいます…",
+  "overview.hostMonitoring.unavailable": "監視ソース一覧を利用できません",
+  "overview.hostMonitoring.unavailableHelp": "ホスト監視の概要を読み込めませんでした。このページのアプリケーションとプロセス情報には影響しません。",
+  "overview.hostMonitoring.sourceCount": "有効な監視ソース",
+  "overview.hostMonitoring.configured": "ソースは登録済みです。ホストディレクトリでサンプルを確認してください。",
+  "overview.hostMonitoring.notConfigured": "この環境には監視ソースが登録されていません。",
+  "overview.hostMonitoring.configure": "ソースを設定",
+  "overview.hostMonitoring.openDirectory": "ホスト一覧を表示"
+}

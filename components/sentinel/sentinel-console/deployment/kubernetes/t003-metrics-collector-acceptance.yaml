@@ -1,0 +1,156 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sentinel-t003-metrics-collector
+  namespace: sentinel-t003-console-20261019
+  labels:
+    app.kubernetes.io/part-of: atlas-richie-sentinel-acceptance
+spec:
+  secretName: sentinel-t003-metrics-collector-tls
+  issuerRef:
+    name: sentinel-t003-test-ca
+    kind: Issuer
+    group: cert-manager.io
+  commonName: metrics-collector
+  dnsNames:
+    - metrics-collector
+    - metrics-collector.sentinel-t003-console-20261019.svc
+    - metrics-collector.sentinel-t003-console-20261019.svc.cluster.local
+  ipAddresses:
+    - 10.20.1.13
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-collector
+  namespace: sentinel-t003-console-20261019
+  labels:
+    app.kubernetes.io/name: sentinel-metrics-collector
+    app.kubernetes.io/part-of: atlas-richie-sentinel-acceptance
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-metrics-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sentinel-metrics-collector
+        app.kubernetes.io/part-of: atlas-richie-sentinel-acceptance
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: collector
+          image: __SENTINEL_REGISTRY_HOST__/atlas-richie/sentinel-console@sha256:72584c4b9d46e584cb58454a8d9c4a545b52c53f57e743384b65fd0094ea08fc
+          imagePullPolicy: Always
+          command: ["sentinel-console", "serve-metrics"]
+          envFrom:
+            - secretRef:
+                name: console-runtime-config
+          env:
+            - name: SENTINEL_CONSOLE_METRICS_BIND_HOST
+              value: 0.0.0.0
+            - name: SENTINEL_CONSOLE_METRICS_PORT
+              value: "8443"
+            - name: SENTINEL_CONSOLE_METRICS_SERVER_CERTIFICATE
+              value: /etc/sentinel/metrics/server/tls.crt
+            - name: SENTINEL_CONSOLE_METRICS_SERVER_PRIVATE_KEY
+              value: /etc/sentinel/metrics/server/tls.key
+            - name: SENTINEL_CONSOLE_METRICS_CLIENT_CA_CERTIFICATE
+              value: /etc/sentinel/metrics/client-ca/ca.crt
+            - name: SENTINEL_CONSOLE_POSTGRESQL_ROOT_CERTIFICATE
+              value: /etc/sentinel/certs/postgres-ca.crt
+          ports:
+            - name: metrics-tls
+              containerPort: 8443
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: metrics-tls
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: metrics-tls
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: shared-state
+              mountPath: /var/lib/sentinel
+            - name: postgres-ca
+              mountPath: /etc/sentinel/certs
+              readOnly: true
+            - name: server-tls
+              mountPath: /etc/sentinel/metrics/server
+              readOnly: true
+            - name: client-ca
+              mountPath: /etc/sentinel/metrics/client-ca
+              readOnly: true
+      volumes:
+        - name: shared-state
+          persistentVolumeClaim:
+            claimName: console-shared-state
+        - name: postgres-ca
+          secret:
+            secretName: postgres-tls
+            items:
+              - key: ca.crt
+                path: postgres-ca.crt
+        - name: server-tls
+          secret:
+            secretName: sentinel-t003-metrics-collector-tls
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+        - name: client-ca
+          secret:
+            secretName: sentinel-t003-metrics-client-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics-collector
+  namespace: sentinel-t003-console-20261019
+  labels:
+    app.kubernetes.io/name: sentinel-metrics-collector
+    app.kubernetes.io/part-of: atlas-richie-sentinel-acceptance
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: sentinel-metrics-collector
+  ports:
+    - name: metrics-tls
+      port: 8443
+      targetPort: metrics-tls
+      nodePort: 32019
+      protocol: TCP

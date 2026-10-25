@@ -1,0 +1,66 @@
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "atlas-richie-sentinel-console"
+version = "0.1.0"
+description = "Independent ASGI control-plane Console for Atlas Richie Sentinel."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Atlas Richie" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Framework :: AsyncIO",
+  "Framework :: ASGI",
+  "Topic :: System :: Monitoring",
+]
+dependencies = [
+  "atlas-richie-contracts>=0.2,<0.3",
+  "aiohttp>=3.10,<4.0",
+  "idna>=3.7,<4.0",
+  "starlette>=0.40,<2.0",
+  "sqlalchemy[asyncio]>=2.0,<3.0",
+  "alembic>=1.13,<2.0",
+  "argon2-cffi>=23.1,<26.0",
+  "cryptography>=42,<48",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.2,<4.0"]
+mysql = ["asyncmy==0.2.16"]
+sqlite-local = ["aiosqlite>=0.20,<1.0"]
+nacos-grpc = ["grpcio>=1.66.1,<2.0", "protobuf>=5.27.2,<8.0"]
+server = ["uvicorn>=0.30,<1.0"]
+collector = ["anycorn>=0.20,<1.0"]
+test = [
+  "httpx>=0.27,<1.0",
+  "pytest>=8.0,<9.0",
+  "PyYAML>=6.0,<7.0",
+  "aiosqlite>=0.20,<1.0",
+  "jsonschema>=4.25,<5.0",
+  "atlas-richie-sentinel-reporter-incidents>=0.1.0,<0.2.0",
+  "atlas-richie-sentinel-reporter-rules>=0.1.0,<0.2.0",
+  "atlas-richie-sentinel-reporter-v2>=0.2.0,<0.3.0",
+]
+
+[project.scripts]
+sentinel-console = "atlas_richie.sentinel_console.cli:main_entry"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv.build-backend]
+module-name = "atlas_richie.sentinel_console"
+module-root = "src"
+
+[tool.uv.sources]
+atlas-richie-contracts = { path = "../../../foundation/contracts", editable = true }
+atlas-richie-sentinel-reporter-incidents = { path = "../sentinel-reporter-incidents", editable = true }
+atlas-richie-sentinel-reporter-rules = { path = "../sentinel-reporter-rules", editable = true }
+atlas-richie-sentinel-reporter-v2 = { path = "../sentinel-reporter-v2", editable = true }

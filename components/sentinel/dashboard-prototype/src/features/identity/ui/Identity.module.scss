@@ -1,0 +1,578 @@
+// Private presentation ownership; colors are supplied by the selected skin.
+.identity-intro.identity-intro {
+  align-items: flex-end;
+}
+.identity-panel.identity-panel {
+  margin-bottom: 16px;
+}
+.identity-notice {
+  margin: 0 0 14px;
+  padding: 11px 14px;
+  border: 1px solid var(--sentinel-color-identity-notice-border);
+  border-radius: 6px;
+  background: var(--sentinel-color-identity-notice-background);
+  color: var(--sentinel-color-identity-notice-color);
+  font-size: 12px;
+}
+.identity-select {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--sentinel-color-identity-select-color);
+  font-size: 11px;
+}
+.identity-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 9px;
+}
+.account-search-form {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1.35fr) minmax(12rem, 0.8fr) auto;
+  align-items: end;
+  gap: 14px;
+  max-width: 880px;
+  padding: 14px 16px 10px;
+}
+.account-directory-inset {
+  padding: 8px 16px 16px;
+}
+.role-search-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+.role-account-list {
+  display: grid;
+  gap: 8px;
+}
+.role-account-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.role-panel-content {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 16px 16px;
+}
+.filter-submit {
+  width: fit-content;
+  justify-self: start;
+}
+.account-dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sentinel-space-2);
+}
+.account-dialog-form > * {
+  min-width: 0;
+}
+.account-dialog-password-note {
+  align-self: stretch;
+  margin: 0 0 3px;
+  color: var(--sentinel-color-account-dialog-password-note-color);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.identity-table td {
+  vertical-align: middle;
+}
+.identity-user {
+  display: flex;
+  align-items: center;
+}
+.identity-account-summary {
+  display: flex;
+  align-items: center;
+}
+.role-chip {
+  display: flex;
+  align-items: center;
+}
+.identity-actions {
+  display: flex;
+  align-items: center;
+}
+.account-row-actions {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.account-action-notes {
+  display: grid;
+  gap: 3px;
+  max-width: 38rem;
+  color: var(--sentinel-color-text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.login-brand {
+  display: flex;
+  align-items: center;
+}
+.identity-user {
+  gap: 9px;
+}
+.identity-user svg {
+  color: var(--sentinel-color-accent);
+  flex: none;
+}
+.identity-user span {
+  display: grid;
+  gap: 3px;
+}
+.identity-user small {
+  color: var(--sentinel-color-identity-user-color);
+  font-size: 10px;
+}
+.identity-account-summary small {
+  color: var(--sentinel-color-identity-account-summary-color);
+  font-size: 10px;
+}
+.identity-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.account-status-restriction {
+  color: var(--sentinel-color-identity-warning-color);
+  font-size: 10px;
+  line-height: 1.35;
+}
+.role-chip {
+  gap: 5px;
+  color: var(--sentinel-color-role-chip-color);
+  font-size: 11px;
+}
+.identity-split {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.72fr) minmax(0, 1.28fr);
+  align-items: start;
+  gap: 16px;
+}
+.identity-select {
+  padding: 0 16px 13px;
+}
+.identity-account-summary {
+  gap: 10px;
+  margin: 0;
+  padding: 13px;
+  border: 1px solid var(--sentinel-color-identity-account-summary-border);
+  border-radius: 6px;
+  background: var(--sentinel-color-identity-account-summary-background);
+}
+.identity-account-summary > svg {
+  color: var(--sentinel-color-accent);
+}
+.identity-account-summary > div {
+  flex: 1;
+  display: grid;
+  gap: 3px;
+}
+.role-options {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+}
+.role-editor {
+  display: grid;
+  gap: var(--sentinel-space-4);
+  min-width: 0;
+}
+.role-fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.identity-warning {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--sentinel-color-identity-warning-color);
+  background: var(--sentinel-color-identity-warning-background);
+  border: 1px solid var(--sentinel-color-identity-warning-border);
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+@media (max-width: 900px) {
+  .identity-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.password-form {
+  max-width: 570px;
+  display: grid;
+  gap: 14px;
+  padding: 0 16px 18px;
+}
+.password-form small {
+  color: var(--sentinel-color-password-form-color);
+  font-size: 10px;
+}
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  position: relative;
+  padding: 100px 24px 32px;
+  background:
+    radial-gradient(
+      circle at 50% -10%,
+      var(--sentinel-color-login-page-background) 0,
+      transparent 55%
+    ),
+    var(--sentinel-color-background-base);
+}
+.login-locale {
+  position: absolute;
+  inset-block-start: 20px;
+  inset-inline-end: 24px;
+  width: 150px;
+}
+.login-intro {
+  text-align: center;
+}
+.login-intro .login-brand {
+  justify-content: flex-start;
+  text-align: start;
+  flex-wrap: wrap;
+}
+.login-card .password-form {
+  padding: 0;
+}
+.login-password {
+  position: relative;
+}
+.login-password-toggle {
+  position: absolute;
+  inset-inline-end: 2px;
+  inset-block-end: 2px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  padding: 0;
+  color: var(--sentinel-color-text-muted);
+}
+.login-help {
+  margin-top: 18px;
+  text-align: center;
+  font-size: 13px;
+}
+.login-card {
+  width: min(100%, 430px);
+  padding: 31px;
+  border: 1px solid var(--sentinel-color-login-card-border);
+  border-radius: 10px;
+  background: var(--sentinel-color-login-card-background);
+  box-shadow: 0 20px 55px var(--sentinel-color-login-card-box-shadow);
+}
+.login-brand {
+  gap: 9px;
+  margin-bottom: 34px;
+  font-size: 18px;
+  font-weight: 650;
+}
+.login-brand b {
+  color: var(--sentinel-color-accent);
+}
+.login-mark {
+  color: var(--sentinel-color-accent);
+  font-size: 25px;
+  font-weight: 800;
+}
+.login-card h1 {
+  margin: 6px 0 6px;
+  font-size: 27px;
+}
+.login-description {
+  color: var(--sentinel-color-login-description-color);
+  font-size: 12px;
+  margin: 0 0 22px;
+}
+.login-demo-notice {
+  margin-bottom: 18px;
+}
+.login-submit {
+  width: 100%;
+  min-height: 43px;
+  margin-top: 16px;
+}
+.setup-page {
+  min-height: 100vh;
+  padding: 36px 24px;
+  background:
+    radial-gradient(
+      circle at 50% -15%,
+      var(--sentinel-color-setup-page-background) 0,
+      transparent 54%
+    ),
+    var(--sentinel-color-background-base);
+}
+.setup-shell {
+  width: min(100%, 1060px);
+  margin: 0 auto;
+  padding: 27px;
+  border: 1px solid var(--sentinel-color-setup-shell-border);
+  border-radius: 10px;
+  background: var(--sentinel-color-setup-shell-background);
+  box-shadow: 0 20px 55px var(--sentinel-color-setup-shell-box-shadow);
+}
+.setup-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--sentinel-color-setup-brand-color);
+  font-size: 18px;
+  font-weight: 650;
+}
+.setup-brand b {
+  color: var(--sentinel-color-accent);
+}
+.setup-heading {
+  margin: 34px 0 23px;
+}
+.setup-heading h1 {
+  margin: 6px 0;
+  font-size: 28px;
+  letter-spacing: -0.035em;
+}
+.setup-heading p {
+  margin: 0;
+  color: var(--sentinel-color-setup-heading-color);
+  font-size: 13px;
+}
+.setup-layout {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.7fr) minmax(0, 1.3fr);
+  gap: 18px;
+}
+.setup-steps {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  margin: 0;
+  padding: 8px;
+  list-style: none;
+  border: 1px solid var(--sentinel-color-setup-steps-border);
+  border-radius: 7px;
+  background: var(--sentinel-color-setup-steps-background);
+}
+.setup-steps li {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 9px;
+  padding: 12px 9px;
+  border-radius: 5px;
+  color: var(--sentinel-color-setup-steps-color);
+}
+.setup-steps li:global(.active) {
+  background: var(--sentinel-color-setup-steps-background-2);
+  color: var(--sentinel-color-setup-steps-color-2);
+}
+.setup-steps li:global(.complete) {
+  color: var(--sentinel-color-setup-steps-color-3);
+}
+.setup-steps li > span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--sentinel-color-setup-steps-border-2);
+  border-radius: 50%;
+  color: var(--sentinel-color-setup-steps-color-4);
+  font-size: 10px;
+  font-weight: 750;
+}
+.setup-steps li:global(.complete) > span {
+  border-color: var(--sentinel-color-setup-steps-border-color);
+  color: var(--sentinel-color-setup-steps-color-5);
+}
+.setup-steps b {
+  display: block;
+}
+.setup-steps small {
+  display: block;
+}
+.setup-steps b {
+  font-size: 12px;
+}
+.setup-steps small {
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.setup-workspace {
+  min-height: 405px;
+  padding: 21px;
+  border: 1px solid var(--sentinel-color-setup-workspace-border);
+  border-radius: 7px;
+  background: var(--sentinel-color-setup-workspace-background);
+}
+.setup-title {
+  display: flex;
+  gap: 11px;
+  margin-bottom: 20px;
+}
+.setup-title > svg {
+  flex: none;
+  color: var(--sentinel-color-accent);
+}
+.setup-title h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+.setup-title p {
+  margin: 0;
+  color: var(--sentinel-color-setup-title-color);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.setup-choice {
+  margin-bottom: 14px;
+}
+.setup-authentication {
+  margin: 14px 0;
+  padding: 0;
+  border: 0;
+}
+.setup-authentication legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: var(--sentinel-color-setup-authentication-color);
+  font-size: 12px;
+  font-weight: 650;
+}
+.setup-field-help {
+  color: var(--sentinel-color-setup-field-help-color);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.setup-security-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--sentinel-color-setup-security-note-border);
+  border-radius: 6px;
+  color: var(--sentinel-color-setup-security-note-color);
+  background: var(--sentinel-color-setup-security-note-background);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.setup-security-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--sentinel-color-setup-security-note-color-2);
+}
+.setup-local-note {
+  margin-bottom: 15px;
+  padding: 11px;
+  border: 1px solid var(--sentinel-color-setup-local-note-border);
+  border-radius: 5px;
+  color: var(--sentinel-color-setup-local-note-color);
+  background: var(--sentinel-color-setup-local-note-background);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.setup-summary {
+  display: grid;
+  gap: 1px;
+  border: 1px solid var(--sentinel-color-setup-summary-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.setup-summary div {
+  display: grid;
+  grid-template-columns: 125px 1fr;
+  gap: 10px;
+  padding: 11px 12px;
+  background: var(--sentinel-color-setup-summary-background);
+  font-size: 11px;
+}
+.setup-summary div + div {
+  border-top: 1px solid var(--sentinel-color-setup-summary-border-top);
+}
+.setup-summary b {
+  color: var(--sentinel-color-setup-summary-color);
+}
+.setup-summary span {
+  color: var(--sentinel-color-setup-summary-color-2);
+}
+.setup-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 24px;
+}
+.setup-controls {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.setup-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+@media (max-width: 560px) {
+  .identity-intro.identity-intro {
+    align-items: flex-start;
+  }
+  .identity-split {
+    grid-template-columns: 1fr;
+  }
+  .identity-form-actions {
+    grid-column: 1;
+    justify-content: flex-start;
+  }
+  .account-search-form,
+  .role-search-form {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: none;
+  }
+  .account-search-form {
+    padding-inline: 12px;
+  }
+  .account-directory-inset,
+  .role-panel-content {
+    padding-inline: 12px;
+  }
+  .filter-submit {
+    margin: 0;
+  }
+  .identity-table {
+    min-width: 760px;
+  }
+  .login-card {
+    padding: 24px 20px;
+  }
+  .setup-page {
+    padding: 16px 12px;
+  }
+  .setup-shell {
+    padding: 20px 15px;
+  }
+  .setup-layout {
+    grid-template-columns: 1fr;
+  }
+  .setup-workspace {
+    min-height: auto;
+    padding: 16px;
+  }
+}
+.manual-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--sentinel-color-accent);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}

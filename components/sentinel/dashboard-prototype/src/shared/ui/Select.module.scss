@@ -1,0 +1,14 @@
+// Private presentation ownership; colors are supplied by the selected skin.
+.select-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--sentinel-color-select-control-color);
+  font-size: 12px;
+  white-space: nowrap;
+}
+@media (max-width: 850px) {
+  .select-control {
+    gap: 5px;
+  }
+}

@@ -1,0 +1,13 @@
+# Runtime artefacts the demo services write into their own working directory.
+# They are produced by running the demos, not by building them, so they must never
+# be committed: the Sentinel SDK rolling log and the Nacos SDK configuration cache
+# both contain machine-local paths and per-run state.
+
+# Sentinel SDK rolling log (record + metrics + index + lock files).
+.sentinel-log/
+
+# Nacos SDK local configuration cache.
+.nacos-cache/
+
+# Compiled Go demo binary (`go build` output next to the sources).
+go-nacos-sentinel/go-nacos-sentinel

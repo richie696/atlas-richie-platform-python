@@ -1,0 +1,88 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sentinel-console-incident-retention
+  labels:
+    app.kubernetes.io/name: sentinel-console
+    app.kubernetes.io/component: incident-retention
+spec:
+  schedule: "17 3 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 1800
+  suspend: false
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: sentinel-console
+            app.kubernetes.io/component: incident-retention
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: expire-incidents
+              # Replace with the same immutable image and DB driver extra used
+              # by the Console deployment; never use a floating tag.
+              image: replace-with-immutable-sentinel-console-image
+              imagePullPolicy: IfNotPresent
+              command: ["sentinel-console"]
+              args: ["incident-events", "expire"]
+              env:
+                - name: SENTINEL_CONSOLE_RUNTIME_LOCATOR_PATH
+                  value: /var/lib/sentinel-console/runtime/runtime-database-locator.json
+                - name: SENTINEL_CONSOLE_RUNTIME_LOCATOR_SECRET_ACTIVE_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: sentinel-console-runtime-secrets
+                      key: locator-active-key-id
+                - name: SENTINEL_CONSOLE_RUNTIME_LOCATOR_SECRET_KEY_RING
+                  valueFrom:
+                    secretKeyRef:
+                      name: sentinel-console-runtime-secrets
+                      key: locator-key-ring
+                # For PostgreSQL/MySQL deployments, both adapters use the
+                # mounted trust bundle. Remove the unused variable for the
+                # selected dialect if policy requires a narrower pod surface.
+                - name: SENTINEL_CONSOLE_POSTGRESQL_ROOT_CERTIFICATE
+                  value: /etc/sentinel-console/database-ca/ca.crt
+                - name: SENTINEL_CONSOLE_MYSQL_ROOT_CERTIFICATE
+                  value: /etc/sentinel-console/database-ca/ca.crt
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: runtime-state
+                  mountPath: /var/lib/sentinel-console/runtime
+                - name: database-ca
+                  mountPath: /etc/sentinel-console/database-ca
+                  readOnly: true
+          volumes:
+            - name: runtime-state
+              persistentVolumeClaim:
+                claimName: sentinel-console-runtime-state
+            - name: database-ca
+              secret:
+                secretName: sentinel-console-database-ca
+                defaultMode: 0444

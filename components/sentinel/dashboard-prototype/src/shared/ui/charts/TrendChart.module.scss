@@ -1,0 +1,68 @@
+// Private presentation ownership; colors are supplied by the selected skin.
+.trend {
+  width: 100%;
+  min-width: 0;
+}
+
+.plot {
+  width: 100%;
+  min-width: 0;
+}
+.chart-empty {
+  display: grid;
+  place-content: center;
+  height: 100%;
+  margin: 0;
+  color: var(--sentinel-color-text-muted);
+}
+.chart-tooltip {
+  padding: 10px;
+}
+.chart-data-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  margin-top: 8px;
+  padding: 6px 12px 8px;
+  color: var(--sentinel-color-text-muted);
+  font-size: 12px;
+  p {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+}
+.chart-table-scroll {
+  overflow: auto;
+  max-height: min(62dvh, 560px);
+  padding: 4px;
+  border: 1px solid var(--sentinel-color-border);
+  border-radius: 8px;
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th,
+  td {
+    text-align: start;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--sentinel-color-border);
+  }
+  caption {
+    text-align: start;
+    padding: 10px 12px;
+    color: var(--sentinel-color-text-muted);
+  }
+  tbody tr:last-child th,
+  tbody tr:last-child td {
+    border-bottom: 0;
+  }
+}
+@media (max-width: 560px) {
+  .chart-data-footer {
+    align-items: flex-start;
+    padding-inline: 8px;
+  }
+}

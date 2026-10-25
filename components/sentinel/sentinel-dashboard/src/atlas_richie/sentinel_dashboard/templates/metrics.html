@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Live Metrics — Atlas Richie Sentinel{% endblock %}
+{% block content %}
+<section>
+  <h1>Live Metrics (SSE 5s 推送)</h1>
+  <p class="hint">来源 <code>/sse/metrics</code>. 客户端断开会自动停止推送.</p>
+  <div id="metrics-status" class="status-badge">连接中…</div>
+  <table class="metrics-table">
+    <thead>
+      <tr>
+        <th>Labels</th>
+        <th>Admitted</th>
+        <th>Blocked</th>
+        <th>Succeeded</th>
+        <th>Failed</th>
+        <th>Cancelled</th>
+        <th>Avg RT (ns)</th>
+      </tr>
+    </thead>
+    <tbody id="metrics-tbody">
+      <tr><td colspan="7" class="empty">等待 metrics 推送…</td></tr>
+    </tbody>
+  </table>
+  <p class="ts" id="metrics-ts"></p>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const status = document.getElementById("metrics-status");
+  const tbody = document.getElementById("metrics-tbody");
+  const ts = document.getElementById("metrics-ts");
+  const es = new EventSource("/sse/metrics");
+  es.addEventListener("open", () => {
+    status.textContent = "已连接";
+    status.className = "status-badge status-ok";
+  });
+  es.addEventListener("error", () => {
+    status.textContent = "连接断开 / 重连中…";
+    status.className = "status-badge status-error";
+  });
+  es.addEventListener("metrics", (e) => {
+    const data = JSON.parse(e.data);
+    const snaps = data.snaps || [];
+    if (!snaps.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty">No metrics yet.</td></tr>';
+    } else {
+      tbody.innerHTML = snaps.map((s) => {
+        const labels = JSON.stringify(s.labels || {});
+        return `<tr>
+          <td><code>${labels}</code></td>
+          <td>${s.admitted}</td>
+          <td>${s.blocked}</td>
+          <td>${s.succeeded}</td>
+          <td>${s.failed}</td>
+          <td>${s.cancelled}</td>
+          <td>${s.avg_rt_ns}</td>
+        </tr>`;
+      }).join("");
+    }
+    ts.textContent = "last update: " + new Date(data.ts * 1000).toISOString();
+  });
+})();
+</script>
+{% endblock %}

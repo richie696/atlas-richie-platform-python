@@ -59,14 +59,12 @@ Design points:
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
-from types import MappingProxyType
-from typing import Any, Callable, Mapping
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from ..errors import RuleSnapshotError
 from .index import RuleIndex
 from .snapshot import RuleSnapshot, RuleSnapshotAppliedEvent, RuleVersion
-
 
 # Type alias for event subscribers
 EventSubscriber = Callable[[RuleSnapshotAppliedEvent], None]
@@ -83,10 +81,17 @@ class _State:
     Repository internal state (Repository-only).
     """
 
-    index: RuleIndex
-    last_version: RuleVersion | None
+    active: _AppliedRuleState
     last_error: BaseException | None
     subscribers: list[EventSubscriber]
+
+
+@dataclass(frozen=True, slots=True)
+class _AppliedRuleState:
+    """One pointer-swapped rule index and the exact snapshot that produced it."""
+
+    index: RuleIndex
+    snapshot: RuleSnapshot | None
 
 
 class RuleRepository:
@@ -101,8 +106,7 @@ class RuleRepository:
 
     def __init__(self) -> None:
         self._state = _State(
-            index=RuleIndex(),
-            last_version=None,
+            active=_AppliedRuleState(index=RuleIndex(), snapshot=None),
             last_error=None,
             subscribers=[],
         )
@@ -117,7 +121,12 @@ class RuleRepository:
         --------
         Currently active ``RuleIndex`` (read-only).
         """
-        return self._state.index
+        return self._state.active.index
+
+    @property
+    def current_snapshot(self) -> RuleSnapshot | None:
+        """Return the immutable snapshot paired atomically with current rules."""
+        return self._state.active.snapshot
 
     @property
     def last_version(self) -> RuleVersion | None:
@@ -129,7 +138,8 @@ class RuleRepository:
         --------
         Last successfully applied version; ``None`` if none applied yet.
         """
-        return self._state.last_version
+        snapshot = self._state.active.snapshot
+        return snapshot.version if snapshot is not None else None
 
     @property
     def last_error(self) -> BaseException | None:
@@ -192,13 +202,14 @@ class RuleRepository:
         v = snap.version
         # No-op: same triple
         if (
-            self._state.last_version is not None
-            and self._state.last_version == v
+            self._state.active.snapshot is not None
+            and self._state.active.snapshot.version == v
         ):
             return True
         # Reject: same (epoch, revision) different checksum
-        if self._state.last_version is not None:
-            prev = self._state.last_version
+        current_snapshot = self._state.active.snapshot
+        if current_snapshot is not None:
+            prev = current_snapshot.version
             if prev.epoch == v.epoch and prev.revision == v.revision:
                 if prev.checksum != v.checksum:
                     err = RuleSnapshotError(
@@ -211,7 +222,7 @@ class RuleRepository:
                     self._state.last_error = err
                     return False
             # Reject: older
-            if v < self._state.last_version:
+            if v < prev:
                 err = RuleSnapshotError(
                     f"RuleSnapshot: version {v.epoch}.{v.revision} < "
                     f"current {prev.epoch}.{prev.revision}",
@@ -241,14 +252,17 @@ class RuleRepository:
             rules=snap.rules,
             applied_at_ns=time.time_ns(),
             source_id=snap.source_id,
+            provenance=snap.provenance,
         )
-        # Atomic swap
-        self._state.index = new_index
-        self._state.last_version = v
+        # One pointer assignment atomically publishes rules and provenance.
+        self._state.active = _AppliedRuleState(index=new_index, snapshot=applied)
         self._state.last_error = None
         # Fire event (M1.5 同步触发;async subscriber M1.5 末尾)
         event = RuleSnapshotAppliedEvent(
-            version=v, rule_count=len(new_index), at_ns=applied.applied_at_ns
+            version=v,
+            rule_count=len(new_index),
+            at_ns=applied.applied_at_ns,
+            provenance=applied.provenance,
         )
         for sub in self._state.subscribers:
             try:

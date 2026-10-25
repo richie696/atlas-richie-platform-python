@@ -36,24 +36,33 @@ Uses ``_FakeNacosClient`` to mock the sync nacos SDK API.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+from dataclasses import replace
 from datetime import timedelta
 from typing import Any, Callable, Iterator
 
 import pytest
-
-from atlas_richie.sentinel.rules.snapshot import RuleSnapshot, RuleVersion
-
+from atlas_richie.contracts.rules.managed_publication.v1 import (
+    ManagedRuleKind,
+    ManagedRulePublicationV1,
+    encode_managed_rule_publication,
+)
+from atlas_richie.sentinel.rules.snapshot import (
+    RuleSnapshot,
+    RuleTargetKind,
+)
 from atlas_richie.sentinel_source_nacos import (
+    NacosManagedRuleBinding,
     NacosRuleSourceConfig,
     NacosSourceError,
     NacosSourceState,
 )
+from atlas_richie.sentinel_source_nacos.codec import NacosCodecError
 from atlas_richie.sentinel_source_nacos.source import (
     NacosRuleSource,
     _redact,
 )
-
 
 # ---------------------------------------------------------------------------
 # _FakeNacosClient: 模拟 nacos-sdk-python 同步 API
@@ -131,9 +140,7 @@ class _FakeNacosClient:
         self._stopped = True
 
 
-def _make_fake_factory() -> tuple[
-    Callable[..., Any], list[_FakeNacosClient]
-]:
+def _make_fake_factory() -> tuple[Callable[..., Any], list[_FakeNacosClient]]:
     """返回 (factory, clients); factory 是 async (M6.1.7 SDK 3.2.0 改造)。
 
     中文
@@ -179,10 +186,55 @@ def config() -> NacosRuleSourceConfig:
     )
 
 
+def _managed_config(config: NacosRuleSourceConfig) -> NacosRuleSourceConfig:
+    return replace(
+        config,
+        poll_interval=timedelta(milliseconds=100),
+        managed_bindings=tuple(
+            NacosManagedRuleBinding(
+                binding_id=f"binding-{kind.value}",
+                rule_kind=kind,
+                profile_id=f"native-{kind.value}-v1",
+            )
+            for kind in ManagedRuleKind
+        ),
+    )
+
+
+def _managed_contents(
+    config: NacosRuleSourceConfig, *, flow_sequence: int = 1
+) -> dict[str, str]:
+    assert config.managed_bindings is not None
+    rule_types = {
+        ManagedRuleKind.FLOW: "flow",
+        ManagedRuleKind.DEGRADE: "degrade",
+        ManagedRuleKind.SYSTEM: "system",
+        ManagedRuleKind.AUTHORITY: "authority",
+        ManagedRuleKind.PARAM: "param_flow",
+    }
+    contents: dict[str, str] = {}
+    for binding in config.managed_bindings:
+        payload = b"[]"
+        sequence = flow_sequence if binding.rule_kind is ManagedRuleKind.FLOW else 1
+        contents[config.data_id_for(rule_types[binding.rule_kind])] = (
+            encode_managed_rule_publication(
+                ManagedRulePublicationV1(
+                    binding_id=binding.binding_id,
+                    publication_id=f"publication-{binding.rule_kind.value}-{sequence}",
+                    target_version_id=f"version-{binding.rule_kind.value}-{sequence}",
+                    publication_sequence=sequence,
+                    rule_kind=binding.rule_kind,
+                    profile_id=binding.profile_id,
+                    payload_sha256=hashlib.sha256(payload).hexdigest(),
+                    rule_payload=payload,
+                )
+            ).decode("utf-8")
+        )
+    return contents
+
+
 @pytest.fixture
-def factory_and_clients() -> tuple[
-    Callable[..., Any], list[_FakeNacosClient]
-]:
+def factory_and_clients() -> tuple[Callable[..., Any], list[_FakeNacosClient]]:
     return _make_fake_factory()
 
 
@@ -216,6 +268,7 @@ class TestPublicApiSignature:
         """
         factory, _ = _make_fake_factory()
         from atlas_richie.sentinel_source_nacos import NacosRuleSourceConfig
+
         cfg = NacosRuleSourceConfig(
             source_id="x",
             server_addresses=("n:1",),
@@ -254,9 +307,7 @@ class TestPublicApiSignature:
         assert src.last_error is None
         assert src.last_error_message is None
 
-    def test_snapshots_is_async_generator(
-        self, config: NacosRuleSourceConfig
-    ) -> None:
+    def test_snapshots_is_async_generator(self, config: NacosRuleSourceConfig) -> None:
         """`snapshots()` 是异步生成器; aclose 后立即 StopAsyncIteration。"""
         factory, _ = _make_fake_factory()
         src = NacosRuleSource(config, client_factory=factory)
@@ -271,6 +322,7 @@ class TestPublicApiSignature:
 
     def test_aclose_is_coroutine(self, config: NacosRuleSourceConfig) -> None:
         import inspect
+
         factory, _ = _make_fake_factory()
         src = NacosRuleSource(config, client_factory=factory)
         assert inspect.iscoroutinefunction(src.aclose)
@@ -284,9 +336,7 @@ class TestPublicApiSignature:
 class TestInitAndState:
     """__init__ 校验 + state 初始值。"""
 
-    def test_init_accepts_valid_config(
-        self, config: NacosRuleSourceConfig
-    ) -> None:
+    def test_init_accepts_valid_config(self, config: NacosRuleSourceConfig) -> None:
         factory, _ = _make_fake_factory()
         src = NacosRuleSource(config, client_factory=factory)
         assert src.source_id == config.source_id
@@ -296,6 +346,7 @@ class TestInitAndState:
     def test_init_rejects_invalid_config(self) -> None:
         """config 自身校验在 NacosRuleSourceConfig.__post_init__ 完成; 传递性。"""
         from atlas_richie.sentinel.errors import SentinelConfigurationError
+
         factory, _ = _make_fake_factory()
         # 空白 source_id 应被 config 拒绝
         with pytest.raises((SentinelConfigurationError, ValueError)):
@@ -307,9 +358,7 @@ class TestInitAndState:
                 data_id_prefix="p",
             )
 
-    def test_state_initial_connecting(
-        self, config: NacosRuleSourceConfig
-    ) -> None:
+    def test_state_initial_connecting(self, config: NacosRuleSourceConfig) -> None:
         factory, _ = _make_fake_factory()
         src = NacosRuleSource(config, client_factory=factory)
         assert src.state is NacosSourceState.CONNECTING
@@ -355,6 +404,7 @@ class TestAcloseIdempotency:
             )
 
         src = NacosRuleSource(config, client_factory=factory)
+
         # 触发 client 构造
         async def _drive() -> None:
             async for _ in src.snapshots():
@@ -362,7 +412,9 @@ class TestAcloseIdempotency:
 
         task = asyncio.create_task(_drive())
         await asyncio.sleep(0.05)  # 让 client 构造
-        with caplog.at_level(logging.WARNING, logger="atlas_richie.sentinel_source_nacos"):
+        with caplog.at_level(
+            logging.WARNING, logger="atlas_richie.sentinel_source_nacos"
+        ):
             await src.aclose()
         # 任务应自然结束
         try:
@@ -435,9 +487,7 @@ class TestErrorClassification:
     """5 类 NacosSourceError 分类 + 状态机转移 + last_error_message 脱敏。"""
 
     @pytest.mark.asyncio
-    async def test_not_found_error(
-        self, config: NacosRuleSourceConfig
-    ) -> None:
+    async def test_not_found_error(self, config: NacosRuleSourceConfig) -> None:
         """某 data_id 服务端 404 (NacosException) → NOT_FOUND, 状态 STALE, snapshot 中不含该 data_id。"""
         from v2.nacos import NacosException
 
@@ -480,10 +530,9 @@ class TestErrorClassification:
         await src.aclose()
 
     @pytest.mark.asyncio
-    async def test_empty_error(
-        self, config: NacosRuleSourceConfig
-    ) -> None:
+    async def test_empty_error(self, config: NacosRuleSourceConfig) -> None:
         """某 data_id 内容为空 → EMPTY, 状态 STALE, snapshot 不含该 data_id。"""
+
         async def factory(client_config: Any) -> _FakeNacosClient:
             client = _FakeNacosClient(
                 server_addresses=getattr(client_config, "server_address", None),
@@ -522,6 +571,7 @@ class TestErrorClassification:
         self, config: NacosRuleSourceConfig
     ) -> None:
         """某 data_id 内容坏 JSON → DECODE, 状态 STALE, 不 yield。"""
+
         async def factory(client_config: Any) -> _FakeNacosClient:
             client = _FakeNacosClient(
                 server_addresses=getattr(client_config, "server_address", None),
@@ -532,6 +582,7 @@ class TestErrorClassification:
             return client
 
         src = NacosRuleSource(config, client_factory=factory)
+
         # snapshots 应在 initial load 阶段因 DECODE 进入 STALE
         # 因为只 1 个 data_id 有内容, 其它 4 个 NOT_FOUND, 整体 parse 失败 → DECODE
         # 实际: 只有 1 个 data_id 有坏 JSON, 其它 4 个 NOT_FOUND; codec 解析坏 JSON 抛 NacosDecodeError
@@ -555,13 +606,18 @@ class TestErrorClassification:
         # 或 DISCONNECTED (因为 _initial_load_with_backoff 把 decode 也当 retry)
         # 当前实现: _load_snapshot 设 STALE; _initial_load_with_backoff 退避后
         # 重试; 退避等待时 state 是 STALE
-        assert src.state in (NacosSourceState.STALE, NacosSourceState.DISCONNECTED, NacosSourceState.CLOSED)
+        assert src.state in (
+            NacosSourceState.STALE,
+            NacosSourceState.DISCONNECTED,
+            NacosSourceState.CLOSED,
+        )
 
     @pytest.mark.asyncio
     async def test_network_error_disconnected(
         self, config: NacosRuleSourceConfig
     ) -> None:
         """SDK get_config 抛连接异常 → NETWORK, 状态 DISCONNECTED, 退避重试。"""
+
         async def factory(client_config: Any) -> _FakeNacosClient:
             client = _FakeNacosClient(
                 server_addresses=getattr(client_config, "server_address", None),
@@ -577,6 +633,7 @@ class TestErrorClassification:
             return client
 
         src = NacosRuleSource(config, client_factory=factory)
+
         async def _drive() -> None:
             async for _ in src.snapshots():
                 pass
@@ -617,6 +674,7 @@ class TestErrorClassification:
             return client
 
         src = NacosRuleSource(config, client_factory=factory)
+
         async def _drive() -> None:
             async for _ in src.snapshots():
                 pass
@@ -717,9 +775,7 @@ class TestErrorClassification:
 class TestBackoff:
     """退避: reconnect_initial → reconnect_max 边界。"""
 
-    def test_backoff_initial(
-        self, config: NacosRuleSourceConfig
-    ) -> None:
+    def test_backoff_initial(self, config: NacosRuleSourceConfig) -> None:
         factory, _ = _make_fake_factory()
         src = NacosRuleSource(config, client_factory=factory)
         # 0 次尝试: 仍用 initial
@@ -727,9 +783,7 @@ class TestBackoff:
             config.reconnect_initial.total_seconds()
         )
 
-    def test_backoff_grows_then_caps(
-        self, config: NacosRuleSourceConfig
-    ) -> None:
+    def test_backoff_grows_then_caps(self, config: NacosRuleSourceConfig) -> None:
         factory, _ = _make_fake_factory()
         src = NacosRuleSource(config, client_factory=factory)
         # reconnect_initial=10ms, reconnect_max=50ms
@@ -805,9 +859,7 @@ class TestRedaction:
         out = _redact(msg, config)
         assert "eyJhbGciOiJIUzI1NiJ9" not in out
 
-    def test_redact_no_op_for_safe_text(
-        self, config: NacosRuleSourceConfig
-    ) -> None:
+    def test_redact_no_op_for_safe_text(self, config: NacosRuleSourceConfig) -> None:
         msg = "decode error on data_id 'flow-rules.json'"
         out = _redact(msg, config)
         assert out == msg
@@ -823,22 +875,25 @@ class TestRedaction:
         self, config: NacosRuleSourceConfig
     ) -> None:
         """last_error_message 不应含敏感字段。"""
+
         async def factory(client_config: Any) -> _FakeNacosClient:
             client = _FakeNacosClient(
                 server_addresses=getattr(client_config, "server_address", None),
                 namespace=getattr(client_config, "namespace_id", None),
             )
+
             def boom(*a: Any, **kw2: Any) -> Any:
-                raise ConnectionError(
-                    "Connection refused to nacos-1:8848"
-                )
+                raise ConnectionError("Connection refused to nacos-1:8848")
+
             client.get_config = boom  # type: ignore[method-assign]
             return client
 
         src = NacosRuleSource(config, client_factory=factory)
+
         async def _drive() -> None:
             async for _ in src.snapshots():
                 pass
+
         task = asyncio.create_task(_drive())
         await asyncio.sleep(0.1)
         await src.aclose()
@@ -858,23 +913,30 @@ class TestRedaction:
         self, config: NacosRuleSourceConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
         """捕获的 log 应不含敏感字段。"""
+
         async def factory(client_config: Any) -> _FakeNacosClient:
             client = _FakeNacosClient(
                 server_addresses=getattr(client_config, "server_address", None),
                 namespace=getattr(client_config, "namespace_id", None),
             )
+
             def boom(*a: Any, **kw2: Any) -> Any:
                 raise ConnectionError(
                     "Connection refused to nacos-1:8848 username=admin"
                 )
+
             client.get_config = boom  # type: ignore[method-assign]
             return client
 
         src = NacosRuleSource(config, client_factory=factory)
-        with caplog.at_level(logging.DEBUG, logger="atlas_richie.sentinel_source_nacos"):
+        with caplog.at_level(
+            logging.DEBUG, logger="atlas_richie.sentinel_source_nacos"
+        ):
+
             async def _drive() -> None:
                 async for _ in src.snapshots():
                     pass
+
             task = asyncio.create_task(_drive())
             await asyncio.sleep(0.1)
             await src.aclose()
@@ -899,7 +961,9 @@ class TestPublicApiBoundary:
 
     def test_no_nacos_sdk_types_in_public_api(self) -> None:
         import inspect
+
         from atlas_richie.sentinel_source_nacos import source as mod
+
         # 类本身
         for cls_name in ["NacosRuleSource"]:
             cls = getattr(mod, cls_name)
@@ -920,13 +984,13 @@ class TestPublicApiBoundary:
                     ann_mod = getattr(type(val), "__module__", "")
                     if ann_mod.startswith("nacos"):
                         pytest.fail(
-                            f"{cls_name}.{name} leaks nacos SDK type "
-                            f"(module={ann_mod})"
+                            f"{cls_name}.{name} leaks nacos SDK type (module={ann_mod})"
                         )
 
     def test_no_nacos_sdk_imports_in_source_module(self) -> None:
         """source 模块静态导入 nacos-sdk-python 仅限于 _NacosAdapter 内, 不污染公开符号。"""
         import atlas_richie.sentinel_source_nacos.source as mod
+
         for name, val in vars(mod).items():
             if name.startswith("_") and not name.startswith("__"):
                 continue
@@ -936,9 +1000,7 @@ class TestPublicApiBoundary:
                 continue
             ann_mod = getattr(type(val), "__module__", "")
             if ann_mod.startswith("nacos"):
-                pytest.fail(
-                    f"source.{name} leaks nacos SDK type (module={ann_mod})"
-                )
+                pytest.fail(f"source.{name} leaks nacos SDK type (module={ann_mod})")
 
 
 # ---------------------------------------------------------------------------
@@ -957,6 +1019,7 @@ class TestCLayerIsolation:
         文档字符串里说"不 import _supervisor"是允许的 (说明性文本)。
         """
         import atlas_richie.sentinel_source_nacos.source as mod
+
         forbidden = "atlas_richie.sentinel.source._supervisor"
         # 1) module 本身 attrs 的 __module__
         for name, val in vars(mod).items():
@@ -969,20 +1032,17 @@ class TestCLayerIsolation:
         # 2) 模块字典里查 "_supervisor" 子字符串作为 attribute 名 (非源码)
         for name in dir(mod):
             if name == "_supervisor" or name.startswith("_supervisor."):
-                pytest.fail(
-                    f"source module exposes _supervisor attribute: {name!r}"
-                )
+                pytest.fail(f"source module exposes _supervisor attribute: {name!r}")
 
     def test_codec_module_does_not_import_supervisor(self) -> None:
         """codec 模块也不 import _supervisor。"""
         import atlas_richie.sentinel_source_nacos.codec as mod
+
         forbidden = "atlas_richie.sentinel.source._supervisor"
         for name, val in vars(mod).items():
             ann_mod = getattr(type(val), "__module__", "")
             if ann_mod.startswith(forbidden):
-                pytest.fail(
-                    f"codec.{name} module {ann_mod!r} is C-layer _supervisor"
-                )
+                pytest.fail(f"codec.{name} module {ann_mod!r} is C-layer _supervisor")
 
 
 # ---------------------------------------------------------------------------
@@ -998,6 +1058,7 @@ class TestSnapshotsEndToEnd:
         self, config: NacosRuleSourceConfig
     ) -> None:
         """首次加载 5 个 data_id → 至少 yield 1 个 snapshot。"""
+
         async def factory(client_config: Any) -> _FakeNacosClient:
             client = _FakeNacosClient(
                 server_addresses=getattr(client_config, "server_address", None),
@@ -1028,7 +1089,11 @@ class TestSnapshotsEndToEnd:
         assert isinstance(snap, RuleSnapshot)
         assert snap.source_id == "nacos-prod"
         # state 应到 READY (5 个都是空 = EMPTY warnings; 或 STALE)
-        assert src.state in (NacosSourceState.READY, NacosSourceState.STALE, NacosSourceState.CLOSED)
+        assert src.state in (
+            NacosSourceState.READY,
+            NacosSourceState.STALE,
+            NacosSourceState.CLOSED,
+        )
 
     @pytest.mark.asyncio
     async def test_change_triggers_new_snapshot(
@@ -1092,3 +1157,50 @@ class TestSnapshotsEndToEnd:
             f"no snapshot with different version; "
             f"versions={[s.version for s in snapshots]}"
         )
+
+    @pytest.mark.asyncio
+    async def test_managed_profile_yields_atomic_five_target_provenance(
+        self, config: NacosRuleSourceConfig
+    ) -> None:
+        managed_config = _managed_config(config)
+        clients: list[_FakeNacosClient] = []
+
+        async def factory(client_config: Any) -> _FakeNacosClient:
+            client = _FakeNacosClient()
+            for data_id, content in _managed_contents(managed_config).items():
+                client.set_config(data_id, content)
+            clients.append(client)
+            return client
+
+        source = NacosRuleSource(managed_config, client_factory=factory)
+        iterator = source.snapshots()
+        try:
+            first = await asyncio.wait_for(anext(iterator), timeout=2.0)
+            assert len(first.provenance) == 5
+            assert len(first.rules) == 0
+            first_flow = next(
+                item
+                for item in first.provenance
+                if item.rule_kind is RuleTargetKind.FLOW
+            )
+            assert first_flow.publication_sequence == 1
+
+            assert clients
+            for data_id, content in _managed_contents(
+                managed_config, flow_sequence=2
+            ).items():
+                clients[0].set_config(data_id, content)
+
+            second = await asyncio.wait_for(anext(iterator), timeout=3.0)
+            second_flow = next(
+                item
+                for item in second.provenance
+                if item.rule_kind is RuleTargetKind.FLOW
+            )
+            assert second_flow.publication_sequence == 2
+            assert second.version > first.version
+
+            with pytest.raises(NacosCodecError, match="stale publication sequence"):
+                source._validate_managed_sequence(first.provenance)
+        finally:
+            await source.aclose()

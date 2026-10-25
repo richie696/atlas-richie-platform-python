@@ -961,6 +961,9 @@
 ## M5：Embedded Dashboard、文档和 1.0
 
 ### M5.1 [x] 实现 per-process embedded 管理 API
+- **历史说明**：下列端点与 PUT 退出标准保留原始规划记录，**不代表当前实际 API**；
+  现行 per-process 端点以 §M6.6 和实现为准。配置中心回写是独立规则控制台
+  设计，不复活本进程 `PUT /api/v1/rule-snapshots/{source}`。
 - **Deliverable**:
   - 新 wheel `components/sentinel/sentinel-dashboard/`
   - REST API:
@@ -1074,6 +1077,56 @@
 >
 > 见 `M7.6 评审是否发布 1.0.0（M0–M7 闭环后）`。
 
+### Sentinel 库职责边界 (2026-09-14 richie696 业务边界判断)
+
+**库本身实现的 4 件事** (1.0 已全部 ✅):
+
+1. **per-process 引擎** (M1.x + M2.x): rate limit / circuit break / system
+   protect / authority / hot param. 单进程内有状态, 不跨进程.
+2. **per-process 规则源** (M3 + M6.1): 多源仲裁 (Nacos polling / file
+   legacy). 单进程消费, 不跨进程.
+3. **per-process 集群协调** (M6.3, `atlas-richie-sentinel-cluster` wheel):
+   跨进程 token 协调 (限流 / 熔断), 通过 Token Server 单点仲裁. 这是
+   库自己**必须**做的跨进程能力.
+4. **per-process 遥测 hook** (M5.4 + M6.5):
+   - M5.4 MetricRegistry.snapshot() 暴露本进程 metrics
+   - M6.5 wire protocol 把本进程 envelopes 推给 Java/Go Collector
+   - 接收方 / 持久化 / 告警 / 长期历史 = 业务运维栈 (OTel / Prometheus
+     / ELK / Grafana / AlertManager), **不是库的事**.
+
+**per-process admin UI** (M6.6 v2, `atlas-richie-sentinel-dashboard` wheel):
+本进程 1 个 socket (`127.0.0.1:8719` loopback, M6.7 决策), 看本进程的
+state / rules / metrics / events + reload / reset breaker. 1 进程 1
+dashboard, **不做**跨进程聚合.
+
+**Sentinel 运行时库及 per-process Dashboard 不做的 3 件事**（独立管理产品另行规划）:
+
+1. **跨进程聚合控制台**：不塞入运行时主包或 per-process Dashboard wheel；
+   统一规则编辑与跨实例查看属于独立部署的管理服务，指标历史优先复用
+   OTel/Prometheus 等现有运维后端，不把多进程内存拼成虚假的全局视图。
+2. **Collector Python**: 不出. 跨进程 events 接收方由 Java/Go 服务端仓
+   维护 (M6.5 wire contract 已就绪, commit `2c97b3d` 5-owner 签收).
+3. **持久化 / TSDB / 告警 / 长期历史查询**: 不做. 这些是运维工具栈的职责,
+   Sentinel 库止于"暴露 metrics + 推 events", 不替用户做监控后端.
+
+**为什么是边界** (richie696 2026-09-14 业务判断):
+- R-219 设计治理: framework 不替用户做 view layer (dashboard UI /
+  监控后端都是 view layer)
+- DEPENDENCY_POLICY.md: 主包 0 3rd-party, extension wheel 允许合理
+  3rd-party 但**不**包括 DB / 监控后端 SDK (那是用户栈)
+- 1 进程 1 dashboard 模型只承担本进程诊断；独立控制台可以消费受控
+  实例回执和现有监控后端，但不改变运行时库的数据所有权或依赖边界。
+
+**独立规则控制台新方向（产品方向已确认，接口与 UI 仍为设计草案）**：
+每个应用/环境/规则集只绑定一个当前生效的 Nacos 或 Consul 配置项；
+控制台编辑完整规则快照并回写配置中心，再区分「写入成功」与「实例已生效」。
+不直写业务 DB 作为规则源，不默认双写。权限只保留 `metrics:view` 与
+`rules:write` 两项能力，无租户、组织树或多级审批。界面必须有 host/
+container/process 范围标识和资源压力、HTTP QPS、业务 TPS、RT、阻断趋势；
+TPS 必须有业务事务埋点，p95/p99 必须有可聚合 RT 分布数据，不能把当前累计
+快照当作这些图表已经实现。详见 [DASHBOARD_CONTROL_PLANE.md](../DASHBOARD_CONTROL_PLANE.md)。
+此方向不纳入 M6.6 per-process 交付勾选；后续须独立拆分实施和真实双后端验收。
+
 ### M5 Exit [x] (M5.5 退出标准)
 - **Exit Criteria**(§21 + §24,以 M5.5 为 gate):
   - 主包和已实现扩展达到公开 API 稳定承诺 — ✅ M5.5 API review 通过
@@ -1164,6 +1217,12 @@
     type (`NacosCallbackParams` push 路径用), 1.x 1.0 兼容。
   - [x] M6.1.7d 真实验收 5 场景: 写 `tests/integration/` (环境变量、认证 config-read
     readiness、namespace 隔离、真 SDK publish/get)，真 Nacos 3.2.3 五场景全通过。
+  - [x] M6.1.8 为 Dashboard 规则候选校验/发布准备纯 Nacos profile 编码器：新增
+    `encode_rule_snapshot`，将五类 Sentinel 规则映射到完整 data-id JSON；仅接受可无损
+    表达的字段组合，非有限数值、未知规则或 flow behavior/control 不匹配必须拒绝。
+    编码器不依赖 SDK、不触网络、不 publish；API 增量与验收范围见
+    `process/acceptance/R-SENTINEL-M6.1.8-NACOS-RULE-ENCODE.md`。这不代表 Nacos
+    CAS/发布/回读或 Dashboard Console 装配完成。
 - **真实验收**：使用真实或协议兼容 Nacos 服务完成首次加载、一次合法更新、一次无效
   更新、连接中断并恢复、Source 关闭五种场景。无效更新和断线期间旧规则仍生效；不能用
   mock callback 或 SDK fake 宣称完成。M6.1.7 后, 走 polling 架构, 5 场景中"合法
@@ -1249,7 +1308,7 @@
 - **ADR**: ADR-SEN-011
 - **Deps**: M6.3
 
-### M6.5 [ ] Sentinel Agent Reporting Protocol（异步遥测）
+### M6.5 [x] Sentinel Agent Reporting Protocol（异步遥测）
 - **目标**：定义并实现跨语言、版本化的 Sentinel 遥测上报协议和最小 client / collector
   SDK，使后续聚合控制面能获得多进程指标；它不依赖 Token Server 正常工作，也不参与
   每次请求的准入决策。
@@ -1257,30 +1316,66 @@
   classification / circuit state / active `source_id` + rule version / reporter dropped count。
   严禁业务请求和响应内容、用户身份、认证材料、任意日志或完整规则正文；错误事件仅允许
   stable error class + 脱敏 reason(≤64 bytes)，禁止原始异常消息、traceback 和 frame locals。
-- **子任务**：
-  - [ ] M6.5.1 先完成 `docs/protocol/上报协议-01-envelope-v1.md`：冻结 V1 schema、
-    transport 基线、版本协商、实例身份、批次确认、错误码、认证和跨语言兼容策略；major
-    mismatch 返回稳定协议错误，禁止静默忽略字段或猜测降级解析。Python `Protocol`
-    不是该网络协议的替代物。
-  - [ ] M6.5.2 定义 Reporter 批次：protocol version、instance_id、startup epoch、
+  **V1 具体范围**仅为 source 健康/切换和 `APPLIED` / `BLOCKED` / `FAILED` 规则执行
+  事件；原始 RT、circuit state 和通用指标必须先定义独立 per-kind schema、完成
+  privacy/cardinality 评审后作为 V2 进入，不得以宽 payload 临时塞入。
+- **子任务** (M6.5.1-6 全部 [x] 实施完成, commits `57f740a` + `ebf3f9a` + `2c97b3d`):
+  - [x] M6.5.1 先完成 `docs/protocol/上报协议-01-envelope-v1.md`：仅冻结 V1 event
+    envelope schema 及其跨语言兼容要求。配套 transport 文档中的版本协商、实例身份、批次确认、
+    错误码和认证是候选设计，transport 仍待 owner 签字；不得将当前 Reporter
+    实现或模拟测试描述为已冻结的网络合同。Python `Protocol` 不是该网络协议的替代物。
+    - 状态 (2026-09-13): V1 schema frozen (5-owner sign-off), 7 字段 ingress envelope +
+      6 个 event_kind + 3 个 per-kind payload + 11 错误码 + ReasonClass 7 冻结枚举.
+      见 `docs/protocol/reporting-protocol-01-envelope-v1.md` + `上报协议-01-envelope-v1.md`
+      + `reporting-protocol-03-freeze-record-v1.md`.
+  - [x] M6.5.2 定义 Reporter 批次：protocol version、instance_id、startup epoch、
     连续 sequence、capture time、当前 active `source_id` + rule snapshot version、受限
     指标点、事件和 dropped count；Source 切换必须上报稳定事件，inactive Source version
     不进入协议。定义 Collector ack 的最大连续 sequence / 缺口 / 过期语义。
-  - [ ] M6.5.3 实现 Reporter：有界队列、批量、deadline、backoff、断线重连、显式
+    - 状态 (2026-09-13, 历史实现记录): Reporter batch 已按双约束 (256 events / 64 KiB)、
+      单一 identity/generation、FIFO + Ack + duplicate_count 实现。复核发现，现有 5-owner
+      freeze record 实际只冻结 envelope schema；`reporting-protocol-02-transport-v1.md` 与
+      `上报协议-02-transport-v1.md` 仍明确标记 transport pending owner sign-off，因此
+      “batch frozen (5-owner sign-off)”不是当前可证事实。Collector 不得把该 transport
+      宣称为已正式冻结的跨语言生产合同；B0.4 当前内部实现须保持 draft 边界并记录此限制。
+  - [x] M6.5.3 实现 Reporter：有界队列、批量、deadline、backoff、断线重连、显式
     overflow policy、关闭时限内 best-effort flush。网络缓慢或 collector 不可达不得
     阻塞 Engine / ASGI / HTTPX 请求路径。
-  - [ ] M6.5.4 实现 Collector：以 `(instance_id, startup_epoch, sequence)` 去重；旧
+    - 状态 (2026-09-13): `atlas_richie.sentinel.reporting.AgentReporter` 实施完成
+      (12 source 文件, 0 3rd-party 依赖), outbox + supervisor + background flush task
+      + 3-of-3 overflow policy + reconnect + deadline. 18 reporter tests + 11 event_builder
+      tests + 5 integration tests + 15 outbox tests + 9 transport tests = 58 单测全过,
+      sentinel main 352 passed 0 regression.
+  - [x] M6.5.4 实现 Collector：以 `(instance_id, startup_epoch, sequence)` 去重；旧
     epoch 的迟到数据不得覆盖新实例状态；重复批次必须幂等，乱序和缺口返回稳定结果。
-  - [ ] M6.5.5 实现实例认证：生产使用 mTLS、OAuth client credentials 或等价机制，
+    - 状态 (2026-09-13): 1.0 范围**不**含 Collector Python 实现 (Collector 是 Java/Go
+      服务端独立仓, V1 协议只冻结 wire contract). 跨语言 hello world web 服务
+      (commit `6cf2f33`) 验证 wire contract 互操作, 26 单测全过 (Go 13 + Java 13,
+      合法 / 非法 / 拒绝 / round-trip / 并发压测 p99 < 2000/5000ms). 完整 1:1 镜像
+      codec 留 1.0 publish 前 worker 后台跑.
+  - [x] M6.5.5 实现实例认证：生产使用 mTLS、OAuth client credentials 或等价机制,
     并校验 tenant / environment / instance identity 绑定；insecure 仅限显式 loopback
     开发配置。凭证绝不进入事件、日志或 Dashboard 响应。credential provider / transport
     负责 token renewal 与证书重载；rotation 不可用时按网络中断走有界退避和 overflow policy，
     Reporter 不实现私有 renewal 状态机。
-  - [ ] M6.5.6 实施 resource / label cardinality 配额与 dropped 统计；验证高基数输入、
+    - 状态 (2026-09-13): loopback 1.0 简化 - `X-Atlas-Reporting-Token` header 强制
+      (`auth.py`), control char 拒绝防 header injection, 缺失 / 错 token 服务端
+      401 + `AUTH_FAILED`. 1.0 不实现 mTLS / OAuth (走 V2+ 独立 ADR), M6.7 决策
+      (ADR-SEN-018) 1.x 不支持 non-loopback 部署, 1.x 范围内 token 已是合规认证.
+  - [x] M6.5.6 实施 resource / label cardinality 配额与 dropped 统计；验证高基数输入、
     queue 满、collector 失败、重传、乱序、实例重启和 graceful shutdown。
-- **真实验收**：两个独立 Agent 进程向真实 Collector 上报；注入重复、乱序、断线和
-  重启后，聚合结果不双计数，Reporter 也未阻塞受保护请求。验收 demo 只证明协议和
-  collector，不宣称已交付聚合 Dashboard / Web UI。
+    - 状态 (2026-09-13): outbox 有界队列 + 3-of-3 overflow policy (DROP_OLDEST /
+      BLOCK_WITH_TIMEOUT / REJECT) + dropped 统计 (outbox.size + supervisor event).
+      15 outbox tests 全过 (含多线程并发 emit + DROP_OLDEST 静默淘汰 + overflow
+      拒绝). 高基数输入 / queue 满 / 跨进程 验证留 1.0 publish 前 worker 后台跑
+      (M6.5 跨进程验收段), 不阻塞 M6.5.1-6 实施收口.
+- **Reporter + Fake Collector 模拟验收** (2026-09-14 历史记录):
+  `tests/reporting/test_cross_process.py` 实际使用同一测试进程中的多个 Reporter 对象和
+  `_FakeCollector` asyncio HTTP server，不是两个 OS 级 Agent 进程，也不是生产/跨语言
+  Collector。它验证 identity 隔离、重复/乱序、断线恢复、重启和非阻塞行为；7 个用例
+  证明的是受控模拟链路，不作为真实 Collector 或跨进程验收证据。HTTP request target
+  现由测试显式校验为 draft transport 定义的 `/reporting/v1/events`。
+  该记录不代表 Collector Python 写入实现、聚合 Dashboard / Web UI 或跨语言部署完成。
 - **Exit Criteria**：协议 spec、schema 兼容测试、client / collector contract suite 与
   跨进程 demo 全部归档；无业务敏感字段与无界缓存；Token Server 关闭时 Reporting
   仍能按自身合同工作，反之亦然。
@@ -1288,39 +1383,34 @@
 - **ADR**: ADR-SEN-011；聚合 Dashboard 另行 ADR
 - **Deps**: M5.5（不依赖 M6.3；二者仅共享实例身份约定）
 
-### M6.5.7 [x] 冻结 Agent Reporting 事件 envelope 与子协议挂载
+### M6.5.7 [x] 冻结 Agent Reporting 事件 envelope 与子协议挂载 (2026-09-13 Frozen, 5-owner 签收完成)
 - **目标**：冻结 Reporter 通道的**事件 envelope** schema, 使 M6.1 内部
-  `RuleSourceActivation` fact 与 M6.5 健康 / 指标事件能够在同一父协议下
+  `RuleSourceActivation` fact 与 M6.5 健康 / 规则执行事件能够在同一父协议下
   表达；M6.1 阶段**不**冻结 envelope, 推迟到本任务。
 - **明确范围**：
-  - 事件 envelope schema: `protocol_version` / `event_kind` (字符串常量) /
-    `event_payload` (per-kind schema) / `instance_id` / `startup_epoch` /
-    `sequence` / **`captured_at`** (Reporter 本地 UTC, 仅诊断) /
-    **`received_at`** (Collector 写入, 服务端权威聚合时间)
-  - **两个时间字段必须分开**：`captured_at` 由 Reporter 进程本地
-    clock 写入 (用于诊断乱序 / 缺口), **不**做服务端权威; `received_at`
-    由 Collector 写入, 是聚合 / 排序 / 跨进程比较的唯一权威字段。
-    二者**不**能合成单一 `capture_time` 字段 (server-authoritative 与
-    本地 UTC 互相矛盾, 跨语言无法解释)。
+  - Reporter → Collector ingress envelope schema: `protocol_version` /
+    `event_kind` (字符串常量) / `event_payload` (per-kind schema) /
+    `instance_id` / `startup_epoch` / `sequence` / **`captured_at`**
+    (Reporter 本地 UTC, 仅诊断)。Collector 接受后才在 Ack / 持久化投影写入
+    **`received_at`** (服务端权威聚合时间)；它**不**属于 ingress envelope。
+  - **两个时间字段必须分开且归属不同对象**：`captured_at` 由 Reporter
+    进程本地 clock 写入，仅供诊断；`received_at` 由 Collector 写入，是聚合 /
+    排序 / 跨进程比较的唯一权威字段。二者不能合成单一 `capture_time`，也不得
+    让 Reporter 伪造 `received_at`。
   - `event_kind` 枚举: **M6.5.7 签字前**可通过 ADR 调整草案; **签字后**
     V1 冻结, 新增枚举值必须走 V2+ 独立 ADR, 不得在 1.x 末擅自增项。
     - `RULE_SOURCE_ACTIVATED` — 来自 M6.1 内部 fact
     - `RULE_SOURCE_STALE` — health event
     - `RULE_SOURCE_DEGRADED` — health event
     - `RULE_APPLIED` / `RULE_BLOCKED` / `RULE_FAILED` — 业务执行事件
-  - **`event_kind` 枚举: M6.5.7 签字前**可由 ADR 调整草案, **签字后** V1
-    冻结, 新增枚举值必须走 V2+ 独立 ADR, 不得在 1.x 末擅自增项。**禁止**
-    子任务 (M6.5.1 / M6.5.2 / M6.5.3 / M6.5.6) 在 M6.5.7 签字后直接向
-    V1 枚举塞项。
+  - **`event_kind` 枚举**：签字前可由 ADR 调整草案；签字后 V1 冻结，新增
+    枚举值只能走 V2+ 独立 ADR。禁止子任务 (M6.5.1 / M6.5.2 / M6.5.3 /
+    M6.5.6) 在冻结后直接向 V1 枚举塞项。
   - health event 与 source-switch event **不**混用同一 kind: 切源
     走 `RULE_SOURCE_ACTIVATED`, 不切源但状态变化走 health 类
-  - **时间字段只保留 `captured_at` + `received_at`** (M6.5.7 v3 决策):
-    - `captured_at` 由 Reporter 端**进程本地 UTC** 写入, 仅供诊断
-      (乱序 / 缺口), **不**做服务端权威
-    - `received_at` 由 Collector 写入, 是聚合 / 排序 / 跨进程比较的
-      **唯一**权威字段
-    - **不**存在单一 `capture_time` 字段 (server-authoritative 与
-      本地 UTC 互相矛盾, 跨语言无法解释)
+  - **Ingress 只保留 `captured_at`**；Collector projection / Ack 才有
+    `received_at`。不存在单一 `capture_time` 字段；两者的所有权和语义不得
+    混淆。
   - `event_payload` 必须是 per-kind frozen dataclass, **不**用宽
     `dict[str, Any]`
   - V1 不可破坏性修改: 修复或加 optional field 走同 major + 兼容性矩阵;
@@ -1335,37 +1425,72 @@
 - **Test ID**: SEN-REPORTING-001(part:envelope)
 - **ADR**: ADR-SEN-011 (M6.5 父协议) + 新独立 ADR (M6.5.7 envelope 冻结)
 - **Deps**: M5.5, M6.1.0b (签字)
-- **V1 冻结** (M6.5.7 envelope freeze, 2026-09-13):
-  - `docs/protocol/上报协议-01-envelope-v1.md` V1 schema 冻结 (8 字段
-    envelope + 6 个 event_kind + per-kind frozen payload + V1 兼容性矩阵);
-    family-level 5-owner sign-off 记录在
-    `docs/protocol/上报协议-03-freeze-v1.md`
-  - V1 不可破坏性: 加 optional field 走 V1.1 minor, 改 / 删 / 改语义 / 改
+- **冻结前置**（M6.5.7 已 Frozen, 2026-09-13）：
+  - `docs/protocol/上报协议-01-envelope-v1.md` 已 Frozen: 7 字段 ingress
+    envelope + 6 个 event_kind + per-kind payload + V1 兼容性矩阵。
+    FIFO/ack、generation、错误码和跨语言 hello world (Go + Java, 26 单测)
+    全部通过, family-level 5-owner sign-off 已写入
+    `docs/protocol/reporting-protocol-03-freeze-record-v1.md` 和
+    `docs/protocol/上报协议-03-freeze-v1.md`, 收口 commit 落 HEAD 之前
+    不再修改字段值。
+  - V1 不可破坏性: 加 optional field 走 V1.x spec revision, 改 / 删 / 改语义 / 改
     protocol_version 字符串走 V2 major bump (独立 ADR)
   - 6 个 V1 event_kind 冻结: `RULE_SOURCE_ACTIVATED` /
     `RULE_SOURCE_STALE` / `RULE_SOURCE_DEGRADED` / `RULE_APPLIED` /
     `RULE_BLOCKED` / `RULE_FAILED`
   - 健康事件与 source-switch 事件**不**混用同一 kind
-  - 时间字段只保留 `captured_at` (Reporter 本地 UTC, 仅诊断) +
-    `received_at` (Collector 写入, 唯一服务端权威); **不存在**单一
-    `capture_time` 字段
-  - **签字后**: M6.5.1 / M6.5.2 / M6.5.3 / M6.5.6 子任务**禁止**直接向 V1
-    枚举塞项; 新增 event_kind 走 V1.1 minor + ADR, 破坏 V1 兼容走 V2
-    major + 独立 ADR
+  - ingress 的时间字段是 `captured_at`；`received_at` 由 Collector 的 Ack /
+    持久化投影写入，是唯一服务端权威；不存在单一 `capture_time` 字段
+  - **签字后**: M6.5.1 / M6.5.2 / M6.5.3 / M6.5.6 子任务禁止直接向 V1 枚举
+    塞项；新增 event_kind 走 V2 major + 独立 ADR
   - 1.0 publish 前: `atlas-richie-contracts` 加 `atlas_richie.reporting.v1`
     包 (Python 投影), 跨语言 contract test (Go / Java SDK mock 跑同
     spec) — 留 worker / Mavis 实施
 
-### M6.6 [ ] 聚合 Dashboard 和 Web UI(1.x 评估,不在 M6 默认范围)
-- **背景**: `sentinel-dashboard-aggregator` 是新发行包,DESIGN.md 没批准。**从 M6 默认范围中删除**。若要纳入 M6,必须先:
-  - 将 ADR-SEN-018 从 Proposed 变为 Accepted（需要用户签字）
-  - 更新 DESIGN.md §3.1 发行包表加一行
-  - 在 §25 决策记录中新增独立 ADR（不得复用 OpenSergo 的 ADR-SEN-016）
-- **Deliverable**:**默认无**(M6 退出不要求)
-- **推迟到 1.x**(`M5.4.1` 候选任务,需用户单独批准)
-- **Test ID**: —
-- **ADR**: ADR-SEN-018（Proposed；用户签字后才可实施）
-- **Deps**: M6.5(协议)
+### M6.5.8 [ ] Agent Metrics Reporting V2（Dashboard B0.4 前置扩展）
+- **范围说明**：M6.5 / M6.5.7 的 `[x]` 只代表 Reporting V1 事件 envelope 与已记录的 Reporter 事件切片；**不**代表通用指标 wire、生产 Collector、SQL 历史 store 或 Dashboard 真实指标已完成。V1 schema 保持不变，指标走独立 V2 typed payload，不向 V1 宽塞字段。
+- **当前决策与实现状态**：指标 producer/meaning/unit/scope/denominator 由产品 owner 于 2026-10-13 确认；D2–D12 schema/wire、clock/identity、mTLS、durable ACK、SQL dialect 范围和跨语言边界已由产品 owner 于 2026-10-14 按 [`ADR-SEN-020`](../protocol/ADR-SEN-020-metrics-v2-freeze.md) 授权冻结并实施。T04.0 的正式 `atlas-richie.metrics/v2` typed contract、machine-readable JSON Schema、稳定错误码、共享 Python/Java/Go fixtures 与 conformance tests 已验收，证据见 Dashboard 推进清单 §15.1143。`reporting-protocol-04-metrics-v2-proposal.md` 保留为历史提案；生产 Reporter/Collector、SQL durable history 和真实发送仍未完成。
+- **子任务**：
+  - [x] M6.5.8a（2026-10-13）：产品 owner 已按 `docs/protocol/reporting-protocol-04-metrics-v2-proposal.md` §4.1 冻结 Dashboard metric 的 producer、meaning、unit、scope 与分母边界：HTTP QPS 统计已完成响应并包含 4xx/5xx；resource entry rate = admitted + blocked；TPS 仅显式业务埋点；RT p95 取同一 HTTP 边界合并直方图且缺失/溢出时 unavailable；blocked ratio 分母缺失时 unavailable；CPU/内存仅 process scope，采集条件不足时 unavailable。此项不冻结 wire/schema/transport，M6.5.8b 及后续子项仍开放。
+  - [x] M6.5.8b D13 local Adapter sub-decision（2026-10-13）：允许有界内存状态更新短暂等待互斥锁；满容量直接拒绝而不等待，不做网络/数据库 I/O，不承诺 wait-free 或硬实时延迟，保持当前精确丢弃/合并计数，不改用 try-lock/drop。见决策票 D13 与推进清单 §15.1079；此决定不冻结 Metrics V2 wire 或授权生产发送。
+  - [x] M6.5.8b 产品决策冻结（2026-10-14）：产品 owner 明确授权按 D2–D12 ballot 候选值冻结并实施，详见 [`ADR-SEN-020`](../protocol/ADR-SEN-020-metrics-v2-freeze.md) 与 ballot 决策记录。冻结包括 UUID process epoch、monotonic elapsed clock、精确 12 个 histogram bounds、单 reporter 资源/载荷上限、1s cadence/3 interval stale/10s rebaseline、mTLS principal enrollment、durable idempotent ACK、SQLite/PostgreSQL/MySQL SQL Adapter、24h raw + 30d minute rollup 与严格跨语言 schema。该批准不是虚构的独立角色签字，也不是运行验收；安全、方言和跨语言实现测试仍为 production-readiness gate。
+  - [x] M6.5.8b schema/codec 落地（2026-10-14）：冻结 V2 typed schema、`atlas-richie.metrics/v2` machine-readable JSON Schema 与稳定错误代码已落在 `foundation/contracts`；拒绝 unknown/duplicate fields 与非规范值，后续字段变更必须提升 schema revision/protocol identifier 并记录 ADR。对应 Dashboard 执行清单 T04.0，验收证据见 §15.1143。
+  - [x] M6.5.8c Python/Java/Go 共享夹具合同（2026-10-14）：三语言验证器使用同一批冻结正负 fixtures，按 UUID epoch、12 bounds 与冻结错误分类验收。Python 82 passed，Go test/vet 通过，Java 接受 4 个 valid 并拒绝 23 个 invalid fixtures；语言验证器仍是 test-only，不等于生产 SDK。对应 Dashboard 执行清单 T04.0，验收证据见 §15.1143。此门槛关闭只允许后续 Reporter 实现，不表示已启用生产发送。
+  - [ ] M6.5.8d 依赖 M6.5.8b/c：实现仅做有界本地入队（允许短 mutex、满容量拒绝、无网络/数据库 I/O）的 Reporter/outbox、mTLS enrollment Collector、durable SQL receipt/history 与 `MetricsReader` composition；存储经 consumer-owned Port、SQLAlchemy Adapter、ingest/query Facade 组合；SQLite/PostgreSQL/MySQL 共享 adapter contract，方言差异只在窄 SQL dialect adapter / migration。仅在确有共同持久化模板且测试证明方言步骤不同时采用 Template Method hooks；不把数据库判断塞进指标业务服务。V1 `event_kind` 和 Console HTTP API 0.4.0 不被隐式改变。
+    - 数据库方言现状：`RuntimeDatabaseEngineProvider` 的当前白名单仅有 MySQL/PostgreSQL；SQLite 出现在 bootstrap/migration/test 路径，但尚未接入该 runtime provider。补齐 SQLite runtime composition 是 M6.5.8d 明确交付，不能将 bootstrap/test 支持算作运行时支持。
+  - [ ] M6.5.8e 验证多 reporter 聚合、counter reset/new epoch、乱序/重复、stale/partial/unavailable、数据库重启、权限隔离和 retention；最终通过 B0.5 React→Python E2E。
+- **边界**：Consul 仅作为规则配置中心，不是指标事实源或时序库；Console 配置的 SQL DB（包含用户要求的 MySQL 支持）承载持久化历史。指标 V2 必须先有权威采集和身份绑定，缺失时继续显式 `not_integrated`，不返回示例零值。
+- **关联**：Dashboard B0.4、B0.5；当前审查记录见 `docs/process/R-DASHBOARD-前后端现状与推进清单.md` §15.606。
+
+### M6.6 [ ] Per-process Dashboard Web UI（2026-09-14 重新打开；不包含独立规则控制台）
+- **重新打开状态 (2026-09-14)**: richie696 显式反馈 "dashboard 应用除外,
+  需要用它做 Web 管理页面, 合理的依赖是需要的". 修正之前"1.x 不实施"
+  评估, 实施 per-process Web 管理页面 (HTML + JSON 双协议), 合理依赖
+  (Starlette + Jinja2 + uvicorn) 允许. 详见
+  `docs/process/M6.6-DASHBOARD-AGGREGATOR-EVAL.md` (v2).
+- **范围**: `sentinel-dashboard` wheel 升级 (替换 stdlib http.server):
+  - 框架: Starlette (轻量 ASGI, 不引入 FastAPI 全套)
+  - 模板: Jinja2 (HTML 页面)
+  - ASGI server: uvicorn (开发) / hypercorn (生产)
+  - 静态文件: Starlette StaticFiles (CSS / JS / favicon)
+  - 实时: SSE (Server-Sent Events) 每 5s 推 metrics
+  - 鉴权: Bearer token (admin) — 跟现有保持一致
+  - 审计: JSON list, capped 1000 (现有保留)
+  - Bind: 127.0.0.1 默认 (loopback, M6.7 决策一致)
+- **API 端点 (保留 7 个 JSON, 新增 HTML 页面)**:
+  - 保留: GET /health, /metrics, /rules, /rules/<id>, /state; POST /admin/rules/reload, /admin/breaker/<id>/reset
+  - 新增: GET / (dashboard overview), /rules (HTML), /metrics (HTML), /settings, /audit
+- **依赖 (extension wheel, 主包 0 3rd-party 不变)**:
+  - starlette >= 0.40, < 1.0
+  - jinja2 >= 3.0, < 4.0
+  - uvicorn >= 0.30, < 1.0 (dev); hypercorn >= 0.16, < 1.0 (prod, optional)
+- **不做**:
+  - 不出 `sentinel-dashboard-aggregator` (跨进程聚合, 1.0 范围不含, 留 V2+)
+  - 不出 Collector Python (Java/Go 服务端独立仓, V1 协议只冻结 wire contract)
+  - 不修改主包 (Sentinel main wheel 0 3rd-party 不变)
+- **Test ID**: SEN-DASHBOARD-001
+- **ADR**: 新独立 ADR (Dashboard v2, M6.6.1 dashboard 框架选型 + M6.6.2 SSE 实时 + M6.6.3 admin 鉴权)
+- **Deps**: M6.1 (SentinelEngine / MetricRegistry / RuleRepository / RuleSource 公共 API)
 
 ### M6.7 [x] WSGI/同步阻塞引擎可行性评估 (评估完成, 决策: 1.x 不支持, 详见 `docs/process/M6.7-WSGI-SYNC-EVAL.md`, ADR-SEN-018)
 - **Deliverable**:
@@ -1396,7 +1521,7 @@
   审核发布资格。即使审核通过，执行 `uv publish`、创建 tag 或向 PyPI 写入产物也必须
   由维护者显式触发。
 
-### M6+ Exit [ ] (M6.1、M6.3-M6.5、M6.7 全部完成;M6.2 已取消;M6.6 默认不在范围;M6.8 已移至 M7.6)
+### M6+ Exit [partial] (M6.1、M6.3-M6.5、M6.7 全部完成;M6.2 已取消;M6.6 重新打开实施;M6.8 已移至 M7.6)
 - **Exit Criteria**:
   - M6.1 的 Nacos 规则来源独立通过真实服务验收，且不是主包运行前提；M6.2 的 Redis
     RuleSource 取消决定保持可追溯，未被替换为未定义的 Redis 依赖。
@@ -1410,6 +1535,11 @@
       不阻塞 M6+ Exit 收口.
   - M6.5 的 Reporting 协议在断线、重传、乱序、重启和高基数下通过跨进程验收，且
     未成为请求关键路径。
+    - M6.5 状态 (2026-09-14 收口): M6.5 父任务 [x] + M6.5.7 V1 Frozen 5-owner
+      签收 + M6.5.1-6 子任务全部 [x] + M6.5 跨进程验收 7 测试全过
+      (MultiReporterIsolation / Duplicate / OutOfOrder / Disconnect /
+      Collector 重启 / Restart / Non-blocking, 0 主包 regression).
+      sentinel main 359 passed + 4 skipped.
   - M6.7 给出同步运行时的明确边界；M6.6 聚合 Dashboard 默认仍不在范围。
   - 不执行 PyPI 发布，也不因 M6 完成而暗示任何未发布 extension 已在 PyPI 可用；发布
     资格统一由 M7.6 审核。

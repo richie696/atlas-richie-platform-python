@@ -1,0 +1,38 @@
+.container {
+  container: sentinel-form / inline-size;
+  min-width: 0;
+  width: 100%;
+}
+.fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(1.25rem, max-content);
+  column-gap: var(--sentinel-space-4);
+  row-gap: var(--sentinel-space-1);
+}
+.fields[data-columns="1"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.fields[data-columns="3"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.fullRow {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  min-width: 0;
+}
+@container sentinel-form (max-width: 42rem) {
+  .fields[data-columns="3"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container sentinel-form (max-width: 26rem) {
+  .fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fields[data-columns="3"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

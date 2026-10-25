@@ -1,0 +1,123 @@
+.page {
+  display: grid;
+  gap: var(--sentinel-space-5);
+}
+
+.tabs,
+.filters,
+.association {
+  display: flex;
+  align-items: center;
+  gap: var(--sentinel-space-3);
+}
+
+.associationPagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sentinel-space-3);
+  margin-top: var(--sentinel-space-3);
+  color: var(--sentinel-color-text-muted);
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: minmax(16rem, 28rem) auto;
+  align-items: end;
+  justify-content: start;
+  gap: var(--sentinel-space-3);
+  padding: var(--sentinel-space-4);
+}
+
+.hostGrid {
+  display: grid;
+  grid-template-columns: minmax(15rem, 0.8fr) minmax(0, 2fr);
+  gap: var(--sentinel-space-4);
+  padding: var(--sentinel-space-4);
+}
+
+.scopeNote {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--sentinel-color-text-muted);
+}
+
+@media (max-width: 520px) {
+  .filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.hostList {
+  display: grid;
+  align-content: start;
+  gap: var(--sentinel-space-2);
+}
+
+.hostButton,
+.selected {
+  display: grid;
+  gap: var(--sentinel-space-1);
+  width: 100%;
+  padding: var(--sentinel-space-3);
+  border: 1px solid var(--sentinel-color-border);
+  border-radius: var(--sentinel-radius-control);
+  color: inherit;
+  text-align: left;
+  background: var(--sentinel-color-surface-base);
+  cursor: pointer;
+}
+
+.selected {
+  border-color: var(--sentinel-color-accent);
+  background: var(--sentinel-color-panel-head-background);
+}
+
+.hostButton small,
+.selected small {
+  color: var(--sentinel-color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.detail {
+  display: grid;
+  align-content: start;
+  gap: var(--sentinel-space-4);
+  min-width: 0;
+}
+
+.detail > h2,
+.detail > p {
+  margin: 0;
+}
+
+.charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sentinel-space-4);
+}
+
+.association {
+  justify-content: space-between;
+  min-height: 2.75rem;
+  border-bottom: 1px solid var(--sentinel-color-border);
+}
+
+.associateForm {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  align-items: end;
+  gap: var(--sentinel-space-3);
+  margin-top: var(--sentinel-space-4);
+}
+
+@media (max-width: 900px) {
+  .hostGrid,
+  .charts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .associateForm {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
