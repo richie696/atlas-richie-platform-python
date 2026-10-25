@@ -7,6 +7,7 @@ import { ConfigurationSourceInputSchema } from "../../../shared/api/configuratio
 import { IDENTITY_ENDPOINTS } from "./identityEndpoints";
 import {
   BootstrapAuthorizationInputSchema,
+  LocalBootstrapAuthorizationInputSchema,
   LoginInputSchema,
   SetupStorageSchema,
   InitializeCommandSchema,
@@ -22,6 +23,40 @@ const adminSessionExample = Object.freeze({
 });
 /** Semantic rules are required backend obligations; structural JSON Schema alone cannot prove these conditions. */
 export const IDENTITY_HTTP_CONTRACT = Object.freeze([
+  {
+    operationId: "authorizeLocalBootstrap",
+    summary: "为 loopback 首次安装建立短时引导会话",
+    tag: "bootstrap",
+    security: "public",
+    requiredAccess: CONSOLE_ACCESS.None,
+    endpoint: IDENTITY_ENDPOINTS.AuthorizeLocalBootstrap,
+    input: LocalBootstrapAuthorizationInputSchema,
+    pathParameters: noParameters,
+    semanticRules: [
+      "Exact Origin and double-submit CSRF proof are required.",
+      "The server authorizes only a loopback peer and only while setup is open; remote peers must use the deployment operator-code exchange.",
+      "The short-lived grant permits first-run setup only and never authenticates an administrator.",
+    ],
+    examples: [
+      {
+        name: "loopback_installer_authorized",
+        summary: "本机首次安装取得短时初始化会话",
+        kind: "positive",
+        request: { body: {} },
+        response: { status: 200, body: { authorized: true } },
+      },
+      {
+        name: "remote_peer_cannot_use_local_bootstrap",
+        summary: "非 loopback 来源必须使用部署授权码",
+        kind: "negative",
+        request: { body: {} },
+        response: {
+          status: 403,
+          body: { error: { code: "forbidden", requestId: "bootstrap-local-peer-denied" } },
+        },
+      },
+    ],
+  },
   {
     operationId: "readBootstrap",
     summary: "读取初始化及本请求引导授权状态",
@@ -110,8 +145,16 @@ export const IDENTITY_HTTP_CONTRACT = Object.freeze([
       "A view account never has rules:write capability.",
       "Capabilities are unique; authorization is rechecked for every request.",
       "sessionEpoch is an opaque observation owner, never a credential.",
+      "Missing, malformed, expired, or revoked sessions return HTTP 200 with a null body; session authority failure is never represented as anonymous null.",
     ],
     examples: [
+      {
+        name: "anonymous_session",
+        summary: "缺失或无效会话以 null 表示匿名状态",
+        kind: "positive",
+        request: {},
+        response: { status: 200, body: null },
+      },
       {
         name: "read_authenticated_admin_session",
         summary: "有效会话只返回安全身份字段与有限能力",

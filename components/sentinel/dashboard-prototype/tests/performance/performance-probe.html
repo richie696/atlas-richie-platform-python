@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sentinel Dashboard performance probe</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font:
+          14px/1.45 system-ui,
+          sans-serif;
+        background: #07151d;
+        color: #d9e6ec;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      #dashboard {
+        display: block;
+        width: 100%;
+        height: 100vh;
+        border: 0;
+      }
+
+      #probe {
+        position: fixed;
+        z-index: 10;
+        right: 12px;
+        bottom: 12px;
+        box-sizing: border-box;
+        width: min(360px, calc(100vw - 24px));
+        max-height: 36vh;
+        overflow: auto;
+        padding: 10px 12px;
+        border: 1px solid #527082;
+        border-radius: 8px;
+        background: rgb(7 21 29 / 94%);
+        box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+      }
+
+      #probe h1 {
+        margin: 0 0 6px;
+        font-size: 14px;
+      }
+
+      #measurements {
+        margin: 0;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font:
+          11px/1.4 ui-monospace,
+          monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <iframe id="dashboard" title="Dashboard performance sample"></iframe>
+    <section id="probe" aria-live="polite" aria-atomic="true">
+      <h1>Dashboard performance sample</h1>
+      <pre id="measurements">Waiting for the dashboard…</pre>
+    </section>
+    <script type="module">
+      const DEFAULT_TARGET = "/#/overview?app=all&range=1h";
+      const TARGET_PARAMETER = "target";
+      const MAX_REPORTED_RESOURCES = 250;
+      const FRAME_ID = "dashboard";
+      const OUTPUT_ID = "measurements";
+
+      const target = new URLSearchParams(window.location.search).get(TARGET_PARAMETER);
+      const targetPath =
+        target?.startsWith("/") && !target.startsWith("//") ? target : DEFAULT_TARGET;
+      const frame = document.getElementById(FRAME_ID);
+      const output = document.getElementById(OUTPUT_ID);
+      const sample = {
+        target: targetPath,
+        measuredAt: new Date().toISOString(),
+        viewport: null,
+        navigation: null,
+        paint: {
+          firstContentfulPaintMs: null,
+          largestContentfulPaintMs: null,
+          availableEntries: [],
+        },
+        layoutShift: {
+          maxSessionScore: 0,
+          entries: 0,
+          largestShiftValue: 0,
+          largestShiftSources: [],
+          recentEntries: [],
+        },
+        longTasks: { count: 0, totalDurationMs: 0, longestDurationMs: 0 },
+        resources: { count: 0, encodedBytes: 0, transferredBytes: 0 },
+        latestTrustedInteraction: null,
+      };
+
+      function render() {
+        output.textContent = JSON.stringify(sample, null, 2);
+      }
+
+      function observeBufferedEntry(windowRef, type, callback) {
+        const Observer = windowRef.PerformanceObserver;
+        if (!Observer || !Observer.supportedEntryTypes?.includes(type)) return null;
+        const observer = new Observer((list) => callback(list.getEntries()));
+        observer.observe({ type, buffered: true });
+        return observer;
+      }
+
+      function readNavigation(performanceRef) {
+        const [entry] = performanceRef.getEntriesByType("navigation");
+        if (!entry) return null;
+        return {
+          responseStartMs: Math.round(entry.responseStart),
+          domContentLoadedMs: Math.round(entry.domContentLoadedEventEnd),
+          loadEventMs: Math.round(entry.loadEventEnd),
+          ttfbMs: Math.round(entry.responseStart - entry.requestStart),
+        };
+      }
+
+      function readResources(performanceRef) {
+        const entries = performanceRef.getEntriesByType("resource").slice(-MAX_REPORTED_RESOURCES);
+        return {
+          count: entries.length,
+          encodedBytes: entries.reduce((sum, entry) => sum + entry.encodedBodySize, 0),
+          transferredBytes: entries.reduce((sum, entry) => sum + entry.transferSize, 0),
+        };
+      }
+
+      function attachPerformanceObservers(windowRef, documentRef) {
+        const performanceRef = windowRef.performance;
+        const layoutShiftSession = {
+          currentScore: 0,
+          largestShiftValue: 0,
+          sessionStartTime: undefined,
+          lastShiftTime: undefined,
+        };
+        sample.viewport = {
+          width: windowRef.innerWidth,
+          height: windowRef.innerHeight,
+          devicePixelRatio: windowRef.devicePixelRatio,
+        };
+        sample.navigation = readNavigation(performanceRef);
+        const paintEntries = performanceRef.getEntriesByType("paint");
+        sample.paint.availableEntries = paintEntries.map((entry) => entry.name);
+        sample.paint.firstContentfulPaintMs =
+          paintEntries.find((entry) => entry.name === "first-contentful-paint")?.startTime ?? null;
+        sample.resources = readResources(performanceRef);
+
+        observeBufferedEntry(windowRef, "largest-contentful-paint", (entries) => {
+          const latest = entries.at(-1);
+          if (latest) sample.paint.largestContentfulPaintMs = Math.round(latest.startTime);
+          render();
+        });
+        observeBufferedEntry(windowRef, "layout-shift", (entries) => {
+          const shifts = entries.filter((entry) => !entry.hadRecentInput);
+          for (const entry of shifts) {
+            const sessionExpired =
+              layoutShiftSession.lastShiftTime === undefined ||
+              entry.startTime - layoutShiftSession.lastShiftTime >= 1000 ||
+              entry.startTime - layoutShiftSession.sessionStartTime >= 5000;
+            if (sessionExpired) {
+              layoutShiftSession.currentScore = 0;
+              layoutShiftSession.sessionStartTime = entry.startTime;
+            }
+            sample.layoutShift.entries += 1;
+            layoutShiftSession.currentScore += entry.value;
+            layoutShiftSession.lastShiftTime = entry.startTime;
+            sample.layoutShift.maxSessionScore = Math.max(
+              sample.layoutShift.maxSessionScore,
+              layoutShiftSession.currentScore,
+            );
+            sample.layoutShift.recentEntries.push({
+              startTimeMs: Math.round(entry.startTime),
+              value: Number(entry.value.toFixed(4)),
+              sources: (entry.sources ?? []).map((source) => ({
+                node: source.node?.nodeName ?? null,
+                className: String(source.node?.className ?? "").slice(0, 128),
+                previousRect: source.previousRect
+                  ? {
+                      x: Math.round(source.previousRect.x),
+                      y: Math.round(source.previousRect.y),
+                      width: Math.round(source.previousRect.width),
+                      height: Math.round(source.previousRect.height),
+                    }
+                  : null,
+                currentRect: source.currentRect
+                  ? {
+                      x: Math.round(source.currentRect.x),
+                      y: Math.round(source.currentRect.y),
+                      width: Math.round(source.currentRect.width),
+                      height: Math.round(source.currentRect.height),
+                    }
+                  : null,
+              })),
+            });
+            sample.layoutShift.recentEntries = sample.layoutShift.recentEntries.slice(-10);
+            if (entry.value >= layoutShiftSession.largestShiftValue) {
+              layoutShiftSession.largestShiftValue = entry.value;
+              sample.layoutShift.largestShiftValue = Number(entry.value.toFixed(4));
+              sample.layoutShift.largestShiftSources = (entry.sources ?? []).map((source) => ({
+                node: source.node?.nodeName ?? null,
+                id: source.node?.id ?? null,
+                className: String(source.node?.className ?? "").slice(0, 128),
+                connected: source.node?.isConnected ?? false,
+                previousRect: source.previousRect
+                  ? {
+                      x: Math.round(source.previousRect.x),
+                      y: Math.round(source.previousRect.y),
+                      width: Math.round(source.previousRect.width),
+                      height: Math.round(source.previousRect.height),
+                    }
+                  : null,
+                currentRect: source.currentRect
+                  ? {
+                      x: Math.round(source.currentRect.x),
+                      y: Math.round(source.currentRect.y),
+                      width: Math.round(source.currentRect.width),
+                      height: Math.round(source.currentRect.height),
+                    }
+                  : null,
+              }));
+            }
+          }
+          sample.layoutShift.maxSessionScore = Number(
+            sample.layoutShift.maxSessionScore.toFixed(4),
+          );
+          render();
+        });
+        observeBufferedEntry(windowRef, "longtask", (entries) => {
+          sample.longTasks.count += entries.length;
+          sample.longTasks.totalDurationMs = Number(
+            (
+              sample.longTasks.totalDurationMs +
+              entries.reduce((sum, entry) => sum + entry.duration, 0)
+            ).toFixed(1),
+          );
+          sample.longTasks.longestDurationMs = Math.max(
+            sample.longTasks.longestDurationMs,
+            ...entries.map((entry) => Math.round(entry.duration * 10) / 10),
+          );
+          render();
+        });
+
+        for (const eventType of ["click", "keydown", "pointerdown"]) {
+          documentRef.addEventListener(
+            eventType,
+            (event) => {
+              if (!event.isTrusted) return;
+              const startedAt = event.timeStamp;
+              windowRef.requestAnimationFrame(() => {
+                windowRef.requestAnimationFrame(() => {
+                  sample.latestTrustedInteraction = {
+                    event: eventType,
+                    eventToTwoAnimationFramesMs: Number(
+                      Math.max(0, performanceRef.now() - startedAt).toFixed(1),
+                    ),
+                    measuredAt: new Date().toISOString(),
+                  };
+                  render();
+                });
+              });
+            },
+            true,
+          );
+        }
+
+        render();
+      }
+
+      frame.addEventListener("load", () => {
+        try {
+          const frameWindow = frame.contentWindow;
+          const frameDocument = frame.contentDocument;
+          if (!frameWindow || !frameDocument) throw new Error("Dashboard frame is unavailable");
+          attachPerformanceObservers(frameWindow, frameDocument);
+        } catch {
+          output.textContent = "Cannot read the dashboard frame; same-origin access is required.";
+        }
+      });
+      frame.src = targetPath;
+      render();
+    </script>
+  </body>
+</html>

@@ -13,6 +13,7 @@ import {
   type SourceRegistrationDraft,
 } from "../model/sourceRegistration";
 import { SOURCE_AUTH_LABEL } from "../presentation/sourceRegistrationLabels";
+import styles from "./SystemObservation.module.scss";
 
 /** Controlled transient write-only fields. No credential enters a store, URL, read model or persisted draft. */
 export function SourceRegistrationFields({
@@ -34,7 +35,7 @@ export function SourceRegistrationFields({
     patch({ credentials: { ...connection.credentials, [field]: value } });
   const replacing = draft.credentialAction === SOURCE_CREDENTIAL_ACTION.Replace;
   return (
-    <FormGrid>
+    <FormGrid className={styles["source-registration-fields"]}>
       <TextField
         label={t("system.source.name")}
         value={draft.name}

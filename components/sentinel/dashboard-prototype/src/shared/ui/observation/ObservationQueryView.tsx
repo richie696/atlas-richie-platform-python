@@ -8,11 +8,17 @@ export function ObservationQueryView<Value>({
   snapshot,
   onRetry,
   children,
+  unavailableContent,
   descriptions,
+  title: titleOverride,
+  showStatusFeedback = true,
+  showPartialFeedback,
 }: {
   readonly snapshot: QuerySnapshot<Value>;
   readonly onRetry: () => void;
   readonly children: (value: Value) => ReactNode;
+  /** Capability-owned layout to keep visible when no trusted query value is available. */
+  readonly unavailableContent?: ReactNode;
   /** Capability-specific empty/partial semantics; lifecycle and safe error policy remain shared. */
   readonly descriptions?: {
     readonly empty?: string;
@@ -21,15 +27,23 @@ export function ObservationQueryView<Value>({
     readonly error?: string;
     readonly stale?: string;
   };
+  /** Lets catalog queries name their own scope without changing shared status behavior. */
+  readonly title?: string;
+  /** Allows a page to avoid duplicate banners while its owning context warning is visible. */
+  readonly showStatusFeedback?: boolean;
+  readonly showPartialFeedback?: boolean;
 }) {
   const { t } = useTranslation();
-  const title = t("observation.read.title");
+  const title = titleOverride ?? t("observation.read.title");
   const targetAbsent =
     snapshot.status === "error" && (snapshot.error.status === 404 || snapshot.error.status === 410);
   return (
     <QueryView
       snapshot={snapshot}
       onRetry={onRetry}
+      unavailableContent={unavailableContent}
+      showStatusFeedback={showStatusFeedback}
+      showPartialFeedback={showPartialFeedback}
       copy={{
         idle: { title, description: t("observation.read.idle") },
         loading: { title, description: t("observation.read.loading") },

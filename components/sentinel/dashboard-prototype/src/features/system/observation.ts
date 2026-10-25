@@ -12,6 +12,7 @@ export type {
 export type {
   SystemConnections,
   SystemProtocols,
+  AgentReportingObservationPage,
   AuditQuery,
   AuditPage,
 } from "./model/systemObservation";

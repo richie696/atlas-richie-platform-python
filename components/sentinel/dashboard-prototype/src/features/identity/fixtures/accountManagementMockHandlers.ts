@@ -1,6 +1,10 @@
 import { http, HttpResponse } from "msw";
-import { CONSOLE_HEADER } from "../../../core/api/protocol/common";
-import { readMockPrincipal } from "../../../core/api/mock/mockRole";
+import { CONSOLE_HEADER, parseIdempotencyKeyHeader } from "../../../core/api/protocol/common";
+import {
+  readMockPrincipal,
+  writeMockPassword,
+  writeMockPrincipal,
+} from "../../../core/api/mock/mockRole";
 import { ACCOUNT_STATUS, canonicalizeAccountUsername, IDENTITY_ROLE } from "../model/account";
 import { AccountMutationSchema, AccountListQuerySchema } from "../api/accountManagementWire";
 import { AccountPageSchema } from "../api/accountManagementWire";
@@ -39,6 +43,7 @@ export function createAccountManagementMockHandlers(
     operations: new Map<string, { input: string; result: Record<string, unknown> }>(),
     revision: nextRevision,
     sequence: 0,
+    deletedIds: new Set<string>(),
   };
 
   const responseHeaders = (requestId: string | null, includeCsrf = true) => {
@@ -66,7 +71,8 @@ export function createAccountManagementMockHandlers(
       "",
     );
   }
-  const records = () => [...state.accounts.values()];
+  const allRecords = () => [...state.accounts.values()];
+  const records = () => allRecords().filter((account) => !state.deletedIds.has(account.id));
   const refreshLastAdmin = () => {
     const activeAdmins = records().filter(
       (account) =>
@@ -77,6 +83,8 @@ export function createAccountManagementMockHandlers(
   };
   refreshLastAdmin();
   const isAdmin = () => readMockPrincipal() === IDENTITY_ROLE.Admin;
+  const currentMockAccountId = () =>
+    scenario.accounts.find((candidate) => candidate.roleId === readMockPrincipal())?.id;
   const forbidden = (requestId: string | null) => problem(requestId, "forbidden", 403);
 
   /** HTTP-level account command simulator. It never stores submitted password material. */
@@ -117,15 +125,23 @@ export function createAccountManagementMockHandlers(
     http.get("*/api/v1/accounts/:accountId", ({ request, params }) => {
       const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
       if (!isAdmin()) return forbidden(requestId);
-      return json(requestId, state.accounts.get(String(params.accountId)) ?? null);
+      return json(
+        requestId,
+        state.deletedIds.has(String(params.accountId))
+          ? null
+          : (state.accounts.get(String(params.accountId)) ?? null),
+      );
     }),
     http.post("*/api/v1/accounts/commands", async ({ request }) => {
       const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
       if (!isAdmin()) return forbidden(requestId);
       if (!request.headers.get(CONSOLE_HEADER.Csrf)) return problem(requestId, "csrf_failed", 403);
       const parsed = AccountMutationSchema.safeParse(await request.json().catch(() => null));
-      if (!parsed.success || request.headers.get("idempotency-key") !== parsed.data?.requestKey)
-        return problem(requestId, "invalid_request", 400);
+      if (!parsed.success) return problem(requestId, "invalid_request", 400);
+      const keyHeader = parseIdempotencyKeyHeader(request.headers);
+      if (keyHeader.kind === "missing") return problem(requestId, "invalid_request", 400);
+      if (keyHeader.kind !== "valid" || keyHeader.requestKey !== parsed.data.requestKey)
+        return problem(requestId, "idempotency_conflict", 409);
       const input = parsed.data;
       const fingerprint = await commandFingerprint(input);
       const prior = state.operations.get(input.requestKey);
@@ -139,7 +155,7 @@ export function createAccountManagementMockHandlers(
       if (input.kind === "create") {
         const username = input.input.username.trim();
         if (
-          records().some(
+          allRecords().some(
             (account) =>
               canonicalizeAccountUsername(account.username) ===
               canonicalizeAccountUsername(username),
@@ -164,29 +180,44 @@ export function createAccountManagementMockHandlers(
         // The command's password is intentionally not copied into state or operation history.
       } else {
         const account = state.accounts.get(input.accountId);
-        if (!account)
+        if (!account || state.deletedIds.has(input.accountId))
           result = { status: "rejected", requestKey: input.requestKey, reason: "not_found" };
         else if (account.revision !== input.revision)
           result = { status: "rejected", requestKey: input.requestKey, reason: "conflict" };
+        else if (input.kind === "delete" && account.id === currentMockAccountId())
+          result = { status: "rejected", requestKey: input.requestKey, reason: "self_operation" };
         else if (
           account.builtIn &&
-          ((input.kind === "status" && input.status !== "active") ||
-            (input.kind === "role" && input.roleId !== "admin"))
+          !(input.kind === "reset_password" && account.id === currentMockAccountId())
         )
           result = { status: "rejected", requestKey: input.requestKey, reason: "built_in" };
         else if (
           account.lastActiveAdmin &&
-          ((input.kind === "status" && input.status !== "active") ||
+          (input.kind === "delete" ||
+            (input.kind === "status" && input.status !== "active") ||
             (input.kind === "role" && input.roleId !== "admin"))
         )
           result = { status: "rejected", requestKey: input.requestKey, reason: "last_admin" };
         else {
           if (input.kind === "status") account.status = input.status;
           else if (input.kind === "role") account.roleId = input.roleId;
+          else if (input.kind === "delete") {
+            account.status = ACCOUNT_STATUS.Disabled;
+            state.deletedIds.add(account.id);
+          }
           account.revision = String(state.revision++);
           refreshLastAdmin();
-          result = { status: "completed", requestKey: input.requestKey, account };
+          result = { status: "completed", requestKey: input.requestKey, account: { ...account } };
         }
+      }
+      if (
+        result.status === "completed" &&
+        input.kind === "reset_password" &&
+        input.accountId === currentMockAccountId()
+      ) {
+        const account = state.accounts.get(input.accountId);
+        if (account) writeMockPassword(account.username, input.password);
+        writeMockPrincipal(null);
       }
       state.operations.set(input.requestKey, { input: fingerprint, result });
       return json(requestId, result);

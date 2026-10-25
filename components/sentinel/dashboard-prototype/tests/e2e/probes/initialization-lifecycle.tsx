@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { i18nReady } from "../../../src/app/i18n/config";
 import { loadAstryxLocaleCatalog } from "../../../src/app/i18n/astryxLocaleCatalogs";
+import "../../../src/core/styles/index.scss";
 import { InitializationProbe } from "./InitializationProbe";
 
 const root = document.getElementById("root");

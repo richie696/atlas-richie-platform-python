@@ -1,6 +1,5 @@
 import {
-  METRIC_BASIS,
-  METRIC_ID,
+  METRIC_DENOMINATOR,
   METRIC_UNIT,
   OBSERVATION_QUALITY,
   OPERATIONAL_METRICS,
@@ -43,17 +42,6 @@ export const UNKNOWN_OBSERVATION_COVERAGE = Object.freeze({
   expected: null,
   inventorySource: null,
   reporting: 0,
-});
-
-const METRIC_DENOMINATOR: Readonly<Record<MetricId, string>> = Object.freeze({
-  [METRIC_ID.HttpQps]: METRIC_BASIS.ElapsedSeconds,
-  [METRIC_ID.EntryRate]: METRIC_BASIS.ElapsedSeconds,
-  [METRIC_ID.Tps]: METRIC_BASIS.ElapsedSeconds,
-  [METRIC_ID.RtP95]: METRIC_BASIS.CompletedRequests,
-  [METRIC_ID.BlockedRatio]: METRIC_BASIS.AttemptedEntries,
-  [METRIC_ID.CpuRatio]: METRIC_BASIS.Processes,
-  [METRIC_ID.MemoryRatio]: METRIC_BASIS.Processes,
-  [METRIC_ID.MemoryBytes]: METRIC_BASIS.Processes,
 });
 
 /** Builds explicit unavailable readings; examples never imply missing samples are zero. */

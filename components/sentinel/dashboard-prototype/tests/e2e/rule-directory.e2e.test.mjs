@@ -1,10 +1,11 @@
 import { before, after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { E2E_BASE_URL, launchBrowser } from "./cdp.mjs";
+import { E2E_BASE_URL, connectIabBrowser } from "./cdp.mjs";
+import { mountReactProbe } from "./probeHarness.mjs";
 let browser;
 before(async () => {
-  browser = await launchBrowser();
+  browser = await connectIabBrowser();
 });
 after(async () => {
   await browser?.close();
@@ -13,11 +14,14 @@ async function withPage(run) {
   const page = await browser.newPage();
   try {
     await page.clearStorage(new URL(E2E_BASE_URL).origin);
-    await page.goto(`${E2E_BASE_URL}/#/login`);
-    await page.waitFor(`!!document.querySelector('.app-shell')`);
-    await page.eval(
-      `(async()=>{const React=(await import('/node_modules/.vite/deps/react.js')).default;const {createRoot}=(await import('/node_modules/.vite/deps/react-dom_client.js')).default;const {RuleDirectoryProbe,createRuleDirectoryTopology}=await import('/tests/e2e/probes/RuleDirectoryProbe.tsx');document.getElementById('root').style.display='none';const host=document.createElement('section');host.id='directory-probe';document.body.append(host);const topology=createRuleDirectoryTopology(),root=createRoot(host,{identifierPrefix:'directory-probe-'});root.render(React.createElement(React.StrictMode,null,React.createElement(RuleDirectoryProbe,{topology})));let disposed=false;window.__directoryCleanup=()=>{if(disposed)return;disposed=true;root.unmount();topology.dispose();host.remove();};})()`,
-    );
+    await mountReactProbe(page, E2E_BASE_URL, {
+      id: "directory-probe",
+      modulePath: "/tests/e2e/probes/RuleDirectoryProbe.tsx",
+      componentName: "RuleDirectoryProbe",
+      topologyFactoryName: "createRuleDirectoryTopology",
+      cleanupName: "__directoryCleanup",
+      topologyName: "__directoryTopology",
+    });
     await page.waitFor(
       `document.querySelector('#directory-probe [data-binding-select]')&&JSON.parse(document.querySelector('#directory-probe [data-rule-summary]').textContent).source==='ready'`,
     );
@@ -149,7 +153,7 @@ test("RULE-DIRECTORY rendered: Japanese 320px and desktop catalog keep controls 
     await action(page, "save");
     await page.waitFor(`!!document.querySelector('#directory-probe [data-draft-open]')`);
     await page.eval(
-      `(async()=>{const {default:i18n}=await import('/src/app/i18n/config.ts');await i18n.changeLanguage('ja-JP');})()`,
+      `(async()=>{const {changeLocale}=await import('/src/app/i18n/changeLocale.ts');await changeLocale('ja-JP');})()`,
     );
     const dir = artifactDirectory("sentinel-f4-directory-20261007");
     mkdirSync(dir, { recursive: true });
@@ -163,14 +167,19 @@ test("RULE-DIRECTORY rendered: Japanese 320px and desktop catalog keep controls 
         deviceScaleFactor: 1,
         mobile: false,
       });
-    await page.eval(
-      `(async()=>{await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);window.scrollTo(0,0);})()`,
-    );
-    await page.waitFor('window.scrollY===0');
-    assert.ok(await page.eval("document.documentElement.scrollWidth<=innerWidth+1"));
-    assert.ok(await page.eval(`(()=>{const root=document.querySelector('#directory-probe');return [...root.querySelectorAll('.sentinel-form-fields input,.sentinel-form-fields button[aria-haspopup="listbox"]')].filter(node=>node.offsetParent).every(node=>{const rect=node.getBoundingClientRect();return rect.left>=0&&rect.right<=innerWidth+1;});})()`), 'Visible filter controls must fit, even when a parent clips overflow');
+      await page.eval(
+        `(async()=>{await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);window.scrollTo(0,0);})()`,
+      );
+      await page.waitFor("window.scrollY===0");
+      assert.ok(await page.eval("document.documentElement.scrollWidth<=innerWidth+1"));
+      assert.ok(
+        await page.eval(
+          `(()=>{const root=document.querySelector('#directory-probe');return [...root.querySelectorAll('.sentinel-form-fields input,.sentinel-form-fields button[aria-haspopup="listbox"]')].filter(node=>node.offsetParent).every(node=>{const rect=node.getBoundingClientRect();return rect.left>=0&&rect.right<=innerWidth+1;});})()`,
+        ),
+        "Visible filter controls must fit, even when a parent clips overflow",
+      );
       assert.doesNotMatch(await page.text("#directory-probe"), /rules\.directory\./);
       writeFileSync(`${dir}/${name}.png`, await page.screenshot());
     }
   }));
-import {artifactDirectory} from './artifacts.mjs';
+import { artifactDirectory } from "./artifacts.mjs";

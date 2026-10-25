@@ -32,18 +32,6 @@ export function useSession(): Session {
   return useContext(SessionContext);
 }
 
-/**
- * @deprecated Demo role selection is retired from the application runtime.
- * Kept temporarily for the frozen, unreachable legacy LoginPage during F6
- * migration; invoking it cannot create or change an authenticated session.
- */
-export function useSessionRoleSetter(): (roleId: SessionRoleId) => void {
-  return (roleId) => {
-    void roleId;
-    throw new Error("Demo role switching is unavailable; authenticate through the Console server");
-  };
-}
-
 /** UI visibility hint only. Every server command must authorize independently. */
 export function useCan(required: SessionCapability): boolean {
   return useSession().capabilities.includes(required);

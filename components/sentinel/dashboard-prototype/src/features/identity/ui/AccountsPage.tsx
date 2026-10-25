@@ -2,11 +2,14 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useExternalSnapshot } from "@richie696/react-framework-react";
 import type { AccountManagementWorkflow } from "../application/accountManagementWorkflow";
-import type { AccountListQuery, AccountRecord } from "../model/accountManagement";
+import {
+  boundAccountSearch,
+  type AccountListQuery,
+  type AccountRecord,
+} from "../model/accountManagement";
 import { ACCOUNT_STATUS, nextAccountStatus } from "../model/account";
 import { TextField } from "../../../shared/ui/TextField";
 import { Select } from "../../../shared/ui/Select";
-import { FormGrid } from "../../../shared/ui/FormGrid";
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { DialogFrame } from "../../../shared/ui/DialogFrame";
 import { FeedbackPanel } from "../../../shared/ui/FeedbackPanel";
@@ -16,7 +19,9 @@ import { AccountDirectory } from "./components/AccountDirectory";
 import { AccountQueryView } from "./components/AccountQueryView";
 import { AccountCommandFeedback } from "./components/AccountCommandFeedback";
 import { CreateAccountDialog } from "./CreateAccountDialog";
+import { AccountLifecycleDialog } from "./AccountLifecycleDialog";
 import { useBeforeUnloadGuard } from "../../../shared/state/useBeforeUnloadGuard";
+import styles from "./Identity.module.scss";
 
 /** URL query comes from the app; this container owns only search input and modal intent. */
 export function AccountsPage({
@@ -24,21 +29,27 @@ export function AccountsPage({
   query,
   onQueryChange,
   onBindRole,
+  onOwnPasswordReset,
 }: {
   readonly workflow: AccountManagementWorkflow;
   readonly query: AccountListQuery;
   readonly onQueryChange: (query: AccountListQuery) => void;
   readonly onBindRole: (id: string) => void;
+  readonly onOwnPasswordReset: () => void;
 }) {
   const { t } = useTranslation(),
     snapshot = useExternalSnapshot(workflow);
-  const [search, setSearch] = useState(query.search),
+  const [search, setSearch] = useState(() => boundAccountSearch(query.search)),
     [creating, setCreating] = useState(false),
     [target, setTarget] = useState<AccountRecord | null>(null);
+  const [lifecycle, setLifecycle] = useState<{
+    readonly kind: "reset_password" | "delete";
+    readonly account: AccountRecord;
+  } | null>(null);
   const load = () => void workflow.list(query).catch(() => {});
   useEffect(() => {
     void workflow.list(query).catch(() => {});
-    return () => workflow.cancel();
+    return () => workflow.cancelDirectory();
   }, [workflow, query]);
   const locked =
     snapshot.inspecting || ["pending", "result-unknown"].includes(snapshot.mutation.status);
@@ -77,37 +88,55 @@ export function AccountsPage({
         <AccountCommandFeedback snapshot={snapshot} onInspect={inspect} onReadLatest={load} />
       )}
       <IdentityPanel title={t("accounts.panel.title")} subtitle={t("accounts.panel.subtitle")}>
-        <form onSubmit={submitSearch}>
-          <FormGrid>
-            <TextField label={t("management.search")} value={search} onChange={setSearch} />
-            <Select
-              label={t("accounts.head.status")}
-              value={query.status ?? "all"}
-              onChange={(status) =>
-                onQueryChange({ ...query, page: 1, status: status === "all" ? undefined : status })
-              }
-              options={[
-                { value: "all", label: t("management.allStatuses") },
-                { value: ACCOUNT_STATUS.Active, label: t("accounts.status.active") },
-                { value: ACCOUNT_STATUS.Disabled, label: t("accounts.status.disabled") },
-              ]}
-            />
-          </FormGrid>
-          <ActionButton type="submit">{t("management.searchAction")}</ActionButton>
+        <form className={styles["account-search-form"]} onSubmit={submitSearch}>
+          <TextField
+            label={t("management.search")}
+            value={search}
+            onChange={(value) => setSearch(boundAccountSearch(value))}
+          />
+          <Select
+            label={t("accounts.head.status")}
+            value={query.status ?? "all"}
+            onChange={(status) =>
+              onQueryChange({ ...query, page: 1, status: status === "all" ? undefined : status })
+            }
+            options={[
+              { value: "all", label: t("management.allStatuses") },
+              { value: ACCOUNT_STATUS.Active, label: t("accounts.status.active") },
+              { value: ACCOUNT_STATUS.Disabled, label: t("accounts.status.disabled") },
+            ]}
+          />
+          <ActionButton className={styles["filter-submit"]} type="submit">
+            {t("management.searchAction")}
+          </ActionButton>
         </form>
-        <AccountQueryView snapshot={snapshot.directory} onRetry={load}>
-          {(page) => (
-            <AccountDirectory
-              page={page}
-              locked={locked}
-              onBindRole={onBindRole}
-              onStatus={setTarget}
-              onPage={(page) => onQueryChange({ ...query, page })}
-            />
-          )}
-        </AccountQueryView>
+        <div className={styles["account-directory-inset"]}>
+          <AccountQueryView snapshot={snapshot.directory} onRetry={load}>
+            {(page) => (
+              <AccountDirectory
+                page={page}
+                locked={locked}
+                onBindRole={onBindRole}
+                onStatus={setTarget}
+                ownerAccountId={workflow.ownerAccountId}
+                onResetPassword={(account) => setLifecycle({ kind: "reset_password", account })}
+                onDelete={(account) => setLifecycle({ kind: "delete", account })}
+                onPage={(page) => onQueryChange({ ...query, page })}
+              />
+            )}
+          </AccountQueryView>
+        </div>
       </IdentityPanel>
       {creating && <CreateAccountDialog workflow={workflow} onClose={() => setCreating(false)} />}
+      {lifecycle && (
+        <AccountLifecycleDialog
+          workflow={workflow}
+          kind={lifecycle.kind}
+          account={lifecycle.account}
+          onOwnPasswordReset={onOwnPasswordReset}
+          onClose={() => setLifecycle(null)}
+        />
+      )}
       {target && (
         <DialogFrame
           isOpen

@@ -27,7 +27,7 @@ test("HTTP-OPERATION-ERROR-MATRIX: every operation accepts only its declared saf
   let errorCases = 0;
   const testedOperations = new Set();
   const server = setupServer(
-    http.all(/\/api\/v1(?:\/.*)?$/, ({ request }) => {
+    http.all(/\/api\/v\d+(?:\/.*)?$/, ({ request }) => {
       const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
       if (activeError === null) {
         return Response.json(
@@ -42,7 +42,13 @@ test("HTTP-OPERATION-ERROR-MATRIX: every operation accepts only its declared saf
         );
       }
       return Response.json(
-        { error: { code: activeError.code, requestId } },
+        {
+          error: {
+            code: activeError.code,
+            requestId,
+            ...(activeError.code === "rate_limited" ? { retryAfterMs: 1_000 } : {}),
+          },
+        },
         {
           status: CONSOLE_ERROR_STATUS[activeError.code],
           headers: { [CONSOLE_HEADER.RequestId]: requestId },
@@ -73,7 +79,7 @@ test("HTTP-OPERATION-ERROR-MATRIX: every operation accepts only its declared saf
         });
         const status = CONSOLE_ERROR_STATUS[code];
         const beforeUnauthorized = unauthorizedTransitions;
-        activeError = { code };
+        activeError = { code, ...(code === "rate_limited" ? { retryAfterMs: 1_000 } : {}) };
         const expectedRequestId = `operation-error-${requestSequence + 1}`;
         errorCases++;
         await assert.rejects(

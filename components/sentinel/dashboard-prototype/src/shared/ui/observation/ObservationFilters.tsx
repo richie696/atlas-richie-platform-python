@@ -18,12 +18,15 @@ export function ObservationFilters({
   onChange,
   environments,
   applications,
+  allowAllApplications = true,
   clock = Date.now,
 }: {
   readonly context: ObservationContext;
   readonly onChange: (context: ObservationContext) => void;
   readonly environments: readonly ObservationOption[];
   readonly applications: readonly ObservationOption[];
+  /** Fleet pages may select all applications; the instance directory is single-application. */
+  readonly allowAllApplications?: boolean;
   readonly clock?: () => number;
 }) {
   const { t } = useTranslation();
@@ -56,7 +59,9 @@ export function ObservationFilters({
         label={t("observation.application")}
         value={context.appId ?? ALL_APPLICATIONS}
         options={[
-          { value: ALL_APPLICATIONS, label: t("observation.allApplications") },
+          ...(allowAllApplications
+            ? [{ value: ALL_APPLICATIONS, label: t("observation.allApplications") }]
+            : []),
           ...applications.map((item) => ({ value: item.id, label: item.name })),
         ]}
         onChange={(id) => {

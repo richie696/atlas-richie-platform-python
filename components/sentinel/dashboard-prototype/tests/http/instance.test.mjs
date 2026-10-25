@@ -116,6 +116,22 @@ test("INSTANCE-CATALOG: actual filters/paging and server counters are preserved 
     },
   );
 });
+test("INSTANCE-CATALOG-WIRE: a non-empty page beyond filteredTotal is rejected", async () => {
+  const query = { ...catalogQuery, page: 3 },
+    response = catalogFor(query);
+  const invalid = catalogWire({ ...response, items: [instanceFor(1, query)] });
+  await run(
+    [
+      http.get(`${origin}/api/v1/instances`, ({ request }) => reply(request, invalid)),
+    ],
+    async (port) => {
+      await assert.rejects(
+        port.readCatalog(query, signal()),
+        (error) => error.code === "console_response_invalid",
+      );
+    },
+  );
+});
 test("INSTANCE-DETAIL: path identity/processEpoch/scope/window match; unsupported collection layer has null metrics", async () => {
   const expected = detailFor(),
     wire = detailWire(expected);

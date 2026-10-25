@@ -1,12 +1,13 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
-import { E2E_BASE_URL, launchBrowser } from "./cdp.mjs";
+import { E2E_BASE_URL, connectIabBrowser } from "./cdp.mjs";
 import { artifactDirectory } from "./artifacts.mjs";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { gotoMockAdministrator, gotoMockSession } from "./mock-auth.mjs";
 
 let browser;
 before(async () => {
-  browser = await launchBrowser();
+  browser = await connectIabBrowser();
 });
 after(async () => {
   await browser?.close();
@@ -51,7 +52,7 @@ test("rules route uses explicit binding HTTP reads and consumes publication deep
   const page = await browser.newPage();
   try {
     await page.clearStorage(new URL(E2E_BASE_URL).origin);
-    await page.goto(`${E2E_BASE_URL}/#/rules?env=test-env&app=all`);
+    await gotoMockAdministrator(page, `${E2E_BASE_URL}/#/rules?env=test-env&app=all`);
     await page.waitFor(`!!document.querySelector('[data-binding-select="binding-app-one"]')`, {
       label: "HTTP-backed ruleset binding directory rendered",
     });
@@ -94,7 +95,7 @@ test("rule HTTP workflow persists a complete draft, validates it, freezes an imm
   const page = await browser.newPage();
   try {
     await page.clearStorage(new URL(E2E_BASE_URL).origin);
-    await page.goto(`${E2E_BASE_URL}/#/rules?env=test-env&app=all`);
+    await gotoMockAdministrator(page, `${E2E_BASE_URL}/#/rules?env=test-env&app=all`);
     await page.waitFor(`!!document.querySelector('[data-binding-select="binding-app-one"]')`);
     await page.click('[data-binding-select="binding-app-one"]');
     await page.waitFor(`!!document.querySelector('[data-rule-source-summary]')`);
@@ -149,7 +150,7 @@ test("rule draft and protocol URL survive switching all supported UI languages",
   const page = await browser.newPage();
   try {
     await page.clearStorage(new URL(E2E_BASE_URL).origin);
-    await page.goto(`${E2E_BASE_URL}/#/rules?env=test-env&app=all&view=flow`);
+    await gotoMockAdministrator(page, `${E2E_BASE_URL}/#/rules?env=test-env&app=all&view=flow`);
     await page.waitFor(`!!document.querySelector('[data-binding-select="binding-app-one"]')`);
     await page.click('[data-binding-select="binding-app-one"]');
     await page.waitFor(`!!document.querySelector('[data-rule-source-summary]')`);
@@ -190,7 +191,7 @@ test("view session can read rules but mock API also rejects privileged operation
     await page.clearStorage(new URL(E2E_BASE_URL).origin);
     await page.goto(`${E2E_BASE_URL}/#/setup`);
     await page.eval(`localStorage.setItem("sentinel.mock.role", "view")`);
-    await page.goto(`${E2E_BASE_URL}/#/rules?env=test-env&app=all`);
+    await gotoMockSession(page, `${E2E_BASE_URL}/#/rules?env=test-env&app=all`, "view");
     await page.waitFor(`!!document.querySelector('[data-binding-select="binding-app-one"]')`);
     await page.click('[data-binding-select="binding-app-one"]');
     await page.waitFor(`!!document.querySelector('[data-rule-source-summary]')`);

@@ -57,6 +57,8 @@ export type DashboardPageProps = DashboardFilters & {
    * `appId` / `range` 同级，由路由边界解析、由 `app` 层透传。
    */
   readonly view: string;
+  /** Optional feature-owned section identifier restored from the URL. */
+  readonly section?: string;
 };
 
 /**
@@ -68,7 +70,18 @@ export type DashboardPageProps = DashboardFilters & {
  * 是为了让 `metric="qqs"` 这类拼写错误在编译期暴露。
  */
 export type MetricKey =
-  "qps" | "rt" | "blocked" | "cpu" | "memory" | "tps" | "entryRate" | "memoryBytes";
+  | "qps"
+  | "rt"
+  | "blocked"
+  | "cpu"
+  | "memory"
+  | "tps"
+  | "entryRate"
+  | "memoryBytes"
+  | "hostCpu"
+  | "hostMemoryBytes"
+  | "hostMemoryRatio"
+  | "hostLoad";
 
 /**
  * 一个采样点上的指标集合。

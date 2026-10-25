@@ -69,7 +69,30 @@ test("I18N-FAILURE: failed catalog preparation never applies or persists a local
     apply: async (locale) => applied.push(locale),
   });
 
-  await assert.rejects(switchLocale("ja-JP", (locale) => persisted.push(locale)), /catalog unavailable/);
+  await assert.rejects(
+    switchLocale("ja-JP", (locale) => persisted.push(locale)),
+    /catalog unavailable/,
+  );
   assert.deepEqual(applied, []);
   assert.deepEqual(persisted, []);
+});
+
+test("I18N-APPLY-RECOVERY: a failed locale commit does not poison later switches", async () => {
+  const applied = [];
+  const persisted = [];
+  const switchLocale = createLatestLocaleSwitcher({
+    prepare: async () => {},
+    apply: async (locale) => {
+      if (locale === "ja-JP") throw new Error("translation runtime unavailable");
+      applied.push(locale);
+    },
+  });
+
+  await assert.rejects(
+    switchLocale("ja-JP", (locale) => persisted.push(locale)),
+    /translation runtime unavailable/,
+  );
+  assert.equal(await switchLocale("en-US", (locale) => persisted.push(locale)), true);
+  assert.deepEqual(applied, ["en-US"]);
+  assert.deepEqual(persisted, ["en-US"]);
 });

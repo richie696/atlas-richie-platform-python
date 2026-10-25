@@ -70,6 +70,8 @@ export const SOURCE_REGISTRATION_HTTP_CONTRACT = Object.freeze([
     pathParameters: [],
     semanticRules: [
       "Requires the admin role, exact Origin and CSRF; does not register, publish or mutate the source.",
+      "sourceId and expectedRevision must either both be null for a new candidate or both identify the same registered revision.",
+      "A 429 rate_limited rejection always includes bounded retryAfterMs; the client preserves the cooldown and never auto-replays the probe.",
       "The server enforces endpoint/SSRF policy and returns only bounded capability and failure classifications.",
       "Keep credentials resolve only on the server; direct credentials and references are write-only.",
     ],
@@ -102,6 +104,28 @@ export const SOURCE_REGISTRATION_HTTP_CONTRACT = Object.freeze([
         },
       },
       {
+        name: "probe_rejects_unpaired_source_revision",
+        summary: "配置源 ID 与 revision 不能只提供其中一个",
+        kind: "negative",
+        request: {
+          body: {
+            sourceId: null,
+            expectedRevision: "revision-12",
+            source: {
+              provider: "nacos",
+              endpoint: "https://nacos.example.test:8848",
+              namespace: "sentinel-staging",
+              authentication: { mode: "none" },
+            },
+          },
+          bodyConforms: false,
+        },
+        response: {
+          status: 400,
+          body: { error: { code: "invalid_request", requestId: "source-example-invalid" } },
+        },
+      },
+      {
         name: "viewer_probe_forbidden",
         summary: "查看者不能发起配置源连通性检查",
         kind: "negative",
@@ -127,7 +151,7 @@ export const SOURCE_REGISTRATION_HTTP_CONTRACT = Object.freeze([
   },
   {
     operationId: "mutateRegisteredSource",
-    summary: "登记或条件更新 Nacos/Consul 配置源",
+    summary: "登记、条件更新或删除 Nacos/Consul 配置源",
     tag: "system-sources",
     security: "session",
     requiredAccess: CONSOLE_ACCESS.Admin,
@@ -139,6 +163,9 @@ export const SOURCE_REGISTRATION_HTTP_CONTRACT = Object.freeze([
       "Update compares expectedRevision atomically; same key with different canonical input is rejected.",
       "Credential fields and reference identifiers are write-only, excluded from safe receipts/audit, and never logged or returned.",
       "A completed receipt must match the requested provider/name/location and return a new safe revision; rejected is a finite domain fact.",
+      "Delete requires the exact current source revision; it is idempotent and never cascades into rule bindings or publications.",
+      "A source referenced by any rule binding is rejected with source_in_use; the restrictive foreign key remains the final concurrency guard.",
+      "Successful delete removes the online encrypted credential and probe in the same SQL transaction; its durable receipt contains only deletedSourceId, never endpoint or credential metadata.",
     ],
     examples: [
       {
@@ -185,6 +212,50 @@ export const SOURCE_REGISTRATION_HTTP_CONTRACT = Object.freeze([
           status: 422,
           body: {
             error: { code: "validation_failed", requestId: "source-example-invalid" },
+          },
+        },
+      },
+      {
+        name: "delete_unreferenced_source",
+        summary: "按 revision 删除未被规则引用的配置源，回执不包含连接或凭证事实",
+        kind: "positive",
+        request: {
+          body: {
+            kind: "delete",
+            requestKey: "source-delete-example-1",
+            sourceId: "source-prod-nacos",
+            expectedRevision: "revision-12",
+          },
+          bodyConforms: true,
+        },
+        response: {
+          status: 202,
+          body: {
+            status: "completed",
+            requestKey: "source-delete-example-1",
+            deletedSourceId: "source-prod-nacos",
+          },
+        },
+      },
+      {
+        name: "delete_rejects_referenced_source",
+        summary: "仍被规则绑定引用的配置源不允许删除，且不会级联删除规则",
+        kind: "negative",
+        request: {
+          body: {
+            kind: "delete",
+            requestKey: "source-delete-example-2",
+            sourceId: "source-prod-nacos",
+            expectedRevision: "revision-12",
+          },
+          bodyConforms: true,
+        },
+        response: {
+          status: 202,
+          body: {
+            status: "rejected",
+            requestKey: "source-delete-example-2",
+            reason: "source_in_use",
           },
         },
       },

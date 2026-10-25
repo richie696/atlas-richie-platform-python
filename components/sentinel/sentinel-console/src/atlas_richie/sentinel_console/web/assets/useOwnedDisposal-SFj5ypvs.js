@@ -1,1 +1,0 @@
-import{r as u}from"./react-runtime-Gy7_P8IC.js";function c(e){const r=u.useRef(null);u.useEffect(()=>{if(!e)return;const t=r.current;t&&t.owner!==e&&t.owner.dispose();const s=Object.freeze({owner:e,token:Symbol("owner-lease")});return r.current=s,()=>{queueMicrotask(()=>{var n;((n=r.current)==null?void 0:n.token)===s.token&&(r.current=null,e.dispose())})}},[e])}export{c as u};

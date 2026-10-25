@@ -1,9 +1,11 @@
+import { z } from "zod";
 import {
   CONSOLE_ACCESS,
   type ConsoleOperationContract,
 } from "../../../core/api/protocol/operationContract";
 import { SYSTEM_OBSERVATION_ENDPOINTS } from "./systemObservationHttp";
 import { AuditQueryParametersSchema } from "./systemObservationWire";
+import { MAX_PROTOCOL_OBSERVATIONS_PAGE } from "../model/agentReportingObservation";
 
 const systemObservationAsOf = "2026-10-09T01:02:03.456Z";
 const connectionsExample = Object.freeze({
@@ -97,6 +99,54 @@ export const SYSTEM_OBSERVATION_HTTP_CONTRACT = Object.freeze([
     ],
   },
   {
+    operationId: "readSystemDeploymentGuides",
+    summary: "读取服务端部署引导 profile 与显式 Collector 公布地址",
+    tag: "system-observation",
+    security: "session",
+    requiredAccess: CONSOLE_ACCESS.None,
+    endpoint: SYSTEM_OBSERVATION_ENDPOINTS.DeploymentGuides,
+    input: null,
+    pathParameters: [],
+    semanticRules: [
+      "Guide readiness and revisions are owned by the Console release catalog; React must not invent install versions or artifacts.",
+      "Runtime Collector advertised endpoint is explicit deployment configuration and is not inferred from bind addresses or request headers.",
+      "Missing advertised endpoint is returned as not_configured with endpoint null.",
+      "Linux and Kubernetes paths remain guide-only until validated server-owned artifacts are available.",
+      "The read endpoint cannot install or mutate exporters, Prometheus, Kubernetes, or Sentinel Runtime configuration.",
+      "Console API 0.17.0 adds this operation without changing prior operations.",
+    ],
+    examples: [
+      {
+        name: "deployment_catalog_preserves_unconfigured_endpoint",
+        summary: "未配置 Collector 公布地址时返回 null，Linux/Kubernetes 模板不伪装为可执行",
+        kind: "positive",
+        request: {},
+        response: {
+          status: 200,
+          body: {
+            catalogRevision: "2026-10-17.1",
+            runtimeCollector: { state: "not_configured", endpoint: null },
+            paths: [
+              { id: "existing", readiness: "configuration-required", profileRevision: null },
+              { id: "linux", readiness: "guide-only", profileRevision: null },
+              { id: "kubernetes", readiness: "guide-only", profileRevision: null },
+            ],
+          },
+        },
+      },
+      {
+        name: "deployment_catalog_requires_session",
+        summary: "匿名请求不能读取部署 profile 与 Collector 公布事实",
+        kind: "negative",
+        request: {},
+        response: {
+          status: 401,
+          body: { error: { code: "unauthenticated", requestId: "deployment-guide-anonymous" } },
+        },
+      },
+    ],
+  },
+  {
     operationId: "readSystemProtocols",
     summary: "读取各协议边界的支持版本和实际协商事实",
     tag: "system-observation",
@@ -125,6 +175,129 @@ export const SYSTEM_OBSERVATION_HTTP_CONTRACT = Object.freeze([
         response: {
           status: 401,
           body: { error: { code: "unauthenticated", requestId: "protocols-anonymous" } },
+        },
+      },
+    ],
+  },
+  {
+    operationId: "readAgentReportingProtocolObservations",
+    summary: "分页读取认证 Reporter 的逐 worker 上报协议协商事实",
+    tag: "system-observation",
+    security: "session",
+    requiredAccess: CONSOLE_ACCESS.None,
+    endpoint: SYSTEM_OBSERVATION_ENDPOINTS.AgentReporting,
+    input: null,
+    pathParameters: [],
+    queryParameters: [
+      { name: "page", schema: z.number().int().min(1).max(MAX_PROTOCOL_OBSERVATIONS_PAGE) },
+      { name: "pageSize", schema: z.number().int().min(1).max(100) },
+    ],
+    semanticRules: [
+      "Each enrolled worker has its own row; mixed Runtime versions are never collapsed.",
+      "An active enrollment without an authenticated hello is unknown, not compatible.",
+      "Collector facts populate only agent-reporting; rule-config and cluster-token remain independently sourced.",
+      "Revoked Reporter enrollments are excluded, and certificate principals are never returned.",
+      "Console API 0.5.0 remains unchanged; this endpoint is an additive versioned read contract.",
+    ],
+    examples: [
+      {
+        name: "worker_protocol_read_preserves_unknown",
+        summary: "未握手 worker 保留 unknown 且仅暴露实例身份",
+        kind: "positive",
+        request: { queryParameters: { page: 1, pageSize: 20 } },
+        response: {
+          status: 200,
+          body: {
+            asOf: systemObservationAsOf,
+            page: 1,
+            pageSize: 20,
+            total: 1,
+            items: [
+              {
+                environmentId: "prod",
+                appId: "orders",
+                instanceId: "orders-worker-0",
+                processId: "pid-0",
+                reporterId: "reporter-orders-0",
+                boundary: "agent-reporting",
+                collectorSupported: ["atlas-richie.reporting/v1"],
+                runtimeVersion: null,
+                compatibility: "unknown",
+                observedAt: null,
+              },
+            ],
+          },
+        },
+      },
+      {
+        name: "worker_protocol_read_requires_session",
+        summary: "匿名会话不能读取 Reporter 协议事实",
+        kind: "negative",
+        request: { queryParameters: { page: 1, pageSize: 20 } },
+        response: {
+          status: 401,
+          body: { error: { code: "unauthenticated", requestId: "agent-protocol-anonymous" } },
+        },
+      },
+    ],
+  },
+  {
+    operationId: "readIncidentEventProtocolObservations",
+    summary: "分页读取认证 Reporter 的逐 worker Incident Event 协议协商事实",
+    tag: "system-observation",
+    security: "session",
+    requiredAccess: CONSOLE_ACCESS.None,
+    endpoint: SYSTEM_OBSERVATION_ENDPOINTS.IncidentEvents,
+    input: null,
+    pathParameters: [],
+    queryParameters: [
+      { name: "page", schema: z.number().int().min(1).max(MAX_PROTOCOL_OBSERVATIONS_PAGE) },
+      { name: "pageSize", schema: z.number().int().min(1).max(100) },
+    ],
+    semanticRules: [
+      "Incident Event V1 is negotiated independently from Agent Reporting V1.",
+      "An active enrollment without an authenticated Incident Event hello is unknown.",
+      "Only the incident-events authority is returned; the response never exposes certificate principals.",
+      "The read path is additive and does not alter Console API 0.5.0 or the Agent Reporting DTO.",
+    ],
+    examples: [
+      {
+        name: "incident_event_protocol_read_preserves_unknown",
+        summary: "没有 Incident Event hello 时兼容状态保持 unknown",
+        kind: "positive",
+        request: { queryParameters: { page: 1, pageSize: 20 } },
+        response: {
+          status: 200,
+          body: {
+            asOf: systemObservationAsOf,
+            page: 1,
+            pageSize: 20,
+            total: 1,
+            items: [
+              {
+                environmentId: "prod",
+                appId: "orders",
+                instanceId: "orders-worker-0",
+                processId: "pid-0",
+                reporterId: "reporter-orders-0",
+                boundary: "incident-events",
+                collectorSupported: ["atlas-richie.incident-events/v1"],
+                runtimeVersion: null,
+                compatibility: "unknown",
+                observedAt: null,
+              },
+            ],
+          },
+        },
+      },
+      {
+        name: "incident_event_protocol_read_requires_session",
+        summary: "匿名会话不能读取 Incident Event 协议事实",
+        kind: "negative",
+        request: { queryParameters: { page: 1, pageSize: 20 } },
+        response: {
+          status: 401,
+          body: { error: { code: "unauthenticated", requestId: "incident-protocol-anonymous" } },
         },
       },
     ],

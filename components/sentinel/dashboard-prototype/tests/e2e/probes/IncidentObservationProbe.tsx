@@ -112,7 +112,13 @@ export function IncidentObservationProbe({
         instanceTotal={0}
         query={query}
         selectedEventId={selection}
-        onQueryChange={setQuery}
+        onQueryChange={(next) => {
+          const filtersChanged =
+            JSON.stringify([next.context, next.severity, next.category, next.pageSize]) !==
+            JSON.stringify([query.context, query.severity, query.category, query.pageSize]);
+          if (filtersChanged) setSelection(null);
+          setQuery(next);
+        }}
         onSelect={setSelection}
         onInstanceChange={() => {}}
         navigate={(route, context) => setNavigation({ route, context })}

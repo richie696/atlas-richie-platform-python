@@ -38,7 +38,7 @@ export type {
  * 成功后服务端关闭该窗口、重复访问拒绝，客户端把 `#/setup` 深链重定向到登录页。
  * 前端校验只是提前给出反馈，不构成任何授权判断。
  */
-import { PASSWORD_MIN_LENGTH, type IdentityIssue } from "./passwordPolicy";
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, type IdentityIssue } from "./passwordPolicy";
 
 /** 控制面持久化数据库的协议值。 */
 export const CONTROL_PLANE_DATABASE = Object.freeze({
@@ -94,6 +94,16 @@ export type SetupStepId = (typeof SETUP_STEP)[keyof typeof SETUP_STEP];
 
 /** 一次性初始化的检查点。这些是引导阶段，不是规则来源状态。 */
 export const SETUP_STEPS: readonly SetupStepId[] = Object.freeze(Object.values(SETUP_STEP));
+
+/** Independent connection checks whose results are invalidated by their own inputs. */
+export const SETUP_CONNECTION_CHECK = Object.freeze({
+  Database: "database",
+  Source: "source",
+} as const);
+
+/** One independently confirmed setup dependency. */
+export type SetupConnectionCheckTarget =
+  (typeof SETUP_CONNECTION_CHECK)[keyof typeof SETUP_CONNECTION_CHECK];
 
 /** 内置管理员表单。初始账号名固定为 `admin`，密码由用户设置。 */
 export interface SetupAdminDraft {
@@ -283,10 +293,13 @@ export function validateSetupStep(stepId: SetupStepId, draft: SetupDraft): reado
     const issues: SetupIssue[] = [];
     if (!draft.admin.username.trim())
       issues.push({ key: "setup.required", field: SETUP_FIELD.AdminUsername });
-    if (draft.admin.password.length < PASSWORD_MIN_LENGTH)
+    if (
+      draft.admin.password.length < PASSWORD_MIN_LENGTH ||
+      draft.admin.password.length > PASSWORD_MAX_LENGTH
+    )
       issues.push({
         key: "setup.adminRequired",
-        params: { min: PASSWORD_MIN_LENGTH },
+        params: { min: PASSWORD_MIN_LENGTH, max: PASSWORD_MAX_LENGTH },
         field: SETUP_FIELD.AdminPassword,
       });
     if (draft.admin.password !== draft.admin.confirm)

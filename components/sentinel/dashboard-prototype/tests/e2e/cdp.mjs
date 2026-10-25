@@ -1,23 +1,19 @@
 /**
- * 零依赖 Chrome DevTools Protocol 客户端。
+ * 零依赖 Chromium DevTools Protocol 客户端。
  *
  * 中文
  * ----
- * 视觉基线工具（`tests/visual/capture-baseline.mjs`）用 `chrome --dump-dom` /
- * `--screenshot` 一次性抓取，**只能验证首屏渲染，不能点击**。组件重写里有真实缺陷
+ * 视觉基线工具（`tests/visual/capture-baseline.mjs`）只验证首屏渲染，不能点击。组件重写里有真实缺陷
  * 只在交互后才暴露：状态写入路径、受控回环、过期结果覆盖、Effect 清理。
  * 纯函数测试同样证明不了这些——skill 明确写了「普通函数测试不证明 UI 生命周期正确」。
  *
  * 因此这里补一条**交互驱动**能力。不引入 puppeteer/playwright：
- * Node 22+ 内置 `WebSocket`，直接讲 CDP 即可，项目的 devDependencies 保持不变。
- * 这与「本 skill 不授权安装依赖」以及既有工具零依赖的约定一致。
- *
- * 端口用 `--remote-debugging-port=0` 让 Chrome 自选，再从 user-data-dir 里的
- * `DevToolsActivePort` 读回实际端口——避免固定端口撞车，也避免轮询一串候选端口。
+ * Node 22+ 内置 `WebSocket`，通过 loopback DevTools endpoint 连接隔离启动的 Edge。
+ * Edge 由 `scripts/test/run-edge-e2e.mjs` 使用临时 profile 启动；本模块只连接，绝不启动浏览器。
  *
  * 用法：
  * ```js
- * const browser = await launchBrowser();
+ * const browser = await connectE2EBrowser();
  * const page = await browser.newPage();
  * await page.goto("http://localhost:5173/#/rules");
  * await page.clickByText("降级");
@@ -25,42 +21,7 @@
  * await browser.close();
  * ```
  */
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-
-const CHROME =
-  process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-
-/** Prevent a known-unstable Edge host from being launched by the CDP suite. */
-export function assertSupportedBrowserExecutable(executable) {
-  const normalized = executable.replaceAll("\\", "/");
-  const microsoftEdgePath =
-    /(?:^|\/)(?:microsoft[- ]edge(?:[- ](?:beta|dev|canary|stable))?|msedge(?:-sxs)?)(?:\.app|\.exe)?(?:\/|$)/i;
-
-  if (microsoftEdgePath.test(normalized)) {
-    throw new Error(
-      "Microsoft Edge is blocked for CDP tests because this host crashes during startup; configure CHROME_BIN with Google Chrome or Chromium.",
-    );
-  }
-  return executable;
-}
-
-/** 等待文件出现并返回内容；用于读取 Chrome 自选的调试端口。 */
-async function waitForFile(file, timeoutMs = 15000, failure = () => null) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (failure()) throw failure();
-    if (existsSync(file)) {
-      const text = readFileSync(file, "utf8").trim();
-      if (text) return text;
-    }
-    await delay(50);
-  }
-  throw new Error(`等待 ${file} 超时（${timeoutMs}ms）`);
-}
 
 /**
  * 一个 CDP 会话。
@@ -120,10 +81,18 @@ export class Connection {
         this.#pending.delete(id);
         reject(new Error(`CDP command timed out: ${method}`));
       }, this.#timeoutMs);
-      const settle = callback => value => { clearTimeout(timeout); callback(value); };
+      const settle = (callback) => (value) => {
+        clearTimeout(timeout);
+        callback(value);
+      };
       this.#pending.set(id, { resolve: settle(resolve), reject: settle(reject) });
-      try { this.#socket.send(JSON.stringify(payload)); }
-      catch(error) { this.#pending.delete(id); clearTimeout(timeout); reject(error); }
+      try {
+        this.#socket.send(JSON.stringify(payload));
+      } catch (error) {
+        this.#pending.delete(id);
+        clearTimeout(timeout);
+        reject(error);
+      }
     });
   }
 
@@ -285,34 +254,152 @@ class Page {
    */
   async #clickResolved(resolveExpr, describe) {
     await this.#waitScrollIdle();
+    // Move both vertical and horizontal scroll containers directly, avoiding
+    // CSS smooth-scroll animations. Tables intentionally own horizontal
+    // overflow on narrow layouts, so scrolling only the document can leave a
+    // real action button outside the viewport even though its row is visible.
+    await this.#evaluate(`(() => {
+      const node = (${resolveExpr});
+      if (!node) return false;
+      const scrollable = [];
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent);
+        if (
+          (parent.scrollHeight > parent.clientHeight + 1 && /(auto|scroll|hidden|overlay)/.test(style.overflowY)) ||
+          (parent.scrollWidth > parent.clientWidth + 1 && /(auto|scroll|hidden|overlay)/.test(style.overflowX))
+        ) {
+          scrollable.push(parent);
+        }
+      }
+      const root = document.scrollingElement;
+      if (root && (
+        root.scrollHeight > root.clientHeight + 1 ||
+        root.scrollWidth > root.clientWidth + 1
+      )) scrollable.push(root);
+      for (const container of scrollable) {
+        const rect = node.getBoundingClientRect();
+        const bounds = container === root
+          ? { top: 0, height: innerHeight, left: 0, width: innerWidth }
+          : (() => {
+              const parentRect = container.getBoundingClientRect();
+              return {
+                top: parentRect.top + container.clientTop,
+                height: container.clientHeight,
+                left: parentRect.left + container.clientLeft,
+                width: container.clientWidth,
+              };
+            })();
+        if (container.scrollHeight > container.clientHeight + 1) {
+          const deltaY = rect.top + rect.height / 2 - (bounds.top + bounds.height / 2);
+          if (Math.abs(deltaY) > 1) container.scrollTop += deltaY;
+        }
+        if (container.scrollWidth > container.clientWidth + 1) {
+          const right = bounds.left + bounds.width;
+          const deltaX = rect.left < bounds.left
+            ? rect.left - bounds.left
+            : rect.right > right
+              ? rect.right - right
+              : 0;
+          if (Math.abs(deltaX) > 1) container.scrollLeft += deltaX;
+        }
+      }
+      return true;
+    })()`);
+
     let last = null;
-    for (let attempt = 1; attempt <= 4; attempt += 1) {
+    let previousPosition = null;
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
       const found = await this.#evaluate(`(() => {
         const node = (${resolveExpr});
         if (!node) return null;
-        node.scrollIntoView({ block: "center", behavior: "instant" });
         const r = node.getBoundingClientRect();
         const x = r.x + r.width / 2;
         const y = r.y + r.height / 2;
         const hit = document.elementFromPoint(x, y);
         return {
           x, y, w: r.width, h: r.height,
+          visible: r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth,
           onTarget: !!hit && (hit === node || node.contains(hit)),
+          hit: hit ? {
+            tag: hit.tagName,
+            id: hit.id,
+            classes: typeof hit.className === "string" ? hit.className : "",
+            text: (hit.textContent ?? "").trim().slice(0, 100),
+          } : null,
+          scrollY: window.scrollY,
+          viewport: { width: innerWidth, height: innerHeight },
+          document: {
+            root: document.scrollingElement?.tagName ?? null,
+            scrollHeight: document.scrollingElement?.scrollHeight ?? null,
+            clientHeight: document.scrollingElement?.clientHeight ?? null,
+            scrollTop: document.scrollingElement?.scrollTop ?? null,
+            body: document.body ? {
+              height: getComputedStyle(document.body).height,
+              position: getComputedStyle(document.body).position,
+              overflow: getComputedStyle(document.body).overflow,
+              scrollHeight: document.body.scrollHeight,
+              clientHeight: document.body.clientHeight,
+            } : null,
+          },
+          ancestors: (() => {
+            const rows = [];
+            for (let parent = node.parentElement; parent && rows.length < 16; parent = parent.parentElement) {
+              const style = getComputedStyle(parent);
+              rows.push({
+                tag: parent.tagName,
+                id: parent.id,
+                classes: typeof parent.className === "string" ? parent.className : "",
+                position: style.position,
+                height: style.height,
+                overflowY: style.overflowY,
+                overflowX: style.overflowX,
+                scrollTop: parent.scrollTop,
+                scrollLeft: parent.scrollLeft,
+                scrollHeight: parent.scrollHeight,
+                scrollWidth: parent.scrollWidth,
+                clientHeight: parent.clientHeight,
+                clientWidth: parent.clientWidth,
+              });
+            }
+            return rows;
+          })(),
         };
       })()`);
       last = found;
-      if (found && found.w > 0 && found.h > 0 && found.onTarget) {
-        const base = { x: found.x, y: found.y, button: "left", clickCount: 1, buttons: 1 };
-        await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...base, buttons: 0 });
-        await this.send("Input.dispatchMouseEvent", { type: "mousePressed", ...base });
-        await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...base, buttons: 0 });
-        return found;
+      if (found && found.w > 0 && found.h > 0 && found.visible && found.onTarget) {
+        const position = { x: found.x, y: found.y };
+        if (
+          previousPosition &&
+          Math.abs(previousPosition.x - position.x) < 0.5 &&
+          Math.abs(previousPosition.y - position.y) < 0.5
+        ) {
+          const base = { ...position, button: "left", clickCount: 1, buttons: 1 };
+          await this.send("Input.dispatchMouseEvent", { type: "mousePressed", ...base });
+          await this.send("Input.dispatchMouseEvent", {
+            type: "mouseReleased",
+            ...base,
+            buttons: 0,
+          });
+          return found;
+        }
+        // Hover styles and async layout can move a target after pointer movement.
+        // Require two consecutive hit-tested measurements at the same point.
+        await this.send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          ...position,
+          button: "none",
+          buttons: 0,
+        });
+        previousPosition = position;
+      } else {
+        previousPosition = null;
       }
-      // 命中不符：页面可能仍在平滑滚动，稍等再试
+      // The target may still be moving due to the page's CSS smooth-scroll rule.
       await delay(70);
     }
     if (!last) throw new Error(`点击目标不存在: ${describe}`);
-    throw new Error(`点击目标在 4 次尝试内始终无法命中: ${describe}（尺寸 ${last.w}x${last.h}）`);
+    throw new Error(`滚动后点击目标仍无法命中: ${describe}（状态 ${JSON.stringify(last)}）`);
   }
 
   /**
@@ -351,7 +438,10 @@ class Page {
   }
 
   /** 按可见文字点击；用于没有稳定 test id 的控件。 */
-  async clickByText(text, selector = "button, a, [role='tab'], [role='button'], label, [role='option']") {
+  async clickByText(
+    text,
+    selector = "button, a, [role='tab'], [role='button'], label, [role='option']",
+  ) {
     await this.#clickResolved(
       `[...document.querySelectorAll(${JSON.stringify(selector)})]
          .find((n) => {
@@ -383,7 +473,9 @@ class Page {
   }
 
   text(selector = "body") {
-    return this.#evaluate(`(document.querySelector(${JSON.stringify(selector)})?.textContent ?? "")`);
+    return this.#evaluate(
+      `(document.querySelector(${JSON.stringify(selector)})?.textContent ?? "")`,
+    );
   }
 
   count(selector) {
@@ -491,128 +583,143 @@ class Page {
   }
 }
 
-/**
- * 启动 headless Chrome 并接上 CDP。
- *
- * 中文
- * ----
- * 返回值自带 `close()`，务必在测试结束调用：否则 Chrome 进程会变成孤儿，
- * 下次 `npm run dev` 的端口探测和后续基线捕获都会受干扰。
- */
-export async function launchBrowser({ viewport = { width: 1280, height: 900 } } = {}) {
-  const browserExecutable = assertSupportedBrowserExecutable(CHROME);
-  const userDataDir = mkdtempSync(path.join(tmpdir(), "sen-e2e-"));
-  const child = spawn(
-    browserExecutable,
-    [
-      "--headless=new",
-      "--disable-gpu",
-      "--hide-scrollbars",
-      "--no-sandbox",
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--disable-extensions",
-      "--disable-background-timer-throttling",
-      "--remote-debugging-port=0",
-      `--user-data-dir=${userDataDir}`,
-      "about:blank",
-    ],
-    { stdio: ["ignore", "pipe", "pipe"] },
-  );
+/** Resolve an HTTP DevTools origin or accept an explicit WebSocket endpoint. */
+async function resolveDevToolsWebSocketUrl(endpoint) {
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw new Error("SENTINEL_E2E_CDP_URL must be a valid loopback DevTools URL");
+  }
+  const hostname = url.hostname.toLowerCase();
+  if (!["localhost", "127.0.0.1", "[::1]", "::1"].includes(hostname)) {
+    throw new Error("E2E DevTools endpoint must be loopback-only");
+  }
+  if (url.protocol === "ws:" || url.protocol === "wss:") return url.href;
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("SENTINEL_E2E_CDP_URL must use http(s) or ws(s)");
+  }
 
-  // Chrome 崩溃时立刻抛错，而不是等到端口超时后给出误导性的连接错误。
-  let crashed = null;
-  let closing = false, diagnostics = "";
-  child.stdout.resume();
-  child.stderr.on("data", chunk => { diagnostics = (diagnostics + chunk).slice(-4096); });
-  child.on("error", error => { crashed = error; });
-  child.on("exit", (code, signal) => {
-    if (!closing) crashed = new Error(`Chrome 提前退出，code=${code}, signal=${signal}; ${diagnostics}`);
+  url.pathname = "/json/version";
+  url.search = "";
+  url.hash = "";
+  let response;
+  try {
+    response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+  } catch {
+    throw new Error("E2E DevTools discovery request failed");
+  }
+  if (!response.ok) throw new Error(`E2E DevTools discovery returned HTTP ${response.status}`);
+  let document;
+  try {
+    document = await response.json();
+  } catch {
+    throw new Error("E2E DevTools discovery response was invalid");
+  }
+  if (typeof document.webSocketDebuggerUrl !== "string") {
+    throw new Error("E2E DevTools endpoint did not provide a WebSocket URL");
+  }
+  const socketUrl = new URL(document.webSocketDebuggerUrl);
+  if (!["localhost", "127.0.0.1", "[::1]", "::1"].includes(socketUrl.hostname.toLowerCase())) {
+    throw new Error("E2E DevTools WebSocket endpoint must be loopback-only");
+  }
+  return socketUrl.href;
+}
+
+/** Connect to a loopback-only DevTools endpoint; never starts a browser process. */
+export async function connectE2EBrowser({
+  viewport = { width: 1280, height: 900 },
+  cdpEndpoint = process.env.SENTINEL_E2E_CDP_URL,
+} = {}) {
+  if (!cdpEndpoint) {
+    throw new Error(
+      "SENTINEL_E2E_CDP_URL is required; run tests through the isolated Edge launcher.",
+    );
+  }
+  const socket = new WebSocket(await resolveDevToolsWebSocketUrl(cdpEndpoint));
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("E2E CDP WebSocket timed out")), 5000);
+    socket.addEventListener(
+      "open",
+      () => {
+        clearTimeout(timeout);
+        resolve();
+      },
+      { once: true },
+    );
+    socket.addEventListener(
+      "error",
+      () => {
+        clearTimeout(timeout);
+        reject(new Error("E2E CDP WebSocket connection failed"));
+      },
+      { once: true },
+    );
   });
 
-  async function stopChild() {
-    closing = true;
-    const exited = () => child.exitCode !== null || child.signalCode !== null;
-    const awaitExit = async (timeoutMs) => {
-      if (exited()) return;
-      await new Promise(resolve => {
-        const done = () => { clearTimeout(timer); child.off("exit", done); resolve(); };
-        const timer = setTimeout(done, timeoutMs);
-        child.once("exit", done);
+  const connection = new Connection(socket);
+  const pages = new Set();
+  return {
+    connection,
+    async newPage() {
+      const { targetId } = await connection.send("Target.createTarget", { url: "about:blank" });
+      const { sessionId } = await connection.send("Target.attachToTarget", {
+        targetId,
+        flatten: true,
       });
-    };
-    if (!exited()) child.kill("SIGTERM");
-    await awaitExit(2000);
-    if (!exited()) child.kill("SIGKILL");
-    await awaitExit(1000);
-    child.stdout.destroy(); child.stderr.destroy(); child.unref();
-    // Only the explicitly created disposable profile is eligible for cleanup.
-    if (exited() && path.basename(userDataDir).startsWith("sen-e2e-")) {
-      try { rmSync(userDataDir, { recursive: true, force: true }); } catch { /* recoverable temp residue */ }
-    }
-  }
-
-  try {
-    const activePort = await waitForFile(path.join(userDataDir, "DevToolsActivePort"), 15000, () => crashed);
-    const port = activePort.split("\n")[0].trim();
-    const response = await fetch(`http://127.0.0.1:${port}/json/version`);
-    const { webSocketDebuggerUrl } = await response.json();
-
-    const socket = new WebSocket(webSocketDebuggerUrl);
-    await new Promise((resolve, reject) => {
-      socket.addEventListener("open", resolve, { once: true });
-      socket.addEventListener("error", () => reject(new Error("CDP WebSocket 连接失败")), {
-        once: true,
+      const page = new Page(connection, sessionId, targetId);
+      pages.add(page);
+      await page.send("Page.enable");
+      await page.send("Runtime.enable");
+      if (process.env.SENTINEL_E2E_MOCK_ADMIN_BASELINE === "1") {
+        const origin = new URL(E2E_BASE_URL).origin;
+        await page.send("Page.addScriptToEvaluateOnNewDocument", {
+          source: `if(location.origin===${JSON.stringify(origin)}&&!location.hash.startsWith('#/setup')){if(localStorage.getItem('sentinel.mock.initialized')===null)localStorage.setItem('sentinel.mock.initialized','true');if(localStorage.getItem('sentinel.mock.role')===null)localStorage.setItem('sentinel.mock.role','admin');}`,
+        });
+      }
+      await page.send("Emulation.setDeviceMetricsOverride", {
+        width: viewport.width,
+        height: viewport.height,
+        deviceScaleFactor: 1,
+        mobile: false,
       });
-    });
-
-    const connection = new Connection(socket);
-
-    return {
-      connection,
-      async newPage() {
-        const { targetId } = await connection.send("Target.createTarget", { url: "about:blank" });
-        const { sessionId } = await connection.send("Target.attachToTarget", {
-          targetId,
-          flatten: true,
-        });
-        const page = new Page(connection, sessionId, targetId);
-        await page.send("Page.enable");
-        await page.send("Runtime.enable");
-        await page.send("Emulation.setDeviceMetricsOverride", {
-          width: viewport.width,
-          height: viewport.height,
-          deviceScaleFactor: 1,
-          mobile: false,
-        });
-        connection.on((message) => {
-          if (message.sessionId !== sessionId) return;
-          if (message.method === "Runtime.consoleAPICalled" && message.params.type === "error") {
-            page.recordConsoleError(
-              message.params.args.map((a) => a.value ?? a.description ?? "").join(" "),
-            );
+      connection.on((message) => {
+        if (message.sessionId !== sessionId) return;
+        if (message.method === "Runtime.consoleAPICalled" && message.params.type === "error") {
+          page.recordConsoleError(
+            message.params.args
+              .map((argument) => argument.value ?? argument.description ?? "")
+              .join(" "),
+          );
+        }
+        if (message.method === "Runtime.exceptionThrown") {
+          page.recordConsoleError(
+            message.params.exceptionDetails.exception?.description ??
+              message.params.exceptionDetails.text,
+          );
+        }
+      });
+      return page;
+    },
+    async close() {
+      await Promise.all(
+        [...pages].map(async (page) => {
+          try {
+            await page.close();
+          } catch {
+            // The test may already have closed its page; only its own targets are affected.
           }
-          if (message.method === "Runtime.exceptionThrown") {
-            page.recordConsoleError(
-              message.params.exceptionDetails.exception?.description ??
-                message.params.exceptionDetails.text,
-            );
-          }
-        });
-        return page;
-      },
-      async close() {
-        connection.close();
-        await stopChild();
-      },
-      get crashed() {
-        return crashed;
-      },
-    };
-  } catch (error) {
-    await stopChild();
-    throw crashed ?? error;
-  }
+        }),
+      );
+      connection.close();
+    },
+    get crashed() {
+      return null;
+    },
+  };
 }
+
+/** @deprecated Use connectE2EBrowser; retained while existing E2E specs migrate. */
+export const connectIabBrowser = connectE2EBrowser;
 
 export const E2E_BASE_URL = process.env.BASE_URL ?? "http://localhost:5173";

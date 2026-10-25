@@ -1,12 +1,13 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { E2E_BASE_URL, launchBrowser } from "./cdp.mjs";
+import { E2E_BASE_URL, connectIabBrowser } from "./cdp.mjs";
 import { artifactDirectory } from "./artifacts.mjs";
+import { gotoMockAdministrator } from "./mock-auth.mjs";
 
 let browser;
 before(async () => {
-  browser = await launchBrowser();
+  browser = await connectIabBrowser();
 });
 after(async () => {
   await browser?.close();
@@ -16,7 +17,7 @@ test("applications route reads an authorized HTTP catalog and restores explicit 
   const page = await browser.newPage();
   try {
     await page.clearStorage(new URL(E2E_BASE_URL).origin);
-    await page.goto(`${E2E_BASE_URL}/#/applications?env=test-env&app=app-one&range=15m`);
+    await gotoMockAdministrator(page, `${E2E_BASE_URL}/#/applications?env=test-env&app=app-one&range=15m`);
     await page.waitFor(`!!document.querySelector('[data-observed-instance="instance-1"]')`, {
       label: "HTTP-backed instance directory rendered",
     });
@@ -35,7 +36,8 @@ test("applications route reads an authorized HTTP catalog and restores explicit 
     assert.match(selected.url, /instance=instance-1/);
     assert.match(selected.url, /scope=process/);
     assert.match(selected.receipt, /当前进程已加载|Applied/);
-    assert.match(selected.metric, /42/);
+    // The selected detail is instance-1 (22 QPS); 42 is the app aggregate.
+    assert.match(selected.metric, /22/);
 
     const directory = artifactDirectory("sentinel-f6-applications-http");
     mkdirSync(directory, { recursive: true });

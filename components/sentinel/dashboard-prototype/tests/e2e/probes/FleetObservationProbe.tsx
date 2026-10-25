@@ -26,6 +26,7 @@ export function createFleetProbeTopology() {
     const summary = value.metrics.summary.map((reading) => ({
       ...reading,
       coverage: { ...reading.coverage, ...coverage },
+      quality: "partial" as const,
     }));
     return {
       ...value,
@@ -39,6 +40,7 @@ export function createFleetProbeTopology() {
           metrics: row.metrics.map((reading) => ({
             ...reading,
             coverage: { ...reading.coverage, ...coverage },
+            quality: "partial" as const,
           })),
         })),
       },
@@ -48,6 +50,7 @@ export function createFleetProbeTopology() {
         series: value.metrics.series.map((series) => ({
           ...series,
           coverage: { ...series.coverage, ...coverage },
+          quality: "partial" as const,
         })),
       },
     };

@@ -16,9 +16,45 @@ export function resolveConsoleBasePath(environment = process.env) {
   return basePath;
 }
 
+export function resolveConsoleApiProxyTarget(environment = process.env) {
+  const target = environment.SENTINEL_CONSOLE_API_PROXY_TARGET;
+  if (target === undefined) return undefined;
+
+  let url;
+  try {
+    url = new URL(target);
+  } catch {
+    throw new Error("SENTINEL_CONSOLE_API_PROXY_TARGET must be an HTTP(S) origin");
+  }
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("SENTINEL_CONSOLE_API_PROXY_TARGET must be an HTTP(S) origin");
+  }
+  return url.origin;
+}
+
+export function resolveConsoleApiProxy(environment = process.env) {
+  const target = resolveConsoleApiProxyTarget(environment);
+  if (target === undefined) return undefined;
+
+  return {
+    "/api": {
+      target,
+      changeOrigin: false,
+    },
+  };
+}
+
 export default defineConfig(({ command, mode }) => {
   const demoProfile = command === "serve" || mode === "demo";
   const demoBuild = command === "build" && mode === "demo";
+  const consoleApiProxy = resolveConsoleApiProxy();
 
   return {
     base: resolveConsoleBasePath(),
@@ -71,6 +107,10 @@ export default defineConfig(({ command, mode }) => {
       warmup: {
         clientFiles: ["./src/main.tsx"],
       },
+      ...(consoleApiProxy ? { proxy: consoleApiProxy } : {}),
+    },
+    preview: {
+      ...(consoleApiProxy ? { proxy: consoleApiProxy } : {}),
     },
     plugins: [react()],
   };

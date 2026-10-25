@@ -2,13 +2,17 @@ import { lazy, Suspense, useCallback, useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MetricKey } from "../../types/dashboard";
 import type { TranslationKey } from "../../types/translation";
+import { ActionButton } from "../ActionButton";
+import { DialogFrame } from "../DialogFrame";
 import { scopedClasses } from "../styles/scopedClasses";
 import { annotationStyle, buildChartTheme, type ChartSeriesColor } from "./chartTheme";
 import { useChartTokens } from "./ChartThemeProvider";
+import { getSystemTimeZone } from "../../presentation/systemTimeZone";
 import {
   buildTrendPlot,
   formatTrendTime,
   formatTrendValue,
+  trendDisplayUnit,
   trendTickValues,
   trendEventCoordinate,
   type TrendDomain,
@@ -30,6 +34,10 @@ const METRIC_LABEL_KEY: Readonly<Record<MetricKey, TranslationKey>> = Object.fre
   tps: "observation.metric.tps",
   entryRate: "observation.metric.entryRate",
   memoryBytes: "observation.metric.memoryBytes",
+  hostCpu: "observation.hostMetrics.cpuBusy",
+  hostMemoryBytes: "observation.hostMetrics.memoryUsedBytes",
+  hostMemoryRatio: "observation.hostMetrics.memoryUsedRatio",
+  hostLoad: "observation.hostMetrics.load1",
 });
 export type { TrendDomain } from "./trendPlot";
 
@@ -52,6 +60,8 @@ export interface TrendChartProps {
   readonly annotations?: readonly TrendAnnotation[];
   readonly cursorTime?: string;
   readonly height?: number;
+  /** Already localized reason for an empty chart; defaults to the generic empty-window message. */
+  readonly emptyMessage?: string;
   readonly domain?: TrendDomain;
   /** Exact timestamp window, [from,to), independently of the first/last available samples. */
   readonly timeWindow?: TrendDomain;
@@ -71,13 +81,15 @@ export function TrendChart({
   annotations = [],
   cursorTime,
   height = 170,
+  emptyMessage,
   domain,
   timeWindow,
   timeZone,
 }: TrendChartProps) {
   const { t, i18n } = useTranslation();
   const summaryId = useId();
-  const [width, setWidth] = useState(0);
+  const [width, setWidth] = useState(0),
+    [isDataDialogOpen, setDataDialogOpen] = useState(false);
   const onResize = useCallback(
     (dimensions: { width: number; height: number }) => setWidth(dimensions.width),
     [],
@@ -89,13 +101,23 @@ export function TrendChart({
     () => buildTrendPlot(data, metric, second, secondAxis, domain),
     [data, metric, second, secondAxis, domain],
   );
+  const secondValueUnit = secondAxis ? secondUnit : unit;
+  const primaryDisplayUnit = trendDisplayUnit(
+    unit,
+    plot.points.map((point) => point.primary),
+  );
+  const secondaryDisplayUnit = trendDisplayUnit(
+    secondValueUnit,
+    plot.points.map((point) => point.secondary),
+  );
   const pointById = new Map(plot.points.map((point) => [point.id, point]));
   const locale = i18n.resolvedLanguage ?? i18n.language;
+  const effectiveTimeZone = timeZone ?? getSystemTimeZone();
   const dayFormat = new Intl.DateTimeFormat(locale, {
     year: "numeric",
     month: "numeric",
     day: "numeric",
-    timeZone,
+    timeZone: effectiveTimeZone,
   });
   const includeDate =
     new Set(
@@ -104,14 +126,15 @@ export function TrendChart({
       ),
     ).size > 1;
   const timeLabel = (id: string) =>
-    formatTrendTime(pointById.get(id)?.time ?? id, locale, includeDate, timeZone);
-  const valueLabel = (value: number | null, valueUnit: string) =>
-    value === null ? t("shell.chart.missing") : formatTrendValue(value, locale, valueUnit);
+    formatTrendTime(pointById.get(id)?.time ?? id, locale, includeDate, effectiveTimeZone);
+  const valueLabel = (value: number | null, displayUnit: ReturnType<typeof trendDisplayUnit>) =>
+    value === null
+      ? t("shell.chart.missing")
+      : formatTrendValue(value / displayUnit.divisor, locale, displayUnit.unit);
   const metricLabel = (key: MetricKey) => t(METRIC_LABEL_KEY[key]);
   const primaryCount = plot.points.filter((point) => point.primary !== null).length;
   const secondaryCount = plot.points.filter((point) => point.secondary !== null).length;
   const hasSamples = primaryCount > 0 || (second !== undefined && secondaryCount > 0);
-  const secondValueUnit = secondAxis ? secondUnit : unit;
   const coordinate = (id: string) => (plot.xDomain ? Number(id) : id);
   const leftMargin = includeDate ? 52 : 48;
   const rightMargin = secondAxis ? 64 : includeDate ? 52 : 32;
@@ -142,7 +165,7 @@ export function TrendChart({
       <div className={scopedClasses(styleModules, "plot")} style={{ height }}>
         {plot.problem || !hasSamples ? (
           <p className={scopedClasses(styleModules, "chart-empty")} role="status">
-            {t(plot.problem ? "shell.chart.invalid" : "shell.chart.empty")}
+            {plot.problem ? t("shell.chart.invalid") : (emptyMessage ?? t("shell.chart.empty"))}
           </p>
         ) : (
           <Suspense
@@ -195,14 +218,17 @@ export function TrendChart({
                       tickSize: 0,
                       tickPadding: 8,
                       tickValues: 5,
-                      format: (value: number) =>
-                        formatTrendValue(
+                      format: (value: number) => {
+                        const rawValue =
                           plot.secondaryDomain[0] +
-                            ((value - plot.domain[0]) / axisSpan) * secondarySpan,
+                          ((value - plot.domain[0]) / axisSpan) * secondarySpan;
+                        return formatTrendValue(
+                          rawValue / secondaryDisplayUnit.divisor,
                           locale,
-                          secondUnit,
+                          secondaryDisplayUnit.unit,
                           true,
-                        ),
+                        );
+                      },
                     }
                   : null
               }
@@ -216,7 +242,13 @@ export function TrendChart({
                 tickSize: 0,
                 tickPadding: 8,
                 tickValues: 5,
-                format: (value: number) => formatTrendValue(value, locale, unit, true),
+                format: (value: number) =>
+                  formatTrendValue(
+                    value / primaryDisplayUnit.divisor,
+                    locale,
+                    primaryDisplayUnit.unit,
+                    true,
+                  ),
               }}
               enableSlices="x"
               enableCrosshair
@@ -274,11 +306,11 @@ export function TrendChart({
                   >
                     <strong>{timeLabel(point.id)}</strong>
                     <div style={{ color: tokens.series[color] }}>
-                      {metricLabel(metric)}: {valueLabel(point.primary, unit)}
+                      {metricLabel(metric)}: {valueLabel(point.primary, primaryDisplayUnit)}
                     </div>
                     {second && (
                       <div style={{ color: tokens.series[secondColor] }}>
-                        {metricLabel(second)}: {valueLabel(point.secondary, secondValueUnit)}
+                        {metricLabel(second)}: {valueLabel(point.secondary, secondaryDisplayUnit)}
                       </div>
                     )}
                   </div>
@@ -288,16 +320,44 @@ export function TrendChart({
           </Suspense>
         )}
       </div>
-      <details className={scopedClasses(styleModules, "chart-observations")}>
-        <summary id={summaryId}>
-          {t("shell.chart.observations", {
+      <div className={scopedClasses(styleModules, "chart-data-footer")}>
+        <p id={summaryId}>
+          {t("shell.chart.observations.summary", {
             metric: metricLabel(metric),
             valid: primaryCount,
             total: plot.points.length,
           })}
           {second &&
-            ` · ${t("shell.chart.observations", { metric: metricLabel(second), valid: secondaryCount, total: plot.points.length })}`}
-        </summary>
+            ` · ${t("shell.chart.observations.summary", { metric: metricLabel(second), valid: secondaryCount, total: plot.points.length })}`}
+        </p>
+        <ActionButton
+          size="sm"
+          variant="ghost"
+          aria-describedby={summaryId}
+          disabled={plot.points.length === 0}
+          onClick={() => setDataDialogOpen(true)}
+        >
+          {t("shell.chart.observations.view")}
+        </ActionButton>
+      </div>
+      <DialogFrame
+        isOpen={isDataDialogOpen}
+        onOpenChange={setDataDialogOpen}
+        title={metricLabel(metric)}
+        subtitle={t("shell.chart.observations.summary", {
+          metric: metricLabel(metric),
+          valid: primaryCount,
+          total: plot.points.length,
+        })}
+        width={760}
+        maxHeight="min(90dvh, 760px)"
+        purpose="info"
+        actions={
+          <ActionButton onClick={() => setDataDialogOpen(false)}>
+            {t("shell.chart.observations.close")}
+          </ActionButton>
+        }
+      >
         <div className={scopedClasses(styleModules, "chart-table-scroll")}>
           <table>
             <caption>{t("shell.chart.table")}</caption>
@@ -306,12 +366,12 @@ export function TrendChart({
                 <th scope="col">{t("shell.chart.time")}</th>
                 <th scope="col">
                   {metricLabel(metric)}
-                  {unit}
+                  {primaryDisplayUnit.unit && ` ${primaryDisplayUnit.unit}`}
                 </th>
                 {second && (
                   <th scope="col">
                     {metricLabel(second)}
-                    {secondValueUnit}
+                    {secondaryDisplayUnit.unit && ` ${secondaryDisplayUnit.unit}`}
                   </th>
                 )}
               </tr>
@@ -320,14 +380,14 @@ export function TrendChart({
               {plot.points.map((point) => (
                 <tr key={point.id}>
                   <th scope="row">{timeLabel(point.id)}</th>
-                  <td>{valueLabel(point.primary, unit)}</td>
-                  {second && <td>{valueLabel(point.secondary, secondValueUnit)}</td>}
+                  <td>{valueLabel(point.primary, primaryDisplayUnit)}</td>
+                  {second && <td>{valueLabel(point.secondary, secondaryDisplayUnit)}</td>}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </details>
+      </DialogFrame>
     </div>
   );
 }

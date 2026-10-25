@@ -9,6 +9,12 @@ import {
   editDraftSession,
 } from "../../src/features/rules/editor/ruleEditing";
 import { validateRuleDraft } from "../../src/features/rules/editor/rulePolicy";
+import { materializeRuleDraft } from "../../src/features/rules/editor/ruleMaterialization";
+import {
+  beginRuleSetEditing,
+  prepareRuleSetCandidate,
+} from "../../src/features/rules/editor/ruleSetEditing";
+import { candidateToWire } from "../../src/features/rules/api/ruleSetMapper";
 import { validRuleValue } from "../../src/features/rules/model/ruleValue";
 import { ruleDraftPreview } from "../../src/features/rules/presentation/ruleDraftPreview";
 
@@ -44,6 +50,145 @@ test("rule drafting preserves all five category shapes but never aliases the bas
   const param = fixture(RULE_KIND.ParamFlow);
   assert.ok(param.draft.paramFlowItemList.every((item) => item.formKey));
   assert.ok(!JSON.stringify(ruleDraftPreview(param)).includes("formKey"));
+});
+
+test("rule candidate materialization omits inactive fields and keeps form identities out of wire", () => {
+  const flow = fixture(RULE_KIND.Flow);
+  const materializedFlow = materializeRuleDraft({
+    ...flow,
+    draft: {
+      ...flow.draft,
+      refResource: "stale-reference",
+      warmUpPeriodSec: "not-a-number",
+      maxQueueingTimeMs: "not-a-number",
+      clusterConfig: {
+        thresholdType: -1,
+        fallbackToLocalWhenFail: true,
+        sampleCount: "not-a-number",
+        windowIntervalMs: "not-a-number",
+      },
+    },
+  });
+  assert.equal(materializedFlow.valid, true);
+  const flowValue = materializedFlow.rule.value;
+  for (const field of ["refResource", "warmUpPeriodSec", "maxQueueingTimeMs", "clusterConfig"])
+    assert.equal(Object.hasOwn(flowValue, field), false, `${field} is inactive and omitted`);
+  const activeFlow = materializeRuleDraft({
+    ...flow,
+    draft: {
+      ...flow.draft,
+      strategy: SentinelCode.FLOW_STRATEGY_CHAIN,
+      refResource: "upstream-resource",
+      controlBehavior: SentinelCode.FLOW_BEHAVIOR_WARM_UP,
+      warmUpPeriodSec: "30",
+      maxQueueingTimeMs: "stale-value",
+      clusterMode: true,
+      clusterConfig: {
+        thresholdType: 0,
+        fallbackToLocalWhenFail: true,
+        sampleCount: "10",
+        windowIntervalMs: "1000",
+      },
+    },
+  });
+  assert.equal(activeFlow.valid, true);
+  assert.equal(activeFlow.rule.value.refResource, "upstream-resource");
+  assert.equal(activeFlow.rule.value.warmUpPeriodSec, 30);
+  assert.equal(Object.hasOwn(activeFlow.rule.value, "maxQueueingTimeMs"), false);
+  assert.deepEqual(activeFlow.rule.value.clusterConfig, {
+    thresholdType: 0,
+    fallbackToLocalWhenFail: true,
+    sampleCount: 10,
+    windowIntervalMs: 1000,
+  });
+
+  const degrade = fixture(RULE_KIND.Degrade);
+  const activeDegradeRatio = materializeRuleDraft(degrade);
+  assert.equal(activeDegradeRatio.valid, true);
+  assert.equal(activeDegradeRatio.rule.value.slowRatioThreshold, 0.3);
+  const inactiveDegradeRatio = materializeRuleDraft({
+    ...degrade,
+    draft: {
+      ...degrade.draft,
+      grade: SentinelCode.DEGRADE_ERROR_RATIO,
+      count: 0.4,
+      slowRatioThreshold: "stale-value",
+    },
+  });
+  assert.equal(inactiveDegradeRatio.valid, true);
+  assert.equal(Object.hasOwn(inactiveDegradeRatio.rule.value, "slowRatioThreshold"), false);
+
+  const flowWire = candidateToWire({
+    bindingId: "flow-binding",
+    profile: "sentinel-java-v1",
+    kind: RULE_KIND.Flow,
+    baseVersionId: null,
+    baseChecksum: "flow-baseline",
+    sourceRevision: null,
+    rules: [{ recordId: null, rule: materializedFlow.rule }],
+  });
+  assert.deepEqual(flowWire.rules[0].rule.value, flowValue);
+  const activeFlowWire = candidateToWire({
+    bindingId: "flow-binding",
+    profile: "sentinel-java-v1",
+    kind: RULE_KIND.Flow,
+    baseVersionId: null,
+    baseChecksum: "flow-baseline",
+    sourceRevision: null,
+    rules: [{ recordId: null, rule: activeFlow.rule }],
+  });
+  assert.deepEqual(activeFlowWire.rules[0].rule.value, activeFlow.rule.value);
+
+  const paramEntry = RULE_FIXTURES.find((entry) => entry.ruleType === RULE_KIND.ParamFlow);
+  const paramSnapshot = {
+    binding: {
+      id: "param-binding",
+      environmentId: "test-environment",
+      appId: paramEntry.app,
+      kind: RULE_KIND.ParamFlow,
+      profile: "sentinel-java-v1",
+      sourceId: "test-source",
+      sourceLabel: "Nacos",
+      location: "redacted",
+    },
+    versionId: "param-version",
+    checksum: "param-baseline",
+    sourceRevision: "source-revision-1",
+    asOfMs: 1,
+    records: [
+      {
+        id: "param-record",
+        rule: { kind: RULE_KIND.ParamFlow, value: paramEntry.sentinelRule },
+      },
+    ],
+  };
+  const editing = beginRuleSetEditing(paramSnapshot);
+  assert.match(editing.records[0].rule.draft.paramFlowItemList[0].formKey, /param-record/);
+  const prepared = prepareRuleSetCandidate(editing);
+  assert.equal(prepared.valid, true);
+  const paramWire = candidateToWire(prepared.candidate);
+  const wireItems = paramWire.rules[0].rule.value.paramFlowItemList;
+  assert.deepEqual(Object.keys(wireItems[0]).sort(), ["classType", "count", "object"]);
+  assert.doesNotMatch(JSON.stringify(paramWire), /formKey/);
+  assert.throws(
+    () =>
+      candidateToWire({
+        ...prepared.candidate,
+        rules: [
+          {
+            ...prepared.candidate.rules[0],
+            rule: {
+              ...prepared.candidate.rules[0].rule,
+              value: {
+                ...prepared.candidate.rules[0].rule.value,
+                paramFlowItemList: [{ ...wireItems[0], formKey: "ui-only" }],
+              },
+            },
+          },
+        ],
+      }),
+    /formKey/,
+  );
 });
 
 test("rule session resolves a changed target before rendering and cannot patch a different category", () => {

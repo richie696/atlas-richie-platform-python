@@ -156,8 +156,12 @@ test('SETUP-SECRET: switching provider/auth/database drops irrelevant secrets an
   const consul=changeSetupSource(draft,'consul');assert.deepEqual(consul.sourceCredentials,INITIAL_SETUP_DRAFT.sourceCredentials);
   assert.deepEqual(consul.source,INITIAL_SETUP_DRAFT.source);assert.deepEqual(changeSetupSource(consul,'nacos').sourceCredentials,INITIAL_SETUP_DRAFT.sourceCredentials);
   const sqlite=changeSetupDatabase(draft,'sqlite');assert.equal(sqlite.database.password,'');assert.equal(sqlite.database.host,'');assert.equal(sqlite.database.username,'');
-  assert.equal(changeSetupDatabase(sqlite,'postgresql').database.password,'');
-  assert.equal(changeSetupDatabase(draft,'mysql').databasePort,'3306');assert.equal(changeSetupDatabase(draft,'mysql').database.password,'');
+  const sqliteToPostgresql=changeSetupDatabase(sqlite,'postgresql');assert.equal(sqliteToPostgresql.database.password,'');assert.equal(sqliteToPostgresql.database.username,'');
+  const postgresqlToMysql=changeSetupDatabase(draft,'mysql');assert.equal(postgresqlToMysql.databasePort,'3306');assert.equal(postgresqlToMysql.database.password,'');assert.equal(postgresqlToMysql.database.username,'');
+  assert.equal(postgresqlToMysql.database.host,draft.database.host);assert.equal(postgresqlToMysql.database.name,draft.database.name);
+  const mysqlToPostgresql=changeSetupDatabase(postgresqlToMysql,'postgresql');assert.equal(mysqlToPostgresql.database.password,'');assert.equal(mysqlToPostgresql.database.username,'');
+  assert.equal(mysqlToPostgresql.database.host,draft.database.host);assert.equal(mysqlToPostgresql.database.name,draft.database.name);
+  assert.equal(draft.database.username,'operator');assert.equal(draft.database.password,'SYNTHETIC-DB');
   assert.equal(draft.database.password,'SYNTHETIC-DB');assert.equal(draft.sourceCredentials.password,'SYNTHETIC-NACOS');
 });
 test('SETUP-SECRET: discard/completion clears every credential field without mutating safe setup context',()=>{

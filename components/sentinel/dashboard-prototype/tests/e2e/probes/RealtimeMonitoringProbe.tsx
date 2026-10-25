@@ -77,7 +77,9 @@ export function createRealtimeProbeTopology() {
       },
     },
     { read: access.getSnapshot, subscribe: access.subscribe },
-    { intervalMs: 500, clock: () => nowMs },
+    // Match the product polling cadence so an offline->online test can assert
+    // the explicit retry path before an automatic refresh races the UI action.
+    { intervalMs: 5_000, clock: () => nowMs },
   );
   return {
     monitor,

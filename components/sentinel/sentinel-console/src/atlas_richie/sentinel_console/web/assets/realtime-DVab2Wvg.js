@@ -1,0 +1,1 @@
+const t={"realtime.intro.description":"用同一时间轴观察流量、响应时间、拦截与资源压力的先后关系。","realtime.intro.title":"实时监控"};export{t as default};

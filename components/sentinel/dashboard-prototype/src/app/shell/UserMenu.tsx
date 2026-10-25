@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { IDENTITY_ROLE, type SessionIdentity } from "../../features/identity/authentication";
 import { ActionButton } from "../../shared/ui/ActionButton";
 import type { Navigate } from "../../shared/types/dashboard";
-import { sessionShortcutRoute } from "../router/navigation";
+import { ROUTE } from "../router/route.constants";
 import styles from "./AppShell.module.scss";
 
 /** Session controls rendered only from the app's confirmed, immutable identity snapshot. */
@@ -25,8 +25,6 @@ export function UserMenu({
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const menuId = useId();
-  const target = sessionShortcutRoute(canAdminister);
-  const targetLabel = t(canAdminister ? "shell.nav.accounts" : "shell.nav.changePassword");
   const roleLabel = t(
     identity.roleId === IDENTITY_ROLE.Admin ? "roles.role.admin.title" : "roles.role.view.title",
   );
@@ -80,11 +78,22 @@ export function UserMenu({
             className={styles["user-menu-action"]}
             onClick={() => {
               setOpen(false);
-              navigate(target);
+              navigate(ROUTE.ChangePassword);
             }}
           >
-            {targetLabel}
+            {t("shell.nav.changePassword")}
           </ActionButton>
+          {canAdminister && (
+            <ActionButton
+              className={styles["user-menu-action"]}
+              onClick={() => {
+                setOpen(false);
+                navigate(ROUTE.Accounts);
+              }}
+            >
+              {t("shell.nav.accounts")}
+            </ActionButton>
+          )}
           <ActionButton
             className={styles["user-menu-action"]}
             disabled={isLoggingOut}

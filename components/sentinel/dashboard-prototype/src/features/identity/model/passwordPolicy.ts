@@ -5,19 +5,21 @@
  * ----
  * 本模块不依赖 React、语言包和网络，只回答「这组密码字段是否满足规则」。
  *
- * 旧实现把规则内联在 `ChangePasswordPage` 的 submit 处理器里，于是「至少 12 位」这个
+ * 旧实现把规则内联在 `ChangePasswordPage` 的 submit 处理器里，于是密码长度这个
  * 领域约束同时出现在三个地方（改密页、新建账号对话框、初始化向导），三份判断可能
  * 悄悄漂移，而且每份都直接产出已翻译的中文字符串，无法单测。
  *
  * 校验结果用**结构化问题**（消息键 + 插值参数）而不是已翻译字符串：翻译发生在 UI 层，
- * 参数（`min`）由常量注入，界面文案不需要重复「12」这个魔法值。
+ * 参数（`min` / `max`）由常量注入，界面文案不需要重复长度魔法值。
  */
 import { WRITE_ONLY_SECRET_MAX_LENGTH } from "../../../shared/model/secretLimits";
 
 /** 密码最小长度。新建账号、改密与初始化内置管理员共用这一条。 */
-export const PASSWORD_MIN_LENGTH = 12;
-/** 密码最大长度，与写入式凭证的 UTF-16 wire 边界共用。 */
-export const PASSWORD_MAX_LENGTH = WRITE_ONLY_SECRET_MAX_LENGTH;
+export const PASSWORD_MIN_LENGTH = 8;
+/** Password maximum measured in UTF-16 code units; unrelated secret fields keep their own limits. */
+export const PASSWORD_MAX_LENGTH = 32;
+/** Current credentials keep the wire ceiling so legacy longer passwords remain changeable. */
+export const CURRENT_PASSWORD_MAX_LENGTH = WRITE_ONLY_SECRET_MAX_LENGTH;
 
 /**
  * 身份 feature 各表单校验共用的**结构化问题**形状。
@@ -61,8 +63,8 @@ export const EMPTY_PASSWORD_CHANGE: PasswordChangeDraft = Object.freeze({
  */
 export function validatePasswordChange(draft: PasswordChangeDraft): readonly PasswordIssue[] {
   if (!draft.current) return [{ key: "password.currentRequired" }];
-  if (draft.current.length > PASSWORD_MAX_LENGTH) {
-    return [{ key: "password.tooLong", params: { max: PASSWORD_MAX_LENGTH } }];
+  if (draft.current.length > CURRENT_PASSWORD_MAX_LENGTH) {
+    return [{ key: "password.tooLong", params: { max: CURRENT_PASSWORD_MAX_LENGTH } }];
   }
   if (draft.next.length < PASSWORD_MIN_LENGTH) {
     return [{ key: "password.tooShort", params: { min: PASSWORD_MIN_LENGTH } }];

@@ -6,6 +6,7 @@ import {
   navigationItemsForAccess,
   routeAfterAuthentication,
   sessionShortcutRoute,
+  shouldKeepLoginEntryMounted,
 } from "../../src/app/router/navigation";
 import {
   accessFor,
@@ -146,6 +147,30 @@ test("F4.20 setup route preservation requires a previously confirmed open and au
     }),
     false,
   );
+});
+test("F4.22 login route keeps its owner mounted to complete confirmed session and setup transitions", () => {
+  assert.equal(
+    shouldKeepLoginEntryMounted({ phase: "resolved", facts: { kind: "anonymous" } }, false),
+    true,
+  );
+  assert.equal(
+    shouldKeepLoginEntryMounted({
+      phase: "resolved",
+      facts: { kind: "authenticated", identity: { accountId: "account-1" } },
+    }, false),
+    true,
+  );
+  assert.equal(
+    shouldKeepLoginEntryMounted({
+      phase: "resolved",
+      facts: { kind: "uninitialized", setupAvailable: true, operatorAuthorized: false },
+    }, false),
+    true,
+  );
+  assert.equal(shouldKeepLoginEntryMounted({ phase: "checking" }, true), true);
+  assert.equal(shouldKeepLoginEntryMounted({ phase: "unavailable" }, true), true);
+  assert.equal(shouldKeepLoginEntryMounted({ phase: "checking" }, false), false);
+  assert.equal(shouldKeepLoginEntryMounted({ phase: "unavailable" }, false), false);
 });
 test("F4.13 incident filters and opaque cursors round-trip only on the faults route", () => {
   const incidentContext = {

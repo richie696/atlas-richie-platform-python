@@ -4,10 +4,6 @@ import { describe, it } from "node:test";
 import { createAccountStore } from "../../src/features/identity/state/accountStore";
 import { ACCOUNT_STATUS, IDENTITY_ROLE } from "../../src/features/identity/model/account";
 import {
-  findApplication,
-  findInstance,
-} from "../../src/features/applications/model/instancePolicy";
-import {
   resolveAppIdForRoute,
   ROUTE,
   ALL_APPLICATIONS,
@@ -75,18 +71,16 @@ describe("F0.3 account initialization and mutation ownership", () => {
 });
 
 describe("F0.4 selection is not an implicit permission to use another target", () => {
-  it("empty directories and explicit missing targets remain missing", () => {
-    assert.equal(findApplication([], "missing"), null);
-    assert.equal(findApplication([{ id: "present" }], "missing"), null);
-    assert.equal(findInstance([{ id: "present" }], "missing"), null);
-  });
   it("application observations use the authorized catalog; only single-target routes resolve a default", () => {
     assert.equal(
       resolveAppIdForRoute(ROUTE.Applications, ALL_APPLICATIONS, ["present"]),
       ALL_APPLICATIONS,
     );
     assert.equal(resolveAppIdForRoute(ROUTE.Applications, "missing", ["present"]), "missing");
-    assert.equal(resolveAppIdForRoute(ROUTE.Rules, ALL_APPLICATIONS, ["present"]), ALL_APPLICATIONS);
+    assert.equal(
+      resolveAppIdForRoute(ROUTE.Rules, ALL_APPLICATIONS, ["present"]),
+      ALL_APPLICATIONS,
+    );
     assert.equal(resolveAppIdForRoute(ROUTE.Rules, ALL_APPLICATIONS, []), ALL_APPLICATIONS);
   });
 });

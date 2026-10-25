@@ -1,5 +1,6 @@
 /** File ownership is independent of i18next's flat runtime namespace. */
 export const MESSAGE_OWNERS = Object.freeze({
+  documentation: ["documentation"],
   applications: ["applications"],
   faults: ["faults"],
   identity: [

@@ -30,7 +30,7 @@ export function sourceCheckFromWire(
 export function sourceOperationFromWire(
   value: z.infer<typeof SourceOperationObservationSchema>,
 ): SourceOperationObservation {
-  if (value.status === "completed") return value;
+  if (value.status === "completed") return "record" in value ? value : { ...value };
   if (value.status === "rejected")
     return { ...value, reason: value.reason === "not_found" ? "not-found" : value.reason };
   return { ...value, status: value.status === "not_found" ? "not-found" : value.status };

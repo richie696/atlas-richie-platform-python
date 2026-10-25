@@ -1,0 +1,1 @@
+const e={"realtime.intro.description":"Watch traffic, response time, blocking and resource pressure on one timeline, in the order they happen.","realtime.intro.title":"Live monitoring"};export{e as default};

@@ -1,7 +1,15 @@
 import { instantToMilliseconds, millisecondsToInstant } from "../../../core/api/protocol/common";
 import type { z } from "zod";
-import type { BindingPage, BindingQuery } from "../model/ruleDirectory";
-import type { RuleBindingRegistration } from "../model/ruleBindingRegistration";
+import type {
+  BindingPage,
+  BindingQuery,
+  RuleCatalogPage,
+  RuleCatalogRefreshResult,
+} from "../model/ruleDirectory";
+import type {
+  RuleBindingRegistration,
+  RuleBindingRegistrationReceipt,
+} from "../model/ruleBindingRegistration";
 import type { RuleSetCandidate, RuleSetCollection, RuleSetSnapshot } from "../model/ruleSet";
 import type {
   PublicationReceiptPage,
@@ -17,10 +25,15 @@ import type {
   RuleValidationReport,
   StoredRuleDraft,
 } from "../model/ruleSetOperations";
+import type { TypedRuleValue } from "../model/ruleValue";
 import {
   ActivationPlanSchema,
   PublicationReceiptPageSchema,
   RuleBindingPageSchema,
+  RuleCatalogPageSchema,
+  RuleCatalogRefreshResultSchema,
+  RuleValueSchema,
+  RuleBindingRegistrationReceiptSchema,
   RuleOperationObservationSchema,
   RulePublicationSchema,
   RuleSetCandidateSchema,
@@ -63,6 +76,71 @@ export function bindingPageFromWire(input: unknown): BindingPage {
   };
 }
 
+/** Validate the catalog response and construct the feature-owned read model. */
+export function ruleCatalogPageFromWire(input: unknown): RuleCatalogPage {
+  const value = RuleCatalogPageSchema.parse(input);
+  return {
+    query: { ...value.query },
+    asOf: value.asOf,
+    coverage: value.coverage,
+    bindings: { ...value.bindings },
+    total: value.total,
+    hasMore: value.hasMore,
+    items: value.items.map((item) => ({
+      binding: { ...item.binding },
+      record: {
+        id: item.record.id,
+        rule: typedRuleValueFromWire(item.record.rule),
+      },
+      snapshot: { ...item.snapshot },
+      read: { ...item.read },
+    })),
+    issues: value.issues.map((issue) => ({
+      binding: { ...issue.binding },
+      reason: issue.reason,
+      lastAttemptAt: issue.lastAttemptAt,
+      stale: issue.stale,
+    })),
+  };
+}
+
+/** Preserve the discriminator/value relationship when mapping rule values. */
+function typedRuleValueFromWire(value: z.infer<typeof RuleValueSchema>): TypedRuleValue {
+  switch (value.kind) {
+    case "flow":
+      return { kind: value.kind, value: { ...value.value } };
+    case "degrade":
+      return { kind: value.kind, value: { ...value.value } };
+    case "system":
+      return { kind: value.kind, value: { ...value.value } };
+    case "authority":
+      return { kind: value.kind, value: { ...value.value } };
+    case "param":
+      return {
+        kind: value.kind,
+        value: {
+          ...value.value,
+          paramFlowItemList: value.value.paramFlowItemList.map((item) => ({ ...item })),
+        },
+      };
+    default: {
+      const unreachable: never = value;
+      return unreachable;
+    }
+  }
+}
+
+/** Validate and copy the refresh receipt into its feature-owned model. */
+export function ruleCatalogRefreshFromWire(input: unknown): RuleCatalogRefreshResult {
+  const value = RuleCatalogRefreshResultSchema.parse(input);
+  return {
+    scope: { ...value.scope },
+    asOf: value.asOf,
+    coverage: value.coverage,
+    bindings: { ...value.bindings },
+  };
+}
+
 /** Converts the feature-owned registration command to its strict Console wire body. */
 export function bindingRegistrationToWire(command: RuleBindingRegistration) {
   return {
@@ -76,6 +154,11 @@ export function bindingRegistrationToWire(command: RuleBindingRegistration) {
     sourceRevision: command.sourceRevision,
     target: { ...command.target },
   };
+}
+
+/** Parses the narrow safe receipt used to resolve an unknown binding-create outcome. */
+export function bindingRegistrationReceiptFromWire(input: unknown): RuleBindingRegistrationReceipt {
+  return RuleBindingRegistrationReceiptSchema.parse(input);
 }
 
 export function ruleSetSnapshotFromWire(input: unknown): RuleSetSnapshot {

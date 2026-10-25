@@ -15,6 +15,7 @@ interface Props {
   readonly bindingId: string;
   readonly resource: ReturnType<typeof createStoredDraftDirectory>;
   readonly workflow: ReturnType<typeof createRuleDraftWorkflow>;
+  readonly onOpened?: () => void;
 }
 /** Stored drafts are independent from live snapshots. Revocation removes both read facts and unsent discard intentions. */
 export function StoredDraftCatalog(props: Props) {
@@ -29,7 +30,7 @@ export function StoredDraftCatalog(props: Props) {
     />
   );
 }
-function AuthorizedCatalog({ bindingId, resource, workflow }: Props) {
+function AuthorizedCatalog({ bindingId, resource, workflow, onOpened }: Props) {
   const state = useExternalSnapshot(resource),
     editing = useExternalSnapshot(workflow),
     { t, i18n } = useTranslation();
@@ -48,6 +49,7 @@ function AuthorizedCatalog({ bindingId, resource, workflow }: Props) {
     try {
       await workflow.openDraft(id, discard);
       setIntent(null);
+      onOpened?.();
     } catch {
       setFailed(true);
     }

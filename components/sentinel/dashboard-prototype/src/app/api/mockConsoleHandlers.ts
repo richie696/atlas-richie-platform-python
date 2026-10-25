@@ -3,6 +3,7 @@ import { createFleetMockHandlers } from "../../features/overview/mock";
 import { createApplicationsMockHandlers } from "../../features/applications/mock";
 import { createRealtimeMockHandlers } from "../../features/realtime/mock";
 import { createIncidentMockHandlers } from "../../features/faults/mock";
+import { createHostAssociationMockHandlers } from "../../features/hosts/mock";
 import { createSystemMockHandlers } from "../../features/system/mock";
 import { createRuleSetMockHandlers } from "../../features/rules/mock";
 import {
@@ -24,6 +25,7 @@ export function createAppConsoleMockAssembly(nowMs: number = MOCK_SCENARIO_NOW_M
   const fleetHandlers = createFleetMockHandlers(MOCK_APPLICATION_SCENARIO);
   const realtimeHandlers = createRealtimeMockHandlers(MOCK_OBSERVATION_SCENARIO);
   const incidentHandlers = createIncidentMockHandlers(MOCK_INCIDENT_SCENARIO, mockClock);
+  const hostAssociationMock = createHostAssociationMockHandlers(mockClock);
   const identityScenario = createMockIdentityScenario(
     import.meta.env?.VITE_CONSOLE_MOCK_BOOTSTRAP_PROFILE ?? MOCK_BOOTSTRAP_PROFILE.Initialized,
   );
@@ -55,6 +57,7 @@ export function createAppConsoleMockAssembly(nowMs: number = MOCK_SCENARIO_NOW_M
       ...identityHandlers,
       ...accountHandlers,
       ...fleetHandlers,
+      ...hostAssociationMock.handlers,
     ]),
   });
 }

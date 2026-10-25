@@ -89,7 +89,7 @@ export function Filters({
   }));
 
   return (
-    <div className={scopedClasses(styleModules, "filters")}>
+    <div className={scopedClasses(styleModules, "filters")} data-shared-filters>
       <Select
         label={text.environment}
         value={text.production}

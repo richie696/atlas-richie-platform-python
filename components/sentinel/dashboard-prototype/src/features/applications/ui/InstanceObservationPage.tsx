@@ -31,6 +31,7 @@ export function InstanceObservationPage({
   environments,
   applications,
   navigate,
+  onShowHosts,
   clock,
 }: {
   readonly resources: {
@@ -45,6 +46,7 @@ export function InstanceObservationPage({
   readonly environments: readonly ObservationOption[];
   readonly applications: readonly ObservationOption[];
   readonly navigate: Navigate;
+  readonly onShowHosts?: () => void;
   readonly clock?: () => number;
 }) {
   const { t } = useTranslation();
@@ -68,6 +70,11 @@ export function InstanceObservationPage({
         eyebrow="APPLICATIONS / INSTANCES"
         title={t("applications.intro.title")}
         description={t("applications.intro.description")}
+        aside={
+          onShowHosts ? (
+            <ActionButton onClick={onShowHosts}>{t("applications.hosts.hostsTab")}</ActionButton>
+          ) : null
+        }
       />
       <InstanceCatalogFilters
         key={instanceCatalogKey(query)}

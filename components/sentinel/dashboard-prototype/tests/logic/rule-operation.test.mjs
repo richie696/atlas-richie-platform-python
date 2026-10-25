@@ -116,6 +116,49 @@ test("RULE-OPERATION: unknown ACK requires original lookup; not-found/pending/wr
   assert.equal(counts.lookups, 4);
   owner.dispose();
 });
+test("RULE-OPERATION-INSPECT-CONCURRENCY: unresolved rule write allows one correlated inspection and no resend", async () => {
+  let resolveLookup;
+  const { owner, counts, last } = topology({
+    write: async () => {
+      throw new AppError(AppErrorKind.NETWORK, "PRIVATE-RAW-ERROR");
+    },
+    lookup: (mutation) =>
+      new Promise((resolve) => {
+        resolveLookup = (value) => resolve(value(mutation));
+      }),
+  });
+
+  await assert.rejects(owner.run(input()));
+  assert.equal(owner.getSnapshot().command.status, "result-unknown");
+
+  const inspection = owner.inspect();
+  await Promise.resolve();
+  assert.equal(owner.getSnapshot().inspecting, true);
+  await assert.rejects(owner.inspect(), (error) => error.kind === AppErrorKind.DUPLICATE);
+  await assert.rejects(owner.run(input()), (error) => error.kind === AppErrorKind.DUPLICATE);
+  assert.equal(counts.writes, 1);
+  assert.equal(counts.lookups, 1);
+
+  resolveLookup((mutation) => ({
+    requestKey: mutation.requestKey,
+    bindingId: mutation.bindingId,
+    status: "pending",
+  }));
+  await inspection;
+  assert.equal(owner.getSnapshot().inspecting, false);
+  assert.equal(owner.getSnapshot().command.status, "result-unknown");
+  assert.equal(owner.getSnapshot().operation.requestKey, last().requestKey);
+  await assert.rejects(owner.run(input()), (error) => error.kind === AppErrorKind.DUPLICATE);
+
+  const completedInspection = owner.inspect();
+  await Promise.resolve();
+  assert.equal(counts.lookups, 2);
+  resolveLookup((mutation) => receipt(mutation));
+  await completedInspection;
+  assert.equal(owner.getSnapshot().command.status, "success");
+  assert.equal(counts.writes, 1);
+  owner.dispose();
+});
 test("RULE-OPERATION: pending acceptance is unknown, while durable rejection is terminal even for unavailable source", async () => {
   const pending = topology({
     write: async (mutation) => ({

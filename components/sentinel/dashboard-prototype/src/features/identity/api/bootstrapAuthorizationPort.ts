@@ -8,4 +8,6 @@ export interface BootstrapAuthorizationPort {
     options?: BootstrapReadOptions,
   ) => Promise<BootstrapOperatorGate>;
   readonly authorize: (code: string, signal: AbortSignal) => Promise<void>;
+  /** Request the loopback-only first-run path; remote peers are rejected. */
+  readonly authorizeLocal: (signal: AbortSignal) => Promise<void>;
 }

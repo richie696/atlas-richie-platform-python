@@ -10,6 +10,7 @@ import {
   CONSOLE_ERROR_STATUS,
   CONSOLE_HEADER,
   CsrfNonceSchema,
+  RateLimitedConsoleErrorSchema,
   RequestKeySchema,
 } from "../protocol/common";
 import type { ConsoleCallOptions, ConsoleEndpoint, ConsoleTransport } from "./consoleEndpoint";
@@ -25,6 +26,7 @@ const LEGACY_HEADERS = [
   "x-gateway-protocol-version",
   "authorization",
 ] as const;
+const isConsoleApiPath = (path: string) => /^\/api\/v[12]\//.test(path);
 const validCsrf = (value: string) => CsrfNonceSchema.safeParse(value).success;
 interface RequestObservation {
   readonly owner: string;
@@ -115,7 +117,7 @@ export function createConsoleTransport(options: ConsoleTransportOptions): Consol
     requestInterceptors: [
       (request) => {
         const resolved = new URL(request.url);
-        if (resolved.origin !== base.origin || !resolved.pathname.startsWith("/api/v1/"))
+        if (resolved.origin !== base.origin || !isConsoleApiPath(resolved.pathname))
           throw new AppError(AppErrorKind.PROTOCOL, "Console endpoint escaped its API origin");
         const headers = new Headers(request.headers);
         for (const name of LEGACY_HEADERS) headers.delete(name);
@@ -138,12 +140,15 @@ export function createConsoleTransport(options: ConsoleTransportOptions): Consol
       if (!RequestKeySchema.safeParse(ticket).success || requests.has(ticket))
         throw new AppError(AppErrorKind.PROTOCOL, "Invalid Console request correlation");
       if (
-        !endpoint.url.path.startsWith("/api/v1/") ||
+        !isConsoleApiPath(endpoint.url.path) ||
         endpoint.url.path.includes("?") ||
         endpoint.url.path.includes("#") ||
         endpoint.url.needEncryption ||
         endpoint.url.needDuplicateCheck ||
-        (endpoint.command && endpoint.url.method !== HttpMethod.POST)
+        (endpoint.command &&
+          ![HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH, HttpMethod.DELETE].includes(
+            endpoint.url.method,
+          ))
       )
         throw new AppError(AppErrorKind.PROTOCOL, "Invalid Console endpoint");
       if ((call.pathParams ?? []).some((value) => value === "." || value === ".."))
@@ -204,7 +209,11 @@ export function createConsoleTransport(options: ConsoleTransportOptions): Consol
         )
           throw new AppError(cause.kind, "Console transport unavailable");
         if (cause instanceof AppError && cause.status !== undefined) {
-          const parsed = ConsoleErrorSchema.safeParse(cause.responseBody);
+          const errorSchema =
+            cause.status === CONSOLE_ERROR_STATUS.rate_limited
+              ? RateLimitedConsoleErrorSchema
+              : ConsoleErrorSchema;
+          const parsed = errorSchema.safeParse(cause.responseBody);
           if (
             parsed.success &&
             parsed.data.error.requestId === ticket &&

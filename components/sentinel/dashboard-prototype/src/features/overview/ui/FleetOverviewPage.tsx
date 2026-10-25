@@ -1,10 +1,12 @@
 import { useQueryResource } from "../../../shared/state/useQueryResource";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { QueryResource } from "../../../shared/state/queryResource";
 import type { Navigate } from "../../../shared/types/navigation";
 import { ObservationContextBar } from "../../../shared/ui/observation/ObservationContextBar";
 import { ObservationQueryView } from "../../../shared/ui/observation/ObservationQueryView";
 import { MetricCharts } from "../../../shared/ui/observation/MetricCharts";
+import { MetricUnavailableView } from "../../../shared/ui/observation/MetricUnavailableView";
 import { Intro } from "../../../shared/ui/Intro";
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { fleetQueryKey, type FleetQuery, type FleetSnapshot } from "../model/fleet";
@@ -21,6 +23,8 @@ export function FleetOverviewPage({
   navigate,
   environments,
   applications,
+  catalogUnavailable = false,
+  hostMonitoringSummary,
   clock,
 }: {
   readonly resource: QueryResource<FleetQuery, FleetSnapshot>;
@@ -29,6 +33,8 @@ export function FleetOverviewPage({
   readonly navigate: Navigate;
   readonly environments: readonly ObservationOption[];
   readonly applications: readonly ObservationOption[];
+  readonly catalogUnavailable?: boolean;
+  readonly hostMonitoringSummary?: ReactNode;
   readonly clock?: () => number;
 }) {
   const { t } = useTranslation();
@@ -44,6 +50,13 @@ export function FleetOverviewPage({
         title={t("overview.intro.title")}
         description={t("overview.intro.description")}
       />
+      <ObservationQueryView
+        snapshot={snapshot}
+        onRetry={refresh}
+        showStatusFeedback={!catalogUnavailable}
+      >
+        {() => null}
+      </ObservationQueryView>
       <FleetQueryEditor
         key={key}
         query={query}
@@ -66,7 +79,13 @@ export function FleetOverviewPage({
       >
         {t("observation.refresh")}
       </ActionButton>
-      <ObservationQueryView snapshot={snapshot} onRetry={refresh}>
+      {hostMonitoringSummary}
+      <ObservationQueryView
+        snapshot={snapshot}
+        onRetry={refresh}
+        unavailableContent={<MetricUnavailableView />}
+        showStatusFeedback={false}
+      >
         {(value) => (
           <>
             <FleetSummary snapshot={value} navigate={navigate} />

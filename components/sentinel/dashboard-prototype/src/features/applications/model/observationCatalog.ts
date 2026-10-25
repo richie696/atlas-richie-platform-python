@@ -17,6 +17,27 @@ export interface ObservationCatalog {
   readonly applications: readonly ApplicationOption[];
 }
 /**
+ * Resolve an instance-page environment without coupling its read to the optional selector catalog.
+ * An explicit URL selection remains usable while the catalog is unavailable, but is validated as
+ * soon as an authoritative catalog is present. Implicit selection still requires catalog facts.
+ */
+export function resolveEnvironmentId(
+  catalog: ObservationCatalog | null,
+  requestedEnvironmentId: string | undefined,
+  appId: string | null,
+): string | null {
+  if (requestedEnvironmentId)
+    return catalog === null ||
+      catalog.environments.some((item) => item.id === requestedEnvironmentId)
+      ? requestedEnvironmentId
+      : null;
+
+  if (catalog === null) return null;
+  const appMatches = catalog.applications.filter((application) => application.id === appId);
+  if (appMatches.length === 1) return appMatches[0].environmentId;
+  return catalog.environments.length === 1 ? catalog.environments[0].id : null;
+}
+/**
  * Retain an application only when it belongs to the environment being selected.
  *
  * Returns `null` for the fleet scope or when the current application is absent

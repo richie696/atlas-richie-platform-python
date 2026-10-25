@@ -16,7 +16,6 @@ export {
   SessionProvider,
   useCan,
   useSession,
-  useSessionRoleSetter,
   type Session,
   type SessionRoleId,
 } from "./SessionProvider";

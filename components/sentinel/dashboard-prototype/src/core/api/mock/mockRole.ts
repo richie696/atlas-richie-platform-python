@@ -9,6 +9,17 @@ export type MockRole = "admin" | "view";
 
 let volatilePrincipal: MockRole | null | undefined;
 let volatileStorage: Storage | null | undefined;
+const volatilePasswords = new Map<string, string>();
+
+/** Mock-only credentials stay in memory and never enter browser storage or logs. */
+export function readMockPassword(username: string, fallback: string): string {
+  return volatilePasswords.get(username) ?? fallback;
+}
+
+/** Keep password reset flows coherent inside the explicit in-memory Mock backend. */
+export function writeMockPassword(username: string, password: string): void {
+  volatilePasswords.set(username, password);
+}
 
 export function readMockPrincipal(): MockRole | null {
   if (typeof window === "undefined") return volatilePrincipal ?? null;

@@ -19,6 +19,7 @@ export const OWN_PASSWORD_HTTP_CONTRACT = Object.freeze([
     semanticRules: [
       "Both admin/view may change only their own password; account comes from the current Cookie session.",
       "Requires current password, exact Origin and CSRF; confirmation and target account are forbidden input.",
+      "Password strings must contain Unicode scalar values; a lone surrogate escape is rejected as `400 invalid_request` before password policy or hashing.",
       "An incorrect current password returns `current_password_invalid`; an absent/expired session remains `unauthenticated`.",
       "The current server atomically updates the password hash, revokes every account session, and returns only `reauthenticate`.",
       "Unverifiable response is not replayable; inspecting a session is not proof that the password mutation did or did not commit.",

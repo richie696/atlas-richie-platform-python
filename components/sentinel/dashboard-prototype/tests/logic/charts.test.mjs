@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {buildTrendPlot, formatTrendTime, formatTrendValue, trendTickValues} from "../../src/shared/ui/charts/trendPlot.ts";
+import {buildTrendPlot, formatTrendTime, formatTrendValue, trendDisplayUnit, trendTickValues} from "../../src/shared/ui/charts/trendPlot.ts";
 import {createChartThemeStore} from "../../src/shared/ui/charts/chartThemeStore.ts";
 import {FALLBACK_CHART_TOKENS, buildChartTheme, annotationStyle} from "../../src/shared/ui/charts/chartTheme.ts";
 
@@ -51,6 +51,25 @@ test("F3 charts: locale formatting does not change identity or invent TPS",()=>{
     assert.ok(formatTrendTime(Date.UTC(2026,9,7,1,30),locale,true).length>5);
     assert.ok(formatTrendValue(50,locale,"%",true).endsWith("%"));
   }
+});
+test("F3 charts: byte observations share a readable decimal-scaled unit without changing source data",()=>{
+  assert.deepEqual(trendDisplayUnit("B",[null,900]),{unit:"B",divisor:1});
+  assert.deepEqual(trendDisplayUnit("B",[1000]),{unit:"KB",divisor:1000});
+  assert.deepEqual(trendDisplayUnit("B",[1000 ** 2]),{unit:"MB",divisor:1000 ** 2});
+  const bytes=4_000_000_000;
+  const display=trendDisplayUnit("B",[bytes]);
+  assert.deepEqual(display,{unit:"GB",divisor:1000 ** 3});
+  assert.equal(formatTrendValue(bytes/display.divisor,"en-US",display.unit),"4 GB");
+  const localizedCapacityLabel=formatTrendValue(bytes/display.divisor,"zh-CN",display.unit,true);
+  assert.equal(localizedCapacityLabel,"4 GB","capacity labels must use readable units, not locale compact notation");
+  assert.doesNotMatch(localizedCapacityLabel,/亿|万/);
+  const screenshotValue=40_000_000_000;
+  const screenshotUnit=trendDisplayUnit("bytes",[screenshotValue]);
+  const screenshotAxisLabel=formatTrendValue(screenshotValue/screenshotUnit.divisor,"zh-CN",screenshotUnit.unit,true);
+  assert.equal(screenshotAxisLabel,"40 GB","large host-memory ticks must not render as 亿B");
+  assert.deepEqual(trendDisplayUnit("bytes",[bytes]),display,"Console wire byte unit scales too");
+  assert.deepEqual(trendDisplayUnit(" byte ",[bytes]),display,"unit whitespace is normalized");
+  assert.deepEqual(trendDisplayUnit("%",[bytes]),{unit:"%",divisor:1});
 });
 test("F3 chart theme: immutable snapshots update once per effective skin change and unsubscribe on cleanup",()=>{
   let current=FALLBACK_CHART_TOKENS,calls=0;

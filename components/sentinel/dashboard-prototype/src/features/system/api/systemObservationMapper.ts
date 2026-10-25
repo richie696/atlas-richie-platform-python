@@ -3,15 +3,27 @@ import { instantToMilliseconds, millisecondsToInstant } from "../../../core/api/
 import type {
   AuditPage,
   AuditQuery,
+  AgentReportingObservationPage,
+  IncidentEventObservationPage,
   SystemConnections,
   SystemProtocols,
 } from "../model/systemObservation";
+import type { DeploymentGuidesSnapshot } from "../model/deploymentGuide";
 import type {
   AuditPageSchema,
   AuditQueryParametersSchema,
   SystemConnectionsSchema,
   SystemProtocolsSchema,
+  AgentReportingObservationPageSchema,
+  IncidentEventObservationPageSchema,
+  DeploymentGuidesSchema,
 } from "./systemObservationWire";
+
+export function deploymentGuidesFromWire(
+  value: z.infer<typeof DeploymentGuidesSchema>,
+): DeploymentGuidesSnapshot {
+  return value;
+}
 
 export function systemConnectionsFromWire(
   value: z.infer<typeof SystemConnectionsSchema>,
@@ -34,6 +46,45 @@ export function systemProtocolsFromWire(
       ...item,
       observedAtMs: observedAt === null ? null : instantToMilliseconds(observedAt),
     })),
+  };
+}
+export function agentReportingObservationsFromWire(
+  value: z.infer<typeof AgentReportingObservationPageSchema>,
+): AgentReportingObservationPage {
+  return runtimeProtocolObservationsFromWire(value);
+}
+export function incidentEventObservationsFromWire(
+  value: z.infer<typeof IncidentEventObservationPageSchema>,
+): IncidentEventObservationPage {
+  return runtimeProtocolObservationsFromWire(value);
+}
+function runtimeProtocolObservationsFromWire<
+  Item extends { readonly observedAt: string | null },
+>(value: {
+  readonly asOf: string;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly total: number;
+  readonly items: readonly Item[];
+}): {
+  readonly asOfMs: number;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly total: number;
+  readonly items: readonly (Omit<Item, "observedAt"> & { readonly observedAtMs: number | null })[];
+} {
+  return {
+    asOfMs: instantToMilliseconds(value.asOf),
+    page: value.page,
+    pageSize: value.pageSize,
+    total: value.total,
+    items: value.items.map((item) => {
+      const { observedAt, ...rest } = item;
+      return {
+        ...rest,
+        observedAtMs: observedAt === null ? null : instantToMilliseconds(observedAt),
+      };
+    }),
   };
 }
 export function auditQueryToWire(value: AuditQuery): z.infer<typeof AuditQueryParametersSchema> {

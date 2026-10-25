@@ -15,10 +15,16 @@ import { ObservationContextBar } from "../../../shared/ui/observation/Observatio
 import { ObservationQueryView } from "../../../shared/ui/observation/ObservationQueryView";
 import { MetricCards } from "../../../shared/ui/observation/MetricCards";
 import { MetricCharts } from "../../../shared/ui/observation/MetricCharts";
+import { MetricUnavailableView } from "../../../shared/ui/observation/MetricUnavailableView";
 import type { ObservationOption } from "../../../shared/ui/observation/ObservationFilters";
 import type { ObservedInstance } from "../../applications";
 import { MonitoringControls } from "./MonitoringControls";
 import { MonitoringStatusBar } from "./MonitoringStatusBar";
+import { HostMetricsPanel } from "./HostMetricsPanel";
+import type {
+  HostMetricsQueryResource,
+  HostMetricsSourceResource,
+} from "../application/hostMetricsResources";
 
 /** Only a known access revocation is represented by the owner; don't silently mask a disposed/configuration error. */
 function startMonitoring(monitor: RealtimeMonitor, selection: RealtimeSelection) {
@@ -44,6 +50,9 @@ export function LiveMonitoringPage({
   instanceTargetMissing,
   instanceTargetUnsupported,
   clock,
+  hostMetricsSources,
+  hostMetricsResource,
+  onConfigureHostMetrics,
 }: {
   readonly monitor: RealtimeMonitor;
   readonly selection: RealtimeSelection;
@@ -58,6 +67,9 @@ export function LiveMonitoringPage({
   readonly instanceTargetMissing: boolean;
   readonly instanceTargetUnsupported: boolean;
   readonly clock?: () => number;
+  readonly hostMetricsSources?: HostMetricsSourceResource;
+  readonly hostMetricsResource?: HostMetricsQueryResource;
+  readonly onConfigureHostMetrics?: () => void;
 }) {
   const { t } = useTranslation();
   const snapshot = useExternalSnapshot(monitor);
@@ -100,6 +112,14 @@ export function LiveMonitoringPage({
         title={t("realtime.intro.title")}
         description={t("realtime.intro.description")}
       />
+      <ObservationQueryView
+        snapshot={observation}
+        onRetry={retry}
+        descriptions={readDescriptions}
+        showPartialFeedback={false}
+      >
+        {() => null}
+      </ObservationQueryView>
       <MonitoringControls
         selection={selection}
         onChange={onSelectionChange}
@@ -116,39 +136,52 @@ export function LiveMonitoringPage({
         context={"data" in observation ? observation.data.query.context : selection.context}
         asOfMs={"data" in observation ? observation.data.asOfMs : undefined}
       />
+      {hostMetricsSources && hostMetricsResource && onConfigureHostMetrics && (
+        <HostMetricsPanel
+          environmentId={selection.context.environmentId}
+          selection={selection}
+          sourcesResource={hostMetricsSources}
+          metricsResource={hostMetricsResource}
+          onConfigure={onConfigureHostMetrics}
+        />
+      )}
       {instanceTargetMissing || instanceTargetUnsupported ? (
-        <FeedbackPanel
-          tone="error"
-          copy={{
-            title: t("observation.read.title"),
-            description: t(
-              instanceTargetUnsupported
-                ? "observation.monitor.instanceUnsupported"
-                : "observation.read.targetAbsent",
-            ),
-          }}
-        />
+        <>
+          <FeedbackPanel
+            tone="error"
+            copy={{
+              title: t("observation.read.title"),
+              description: t(
+                instanceTargetUnsupported
+                  ? "observation.monitor.instanceUnsupported"
+                  : "observation.read.targetAbsent",
+              ),
+            }}
+          />
+          <MetricUnavailableView />
+        </>
       ) : queryReady ? (
-        <ObservationQueryView
-          snapshot={observation}
-          onRetry={retry}
-          descriptions={readDescriptions}
-        >
-          {(value) => (
-            <>
-              <MetricCards readings={value.summary} />
-              <MetricCharts bundle={value} />
-            </>
-          )}
-        </ObservationQueryView>
+        <>
+          <ObservationQueryView
+            snapshot={observation}
+            onRetry={retry}
+            descriptions={readDescriptions}
+            unavailableContent={<MetricUnavailableView />}
+            showStatusFeedback={false}
+            showPartialFeedback={false}
+          >
+            {(value) => (
+              <>
+                <MetricCards readings={value.summary} />
+                <MetricCharts bundle={value} />
+              </>
+            )}
+          </ObservationQueryView>
+        </>
       ) : (
-        <FeedbackPanel
-          tone="info"
-          copy={{
-            title: t("observation.read.title"),
-            description: t("observation.read.loading"),
-          }}
-        />
+        <>
+          <MetricUnavailableView />
+        </>
       )}
     </>
   );

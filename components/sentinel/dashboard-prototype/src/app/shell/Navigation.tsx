@@ -26,6 +26,9 @@ export function Navigation({
             type="button"
             className={route === item.id ? "active" : ""}
             onClick={() => navigate(item.id)}
+            onFocus={(event) =>
+              event.currentTarget.scrollIntoView({ block: "nearest", inline: "center" })
+            }
           >
             <Icon size={16} />
             <span>{t(item.i18nKey)}</span>

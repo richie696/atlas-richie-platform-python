@@ -25,6 +25,8 @@ export function MetricCharts({ bundle }: { readonly bundle: MetricBundle }) {
     <div className={styles.charts}>
       {bundle.series.map((series) => {
         const plot = metricPlot(series);
+        const emptyMessage =
+          series.quality === "not_integrated" ? t("observation.chart.notIntegrated") : undefined;
         return (
           <Panel
             key={series.metric}
@@ -35,9 +37,9 @@ export function MetricCharts({ bundle }: { readonly bundle: MetricBundle }) {
               data={plot.points}
               metric={plot.metric}
               unit={plot.unit}
+              emptyMessage={emptyMessage}
               annotations={annotations}
               timeWindow={[bundle.query.context.window.fromMs, bundle.query.context.window.toMs]}
-              timeZone="UTC"
               domain={series.unit === "ratio" ? [0, 100] : undefined}
             />
           </Panel>

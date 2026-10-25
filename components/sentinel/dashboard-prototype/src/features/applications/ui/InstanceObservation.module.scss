@@ -8,6 +8,10 @@
 .filters > * {
   min-width: 0;
 }
+.filter-submit {
+  width: fit-content;
+  justify-self: start;
+}
 .actions {
   display: flex;
   flex-wrap: wrap;

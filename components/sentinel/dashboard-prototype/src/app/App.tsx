@@ -2,6 +2,7 @@ import { AppShell } from "./shell/AppShell";
 import { Header } from "./shell/Header";
 import { StatusBanner } from "./shell/StatusBanner";
 import { Footer } from "./shell/Footer";
+import { AccessPendingHeader } from "./shell/AccessPendingHeader";
 import { accessFor, ROUTE } from "./router/route.constants";
 import { RouteBoundary } from "./router/RouteBoundary";
 import { routeLoaders } from "./router/routes";
@@ -19,7 +20,8 @@ import {
 import { FeedbackPanel } from "../shared/ui/FeedbackPanel";
 import { ActionButton } from "../shared/ui/ActionButton";
 import { useTranslation } from "react-i18next";
-import { mayPreserveAuthorizedSetupRoute } from "./router/navigation";
+import { mayPreserveAuthorizedSetupRoute, shouldKeepLoginEntryMounted } from "./router/navigation";
+import { useConsoleRuntime } from "../core/api/runtime/ConsoleRuntimeProvider";
 
 const routeOptions = Object.freeze({
   defaultAccountId: "",
@@ -27,6 +29,7 @@ const routeOptions = Object.freeze({
 
 /** Compose URL routing with the application shell; page behavior belongs to features. */
 export function App() {
+  const runtime = useConsoleRuntime();
   const route = useHashRoute(routeOptions);
   const locale = useLocale();
   const { workflow: authentication, snapshot: auth } = useAuthentication();
@@ -69,6 +72,7 @@ export function App() {
         accountId,
         locale,
         view,
+        section: context.section,
         environmentId: context.environmentId,
         instanceId: context.instanceId,
         eventId: context.eventId,
@@ -82,6 +86,7 @@ export function App() {
         to: context.to,
         search: context.search,
         returnTo: context.returnTo,
+        embeddedInAppShell: Boolean(identity),
       }}
       onHome={() => navigate(ROUTE.Overview)}
     />
@@ -92,6 +97,7 @@ export function App() {
     // LoginEntryPage owns authenticated/setup transitions through its route-owner callbacks.
     // Keep this app-level effect responsible only for protecting non-public destinations.
     if (currentRoute === ROUTE.Login) return;
+    if (currentRoute === ROUTE.Documentation) return;
     if (decision.kind === "login")
       navigate(
         ROUTE.Login,
@@ -101,6 +107,18 @@ export function App() {
     else if (decision.kind === "setup" && currentRoute !== ROUTE.Setup)
       navigate(ROUTE.Setup, {}, { history: "replace" });
   }, [auth.access, context.returnTo, currentRoute, decision.kind, navigate]);
+
+  useEffect(() => {
+    // A successful self-password reset revokes the current session. Once the
+    // login route is active, resolve that expired snapshot against the server
+    // so LoginEntryPage can render the anonymous login form instead of waiting
+    // forever for a state transition that no longer has an owner.
+    if (currentRoute === ROUTE.Login && auth.access.phase === "expired") {
+      void authentication.restore().catch(() => {
+        // The workflow publishes the unavailable state; the login route exposes retry.
+      });
+    }
+  }, [auth.access.phase, authentication, currentRoute]);
 
   const recovery = () => void authentication.inspectSession().catch(() => {});
   const logoutRecovery =
@@ -121,17 +139,10 @@ export function App() {
             }
           : undefined;
   if (currentRoute === ROUTE.Login) {
-    if (auth.access.phase === "resolved" && auth.access.facts.kind === "anonymous") return page;
-    // Keep the public login owner mounted throughout its own command and
-    // confirmation/recovery projections. Replacing it here would drop
-    // correctable credentials if the server rejects the attempt.
-    if (
-      auth.login.status !== "idle" &&
-      (auth.access.phase === "authenticating" ||
-        auth.access.phase === "checking" ||
-        auth.access.phase === "unavailable")
-    )
-      return page;
+    // Confirmed access must reach LoginEntryPage: its owner effect redirects
+    // authenticated sessions and first-run installations to their safe routes.
+    // Keep it mounted during a command too, so correctable credentials survive.
+    if (shouldKeepLoginEntryMounted(auth.access, auth.login.status !== "idle")) return page;
     if (auth.access.phase === "unavailable")
       return (
         <IdentityRouteFeedback
@@ -162,18 +173,19 @@ export function App() {
       );
     return <IdentityRouteFeedback isBusy title={t("setup.workflow.checking")} description="" />;
   }
-  if (decision.kind === "wait")
-    return auth.logout.status === "pending" ? (
-      <IdentityRouteFeedback
-        isBusy
-        title={t("shell.session.logoutPendingTitle")}
-        description={t("shell.session.logoutPending")}
-      />
-    ) : (
-      <IdentityRouteFeedback isBusy title={t("shell.route.loading")} description="" />
-    );
-  if (decision.kind === "unavailable")
+  if (currentRoute === ROUTE.Documentation && !identity)
     return (
+      <AppShell header={null} contentClassName={`page-${currentRoute}`}>
+        {page}
+      </AppShell>
+    );
+  // Keep the same chrome owner through initial checks and access revalidation.
+  // Non-allowed states render only neutral feedback, never previously protected
+  // route content or identity data.
+  const accessPending =
+    currentRoute !== ROUTE.Documentation && (decision.kind !== "allow" || !identity);
+  const accessFeedback =
+    decision.kind === "unavailable" ? (
       <IdentityRouteFeedback
         tone="error"
         title={logoutRecovery?.title ?? t("shell.route.failed")}
@@ -181,37 +193,45 @@ export function App() {
         onRetry={recovery}
         actionLabel={logoutRecovery ? t("shell.session.inspect") : undefined}
       />
-    );
-  if (decision.kind === "denied")
-    return (
+    ) : decision.kind === "denied" ? (
       <IdentityRouteFeedback
         tone="warning"
         title={t("management.title")}
         description={t("management.denied")}
       />
+    ) : (
+      <IdentityRouteFeedback
+        isBusy
+        title={
+          auth.logout.status === "pending"
+            ? t("shell.session.logoutPendingTitle")
+            : t("shell.route.loading")
+        }
+        description={auth.logout.status === "pending" ? t("shell.session.logoutPending") : ""}
+      />
     );
-  if (decision.kind !== "allow")
-    return <IdentityRouteFeedback isBusy title={t("shell.route.loading")} description="" />;
-  if (!identity)
-    return <IdentityRouteFeedback isBusy title={t("shell.route.loading")} description="" />;
 
   return (
     <AppShell
       header={
-        <Header
-          route={currentRoute}
-          navigate={navigate}
-          canAdminister={canAdminister}
-          identity={identity}
-          logoutStatus={auth.logout.status}
-          onLogout={() => void authentication.logout().catch(() => {})}
-        />
+        accessPending || !identity ? (
+          <AccessPendingHeader />
+        ) : (
+          <Header
+            route={currentRoute}
+            navigate={navigate}
+            canAdminister={canAdminister}
+            identity={identity}
+            logoutStatus={auth.logout.status}
+            onLogout={() => void authentication.logout().catch(() => {})}
+          />
+        )
       }
-      banner={__SENTINEL_CONSOLE_BUILD_PROFILE__ === "demo" ? <StatusBanner /> : undefined}
+      banner={runtime.mode === "mock" ? <StatusBanner /> : undefined}
       contentClassName={`page-${currentRoute}`}
-      footer={<Footer />}
+      footer={runtime.mode === "mock" ? <Footer /> : undefined}
     >
-      {page}
+      {accessPending ? <section data-route-state="access-pending">{accessFeedback}</section> : page}
     </AppShell>
   );
 }
@@ -223,6 +243,7 @@ function IdentityRouteFeedback({
   isBusy = false,
   onRetry,
   actionLabel,
+  insideShell = false,
 }: {
   readonly title: string;
   readonly description: string;
@@ -230,22 +251,26 @@ function IdentityRouteFeedback({
   readonly isBusy?: boolean;
   readonly onRetry?: () => void;
   readonly actionLabel?: string;
+  readonly insideShell?: boolean;
 }) {
   const { t } = useTranslation();
-  return (
-    <main className="content">
-      <FeedbackPanel
-        tone={tone}
-        isBusy={isBusy}
-        copy={{ title, description }}
-        actions={
-          onRetry ? (
-            <ActionButton onClick={onRetry}>
-              {actionLabel ?? t("shell.feedback.retryRead")}
-            </ActionButton>
-          ) : undefined
-        }
-      />
-    </main>
+  const panel = (
+    <FeedbackPanel
+      tone={tone}
+      isBusy={isBusy}
+      copy={{ title, description }}
+      actions={
+        onRetry ? (
+          <ActionButton onClick={onRetry}>
+            {actionLabel ?? t("shell.feedback.retryRead")}
+          </ActionButton>
+        ) : undefined
+      }
+    />
+  );
+  return insideShell ? (
+    <section data-route-state="access-pending">{panel}</section>
+  ) : (
+    <main className="content">{panel}</main>
   );
 }

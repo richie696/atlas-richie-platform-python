@@ -18,6 +18,7 @@ import type {
 import {
   systemConnections,
   systemProtocols,
+  deploymentGuides,
   auditQuery,
   auditPage,
 } from "../../fixtures/systemObservations";
@@ -53,6 +54,11 @@ export function createSystemObservationTopology() {
           return systemConnections;
         },
       },
+      deploymentGuides: {
+        async readDeploymentGuides() {
+          return deploymentGuides;
+        },
+      },
       protocols: {
         async readProtocols(signal) {
           count("protocols");
@@ -61,6 +67,24 @@ export function createSystemObservationTopology() {
             release = () => resolve(systemProtocols);
             signal.addEventListener("abort", () => count("aborts"), { once: true });
           });
+        },
+        async readAgentReportingObservations() {
+          return {
+            asOfMs: Date.now(),
+            page: 1,
+            pageSize: 20,
+            total: 0,
+            items: [],
+          };
+        },
+        async readIncidentEventObservations() {
+          return {
+            asOfMs: Date.now(),
+            page: 1,
+            pageSize: 20,
+            total: 0,
+            items: [],
+          };
         },
       },
       audit: {
@@ -106,6 +130,8 @@ export function SystemObservationProbe({
     [selected, setSelected] = useState<AuditRecord | null>(null);
   const connections = useExternalSnapshot(topology.resources.connections),
     protocols = useExternalSnapshot(topology.resources.protocols),
+    agentReporting = useExternalSnapshot(topology.resources.agentReporting),
+    incidentEvents = useExternalSnapshot(topology.resources.incidentEvents),
     audit = useExternalSnapshot(topology.resources.audit),
     counts = useExternalSnapshot(topology.counts);
   const session = useExternalSnapshot(topology.session);
@@ -162,7 +188,11 @@ export function SystemObservationProbe({
       </div>
       <ObservedPermissionsPanel access={session} />
       <ObservedConnectionsPanel resource={topology.resources.connections} />
-      <ObservedProtocolsPanel resource={topology.resources.protocols} />
+      <ObservedProtocolsPanel
+        resource={topology.resources.protocols}
+        agentReportingResource={topology.resources.agentReporting}
+        incidentEventResource={topology.resources.incidentEvents}
+      />
       <ObservedAuditPanel
         resource={topology.resources.audit}
         query={query}
@@ -173,6 +203,8 @@ export function SystemObservationProbe({
         {JSON.stringify({
           connections: connections.status,
           protocols: protocols.status,
+          agentReporting: agentReporting.status,
+          incidentEvents: incidentEvents.status,
           audit: audit.status,
           query,
           selected,

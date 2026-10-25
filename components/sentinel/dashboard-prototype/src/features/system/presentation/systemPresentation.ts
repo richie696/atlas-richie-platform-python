@@ -90,6 +90,7 @@ export const SYSTEM_TAB_LABEL_KEY: Readonly<Record<SystemTab, TranslationKey>> =
   [SYSTEM_TAB.Audit]: "system.tab.audit",
   [SYSTEM_TAB.Accounts]: "shell.nav.accounts",
   [SYSTEM_TAB.Roles]: "shell.nav.roles",
+  [SYSTEM_TAB.Settings]: "system.tab.settings",
 });
 
 /** 最小权限模型里的一条角色说明。 */

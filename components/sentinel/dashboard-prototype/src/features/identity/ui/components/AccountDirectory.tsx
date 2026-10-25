@@ -8,18 +8,24 @@ import { DataTable } from "../../../../shared/ui/DataTable";
 import { ActionButton } from "../../../../shared/ui/ActionButton";
 import styles from "../Identity.module.scss";
 
-/** Server records only. No target-password link: changing one's password is a separate session operation. */
+/** Directory actions use server revisions; resetting the signed-in account requires reauthentication. */
 export function AccountDirectory({
   page,
   locked,
   onBindRole,
   onStatus,
+  ownerAccountId,
+  onResetPassword,
+  onDelete,
   onPage,
 }: {
   readonly page: AccountPage;
   readonly locked: boolean;
   readonly onBindRole: (id: string) => void;
   readonly onStatus: (record: AccountRecord) => void;
+  readonly ownerAccountId: string;
+  readonly onResetPassword: (record: AccountRecord) => void;
+  readonly onDelete: (record: AccountRecord) => void;
   readonly onPage: (page: number) => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -58,24 +64,50 @@ export function AccountDirectory({
               </td>
               <td>{t(record.builtIn ? "accounts.type.builtIn" : "accounts.type.normal")}</td>
               <td>
-                <div className={styles["identity-actions"]}>
-                  <ActionButton disabled={locked} onClick={() => onBindRole(record.id)}>
-                    {t("accounts.action.bindRole")}
-                  </ActionButton>
-                  <ActionButton
-                    disabled={locked || statusRestriction !== null}
-                    onClick={() => onStatus(record)}
-                  >
-                    {t(
-                      record.status === ACCOUNT_STATUS.Active
-                        ? "accounts.action.disable"
-                        : "accounts.action.enable",
-                    )}
-                  </ActionButton>
-                  {statusRestriction && (
-                    <small className={styles["account-status-restriction"]} role="note">
-                      {t(statusRestriction)}
-                    </small>
+                <div className={styles["account-row-actions"]}>
+                  <div className={styles["identity-actions"]}>
+                    <ActionButton disabled={locked} onClick={() => onBindRole(record.id)}>
+                      {t("accounts.action.bindRole")}
+                    </ActionButton>
+                    <ActionButton
+                      disabled={locked || (record.builtIn && record.id !== ownerAccountId)}
+                      onClick={() => onResetPassword(record)}
+                    >
+                      {t("accounts.action.resetPassword")}
+                    </ActionButton>
+                    <ActionButton
+                      disabled={
+                        locked ||
+                        record.builtIn ||
+                        record.lastActiveAdmin ||
+                        record.id === ownerAccountId
+                      }
+                      onClick={() => onDelete(record)}
+                    >
+                      {t("accounts.action.delete")}
+                    </ActionButton>
+                    <ActionButton
+                      disabled={locked || statusRestriction !== null}
+                      onClick={() => onStatus(record)}
+                    >
+                      {t(
+                        record.status === ACCOUNT_STATUS.Active
+                          ? "accounts.action.disable"
+                          : "accounts.action.enable",
+                      )}
+                    </ActionButton>
+                  </div>
+                  {(record.id === ownerAccountId || statusRestriction) && (
+                    <div className={styles["account-action-notes"]}>
+                      {record.id === ownerAccountId && (
+                        <small role="note">{t("management.useOwnPassword")}</small>
+                      )}
+                      {statusRestriction && (
+                        <small className={styles["account-status-restriction"]} role="note">
+                          {t(statusRestriction)}
+                        </small>
+                      )}
+                    </div>
                   )}
                 </div>
               </td>

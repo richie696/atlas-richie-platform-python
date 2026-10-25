@@ -6,6 +6,7 @@ import { setupServer } from "msw/node";
 import { z } from "zod";
 import { AppErrorKind, defineUrl, HttpMethod } from "@richie696/react-framework";
 import { createConsoleTransport } from "../../src/core/api/transport/consoleTransport";
+import { startConsoleInterception } from "../../src/core/api/runtime/startConsoleInterception";
 import { createConsoleServices } from "../../src/app/providers/consoleServices";
 import { createObservationCatalogHttp } from "../../src/features/applications/api/catalogHttp";
 import { createObservationCatalogResource } from "../../src/features/applications/application/catalogResource";
@@ -27,7 +28,10 @@ import "./contract.test.mjs";
 import "./account.test.mjs";
 import "./accountIdentityMock.test.mjs";
 import "./authenticationOwner.test.mjs";
+import "./authenticationLogoutOwnerRace.test.mjs";
 import "./observation.test.mjs";
+import "./hostMetrics.test.mjs";
+import "./hostAssociation.test.mjs";
 import "./fleetMock.test.mjs";
 import "./instanceMock.test.mjs";
 import "./realtimeMock.test.mjs";
@@ -35,15 +39,20 @@ import "./mockObservationConsistency.test.mjs";
 import "./mockOperationCoverage.test.mjs";
 import "./operationErrorMatrix.test.mjs";
 import "./authorizationMatrix.test.mjs";
+import "./viewerWriteDenial.test.mjs";
 import "./instance.test.mjs";
 import "./incident.test.mjs";
 import "./incidentMock.test.mjs";
 import "./systemObservation.test.mjs";
 import "./catalog.test.mjs";
 import "./ruleSet.test.mjs";
+import "./ruleBindingScope.test.mjs";
+import "./ruleObservation.test.mjs";
+import "./ruleBindingRegistrationReceipt.test.mjs";
 import "./ruleSetMock.test.mjs";
 import "./sourceRegistration.test.mjs";
 import "./sourceRegistrationMock.test.mjs";
+import "./monitoringSourceManagement.test.mjs";
 import "./unmatchedConsoleApi.test.mjs";
 
 const origin = "http://console-http.test",
@@ -75,7 +84,13 @@ const response = (
 const rejection = (request, code, status) =>
   response(
     request,
-    { error: { code, requestId: request.headers.get("x-request-id") } },
+    {
+      error: {
+        code,
+        requestId: request.headers.get("x-request-id"),
+        ...(code === "rate_limited" ? { retryAfterMs: 1_000 } : {}),
+      },
+    },
     { status, token: null },
   );
 async function withMock(handlers, run, overrides = {}) {
@@ -733,6 +748,7 @@ test("HTTP-PATH: dot-segment identities and endpoint escape never dispatch outsi
       for (const [path, pathParams] of [
         ["/api/v1/probe/{id}", [".."]],
         ["/api/v1/../../outside", []],
+        ["/api/v3/future", []],
       ])
         await assert.rejects(transport.send(endpoint(path), call({ pathParams })));
       assert.equal(reads, 0);
@@ -742,6 +758,14 @@ test("HTTP-PATH: dot-segment identities and endpoint escape never dispatch outsi
         reads++;
         return response(request);
       },
+    },
+  );
+});
+test("HTTP-PATH: explicitly versioned v2 Console extension routes are accepted", async () => {
+  await withMock(
+    [http.get(`${origin}/api/v2/probe`, ({ request }) => response(request))],
+    async ({ transport }) => {
+      assert.deepEqual(await transport.send(endpoint("/api/v2/probe"), call()), payload);
     },
   );
 });
@@ -776,7 +800,7 @@ test("HTTP-DISPOSE: disposal aborts owned requests and a late response cannot po
   );
 });
 test(
-  "HTTP-LIVE-CONTROLLED: same foundation transport reaches an isolated loopback HTTP endpoint, not a synthetic Port",
+  "HTTP-LIVE-CONTROLLED: live bypasses Mock handlers, reaches the loopback API, and preserves backend failures",
   { timeout: 15_000 },
   async () => {
     let successRequest, failureRequest, resolveCancelReceived, resolveCancelClosed;
@@ -838,11 +862,19 @@ test(
       throw error;
     }
     const address = server.address(),
-      transport = createConsoleTransport({
-        baseUrl: `http://127.0.0.1:${address.port}`,
-        owner: () => "real-http-owner",
-        onUnauthorized: () => {},
-      });
+      liveOrigin = `http://127.0.0.1:${address.port}`;
+    let demoHandlerCalls = 0;
+    await startConsoleInterception({ mode: "live", apiBaseUrl: liveOrigin }, [
+      http.all(`${liveOrigin}/api/v1/*`, () => {
+        demoHandlerCalls++;
+        return HttpResponse.json(payload);
+      }),
+    ]);
+    const transport = createConsoleTransport({
+      baseUrl: liveOrigin,
+      owner: () => "real-http-owner",
+      onUnauthorized: () => {},
+    });
     try {
       assert.deepEqual(await transport.send(endpoint(), call({ query: { page: 2 } })), payload);
       assert.equal(successRequest.url, "/api/v1/probe?page=2");
@@ -859,6 +891,7 @@ test(
           return true;
         },
       );
+      assert.equal(demoHandlerCalls, 0, "live network failures must never fall back to demo data");
 
       const controller = new AbortController();
       const cancelled = transport.send(

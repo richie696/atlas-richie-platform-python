@@ -131,9 +131,7 @@ export function createSourceRegistrationHttp(transport: ConsoleTransport): Sourc
       const wire = await transport.send(
         {
           ...SOURCE_REGISTRATION_ENDPOINTS.Command,
-          accept: (value) =>
-            value.requestKey === body.requestKey &&
-            (value.status !== "completed" || validSourceRecord(value.record)),
+          accept: (value) => value.requestKey === body.requestKey && validOperationResult(value),
         },
         { signal, body, requestKey: body.requestKey },
       );
@@ -144,15 +142,20 @@ export function createSourceRegistrationHttp(transport: ConsoleTransport): Sourc
       const wire = await transport.send(
         {
           ...SOURCE_REGISTRATION_ENDPOINTS.Operation,
-          accept: (value) =>
-            value.requestKey === key &&
-            (value.status !== "completed" || validSourceRecord(value.record)),
+          accept: (value) => value.requestKey === key && validOperationResult(value),
         },
         { signal, pathParams: [key] },
       );
       return sourceOperationFromWire(wire);
     },
   } satisfies SourceRegistrationPort);
+}
+
+function validOperationResult(value: z.infer<typeof SourceOperationObservationSchema>): boolean {
+  return (
+    value.status !== "completed" ||
+    ("record" in value ? validSourceRecord(value.record) : value.deletedSourceId.length > 0)
+  );
 }
 
 function validSourceRecord(value: z.infer<typeof SourceRecordSchema>): boolean {

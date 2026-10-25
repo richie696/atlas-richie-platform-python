@@ -1,13 +1,14 @@
 import {after,before,test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdirSync,writeFileSync} from 'node:fs';
-import {E2E_BASE_URL,launchBrowser} from './cdp.mjs';
+import {E2E_BASE_URL,connectIabBrowser} from './cdp.mjs';
+import {gotoMockAdministrator} from './mock-auth.mjs';
 let browser;
-before(async()=>{browser=await launchBrowser();});after(async()=>{await browser?.close();});
+before(async()=>{browser=await connectIabBrowser();});after(async()=>{await browser?.close();});
 async function withProbe(run){
   const page=await browser.newPage();
   try{
-    await page.clearStorage(new URL(E2E_BASE_URL).origin);await page.goto(`${E2E_BASE_URL}/#/accounts`);await page.waitFor(`!!document.querySelector('[data-account-management] table')`);
+    await page.clearStorage(new URL(E2E_BASE_URL).origin);await gotoMockAdministrator(page, `${E2E_BASE_URL}/#/accounts`);await page.waitFor(`!!document.querySelector('[data-account-management] table')`);
     await page.eval(`(async()=>{const React=(await import('/node_modules/.vite/deps/react.js')).default;const {createRoot}=(await import('/node_modules/.vite/deps/react-dom_client.js')).default;const {FeedbackProbe}=await import('/tests/e2e/probes/FeedbackProbe.tsx');const host=document.createElement('section');host.id='feedback-probe';document.body.prepend(host);const root=createRoot(host);root.render(React.createElement(React.StrictMode,null,React.createElement(FeedbackProbe)));window.__feedbackCleanup=()=>{root.unmount();host.remove();};})()`);
     await page.waitFor(`!!document.querySelector('#feedback-probe output')`);await run(page);await page.eval(`window.__feedbackCleanup()`);assert.deepEqual(page.consoleErrors,[]);
   }finally{await page.close();}
@@ -26,6 +27,18 @@ test('反馈: 10 类资源状态正确保留或隐藏内容，拒绝/空结果�
     }
     await page.click('#feedback-probe [data-query="error"]');
     await page.clickByText('重试读取');
+    assert.equal(await page.eval(`JSON.parse(document.querySelector('#feedback-probe output').textContent).reads`),1);
+  });
+});
+test('反馈: 429 retryAfterMs 到期前禁用人工读取，等待后恢复且不泄露错误详情',async()=>{
+  await withProbe(async page=>{
+    await page.click('#feedback-probe [data-query-rate-limited]');
+    const retry='#feedback-probe [data-query-probe] button';
+    assert.equal(await page.eval(`document.querySelector(${JSON.stringify(retry)}).disabled`),true);
+    assert.equal(await page.eval(`JSON.parse(document.querySelector('#feedback-probe output').textContent).reads`),0);
+    assert.doesNotMatch(await page.text('#feedback-probe'),/SENSITIVE-RATE-LIMIT-DETAIL/);
+    await page.waitFor(`!document.querySelector(${JSON.stringify(retry)}).disabled`);
+    await page.click(retry);
     assert.equal(await page.eval(`JSON.parse(document.querySelector('#feedback-probe output').textContent).reads`),1);
   });
 });

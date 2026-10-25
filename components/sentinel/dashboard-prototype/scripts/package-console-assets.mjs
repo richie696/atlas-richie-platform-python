@@ -12,9 +12,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const prototypeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const clientRoot = path.join(prototypeRoot, "dist", "client");
+const clientRoot = path.resolve(
+  process.env.SENTINEL_DASHBOARD_CLIENT_BUILD_DIR ?? path.join(prototypeRoot, "dist", "client"),
+);
 const packageRoot = path.resolve(prototypeRoot, "..", "sentinel-console");
-const webRoot = path.join(packageRoot, "src", "atlas_richie", "sentinel_console", "web");
+const isolatedWebRoot = process.env.SENTINEL_CONSOLE_WEB_OUTPUT_DIR;
+const webRoot = path.resolve(
+  isolatedWebRoot ?? path.join(packageRoot, "src", "atlas_richie", "sentinel_console", "web"),
+);
 const markerPath = path.join(webRoot, ".dashboard-assets.json");
 const indexPath = path.join(clientRoot, "index.html");
 const manifestPath = path.join(clientRoot, ".vite", "manifest.json");
@@ -52,7 +57,11 @@ for (const file of uniqueFiles) {
   }
 }
 
-if (existsSync(webRoot)) {
+if (isolatedWebRoot !== undefined) {
+  if (existsSync(webRoot)) {
+    throw new Error("Refusing to replace isolated Console web output directory");
+  }
+} else if (existsSync(webRoot)) {
   if (!existsSync(markerPath)) {
     throw new Error("Refusing to replace an unmarked Console web asset directory");
   }

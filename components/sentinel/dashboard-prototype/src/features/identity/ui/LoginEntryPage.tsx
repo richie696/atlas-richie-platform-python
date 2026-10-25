@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { loginFeedback } from "../presentation/loginFeedback";
 import type { LoginCredentials } from "../model/account";
@@ -19,19 +19,22 @@ export function LoginEntryPage({
   onAuthenticated,
   onSetupRequired,
   demoMode = false,
+  localeControl,
 }: {
   readonly onAuthenticated: (identity: SessionIdentity) => void;
   readonly onSetupRequired: () => void;
   /** True only when the app assembly selected the isolated synthetic demo profile. */
   readonly demoMode?: boolean;
+  /** App-owned locale control for unauthenticated visitors. */
+  readonly localeControl?: ReactNode;
 }) {
   const { workflow, snapshot } = useAuthentication();
   const { t } = useTranslation();
-  const { retryAfterSeconds, recordRateLimit } = useLoginCooldown();
   const notified = useRef<{ owner: object; epoch: string } | null>(null);
   const setupNotified = useRef<object | null>(null);
   const access = snapshot.access,
     login = snapshot.login;
+  const { retryAfterSeconds, recordRateLimit } = useLoginCooldown(workflow, login);
   const authenticated = access.phase === "resolved" && access.facts.kind === "authenticated";
   const setupRequired =
     access.phase === "resolved" &&
@@ -65,6 +68,7 @@ export function LoginEntryPage({
   };
   return (
     <LoginSurface
+      localeControl={localeControl}
       onCredentialsEdited={() => {
         workflow.clearLoginFailure();
       }}

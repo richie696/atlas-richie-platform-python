@@ -4,11 +4,24 @@ export const AUDIT_ACTION = Object.freeze({
   AccountCreate: "account-create",
   AccountRole: "account-role",
   AccountStatus: "account-status",
+  AccountPasswordReset: "account-password-reset",
+  LocalAdminPasswordRecovery: "local-admin-password-recovery",
+  AccountDelete: "account-delete",
   PasswordChange: "password-change",
   SystemInitialize: "system-initialize",
   RuleValidate: "rule-validate",
   SourceRegister: "source-register",
   SourceUpdate: "source-update",
+  SourceDelete: "source-delete",
+  DeploymentDependenciesMigrated: "deployment-dependencies-migrated",
+  ReporterCertificateRotated: "reporter-certificate-rotated",
+  MonitoringSourceCreate: "monitoring-source-create",
+  MonitoringSourceUpdate: "monitoring-source-update",
+  MonitoringSourceDelete: "monitoring-source-delete",
+  MonitoringSourceEnable: "monitoring-source-enable",
+  MonitoringSourceDisable: "monitoring-source-disable",
+  HostAssociationCreate: "host-association-create",
+  HostAssociationDelete: "host-association-delete",
   DraftSave: "draft-save",
   DraftDelete: "draft-delete",
   VersionFreeze: "version-freeze",
@@ -17,6 +30,7 @@ export const AUDIT_ACTION = Object.freeze({
   PlanCancel: "plan-cancel",
   PlanActivate: "plan-activate",
   PlanRestore: "plan-restore",
+  TargetConfigure: "target-configure",
   RuleBindingCreate: "rule-binding-create",
 } as const);
 export type AuditAction = (typeof AUDIT_ACTION)[keyof typeof AUDIT_ACTION];
@@ -28,6 +42,7 @@ export const AUDIT_RESULT = Object.freeze({
 export type AuditResult = (typeof AUDIT_RESULT)[keyof typeof AUDIT_RESULT];
 const ANONYMOUS_AUDIT_ACTIONS: readonly AuditAction[] = [
   AUDIT_ACTION.SystemInitialize,
+  AUDIT_ACTION.LocalAdminPasswordRecovery,
   AUDIT_ACTION.PlanActivate,
   AUDIT_ACTION.PlanRestore,
 ];

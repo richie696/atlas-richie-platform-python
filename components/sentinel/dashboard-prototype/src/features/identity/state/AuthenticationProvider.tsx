@@ -1,7 +1,6 @@
 import { createContext, useContext, useEffect, type ReactNode } from "react";
 import { useExternalSnapshot } from "@richie696/react-framework-react";
 import type { AuthenticationWorkflow } from "../application/authenticationWorkflow";
-import { observeAuthenticationForeground } from "./foregroundRevalidation";
 
 const AuthenticationContext = createContext<AuthenticationWorkflow | null>(null);
 
@@ -23,9 +22,6 @@ export function AuthenticationProvider({
       // Safe failure state belongs to the workflow, never an inferred role.
     });
     return () => workflow.cancel();
-  }, [workflow]);
-  useEffect(() => {
-    return observeAuthenticationForeground(workflow, window, document);
   }, [workflow]);
   return <AuthenticationContext value={workflow}>{children}</AuthenticationContext>;
 }

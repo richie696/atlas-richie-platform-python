@@ -1,6 +1,6 @@
 # Atlas Richie Sentinel Dashboard React 前端
 
-此目录是正在工程化的 Sentinel Dashboard 前端：六个主导航页，加初始化、登录、账户、角色、本人改密，共 11 条路由。正式路由已通过 feature-owned Console HTTP adapters 使用统一 transport；本地 demo profile 在 HTTP 边界由 MSW 返回演示数据。OpenAPI 仍为 `draft-partial`，独立 Python Console、真实数据库/配置中心和最终跨层 E2E 尚未完成，因此不要把 demo 内容当生产事实，也不要填写真实数据库或配置中心凭证。完整任务进度以[唯一推进清单](../docs/process/R-DASHBOARD-前后端现状与推进清单.md)为准。
+此目录是 Sentinel Dashboard 前端：七个主导航页（总览、应用与实例、规则、实时监控、故障分析、系统管理、文档中心），加初始化、登录、账户、角色、本人改密，共 12 条路由。正式路由已通过 feature-owned Console HTTP adapters 使用统一 transport；本地 demo profile 在 HTTP 边界由 MSW 返回演示数据。Console API wire 0.19.0 已冻结，独立 Python Console、真实数据库/配置中心与最终跨层 E2E 已在阶段 M7 关闭，但 demo 内容仍不是生产事实，也不要填写真实数据库或配置中心凭证。完整任务进度以[唯一推进清单](../docs/process/R-DASHBOARD-前后端现状与推进清单.md)为准。
 
 ## 页面与操作
 

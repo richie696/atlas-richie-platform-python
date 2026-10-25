@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { http, HttpResponse } from "msw/http";
 import { setupServer } from "msw/node";
 import { createConsoleTransport } from "../../src/core/api/transport/consoleTransport";
+import { createIdentityHttp } from "../../src/features/identity/api/identityAccessHttp";
 import { createRuleSetHttp } from "../../src/features/rules/api/ruleSetHttp";
 import {
   ActivationPlanSchema,
@@ -44,7 +45,7 @@ async function run(handlers, action) {
     requestId: () => `rule-${++sequence}`,
   });
   try {
-    await action(createRuleSetHttp(transport));
+    await action(createRuleSetHttp(transport), createIdentityHttp(transport));
   } finally {
     transport.dispose();
     server.close();
@@ -477,6 +478,120 @@ test("RULE-BINDINGS: explicit query, strict page echo and redacted binding facts
       assert.equal(search.get("pageSize"), "25");
       assert.equal(search.has("appId"), false);
       assert.equal(search.has("search"), false);
+    },
+  );
+});
+
+test("RULE-CATALOG HTTP: provider rules and freshness facts map from the Console wire contract", async () => {
+  const query = {
+    environmentId: "test-env",
+    appId: null,
+    kind: null,
+    search: "",
+    page: 1,
+    pageSize: 25,
+  };
+  const timestamp = "2026-10-16T08:00:00.000Z";
+  const item = {
+    binding: ruleSet.binding,
+    record: ruleSet.records[0],
+    snapshot: {
+      checksum: ruleSet.checksum,
+      sourceRevision: ruleSet.sourceRevision,
+      versionId: ruleSet.versionId,
+      asOf: timestamp,
+    },
+    read: { freshness: "current", lastAttemptAt: timestamp },
+  };
+  const payload = {
+    query,
+    asOf: timestamp,
+    coverage: "complete",
+    bindings: { total: 1, current: 1, stale: 0, notRead: 0 },
+    total: 1,
+    hasMore: false,
+    items: [item],
+    issues: [],
+  };
+  let receivedUrl;
+  await run(
+    [
+      http.get(`${origin}/api/v2/rules/catalog`, ({ request }) => {
+        receivedUrl = new URL(request.url);
+        return response(request, payload);
+      }),
+    ],
+    async (port) => {
+      const page = await port.readRuleCatalog(query, new AbortController().signal);
+      assert.equal(receivedUrl.pathname, "/api/v2/rules/catalog");
+      assert.equal(receivedUrl.searchParams.get("environmentId"), "test-env");
+      assert.equal(receivedUrl.searchParams.get("page"), "1");
+      assert.equal(receivedUrl.searchParams.get("pageSize"), "25");
+      assert.equal(receivedUrl.searchParams.has("appId"), false);
+      assert.equal(receivedUrl.searchParams.has("kind"), false);
+      assert.equal(page.coverage, "complete");
+      assert.equal(page.total, 1);
+      assert.equal(page.items[0].record.id, "rule-one");
+      assert.deepEqual(page.items[0].record.rule, ruleSet.records[0].rule);
+      assert.equal(page.items[0].snapshot.checksum, ruleSet.checksum);
+      assert.equal(page.items[0].read.freshness, "current");
+    },
+  );
+});
+
+test("RULE-CATALOG HTTP: refresh receipt is validated and mapped into the feature model", async () => {
+  const timestamp = "2026-10-16T08:00:00.000Z";
+  const payload = {
+    scope: { environmentId: "test-env", appId: null },
+    asOf: timestamp,
+    coverage: "complete",
+    bindings: { total: 2, attempted: 2, current: 2, stale: 0, notRead: 0 },
+  };
+  let requestBody;
+  await run(
+    [
+      http.get(`${origin}/api/v1/system/bootstrap`, ({ request }) =>
+        response(request, { initialized: true }),
+      ),
+      http.post(`${origin}/api/v2/rules/catalog/refresh`, async ({ request }) => {
+        requestBody = await request.json();
+        return response(request, payload);
+      }),
+    ],
+    async (port, identity) => {
+      await identity.readBootstrap(new AbortController().signal);
+      const result = await port.refreshRuleCatalog("test-env", null, new AbortController().signal);
+      assert.deepEqual(requestBody, { environmentId: "test-env", appId: null });
+      assert.deepEqual(result, payload);
+    },
+  );
+});
+
+test("RULE-CATALOG HTTP: mismatched query echo and unknown wire fields fail closed", async () => {
+  const query = {
+    environmentId: "test-env",
+    appId: null,
+    kind: null,
+    search: "",
+    page: 1,
+    pageSize: 25,
+  };
+  const timestamp = "2026-10-16T08:00:00.000Z";
+  const payload = {
+    query: { ...query, environmentId: "other-env" },
+    asOf: timestamp,
+    coverage: "complete",
+    bindings: { total: 0, current: 0, stale: 0, notRead: 0 },
+    total: 0,
+    hasMore: false,
+    items: [],
+    issues: [],
+    unexpected: true,
+  };
+  await run(
+    [http.get(`${origin}/api/v2/rules/catalog`, ({ request }) => response(request, payload))],
+    async (port) => {
+      await assert.rejects(port.readRuleCatalog(query, new AbortController().signal));
     },
   );
 });

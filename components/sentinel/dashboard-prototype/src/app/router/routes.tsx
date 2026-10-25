@@ -4,9 +4,12 @@ import type { DashboardPageProps } from "../../shared/types/dashboard";
 import { ROUTE, type RouteId } from "./route.constants";
 import type { RouteLoader } from "./RouteBoundary";
 import { useConsoleServices } from "../providers/ConsoleServicesProvider";
+import { PublicLocaleControl } from "../shell/PublicLocaleControl";
 
 /** Application-owned navigation projection; no wire DTOs or feature store references. */
 export interface RoutePageContext extends DashboardPageProps {
+  /** True when the route is rendered under the authenticated console shell. */
+  readonly embeddedInAppShell: boolean;
   readonly accountId: string;
   readonly environmentId?: string;
   readonly instanceId?: string;
@@ -27,33 +30,84 @@ export interface RoutePageContext extends DashboardPageProps {
 export const routeLoaders: Readonly<Record<RouteId, RouteLoader<RoutePageContext>>> = Object.freeze(
   {
     [ROUTE.Overview]: async () => {
-      const [{ FleetOverviewContainer, createFleetHttp }, { createObservationCatalogHttp }] =
-        await Promise.all([
-          import("../../features/overview"),
-          import("../../features/applications"),
-        ]);
+      const [overview, applications, system, hosts] = await Promise.all([
+        import("../../features/overview"),
+        import("../../features/applications"),
+        import("../../features/system"),
+        import("../../features/hosts"),
+      ]);
+      const { FleetOverviewContainer, createFleetHttp } = overview;
+      const { createObservationCatalogHttp } = applications;
       const Page: ComponentType<RoutePageContext> = (props) => {
         const { transport } = useConsoleServices();
         const fleetPort = useMemo(() => createFleetHttp(transport), [transport]);
         const catalogPort = useMemo(() => createObservationCatalogHttp(transport), [transport]);
+        const sourcePort = useMemo(() => system.createMonitoringSourceHttp(transport), [transport]);
         return (
-          <FleetOverviewContainer {...props} fleetPort={fleetPort} catalogPort={catalogPort} />
+          <FleetOverviewContainer
+            {...props}
+            fleetPort={fleetPort}
+            catalogPort={catalogPort}
+            hostMonitoringSummary={
+              props.environmentId ? (
+                <hosts.HostMonitoringSummary
+                  environmentId={props.environmentId}
+                  sourcePort={{ readSources: (signal) => sourcePort.readSources(signal) }}
+                  navigate={props.navigate}
+                />
+              ) : null
+            }
+          />
         );
       };
       return { default: Page };
     },
     [ROUTE.Applications]: async () => {
+      const [applications, system, realtime, hosts] = await Promise.all([
+        import("../../features/applications"),
+        import("../../features/system"),
+        import("../../features/realtime"),
+        import("../../features/hosts"),
+      ]);
       const { ApplicationsObservationContainer, createObservationCatalogHttp, createInstanceHttp } =
-        await import("../../features/applications");
+        applications;
       const Page: ComponentType<RoutePageContext> = (props) => {
         const { transport } = useConsoleServices();
         const catalogPort = useMemo(() => createObservationCatalogHttp(transport), [transport]);
         const instancePort = useMemo(() => createInstanceHttp(transport), [transport]);
+        const sourcePort = useMemo(() => system.createMonitoringSourceHttp(transport), [transport]);
+        const hostMetricsPort = useMemo(
+          () => realtime.createHostMetricsHttp(transport),
+          [transport],
+        );
+        const hostAssociationsPort = useMemo(
+          () => hosts.createHostAssociationHttp(transport),
+          [transport],
+        );
+        if (props.view === "hosts" && props.environmentId) {
+          return (
+            <hosts.HostDirectoryPage
+              environmentId={props.environmentId}
+              appId={props.appId}
+              sourcesPort={{ readSources: (signal) => sourcePort.readSources(signal) }}
+              metricsPort={hostMetricsPort}
+              associationPort={hostAssociationsPort}
+              navigate={props.navigate}
+            />
+          );
+        }
         return (
           <ApplicationsObservationContainer
             {...props}
             catalogPort={catalogPort}
             instancePort={instancePort}
+            onShowHosts={() =>
+              props.navigate(ROUTE.Applications, {
+                environmentId: props.environmentId ?? "",
+                appId: props.appId,
+                view: "hosts",
+              })
+            }
           />
         );
       };
@@ -61,18 +115,19 @@ export const routeLoaders: Readonly<Record<RouteId, RouteLoader<RoutePageContext
     },
     [ROUTE.Rules]: async () => {
       const [
-        { RuleConsoleContainer, createRuleSetHttp },
-        { createObservationCatalogHttp },
+        {
+          RuleConsoleContainer,
+          createRuleSetHttp,
+          createRuleBindingScopeHttp,
+          createRuleObservationHttp,
+        },
         { createSourceRegistrationHttp },
-      ] = await Promise.all([
-        import("../../features/rules"),
-        import("../../features/applications"),
-        import("../../features/system"),
-      ]);
+      ] = await Promise.all([import("../../features/rules"), import("../../features/system")]);
       const Page: ComponentType<RoutePageContext> = (props) => {
         const { transport } = useConsoleServices();
         const ruleSetPort = useMemo(() => createRuleSetHttp(transport), [transport]);
-        const catalogPort = useMemo(() => createObservationCatalogHttp(transport), [transport]);
+        const observationPort = useMemo(() => createRuleObservationHttp(transport), [transport]);
+        const scopePort = useMemo(() => createRuleBindingScopeHttp(transport), [transport]);
         const sourceRegistrationPort = useMemo(
           () => createSourceRegistrationHttp(transport),
           [transport],
@@ -109,7 +164,8 @@ export const routeLoaders: Readonly<Record<RouteId, RouteLoader<RoutePageContext
           <RuleConsoleContainer
             {...props}
             ruleSetPort={ruleSetPort}
-            catalogPort={catalogPort}
+            observationPort={observationPort}
+            scopePort={scopePort}
             sourceCatalogPort={sourceCatalogPort}
           />
         );
@@ -118,21 +174,31 @@ export const routeLoaders: Readonly<Record<RouteId, RouteLoader<RoutePageContext
     },
     [ROUTE.Realtime]: async () => {
       const [
-        { RealtimeObservationContainer, createMetricsHttp },
+        { RealtimeObservationContainer, createMetricsHttp, createHostMetricsHttp },
         { createObservationCatalogHttp, createInstanceHttp },
+        { createMonitoringSourceHttp },
       ] = await Promise.all([
         import("../../features/realtime"),
         import("../../features/applications"),
+        import("../../features/system"),
       ]);
       const Page: ComponentType<RoutePageContext> = (props) => {
         const { transport } = useConsoleServices();
         const metricsPort = useMemo(() => createMetricsHttp(transport), [transport]);
         const catalogPort = useMemo(() => createObservationCatalogHttp(transport), [transport]);
         const instancePort = useMemo(() => createInstanceHttp(transport), [transport]);
+        const hostMetricsPort = useMemo(() => createHostMetricsHttp(transport), [transport]);
+        const sourcePort = useMemo(() => createMonitoringSourceHttp(transport), [transport]);
+        const hostMetricsSourcePort = useMemo(
+          () => ({ readSources: (signal: AbortSignal) => sourcePort.readSources(signal) }),
+          [sourcePort],
+        );
         return (
           <RealtimeObservationContainer
             {...props}
             metricsPort={metricsPort}
+            hostMetricsPort={hostMetricsPort}
+            hostMetricsSourcePort={hostMetricsSourcePort}
             catalogPort={catalogPort}
             instancePort={instancePort}
           />
@@ -167,6 +233,17 @@ export const routeLoaders: Readonly<Record<RouteId, RouteLoader<RoutePageContext
     [ROUTE.System]: async () => {
       const { ConsoleSystemRoute } = await import("./ConsoleSystemRoute");
       return { default: ConsoleSystemRoute };
+    },
+    [ROUTE.Documentation]: async () => {
+      const { DocumentationPage } = await import("../../features/documentation");
+      const Page: ComponentType<RoutePageContext> = (props) => (
+        <DocumentationPage
+          {...props}
+          embeddedInAppShell={props.embeddedInAppShell}
+          localeControl={<PublicLocaleControl />}
+        />
+      );
+      return { default: Page };
     },
     [ROUTE.Accounts]: async () => ({
       default: (await import("./IdentityRouteOwners")).ConsoleAccountsRoute,

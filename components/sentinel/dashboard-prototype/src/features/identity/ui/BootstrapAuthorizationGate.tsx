@@ -35,7 +35,14 @@ export function BootstrapAuthorizationGate({
       )
         setCode("");
     });
-    void workflow.restore().catch(() => {});
+    void workflow
+      .restore()
+      .then((current) => {
+        if (current.kind === "open" && !current.authorized)
+          return workflow.authorizeLocal().catch(() => undefined);
+        return undefined;
+      })
+      .catch(() => {});
     return () => {
       unsubscribe();
       workflow.cancel();

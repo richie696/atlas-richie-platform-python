@@ -12,6 +12,11 @@ import type {
   SetupStorageInput,
   SetupSubmission,
 } from "../model/setupSubmission";
+import type { SetupConnectionCheckTarget } from "../model/setup";
+import { SETUP_CONNECTION_CHECK } from "../model/setup";
+
+/** First-run database migration and password hashing can outlive the generic 10s command timeout. */
+const INITIALIZATION_COMMAND_TIMEOUT_MS = 300_000;
 
 /** Ready means THIS request completed AND bootstrap confirmed initialization, not merely a successful POST. */
 export type InitializationState =
@@ -46,7 +51,9 @@ export interface InitializationWorkflow {
   readonly restore: (forceRefresh?: boolean) => Promise<BootstrapFact>;
   readonly checkDatabase: (input: SetupStorageInput) => Promise<ConnectionCheck>;
   readonly checkSource: (input: SetupSourceInput) => Promise<ConnectionCheck>;
-  /** Field/provider/auth changes invalidate old connection facts, including late responses. */
+  /** Invalidate only the database or source check affected by edited inputs. */
+  readonly invalidateCheck: (target: SetupConnectionCheckTarget) => void;
+  /** Clear both independent checks, including during form discard or completion. */
   readonly invalidateChecks: () => void;
   readonly initialize: (input: SetupSubmission) => Promise<InitializationState>;
   /** Explicit lookup of the ORIGINAL request. No automatic polling or write replay. */
@@ -92,6 +99,7 @@ export function createInitializationWorkflow(
         });
       return receipt;
     },
+    { timeoutMs: INITIALIZATION_COMMAND_TIMEOUT_MS },
   );
   const idle = Object.freeze({ status: "idle" } as const);
   let initialization: InitializationState = idle;
@@ -135,6 +143,12 @@ export function createInitializationWorkflow(
   const assertOpen = () => {
     if (disposed) throw new AppError(AppErrorKind.CANCELLED, "Setup owner disposed");
   };
+  const invalidateCheck = (target: SetupConnectionCheckTarget) => {
+    assertOpen();
+    if (target === SETUP_CONNECTION_CHECK.Database) database.reset();
+    else if (target === SETUP_CONNECTION_CHECK.Source) source.reset();
+    else throw new AppError(AppErrorKind.PROTOCOL, "Unsupported setup check target");
+  };
   const assertObservationAllowed = () => {
     assertOpen();
     if (
@@ -155,11 +169,16 @@ export function createInitializationWorkflow(
   };
   const setupAvailable = () => {
     const current = bootstrap.getSnapshot();
-    return current.status === "ready" && !current.data.initialized && current.data.setupAvailable;
+    return (
+      current.status === "ready" &&
+      !current.data.initialized &&
+      current.data.setupAvailable &&
+      current.data.operatorAuthorized
+    );
   };
   const assertWindow = () => {
     if (!setupAvailable())
-      throw new AppError(AppErrorKind.FORBIDDEN, "Setup window not confirmed open");
+      throw new AppError(AppErrorKind.FORBIDDEN, "Setup window not confirmed open and authorized");
   };
   const assertConnectionIdle = (snapshot: QuerySnapshot<ConnectionCheck>) => {
     if (snapshot.status === "loading" || snapshot.status === "refreshing")
@@ -221,10 +240,10 @@ export function createInitializationWorkflow(
       assertConnectionIdle(source.getSnapshot());
       return source.load({ revision: ++revision, input });
     },
+    invalidateCheck,
     invalidateChecks() {
-      assertOpen();
-      database.reset();
-      source.reset();
+      invalidateCheck(SETUP_CONNECTION_CHECK.Database);
+      invalidateCheck(SETUP_CONNECTION_CHECK.Source);
     },
     async initialize(input: SetupSubmission) {
       assertMutable();
@@ -243,6 +262,10 @@ export function createInitializationWorkflow(
           setInitialization({ status: "closed" });
           throw new AppError(AppErrorKind.FORBIDDEN, "Setup window closed");
         }
+        // The one-use operator grant may expire or be revoked after the cached
+        // check above. Do not treat an open setup window as authorization.
+        if (!fact.operatorAuthorized)
+          throw new AppError(AppErrorKind.FORBIDDEN, "Setup operator authorization was revoked");
         const receipt = await write.run({ requestKey, input });
         ensureCurrent(ticket);
         setInitialization({ status: "checking", requestKey });

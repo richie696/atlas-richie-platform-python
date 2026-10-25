@@ -6,11 +6,16 @@ import { OpaqueIdentifierSchema, RequestKeySchema } from "../../../core/api/prot
 import {
   PublicationReceiptParametersSchema,
   RuleBindingParametersSchema,
+  RuleCatalogParametersSchema,
+  RuleCatalogRefreshRequestSchema,
+  RuleCatalogRefreshResultSchema,
   RuleBindingRegistrationRequestSchema,
+  RuleBindingRegistrationReceiptSchema,
   RuleCommandRequestSchema,
   RuleSetCandidateSchema,
 } from "./ruleSetWire";
 import { RULE_SET_ENDPOINTS } from "./ruleSetHttp";
+import { RULE_BINDING_SCOPE_ENDPOINT } from "./ruleBindingScopeHttp";
 import {
   RULE_EXAMPLE_BINDING,
   RULE_EXAMPLE_CANDIDATE,
@@ -61,6 +66,73 @@ const bindingRead = (
 
 export const RULE_SET_HTTP_CONTRACT = Object.freeze([
   {
+    operationId: "readRuleBindingScopes",
+    summary: "从已登记规则绑定读取规则页环境和应用范围",
+    tag: "rulesets",
+    security: "session",
+    requiredAccess: CONSOLE_ACCESS.None,
+    endpoint: RULE_BINDING_SCOPE_ENDPOINT,
+    input: null,
+    pathParameters: [],
+    semanticRules: [
+      "Selector scopes are projected only from complete persisted rule-binding/source/target facts; the Metrics V2 observation catalog is not consulted.",
+      "An authoritative empty binding directory is a successful empty snapshot; missing or inconsistent authority is service_unavailable, never guessed as empty.",
+      "Environment and application labels are their persisted identifiers until an authoritative display-name contract exists.",
+      "No credentials, target body, rule arrays, or provider connection data are exposed.",
+      "This is an additive /api/v2 read boundary; existing Console API 0.5.0 routes keep their semantics.",
+    ],
+    examples: [
+      {
+        name: "rule-scopes-from-bindings",
+        summary: "仅从登记过的规则绑定得到规则筛选范围",
+        kind: "positive",
+        request: {},
+        response: {
+          status: 200,
+          body: {
+            asOf: "2026-10-15T01:02:03.456Z",
+            environments: [{ id: "prod", name: "prod" }],
+            applications: [{ id: "checkout", environmentId: "prod", name: "checkout" }],
+          },
+        },
+      },
+      {
+        name: "rule-scopes-require-session",
+        summary: "匿名会话不能读取规则筛选范围",
+        kind: "negative",
+        request: {},
+        response: {
+          status: 401,
+          body: { error: { code: "unauthenticated", requestId: "rule-scope-anonymous" } },
+        },
+      },
+      {
+        name: "no-rule-bindings-yet",
+        summary: "初始化后尚无规则绑定时返回权威空范围",
+        kind: "positive",
+        request: {},
+        response: {
+          status: 200,
+          body: {
+            asOf: "2026-10-15T01:02:03.456Z",
+            environments: [],
+            applications: [],
+          },
+        },
+      },
+      {
+        name: "rule-scope-session-required",
+        summary: "匿名请求不能读取规则绑定范围",
+        kind: "negative",
+        request: {},
+        response: {
+          status: 401,
+          body: { error: { code: "unauthenticated", requestId: "rule-scope-anonymous" } },
+        },
+      },
+    ],
+  },
+  {
     operationId: "createRuleBinding",
     summary: "创建规则集绑定及其精确配置源目标",
     tag: "rulesets",
@@ -72,6 +144,7 @@ export const RULE_SET_HTTP_CONTRACT = Object.freeze([
     semanticRules: [
       "Creates Console binding metadata and its exact Nacos/Consul target in one SQL transaction; it never writes a rule array or calls the provider.",
       "The registered source provider, label, and revision are authoritative server facts; the request supplies only sourceId and expected sourceRevision.",
+      "Idempotency-Key must equal the body requestKey; mismatches are rejected before registration authority is called.",
       "The command is idempotent for the same actor, browser session, request key, and payload. Reusing the key with another payload is rejected.",
       "An identical retry returns the original binding; provider target and binding metadata are never partially visible.",
     ],
@@ -117,6 +190,88 @@ export const RULE_SET_HTTP_CONTRACT = Object.freeze([
         summary: "viewer 不能创建规则绑定",
         kind: "negative",
         request: { body: { requestKey: "binding-create-1" }, bodyConforms: false },
+        response: { status: 403, body: ruleErrorExample("forbidden") },
+      },
+    ],
+  },
+  {
+    operationId: "readBindingRegistration",
+    summary: "按原 actor、binding 与 requestKey 核查绑定创建回执",
+    tag: "rulesets",
+    security: "session",
+    requiredAccess: CONSOLE_ACCESS.AdminRulesWrite,
+    endpoint: RULE_SET_ENDPOINTS.BindingRegistrationOperation,
+    input: null,
+    pathParameters: [
+      { name: "bindingId", schema: OpaqueIdentifierSchema },
+      { name: "requestKey", schema: RequestKeySchema },
+    ],
+    semanticRules: [
+      "Read-only operation lookup reauthorizes the current active admin session for the same actor; it does not require the originating cookie to remain current.",
+      "The authority returns a receipt only for the exact original actor, bindingId, and requestKey; another actor, binding, or key is not visible.",
+      "A not_found lookup does not prove that the synchronous create was not committed and must never unlock or trigger command replay.",
+      "The DTO contains only the original safe RuleBinding response; configuration credentials, target body, and original session hash are excluded.",
+    ],
+    examples: [
+      {
+        name: "binding-registration-completed",
+        summary: "同一管理员重新认证后读取原始安全回执",
+        kind: "positive",
+        request: {
+          pathParameters: {
+            bindingId: "checkout-prod-flow",
+            requestKey: "binding-create-1",
+          },
+        },
+        response: {
+          status: 200,
+          body: {
+            requestKey: "binding-create-1",
+            bindingId: "checkout-prod-flow",
+            status: "completed",
+            binding: {
+              id: "checkout-prod-flow",
+              environmentId: "prod",
+              appId: "checkout",
+              kind: "flow",
+              profile: "sentinel-flow-v1",
+              sourceId: "nacos-main",
+              sourceLabel: "Operations Nacos",
+              location: "nacos://prod-namespace/DEFAULT_GROUP/flow-rules.json",
+            },
+          },
+        },
+      },
+      {
+        name: "binding-registration-not-found",
+        summary: "错误 binding 或 request key 不暴露任何操作事实",
+        kind: "positive",
+        request: {
+          pathParameters: {
+            bindingId: "other-binding",
+            requestKey: "binding-create-1",
+          },
+        },
+        response: {
+          status: 200,
+          body: {
+            requestKey: "binding-create-1",
+            bindingId: "other-binding",
+            status: "not_found",
+            binding: null,
+          },
+        },
+      },
+      {
+        name: "binding-registration-forbidden",
+        summary: "无权读取规则绑定创建回执",
+        kind: "negative",
+        request: {
+          pathParameters: {
+            bindingId: RULE_EXAMPLE_BINDING.id,
+            requestKey: "binding-create-1",
+          },
+        },
         response: { status: 403, body: ruleErrorExample("forbidden") },
       },
     ],
@@ -170,6 +325,129 @@ export const RULE_SET_HTTP_CONTRACT = Object.freeze([
       "Requires current session authorization; every filter and page is explicit.",
       "The response query exactly echoes the effective query; total is the filtered total and never implies a first binding selection.",
       "Binding locations are redacted display facts; provider credentials and raw connection options are forbidden.",
+    ],
+  },
+  {
+    operationId: "readRuleCatalog",
+    summary: "分页读取配置中心中已登记的真实规则条目",
+    tag: "rulesets",
+    security: "session",
+    requiredAccess: CONSOLE_ACCESS.None,
+    endpoint: RULE_SET_ENDPOINTS.Catalog,
+    input: null,
+    pathParameters: [],
+    queryParameters: Object.entries(RuleCatalogParametersSchema.shape).map(([name, schema]) => ({
+      name,
+      schema,
+    })),
+    semanticRules: [
+      "Reads the SQL search projection of exact provider snapshots; configuration centers remain authoritative.",
+      "An exact total is present only when every registered binding in the requested environment/application scope has a current successful read.",
+      "Partial coverage returns only confirmed projected rows, reports unread/stale bindings, and must not be presented as an authoritative empty search.",
+      "A valid empty provider array is a successful binding read with zero rule entries; no application traffic or Reporter sample is required.",
+      "Current instance loading, per-rule request matches, and publication history are separate facts and are not inferred by this operation.",
+    ],
+    examples: [
+      {
+        name: "complete-empty-rule-catalog",
+        summary: "完整读取成功且规则数组为空",
+        kind: "positive",
+        request: { queryParameters: { environmentId: "prod", page: 1, pageSize: 20 } },
+        response: {
+          status: 200,
+          body: {
+            query: {
+              environmentId: "prod",
+              appId: null,
+              kind: null,
+              search: "",
+              page: 1,
+              pageSize: 20,
+            },
+            asOf: RULE_EXAMPLE_TIME.asOf,
+            coverage: "complete",
+            bindings: { total: 1, current: 1, stale: 0, notRead: 0 },
+            total: 0,
+            hasMore: false,
+            items: [],
+            issues: [],
+          },
+        },
+      },
+      {
+        name: "partial-rule-catalog",
+        summary: "部分来源未读时总数为 unknown，保留已确认条目",
+        kind: "positive",
+        request: { queryParameters: { environmentId: "prod", page: 1, pageSize: 20 } },
+        response: {
+          status: 200,
+          body: {
+            query: {
+              environmentId: "prod",
+              appId: null,
+              kind: null,
+              search: "",
+              page: 1,
+              pageSize: 20,
+            },
+            asOf: RULE_EXAMPLE_TIME.asOf,
+            coverage: "partial",
+            bindings: { total: 2, current: 1, stale: 0, notRead: 1 },
+            total: null,
+            hasMore: false,
+            items: [],
+            issues: [],
+          },
+        },
+      },
+      {
+        name: "rule-catalog-session-required",
+        summary: "匿名会话不能读取规则内容",
+        kind: "negative",
+        request: { queryParameters: { environmentId: "prod", page: 1, pageSize: 20 } },
+        response: { status: 401, body: ruleErrorExample("unauthenticated") },
+      },
+    ],
+  },
+  {
+    operationId: "refreshRuleCatalog",
+    summary: "有界刷新指定环境的规则源快照投影",
+    tag: "rulesets",
+    security: "session",
+    requiredAccess: CONSOLE_ACCESS.None,
+    endpoint: RULE_SET_ENDPOINTS.CatalogRefresh,
+    input: RuleCatalogRefreshRequestSchema,
+    pathParameters: [],
+    semanticRules: [
+      "Requires an active session and browser write proof; both admin and view may trigger this read-only source refresh.",
+      "Never writes provider rule configuration; a successful snapshot atomically replaces only its SQL read projection.",
+      "A single request reads at most 24 bindings with at most 8 provider calls in flight; next refreshes resume from never-read and oldest-attempted bindings.",
+      "One failed source does not abort other reads; previous last-known-good rule rows remain visible with stale freshness.",
+      "The response reports complete/partial coverage and exact attempt counts; no credentials or raw provider errors are returned.",
+    ],
+    examples: [
+      {
+        name: "refresh-rules-read-only",
+        summary: "刷新仅读取配置中心并更新 SQL 投影",
+        kind: "positive",
+        request: { body: { environmentId: "prod", appId: "checkout" } },
+        response: {
+          status: 200,
+          body: {
+            scope: { environmentId: "prod", appId: "checkout" },
+            asOf: RULE_EXAMPLE_TIME.asOf,
+            coverage: "complete",
+            bindings: { total: 1, attempted: 1, current: 1, stale: 0, notRead: 0 },
+          },
+        },
+      },
+      {
+        name: "refresh-rule-catalog-session-required",
+        summary: "匿名请求不能触发规则源刷新",
+        kind: "negative",
+        request: { body: { environmentId: "prod" } },
+        response: { status: 401, body: ruleErrorExample("unauthenticated") },
+      },
     ],
   },
   {

@@ -18,11 +18,13 @@ export function CommandFeedback<Result>({
   snapshot,
   copy,
   onInspectOutcome,
+  inspectDisabled = false,
   onReadLatest,
 }: {
   readonly snapshot: CommandSnapshot<Result>;
   readonly copy: Readonly<Record<FeedbackCommandStatus, FeedbackCopy>>;
   readonly onInspectOutcome?: () => void;
+  readonly inspectDisabled?: boolean;
   readonly onReadLatest?: () => void;
 }) {
   const { t } = useTranslation();
@@ -35,7 +37,7 @@ export function CommandFeedback<Result>({
         isBusy={snapshot.status === COMMAND_STATUS.Pending}
         actions={
           snapshot.status === COMMAND_STATUS.Unknown && onInspectOutcome ? (
-            <ActionButton onClick={onInspectOutcome}>
+            <ActionButton disabled={inspectDisabled} onClick={onInspectOutcome}>
               {t("shell.feedback.inspectOutcome")}
             </ActionButton>
           ) : snapshot.status === COMMAND_STATUS.Conflict && onReadLatest ? (

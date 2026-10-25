@@ -18,6 +18,7 @@ import { DialogFrame } from "../../../shared/ui/DialogFrame";
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { FeedbackPanel } from "../../../shared/ui/FeedbackPanel";
 import { useBeforeUnloadGuard } from "../../../shared/state/useBeforeUnloadGuard";
+import { useRetryCooldown } from "../../../shared/state/useRetryCooldown";
 import { SourceRegistrationFields } from "./SourceRegistrationFields";
 import { SourceOperationFeedback } from "./SourceOperationFeedback";
 import styles from "./SystemObservation.module.scss";
@@ -42,6 +43,17 @@ export function SourceRegistrationDialog({
     [operationFailed, setOperationFailed] = useState(false);
   const busy = state.command.status === "pending" || state.inspecting,
     unknown = state.command.status === "result-unknown";
+  const checkError =
+      state.check.status === "error" || state.check.status === "stale"
+        ? state.check.error
+        : undefined,
+    commandError = state.command.status === "error" ? state.command.error : undefined,
+    inspectionError = state.inspectionError;
+  const checkCoolingDown = useRetryCooldown(checkError, state.checkRetryUntilMs),
+    commandCoolingDown = useRetryCooldown(commandError),
+    inspectionCoolingDown = useRetryCooldown(inspectionError);
+  const checkLoading = state.check.status === "loading" || state.check.status === "refreshing";
+  const canSubmit = !busy && !unknown && !commandCoolingDown;
   useBeforeUnloadGuard(dirty || busy || unknown, busy || unknown, () =>
     setDraft((value) => clearSourceCredentials(value)),
   );
@@ -77,6 +89,7 @@ export function SourceRegistrationDialog({
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (!canSubmit) return;
     if (!prepareSourceMutation(draft, record)) {
       setInvalid(true);
       return;
@@ -121,10 +134,13 @@ export function SourceRegistrationDialog({
           <ActionButton disabled={busy} onClick={close}>
             {t("system.source.close")}
           </ActionButton>
-          <ActionButton disabled={busy || unknown} onClick={() => void check()}>
+          <ActionButton
+            disabled={busy || unknown || checkLoading || checkCoolingDown}
+            onClick={() => void check()}
+          >
             {t("system.source.check")}
           </ActionButton>
-          <ActionButton variant="primary" type="submit" form={formId} disabled={busy || unknown}>
+          <ActionButton variant="primary" type="submit" form={formId} disabled={!canSubmit}>
             {t("system.source.save")}
           </ActionButton>
         </>
@@ -179,6 +195,8 @@ export function SourceRegistrationDialog({
         <SourceOperationFeedback
           state={state}
           failed={operationFailed}
+          inspectDisabled={state.inspecting || inspectionCoolingDown}
+          inspectCoolingDown={inspectionCoolingDown}
           onInspect={() => void inspect()}
           onReadLatest={() => {
             void workflow.registry.load(null).catch(() => {});

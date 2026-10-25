@@ -43,6 +43,7 @@ function topology(overrides={}) {
     async readPublication(binding,id){return overrides.publication ? overrides.publication(id) : publication;},
     async readReceipts(query){counts.receipts++;return overrides.receipts ? overrides.receipts(query) : receiptPage;},
     async readPlans(){return overrides.plans ? overrides.plans() : collection(plans);},
+    async readPublicationTarget(bindingId){return overrides.publicationTarget ? overrides.publicationTarget(bindingId) : {bindingId,target:null};},
   },readAccess,writeAccess,operation,source,()=>500);
   return {workflow,operation,read,write,source,counts,last:()=>latest,setPlans:values=>{plans=values;},dispose(){workflow.dispose();operation.dispose();read.complete();write.complete();source.complete();}};
 }

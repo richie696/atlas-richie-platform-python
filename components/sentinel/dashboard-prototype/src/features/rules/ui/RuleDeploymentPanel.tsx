@@ -21,6 +21,7 @@ import { useBeforeUnloadGuard } from "../../../shared/state/useBeforeUnloadGuard
 interface Props {
   readonly bindingId: string;
   readonly workflow: ReturnType<typeof createRuleDeploymentWorkflow>;
+  readonly view: "publications" | "recovery";
   readonly initialPublicationId?: string;
   readonly initialVersionId?: string;
 }
@@ -28,6 +29,7 @@ interface Props {
 export function RuleDeploymentPanel({
   bindingId,
   workflow,
+  view,
   initialPublicationId,
   initialVersionId,
 }: Props) {
@@ -59,6 +61,7 @@ export function RuleDeploymentPanel({
       key={state.writable ? "write" : "read"}
       bindingId={bindingId}
       workflow={workflow}
+      view={view}
     />
   ) : (
     <FeedbackPanel
@@ -71,7 +74,7 @@ export function RuleDeploymentPanel({
   );
 }
 /** Dialog intentions retain their workflow identity, so replacing the injected owner cannot inherit a confirmation. */
-function DeploymentSurface({ bindingId, workflow }: Props) {
+function DeploymentSurface({ bindingId, workflow, view }: Props) {
   const state = useExternalSnapshot(workflow),
     { t } = useTranslation();
   const [publication, setPublication] = useState<{
@@ -111,9 +114,9 @@ function DeploymentSurface({ bindingId, workflow }: Props) {
     });
   const operationKind = state.operation.operation?.kind;
   const showOperation =
-    operationKind === RULE_MUTATION.Publish ||
-    operationKind === RULE_MUTATION.CreatePlan ||
-    operationKind === RULE_MUTATION.CancelPlan;
+    (view === "publications" && operationKind === RULE_MUTATION.Publish) ||
+    (view === "recovery" &&
+      (operationKind === RULE_MUTATION.CreatePlan || operationKind === RULE_MUTATION.CancelPlan));
   const freshSource = state.source.status === "ready" || state.source.status === "empty";
   const freshVersions = state.versions.status === "ready";
   const freshPlans = state.plans.status === "ready" || state.plans.status === "empty";
@@ -126,7 +129,7 @@ function DeploymentSurface({ bindingId, workflow }: Props) {
           onReadLatest={() => void act(workflow.refreshCatalog)}
         />
       )}
-      <RulePublicationTargetPanel workflow={workflow} />
+      {view === "publications" && <RulePublicationTargetPanel workflow={workflow} />}
       {failed && (
         <FeedbackPanel
           tone="warning"
@@ -136,36 +139,43 @@ function DeploymentSurface({ bindingId, workflow }: Props) {
           }}
         />
       )}
-      <RuleVersionsPanel
-        versions={state.versions}
-        version={state.version}
-        selectedId={state.versionId}
-        canPublish={
-          state.writable && !state.locked && freshSource && state.version.status === "ready"
-        }
-        onSelect={(id) => void act(() => workflow.selectVersion(id))}
-        onRead={() => void act(workflow.refreshVersions)}
-        onPublish={() =>
-          void act(() => setPublication({ owner: workflow, intent: workflow.preparePublication() }))
-        }
-      />
-      <RulePublicationPanel
-        publications={state.publications}
-        publication={state.publication}
-        receipts={state.receipts}
-        selectedId={state.publicationId}
-        onSelect={(id) => void act(() => workflow.selectPublication(id))}
-        onRead={refreshPublication}
-        onReadReceipts={(page) => void act(() => workflow.loadReceipts(page))}
-      />
-      <RulePlansPanel
-        plans={state.plans}
-        canCreate={state.writable && !state.locked && freshVersions && freshPlans}
-        canCancel={state.writable && !state.locked && freshPlans}
-        onRead={() => void act(workflow.refreshPlans)}
-        onCreate={() => setPlanOwner(workflow)}
-        onCancel={(plan) => setCancel({ owner: workflow, plan })}
-      />
+      {view === "publications" ? (
+        <>
+          <RuleVersionsPanel
+            versions={state.versions}
+            version={state.version}
+            selectedId={state.versionId}
+            canPublish={
+              state.writable && !state.locked && freshSource && state.version.status === "ready"
+            }
+            onSelect={(id) => void act(() => workflow.selectVersion(id))}
+            onRead={() => void act(workflow.refreshVersions)}
+            onPublish={() =>
+              void act(() =>
+                setPublication({ owner: workflow, intent: workflow.preparePublication() }),
+              )
+            }
+          />
+          <RulePublicationPanel
+            publications={state.publications}
+            publication={state.publication}
+            receipts={state.receipts}
+            selectedId={state.publicationId}
+            onSelect={(id) => void act(() => workflow.selectPublication(id))}
+            onRead={refreshPublication}
+            onReadReceipts={(page) => void act(() => workflow.loadReceipts(page))}
+          />
+        </>
+      ) : (
+        <RulePlansPanel
+          plans={state.plans}
+          canCreate={state.writable && !state.locked && freshVersions && freshPlans}
+          canCancel={state.writable && !state.locked && freshPlans}
+          onRead={() => void act(workflow.refreshPlans)}
+          onCreate={() => setPlanOwner(workflow)}
+          onCancel={(plan) => setCancel({ owner: workflow, plan })}
+        />
+      )}
       {state.writable && publication?.owner === workflow && (
         <RulePublishDialog
           workflow={workflow}

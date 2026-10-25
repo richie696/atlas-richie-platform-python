@@ -7,5 +7,14 @@
   </head>
   <body>
     <div id="root"></div>
+    <script type="module">
+      import "/src/core/styles/index.scss";
+      import { loadAstryxLocaleCatalog } from "/src/app/i18n/astryxLocaleCatalogs.ts";
+      import { i18nReady } from "/src/app/i18n/config.ts";
+      import { readStoredLocale } from "/src/app/i18n/locales.ts";
+      await loadAstryxLocaleCatalog(readStoredLocale());
+      await i18nReady;
+      window.__sentinelProbeReady = true;
+    </script>
   </body>
 </html>

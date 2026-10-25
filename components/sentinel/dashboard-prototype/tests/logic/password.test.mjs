@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { AppError, AppErrorKind } from "@richie696/react-framework";
 import {
   validatePasswordChange,
+  CURRENT_PASSWORD_MAX_LENGTH,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
 } from "../../src/features/identity/model/passwordPolicy";
@@ -28,7 +29,7 @@ function deferred() {
   });
   return { promise, resolve };
 }
-function make(change = async () => ({ sessionDisposition: "reauthenticate" })) {
+function make(change = async () => ({ sessionDisposition: "reauthenticate" }), options = {}) {
   let access = { phase: "resolved", facts: { kind: "authenticated", identity: owner } };
   const listeners = new Set();
   const session = {
@@ -38,7 +39,12 @@ function make(change = async () => ({ sessionDisposition: "reauthenticate" })) {
       return () => listeners.delete(fn);
     },
   };
-  const workflow = createOwnPasswordWorkflow({ changeOwnPassword: change }, owner, session);
+  const workflow = createOwnPasswordWorkflow(
+    { changeOwnPassword: change },
+    owner,
+    session,
+    options,
+  );
   return {
     workflow,
     listeners,
@@ -61,9 +67,15 @@ test("PASSWORD-VALIDATE current is required, minimum/confirmation are local and 
     validatePasswordChange({ ...draft, next: "x".repeat(PASSWORD_MAX_LENGTH + 1) })[0],
     { key: "password.tooLong", params: { max: PASSWORD_MAX_LENGTH } },
   );
+  // A legacy password longer than the new-password ceiling stays changeable: only the
+  // replacement is capped, otherwise those accounts could never rotate their password.
   assert.deepEqual(
-    validatePasswordChange({ ...draft, current: "x".repeat(PASSWORD_MAX_LENGTH + 1) })[0],
-    { key: "password.tooLong", params: { max: PASSWORD_MAX_LENGTH } },
+    validatePasswordChange({ ...draft, current: "x".repeat(PASSWORD_MAX_LENGTH + 1) }),
+    [],
+  );
+  assert.deepEqual(
+    validatePasswordChange({ ...draft, current: "x".repeat(CURRENT_PASSWORD_MAX_LENGTH + 1) })[0],
+    { key: "password.tooLong", params: { max: CURRENT_PASSWORD_MAX_LENGTH } },
   );
   assert.deepEqual(
     validatePasswordChange({
@@ -140,19 +152,71 @@ test("PASSWORD-OUTCOME invalid fields never dispatch, pending is single-flight, 
   assert.equal(calls, 1);
   workflow.dispose();
 });
-test("PASSWORD-OUTCOME known current-password/weak-password/rate-limit errors permit deliberate correction, never auto replay", async () => {
+test("PASSWORD-OUTCOME known rejections retain stable classification, redact details and require deliberate resubmit", async () => {
+  const expected = [
+    { status: 400, code: "current_password_invalid" },
+    { status: 422, code: "validation_failed" },
+    { status: 429, code: "rate_limited", retryAfterMs: 0 },
+  ];
   let calls = 0;
   const { workflow } = make(async () => {
-    throw new AppError(AppErrorKind.PROTOCOL, "safe", { status: [400, 422, 429][calls++] });
+    const failure = expected[calls++];
+    if (!failure) return { sessionDisposition: "reauthenticate" };
+    throw new AppError(AppErrorKind.PROTOCOL, "PRIVATE-REMOTE-DIAGNOSTIC", failure);
   });
-  for (let i = 0; i < 3; i++) {
-    await assert.rejects(workflow.submit(draft));
-    assert.equal(workflow.getSnapshot().status, "error");
+  try {
+    for (const failure of expected) {
+      await assert.rejects(workflow.submit(draft));
+      const snapshot = workflow.getSnapshot();
+      assert.equal(snapshot.status, "error", `${failure.code} is a known rejection`);
+      assert.equal(snapshot.error.status, failure.status);
+      assert.equal(snapshot.error.code, failure.code);
+      assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE|SYNTHETIC/);
+      assert.equal(calls, expected.indexOf(failure) + 1, "a rejection never schedules a replay");
+    }
+    await workflow.submit({ ...draft, current: "SYNTHETIC-CORRECTED-CURRENT" });
+    assert.equal(calls, 4, "only a deliberate later submit starts another request");
+  } finally {
+    workflow.dispose();
   }
-  assert.equal(calls, 3);
-  workflow.dispose();
 });
-test("PASSWORD-OUTCOME timeout/5xx/cancellation after dispatch are unknown, cannot be reset into repeated password mutation", async () => {
+test("F4.32-PASSWORD rate-limit cooldown blocks manual edits from dispatch until its bounded deadline", async () => {
+  let now = 10_000;
+  let calls = 0;
+  const { workflow: rateLimited } = make(
+    async () => {
+      calls++;
+      if (calls === 1)
+        throw new AppError(AppErrorKind.RATE_LIMITED, "private rate-limit detail", {
+          status: 429,
+          code: "rate_limited",
+          retryAfterMs: 1_500,
+        });
+      return { sessionDisposition: "reauthenticate" };
+    },
+    { clock: () => now },
+  );
+  try {
+    await assert.rejects(rateLimited.submit(draft));
+    assert.equal(calls, 1);
+    assert.equal(rateLimited.getRetryAfterMs(), 1_500);
+    await assert.rejects(
+      rateLimited.submit({ ...draft, current: "SYNTHETIC-CORRECTED-CURRENT" }),
+      (error) => error.code === "rate_limited" && error.retryAfterMs === 1_500,
+    );
+    now += 700;
+    assert.equal(rateLimited.getRetryAfterMs(), 800);
+    await assert.rejects(rateLimited.submit(draft), (error) => error.code === "rate_limited");
+    assert.equal(calls, 1, "cooldown must block transport, including direct workflow calls");
+    now += 800;
+    assert.equal(rateLimited.getRetryAfterMs(), 0);
+    await rateLimited.submit(draft);
+    assert.equal(calls, 2, "a deliberate submit is allowed after server cooldown expires");
+  } finally {
+    rateLimited.dispose();
+  }
+});
+test("PASSWORD-OUTCOME timeout/5xx after dispatch are unknown, cannot be reset into repeated password mutation", async () => {
   for (const error of [
     new AppError(AppErrorKind.TIMEOUT, "safe"),
     new AppError(AppErrorKind.SERVER, "safe", { status: 503 }),
@@ -164,10 +228,37 @@ test("PASSWORD-OUTCOME timeout/5xx/cancellation after dispatch are unknown, cann
     });
     await assert.rejects(workflow.submit(draft));
     assert.equal(workflow.getSnapshot().status, "result-unknown");
+    assert.doesNotMatch(JSON.stringify(workflow.getSnapshot()), /PRIVATE|SYNTHETIC/);
     await assert.rejects(workflow.submit(draft), (error) => error.kind === AppErrorKind.DUPLICATE);
     assert.equal(calls, 1);
     workflow.dispose();
   }
+});
+test("PASSWORD-CANCEL after dispatch remains unknown and a late receipt cannot authorize replay", async () => {
+  const pending = deferred();
+  const started = deferred();
+  let calls = 0,
+    signal;
+  const { workflow } = make(async (_input, receivedSignal) => {
+    calls++;
+    signal = receivedSignal;
+    started.resolve();
+    return pending.promise;
+  });
+  const running = workflow.submit(draft);
+  await started.promise;
+  workflow.cancel();
+
+  assert.ok(signal.aborted);
+  await assert.rejects(running, (error) => error.kind === AppErrorKind.CANCELLED);
+  assert.equal(workflow.getSnapshot().status, "result-unknown");
+  assert.doesNotMatch(JSON.stringify(workflow.getSnapshot()), /SYNTHETIC/);
+  await assert.rejects(workflow.submit(draft), (error) => error.kind === AppErrorKind.DUPLICATE);
+  pending.resolve({ sessionDisposition: "reauthenticate" });
+  await Promise.resolve();
+  assert.equal(workflow.getSnapshot().status, "result-unknown");
+  assert.equal(calls, 1);
+  workflow.dispose();
 });
 test("PASSWORD-SESSION owner changes abort observation and a late result cannot be published as success for the new user", async () => {
   const pending = deferred();

@@ -52,7 +52,10 @@ export function ActionButton({
     <Button
       {...rest}
       type={type}
-      className={scopedClasses(styleModules, className)}
+      className={scopedClasses(
+        styleModules,
+        ["action-button", className].filter(Boolean).join(" "),
+      )}
       label={accessibleLabel}
       variant={resolvedVariant}
       size={size}

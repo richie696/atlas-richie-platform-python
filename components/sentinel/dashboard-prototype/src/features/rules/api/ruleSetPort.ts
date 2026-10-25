@@ -1,5 +1,14 @@
-import type { BindingQuery, BindingPage } from "../model/ruleDirectory";
-import type { RuleBindingRegistration } from "../model/ruleBindingRegistration";
+import type {
+  BindingQuery,
+  BindingPage,
+  RuleCatalogPage,
+  RuleCatalogQuery,
+  RuleCatalogRefreshResult,
+} from "../model/ruleDirectory";
+import type {
+  RuleBindingRegistration,
+  RuleBindingRegistrationReceipt,
+} from "../model/ruleBindingRegistration";
 import type { RuleBinding } from "../model/ruleSet";
 import type { RuleSetSnapshot, RuleSetCandidate, RuleSetCollection } from "../model/ruleSet";
 import type {
@@ -27,10 +36,25 @@ export interface PublicationReceiptQuery {
 /** Consumer effects, not frozen JSON endpoints. Same future HTTP adapter serves mock and live. */
 export interface RuleSetPort {
   readonly readBindings: (query: BindingQuery, signal: AbortSignal) => Promise<BindingPage>;
+  readonly readRuleCatalog: (
+    query: RuleCatalogQuery,
+    signal: AbortSignal,
+  ) => Promise<RuleCatalogPage>;
+  readonly refreshRuleCatalog: (
+    environmentId: string,
+    appId: string | null,
+    signal: AbortSignal,
+  ) => Promise<RuleCatalogRefreshResult>;
   readonly registerBinding: (
     command: RuleBindingRegistration,
     signal: AbortSignal,
   ) => Promise<RuleBinding>;
+  /** Read only the original safe result; a miss never means the write is safe to repeat. */
+  readonly readBindingRegistration: (
+    bindingId: string,
+    requestKey: string,
+    signal: AbortSignal,
+  ) => Promise<RuleBindingRegistrationReceipt>;
   readonly readSnapshot: (bindingId: string, signal: AbortSignal) => Promise<RuleSetSnapshot>;
   readonly readDrafts: (
     bindingId: string,

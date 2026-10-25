@@ -7,16 +7,22 @@ import { createSourceRegistrationWorkflow } from "../application/sourceRegistrat
 import { createSystemObservationResources } from "../application/systemObservationResources";
 import type { SystemObservationPorts } from "../api/systemObservationPort";
 import type { SourceRegistrationPort } from "../api/sourceRegistrationPort";
+import type { MonitoringSourcePort } from "../api/monitoringSourcePort";
+import { createMonitoringSourceWorkflow } from "../application/monitoringSourceWorkflow";
 import type { AuditQuery } from "../model/systemObservation";
 import type { ControlPlaneAccessState } from "../../identity";
 import { SystemPage } from "./SystemPage";
+import type { SystemSettingsPort } from "../api/systemSettingsPort";
 
 type PageContext = DashboardPageProps & {
   readonly observationPorts: SystemObservationPorts;
   readonly sourceRegistrationPort: SourceRegistrationPort;
+  readonly systemSettingsPort: SystemSettingsPort;
+  readonly monitoringSourcePort: MonitoringSourcePort;
   readonly accountId?: string;
   readonly principal: { readonly roleId: "admin" | "view"; readonly sessionEpoch: string };
   readonly access: ControlPlaneAccessState;
+  readonly demoMode: boolean;
   readonly identityPanels: { readonly accounts: ReactNode; readonly roles: ReactNode };
 };
 
@@ -29,8 +35,11 @@ function accessObserver(ownerKey: string, allowed: boolean): QueryAccessObserver
 export function SystemObservationContainer({
   observationPorts,
   sourceRegistrationPort,
+  systemSettingsPort,
+  monitoringSourcePort,
   principal,
   access: sessionAccess,
+  demoMode,
   ...page
 }: PageContext) {
   const identityRole = principal.roleId;
@@ -61,6 +70,14 @@ export function SystemObservationContainer({
     [access.sources, sourceRegistrationPort],
   );
   useOwnedDisposal(sourceWorkflow);
+  const monitoringSourceWorkflow = useMemo(
+    () =>
+      createMonitoringSourceWorkflow(monitoringSourcePort, access.system, () =>
+        crypto.randomUUID(),
+      ),
+    [access.system, monitoringSourcePort],
+  );
+  useOwnedDisposal(monitoringSourceWorkflow);
   const [auditQuery, setAuditQuery] = useState<AuditQuery>(() => {
     const endMs = Date.now();
     return {
@@ -77,7 +94,10 @@ export function SystemObservationContainer({
   useEffect(
     () => () => {
       resources.connections.cancel();
+      resources.deploymentGuides.cancel();
       resources.protocols.cancel();
+      resources.agentReporting.cancel();
+      resources.incidentEvents.cancel();
       resources.audit.cancel();
     },
     [resources],
@@ -91,10 +111,14 @@ export function SystemObservationContainer({
       accountId={page.accountId}
       identityPanels={page.identityPanels}
       access={sessionAccess}
+      demoMode={demoMode}
       observations={resources}
       sourceRegistration={sourceWorkflow}
+      monitoringSources={monitoringSourceWorkflow}
+      canManageMonitoringSources={identityRole === "admin"}
       auditQuery={auditQuery}
       onAuditQueryChange={setAuditQuery}
+      systemSettings={systemSettingsPort}
     />
   );
 }

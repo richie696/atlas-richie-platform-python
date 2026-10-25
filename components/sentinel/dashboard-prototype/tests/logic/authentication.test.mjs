@@ -7,7 +7,6 @@ import {
 } from "../../src/features/identity/presentation/loginFeedback.ts";
 import { CONSOLE_WIRE_LIMIT } from "../../src/core/api/protocol/common.ts";
 import { createAuthenticationWorkflow } from "../../src/features/identity/application/authenticationWorkflow";
-import { observeAuthenticationForeground } from "../../src/features/identity/state/foregroundRevalidation";
 
 const identity = Object.freeze({
   accountId: "one",
@@ -28,14 +27,18 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
-function make(changes = {}) {
-  return createAuthenticationWorkflow({
-    readBootstrap: async () => ({ initialized: true }),
-    readSession: async () => null,
-    login: async () => identity,
-    logout: async () => {},
-    ...changes,
-  });
+function make(changes = {}, options = {}) {
+  return createAuthenticationWorkflow(
+    {
+      readBootstrap: async () => ({ initialized: true }),
+      readSession: async () => null,
+      login: async () => identity,
+      logout: async () => {},
+      ...changes,
+    },
+    undefined,
+    options,
+  );
 }
 
 test("F2 authentication requires confirmed initialized anonymous state, validates blanks before dispatch", async () => {
@@ -210,6 +213,72 @@ test("F4.22 login cooldown accepts only bounded retry metadata from the rate-lim
     ),
     null,
   );
+});
+test("F4.22 authentication workflow enforces the server cooldown before dispatch and allows retry at expiry", async () => {
+  let now = 10_000,
+    calls = 0,
+    authenticated = false;
+  const workflow = make(
+    {
+      readSession: async () => (authenticated ? identity : null),
+      login: async () => {
+        calls++;
+        if (calls === 1)
+          throw new AppError(AppErrorKind.SERVER, "safe", {
+            status: 429,
+            code: "rate_limited",
+            retryAfterMs: 1_250,
+          });
+        authenticated = true;
+        return identity;
+      },
+    },
+    { clock: () => now },
+  );
+  await workflow.restore();
+  await assert.rejects(workflow.login(credentials), (error) => error.status === 429);
+  assert.equal(workflow.getLoginRetryAfterMs(), 1_250);
+
+  now += 1_249;
+  await assert.rejects(workflow.login(credentials), (error) => {
+    assert.equal(error.code, "rate_limited");
+    assert.equal(error.retryAfterMs, 1);
+    return true;
+  });
+  assert.equal(calls, 1, "cooldown rejection must happen before the login Port");
+
+  now += 1;
+  assert.equal(workflow.getLoginRetryAfterMs(), 0);
+  await workflow.login(credentials);
+  assert.equal(calls, 2);
+  assert.equal(workflow.getSnapshot().access.facts.kind, "authenticated");
+  workflow.dispose();
+});
+test("F4.22 unrelated retry metadata starts no cooldown but preserves unknown-outcome protection", async () => {
+  let calls = 0;
+  const workflow = make(
+    {
+      login: async () => {
+        calls++;
+        throw new AppError(AppErrorKind.SERVER, "safe", {
+          status: 503,
+          code: "rate_limited",
+          retryAfterMs: 1_250,
+        });
+      },
+    },
+    { clock: () => 50 },
+  );
+  await workflow.restore();
+  await assert.rejects(workflow.login(credentials));
+  assert.equal(workflow.getLoginRetryAfterMs(), 0);
+  assert.equal(workflow.getSnapshot().login.status, "result-unknown");
+  await assert.rejects(
+    workflow.login(credentials),
+    (error) => error.kind === AppErrorKind.DUPLICATE,
+  );
+  assert.equal(calls, 1);
+  workflow.dispose();
 });
 test("F4.22 server cooldown feedback survives edited credentials returning login to idle", () => {
   const feedback = loginFeedback(
@@ -466,95 +535,6 @@ test("F4.20 checking snapshots never expose a previously authenticated identity"
   assert.deepEqual(workflow.getSnapshot().access, { phase: "checking" });
   pending.resolve(identity);
   await revalidation;
-  workflow.dispose();
-});
-test("F2 foreground observer revalidates only when visible and detaches both listeners", async () => {
-  const listeners = new Map();
-  const target = {
-    addEventListener(type, listener) {
-      listeners.set(type, listener);
-    },
-    removeEventListener(type, listener) {
-      if (listeners.get(type) === listener) listeners.delete(type);
-    },
-  };
-  let reads = 0,
-    visibilityState = "hidden";
-  const documentTarget = Object.create(target);
-  Object.defineProperty(documentTarget, "visibilityState", { get: () => visibilityState });
-  const workflow = make({
-    readBootstrap: async () => {
-      reads++;
-      return { initialized: true };
-    },
-  });
-  await workflow.restore();
-  const stop = observeAuthenticationForeground(workflow, target, documentTarget);
-  listeners.get("focus")();
-  listeners.get("visibilitychange")();
-  assert.equal(reads, 1);
-  visibilityState = "visible";
-  listeners.get("visibilitychange")();
-  await Promise.resolve();
-  await Promise.resolve();
-  assert.equal(reads, 2);
-  stop();
-  assert.equal(listeners.size, 0);
-  workflow.dispose();
-});
-test("F4.21 a setup tab returning to the foreground accepts the initialized server fact", async () => {
-  const listeners = new Map();
-  const target = {
-    addEventListener(type, listener) {
-      listeners.set(type, listener);
-    },
-    removeEventListener(type, listener) {
-      if (listeners.get(type) === listener) listeners.delete(type);
-    },
-  };
-  let initialized = false,
-    visibilityState = "visible",
-    bootstrapReads = 0,
-    sessionReads = 0;
-  const documentTarget = Object.create(target);
-  Object.defineProperty(documentTarget, "visibilityState", { get: () => visibilityState });
-  const workflow = make({
-    readBootstrap: async () => {
-      bootstrapReads++;
-      return initialized
-        ? { initialized: true }
-        : { initialized: false, setupAvailable: true, operatorAuthorized: true };
-    },
-    readSession: async () => {
-      sessionReads++;
-      return null;
-    },
-  });
-  assert.deepEqual(await workflow.restore(), {
-    kind: "uninitialized",
-    setupAvailable: true,
-    operatorAuthorized: true,
-  });
-  const stop = observeAuthenticationForeground(workflow, target, documentTarget);
-  initialized = true;
-  visibilityState = "hidden";
-  listeners.get("focus")();
-  listeners.get("visibilitychange")();
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(bootstrapReads, 1);
-
-  visibilityState = "visible";
-  listeners.get("focus")();
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(bootstrapReads, 2);
-  assert.equal(sessionReads, 1);
-  assert.deepEqual(workflow.getSnapshot().access, {
-    phase: "resolved",
-    facts: { kind: "anonymous" },
-  });
-
-  stop();
-  assert.equal(listeners.size, 0);
   workflow.dispose();
 });
 test("F2 explicit bootstrap receipt read supersedes a background focus refresh", async () => {

@@ -8,7 +8,7 @@
  * 基础组件卡片全是中文——49 条用例全绿，中文却满页都是。
  *
  * `tests/i18n/audit.mjs` 扫的是**源码**，它看不到：
- * - model 层被渲染成文本的中文常量（`TPS_INTEGRATION.note` 就是这样漏掉的）
+ * - model 层被渲染成文本的中文常量
  * - shared 组件里的文案
  * - 经由 props 层层传递、最终在别的 feature 渲染的中文
  *
@@ -69,9 +69,7 @@ const COLLECT = `(() => {
 
 const locale = process.argv[2] ?? "en-US";
 const filters = process.argv.slice(3);
-const cases = filters.length
-  ? CASES.filter(([name]) => filters.includes(name))
-  : CASES;
+const cases = filters.length ? CASES.filter(([name]) => filters.includes(name)) : CASES;
 
 if (cases.length === 0) {
   console.error(`没有匹配的用例。可用: ${CASES.map(([n]) => n).join(", ")}`);

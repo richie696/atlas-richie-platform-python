@@ -6,6 +6,7 @@ import {
   createInitializationWorkflow,
   InitializationPage,
 } from "../../../src/features/identity/initialization";
+import styles from "./InitializationProbe.module.scss";
 
 /** Mutable transport state belongs to this test effect owner, not React props. */
 function createInitializationTopology(alreadyInitialized: boolean) {
@@ -95,8 +96,10 @@ export function InitializationProbe({
   const snapshot = useExternalSnapshot(workflow);
   return (
     <AstryxProvider>
-      <aside>
+      <aside className={styles.controls} aria-label="Initialization test controls">
+        <strong className={styles.label}>TEST ONLY · 初始化探针</strong>
         <button
+          className={styles.button}
           data-hold
           onClick={() => {
             topology.hold();
@@ -105,6 +108,7 @@ export function InitializationProbe({
           Hold request
         </button>
         <button
+          className={styles.button}
           data-release
           onClick={() => {
             topology.release();
@@ -113,6 +117,7 @@ export function InitializationProbe({
           Release request
         </button>
         <button
+          className={styles.button}
           data-timeout
           onClick={() => {
             topology.setFailure("timeout");
@@ -121,6 +126,7 @@ export function InitializationProbe({
           Simulate timeout after commit
         </button>
         <button
+          className={styles.button}
           data-validation
           onClick={() => {
             topology.setFailure("validation");
@@ -129,6 +135,7 @@ export function InitializationProbe({
           Reject validation
         </button>
         <button
+          className={styles.button}
           data-close-externally
           onClick={() => {
             topology.setInitialized(true);
@@ -138,6 +145,7 @@ export function InitializationProbe({
           Close setup from another initializer
         </button>
         <button
+          className={styles.button}
           data-reopen-after-close
           onClick={() => {
             topology.setInitialized(false);
@@ -146,7 +154,7 @@ export function InitializationProbe({
         >
           Reopen setup for secret-clearing assertion
         </button>
-        <output data-probe-summary>
+        <output className={styles.summary} data-probe-summary>
           {JSON.stringify({
             status: snapshot.initialization.status,
             ...topology.readCounts(),

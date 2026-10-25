@@ -12,9 +12,9 @@ export interface IdentitySessionObserver {
   readonly subscribe: (listener: () => void) => () => void;
 }
 
-/** App-owned capability used only when an account command can alter the active principal. */
+/** App-owned authority refresh used by account management after self-change or server denial. */
 export interface IdentitySessionRevalidator {
-  /** Re-read bootstrap/session authority after a confirmed mutation of the current account. */
+  /** Re-read server authority after a confirmed self-mutation or protected-operation denial. */
   readonly revalidateAccess: () => Promise<AccessFacts | undefined>;
 }
 

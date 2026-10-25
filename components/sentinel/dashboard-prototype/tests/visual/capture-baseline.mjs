@@ -4,13 +4,13 @@
  *
  * 中文
  * ----
- * 重建页面时必须证明「展示效果不变」。本工具用系统 Chrome headless 对每条路由和
+ * 重建页面时必须证明「展示效果不变」。本工具连接已运行的 Codex 内置浏览器，对每条路由和
  * 关键交互状态捕获两样东西，并**分别**比较：
  *
  * 1. **归一化 DOM**：class 名决定实际样式，因此 DOM 归一化后逐字节相等，可以证明
  *    「这次改动没有动到影响渲染的结构与类名」，并且容易定位到差异元素。
  * 2. **整页 PNG**：按 png-diff 的比例与通道差容差比较，保留真实错位而允许
- *    跨 Chrome 进程的微小字形栅格化抖动；不只比较文件摘要。
+ *    浏览器会话间的微小字形栅格化抖动；不只比较文件摘要。
  *
  * **两个信号必须分开看。** DOM 相等但 PNG 不等 = 纯 CSS 层的回归：结构没动，
  * 但布局坏了。真实踩过的坑：Astryx `Button` 在 children 外包了一层盒子，
@@ -42,7 +42,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { launchBrowser } from "../e2e/cdp.mjs";
+import { connectIabBrowser } from "../e2e/cdp.mjs";
 import { DEFAULT_TOLERANCE, diffPng } from "./png-diff.mjs";
 import { normalizeDom, normalizeLegacyDom } from "./dom-normalization.mjs";
 
@@ -122,7 +122,11 @@ const CASES = [
  * 处于其他 worker 的中间态，纳入比较只会产生无法归因的误报。用 `ONLY=a,b` 指定。
  */
 const ONLY = process.env.ONLY
-  ? new Set(process.env.ONLY.split(",").map((item) => item.trim()).filter(Boolean))
+  ? new Set(
+      process.env.ONLY.split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    )
   : null;
 
 /**
@@ -133,7 +137,11 @@ const ONLY = process.env.ONLY
  * 差异被悄悄重新基线化。
  */
 const ACCEPT_RENDER = process.env.ACCEPT_RENDER
-  ? new Set(process.env.ACCEPT_RENDER.split(",").map((item) => item.trim()).filter(Boolean))
+  ? new Set(
+      process.env.ACCEPT_RENDER.split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    )
   : new Set();
 
 /**
@@ -149,7 +157,11 @@ const ACCEPT_RENDER = process.env.ACCEPT_RENDER
  * DOM 变化，和不接受它的差别只剩下一个绿色输出。
  */
 const ACCEPT_DOM = process.env.ACCEPT_DOM
-  ? new Set(process.env.ACCEPT_DOM.split(",").map((item) => item.trim()).filter(Boolean))
+  ? new Set(
+      process.env.ACCEPT_DOM.split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    )
   : new Set();
 
 /** 接受 DOM 变化时必须给出的原因，会打印在输出里。 */
@@ -165,7 +177,7 @@ if (ACCEPT_DOM.size > 0 && !DOM_CHANGE_REASON.trim()) {
 /**
  * 渲染容差。可用 `TOLERANCE_RATIO` / `TOLERANCE_MAX_DELTA` 覆盖。
  *
- * 默认值来自实测：跨进程 Chrome 捕获的抗锯齿抖动上限约 0.0077% 像素 / 通道差 44；
+ * 默认值来自既有浏览器基线：抗锯齿抖动上限约 0.0077% 像素 / 通道差 44；
  * 真实布局回归是 0.68% / 通道差 233。阈值取抖动上限的约 6 倍与 1.8 倍。
  */
 const TOLERANCE = Object.freeze({
@@ -177,7 +189,6 @@ const TOLERANCE = Object.freeze({
 function selectedCases() {
   return ONLY ? CASES.filter((item) => ONLY.has(item.name)) : CASES;
 }
-
 
 /**
  * 截一张图并等到**渲染收敛**。
@@ -194,7 +205,7 @@ function selectedCases() {
  *
  * 逐字节比较足够：像素完全相同则 PNG 编码结果也完全相同（实测同态两次 md5 一致）。
  *
- * @param browser 由 `launchBrowser()` 得到的 CDP 会话，**整个捕获共用一个**。
+ * @param browser 由 `connectIabBrowser()` 得到的 CDP 会话，**整个捕获共用一个**。
  */
 async function captureSettled(page, testCase, outDir) {
   const finalPath = path.join(outDir, `${testCase.name}.png`);
@@ -237,7 +248,7 @@ async function captureCase(page, testCase, outDir) {
 
 async function capture(outDir) {
   if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
-  const browser = await launchBrowser({ viewport: VIEWPORT });
+  const browser = await connectIabBrowser({ viewport: VIEWPORT });
   const results = [];
   try {
     const page = await browser.newPage();
@@ -248,7 +259,9 @@ async function capture(outDir) {
       } catch (error) {
         // 单个用例失败不该毁掉整轮——这正是超时+重试没能兜住的那类损失
         // （缺 per-case 隔离时，一个卡住就把前面已捕获的结果一起丢掉）。
-        process.stdout.write(`  ✗ ${testCase.name.padEnd(24)} 捕获失败：${String(error?.message ?? error)}\n`);
+        process.stdout.write(
+          `  ✗ ${testCase.name.padEnd(24)} 捕获失败：${String(error?.message ?? error)}\n`,
+        );
         result = { name: testCase.name, bytes: 0, attempts: 0, converged: false, failed: true };
       }
       results.push(result);
@@ -256,14 +269,17 @@ async function capture(outDir) {
       const settle = result.converged
         ? `settle=${result.attempts}`
         : `⚠ 未收敛(重试 ${result.attempts} 次)`;
-      process.stdout.write(`  ${result.failed || !result.converged ? "✗" : "✓"} ${result.name.padEnd(24)} dom=${result.bytes}B  ${settle}\n`);
+      process.stdout.write(
+        `  ${result.failed || !result.converged ? "✗" : "✓"} ${result.name.padEnd(24)} dom=${result.bytes}B  ${settle}\n`,
+      );
     }
   } finally {
-    // 不关页面的话 CDP WebSocket 与 Chrome 进程句柄会一直持有事件循环。
+    // 仅关闭本工具创建的页面和 CDP 连接；Codex 内置浏览器本身保持运行。
     await browser.close();
   }
-  const incomplete = results.filter(result => result.failed || !result.converged);
-  if (incomplete.length > 0) throw new Error(`Capture incomplete: ${incomplete.map(result => result.name).join(", ")}`);
+  const incomplete = results.filter((result) => result.failed || !result.converged);
+  if (incomplete.length > 0)
+    throw new Error(`Capture incomplete: ${incomplete.map((result) => result.name).join(", ")}`);
   return results.length;
 }
 
@@ -289,7 +305,7 @@ function renderDigest(filePath) {
 /**
  * 比较两张截图的渲染结果。
  *
- * 不直接比摘要：抗锯齿与字体栅格化在跨进程 Chrome 启动之间有极少量抖动
+ * 不直接比摘要：抗锯齿与字体栅格化在不同浏览器会话之间有极少量抖动
  * （实测同一页面两次捕获最多 89 像素 / 0.0077% / 最大通道差 44），而真实布局
  * 回归的量级是 7849 像素 / 0.68% / 最大通道差 233。改用容差像素比对，两个条件
  * 任一超限才判为回归。
@@ -315,7 +331,9 @@ function compareRender(name, basePng, newPng) {
       accepted: true,
     };
   }
-  const region = result.bbox ? `区域 x${result.bbox[0]}-${result.bbox[2]} y${result.bbox[1]}-${result.bbox[3]}` : "全图";
+  const region = result.bbox
+    ? `区域 x${result.bbox[0]}-${result.bbox[2]} y${result.bbox[1]}-${result.bbox[3]}`
+    : "全图";
   return {
     state: result.sizeMismatch
       ? "渲染不同(尺寸变化)"
@@ -356,12 +374,16 @@ function compare(baseDir, newDir) {
     }
 
     // Apply the same noise policy to older captures without rewriting them.
-    const baseRaw = path.join(baseDir, `${name}.raw-dom`), newRaw = path.join(newDir, `${name}.raw-dom`);
+    const baseRaw = path.join(baseDir, `${name}.raw-dom`),
+      newRaw = path.join(newDir, `${name}.raw-dom`);
     const rawAvailable = existsSync(baseRaw) && existsSync(newRaw);
     const normalize = rawAvailable ? normalizeDom : normalizeLegacyDom;
     const baseline = normalize(readFileSync(rawAvailable ? baseRaw : baseHtml, "utf8"));
     const candidate = normalize(readFileSync(rawAvailable ? newRaw : newHtml, "utf8"));
-    if (!rawAvailable) process.stdout.write(`  历史快照 ${name}: 旧 ID 已被抹掉，DOM 检查不证明原始 ID/ARIA；当前关系另由浏览器用例验证\n`);
+    if (!rawAvailable)
+      process.stdout.write(
+        `  历史快照 ${name}: 旧 ID 已被抹掉，DOM 检查不证明原始 ID/ARIA；当前关系另由浏览器用例验证\n`,
+      );
     const domOk = baseline === candidate;
     const domAccepted = !domOk && ACCEPT_DOM.has(name);
     if (domOk) domEqual += 1;
@@ -397,7 +419,9 @@ function compare(baseDir, newDir) {
     `\n用例 ${caseNames.length} 个 · DOM 等价 ${domEqual} 个 · 渲染一致 ${renderEqual} 个`,
   );
   if (acceptedDom.length > 0) {
-    process.stdout.write(` · 已声明接受的 DOM 变化: ${acceptedDom.join(", ")}（${DOM_CHANGE_REASON}）`);
+    process.stdout.write(
+      ` · 已声明接受的 DOM 变化: ${acceptedDom.join(", ")}（${DOM_CHANGE_REASON}）`,
+    );
   }
   if (acceptedRender.length > 0) {
     process.stdout.write(` · 已声明接受的渲染变化: ${acceptedRender.join(", ")}`);
@@ -408,7 +432,9 @@ function compare(baseDir, newDir) {
     for (const failure of failures) {
       process.stdout.write(`\n[${failure.name}] ${failure.reason}\n`);
       if (failure.baselineExcerpt !== undefined) {
-        process.stdout.write(`  首个差异位置: ${failure.index} (基线 ${failure.baselineLength}B vs 当前 ${failure.candidateLength}B)\n`);
+        process.stdout.write(
+          `  首个差异位置: ${failure.index} (基线 ${failure.baselineLength}B vs 当前 ${failure.candidateLength}B)\n`,
+        );
         process.stdout.write(`  基线: …${failure.baselineExcerpt}…\n`);
         process.stdout.write(`  当前: …${failure.candidateExcerpt}…\n`);
       }
@@ -423,7 +449,9 @@ const [command, ...rest] = process.argv.slice(2);
 if (command === "capture") {
   const outDir = rest[0];
   if (!outDir) throw new Error("用法: capture <outDir>");
-  process.stdout.write(`捕获基线 -> ${outDir} (${selectedCases().length} 个用例)${ONLY ? ` [ONLY=${[...ONLY].join(",")}]` : ""}\n`);
+  process.stdout.write(
+    `捕获基线 -> ${outDir} (${selectedCases().length} 个用例)${ONLY ? ` [ONLY=${[...ONLY].join(",")}]` : ""}\n`,
+  );
   const count = await capture(outDir);
   process.stdout.write(`\n完成: ${count} 个用例\n`);
   process.exit(0);

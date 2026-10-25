@@ -1,17 +1,18 @@
 import {after,before,test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdirSync,writeFileSync} from 'node:fs';
-import {E2E_BASE_URL,launchBrowser} from './cdp.mjs';
+import {E2E_BASE_URL,connectIabBrowser} from './cdp.mjs';
+import {gotoMockAdministrator} from './mock-auth.mjs';
 
 let browser;
-before(async()=>{browser=await launchBrowser();});
+before(async()=>{browser=await connectIabBrowser();});
 after(async()=>{await browser?.close();});
 
 async function withProbe(run) {
   const page=await browser.newPage();
   try {
     await page.clearStorage(new URL(E2E_BASE_URL).origin);
-    await page.goto(`${E2E_BASE_URL}/#/accounts`);
+    await gotoMockAdministrator(page, `${E2E_BASE_URL}/#/accounts`);
     await page.waitFor(`!!document.querySelector('[data-account-management] table')`);
     await page.eval(`(async()=>{
       const React=(await import('/node_modules/.vite/deps/react.js')).default;
@@ -116,7 +117,7 @@ test('Astryx locale: 官方关闭标签随同一 i18next 切换，打开的 Dial
     await page.type('dialog[open] input','kept-while-translating');
     const hash=await page.eval('location.hash');
     for(const [locale,label] of [['zh-CN','关闭'],['en-US','Close'],['ja-JP','閉じる'],['zh-CN','关闭']]) {
-      await page.eval(`(async()=>{const {default:i18n}=await import('/src/app/i18n/config.ts');await i18n.changeLanguage(${JSON.stringify(locale)});})()`);
+      await page.eval(`(async()=>{const {changeLocale}=await import('/src/app/i18n/changeLocale.ts');await changeLocale(${JSON.stringify(locale)});})()`);
       await page.waitFor(`document.querySelector('dialog[open] .astryx-layout-header button')?.getAttribute('aria-label')===${JSON.stringify(label)}`);
       assert.equal(await page.value('dialog[open] input'),'kept-while-translating');
       assert.equal(await page.eval('location.hash'),hash);
@@ -133,7 +134,7 @@ test('账号弹窗: Selector 内的 Escape 只关闭下拉，第二次 Escape �
   const page=await browser.newPage();
   try {
     await page.clearStorage(new URL(E2E_BASE_URL).origin);
-    await page.goto(`${E2E_BASE_URL}/#/accounts`);
+    await gotoMockAdministrator(page, `${E2E_BASE_URL}/#/accounts`);
     await page.waitFor(`!!document.querySelector('[data-account-management] table')`);
     await page.clickByText('新增账号');
     await page.waitFor(`!!document.querySelector('dialog[open]')`);

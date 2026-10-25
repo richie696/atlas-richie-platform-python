@@ -3,7 +3,10 @@ import { test } from "node:test";
 import { http, HttpResponse } from "msw/http";
 import { setupServer } from "msw/node";
 import { createConsoleTransport } from "../../src/core/api/transport/consoleTransport";
-import { createMetricsHttp } from "../../src/features/realtime/api/metricsHttp";
+import {
+  createMetricsHttp,
+  MetricParametersSchema,
+} from "../../src/features/realtime/api/metricsHttp";
 import { createFleetHttp } from "../../src/features/overview/api/fleetHttp";
 import { FleetQuerySchema, FleetParametersSchema } from "../../src/features/overview/api/fleetWire";
 import { observationContextParameters } from "../../src/shared/api/observationMapper";
@@ -12,6 +15,7 @@ import {
   MetricBundleSchema,
   ObservationCoverageSchema,
 } from "../../src/shared/api/observationWire";
+import { METRIC_BASIS, METRIC_ID } from "../../src/shared/model/observation";
 import { bundleFor, snapshotFor, query as fleetQuery } from "../fixtures/observations";
 import { MOCK_SYSTEM_SCENARIO } from "../../src/app/api/mockSystemScenario";
 import { MOCK_APPLICATION_SCENARIO } from "../../src/app/api/mockApplicationScenario";
@@ -138,6 +142,12 @@ test("METRICS-WIRE: strict nested shape, unit/window identity, unknown coverage 
   });
   change((wire) => {
     wire.summary[0].unit = "transactions_per_second";
+  });
+  change((wire) => {
+    wire.summary[0].denominator = METRIC_BASIS.ElapsedSeconds;
+  });
+  change((wire) => {
+    wire.series[0].source = "different-reporter";
   });
   change((wire) => {
     wire.summary.pop();
@@ -359,4 +369,11 @@ test("OBSERVATION-INPUT: invalid steps, duplicate instruments and instance/resou
       assert.equal(dispatched, 0);
     },
   );
+});
+
+test("METRICS-QUERY-WIRE: the comma-separated selection accepts only registered metric IDs", () => {
+  const schema = MetricParametersSchema.shape.metrics;
+  assert.equal(schema.safeParse(Object.values(METRIC_ID).join(",")).success, true);
+  for (const invalid of ["http_qps,unknown_metric", "http_qps,", ",http_qps"])
+    assert.equal(schema.safeParse(invalid).success, false, invalid);
 });

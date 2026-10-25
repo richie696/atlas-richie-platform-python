@@ -89,7 +89,7 @@ export function prepareSetupSubmission(draft: SetupDraft): SetupPreparation {
   };
 }
 
-/** A driver switch never carries an old password; local storage also drops network-only identities. */
+/** A network driver switch preserves connection location, but never carries the previous database identity. */
 export function changeSetupDatabase(draft: SetupDraft, kind: ControlPlaneDatabaseKind): SetupDraft {
   if (draft.databaseKind === kind) return draft;
   return {
@@ -99,7 +99,7 @@ export function changeSetupDatabase(draft: SetupDraft, kind: ControlPlaneDatabas
     database:
       kind === CONTROL_PLANE_DATABASE.Sqlite
         ? INITIAL_SETUP_DRAFT.database
-        : { ...draft.database, password: "" },
+        : { ...draft.database, username: "", password: "" },
   };
 }
 

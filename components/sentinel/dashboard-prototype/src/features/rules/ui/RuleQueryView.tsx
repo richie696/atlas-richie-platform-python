@@ -9,11 +9,13 @@ export function RuleQueryView<Value>({
   onRetry,
   children,
   partialCopy,
+  unavailableContent,
 }: {
   readonly snapshot: QuerySnapshot<Value>;
   readonly onRetry: () => void;
   readonly children: (value: Value) => ReactNode;
   readonly partialCopy?: FeedbackCopy;
+  readonly unavailableContent?: ReactNode;
 }) {
   const { t } = useTranslation();
   const title = t("rules.workspace.readTitle");
@@ -21,6 +23,7 @@ export function RuleQueryView<Value>({
     <QueryView
       snapshot={snapshot}
       onRetry={onRetry}
+      unavailableContent={unavailableContent}
       copy={{
         idle: { title, description: t("rules.workspace.readIdle") },
         loading: { title, description: t("rules.workspace.readLoading") },

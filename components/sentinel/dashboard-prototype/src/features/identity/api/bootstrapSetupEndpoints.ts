@@ -11,6 +11,9 @@ import {
 
 export const BOOTSTRAP_SETUP_URLS = defineUrlCatalog({
   AuthorizeBootstrap: defineUrl("/api/v1/system/bootstrap/authorize", { method: HttpMethod.POST }),
+  AuthorizeLocalBootstrap: defineUrl("/api/v1/system/bootstrap/authorize-local", {
+    method: HttpMethod.POST,
+  }),
   CheckDatabase: defineUrl("/api/v1/system/bootstrap/database-check", { method: HttpMethod.POST }),
   CheckSource: defineUrl("/api/v1/system/bootstrap/source-check", { method: HttpMethod.POST }),
   Initialize: defineUrl("/api/v1/system/bootstrap/initialize", { method: HttpMethod.POST }),
@@ -33,6 +36,16 @@ const AuthorizeBootstrap: ConsoleEndpoint<z.infer<typeof BootstrapAuthorizationS
     "rate_limited",
     "service_unavailable",
   ],
+};
+const AuthorizeLocalBootstrap: ConsoleEndpoint<z.infer<typeof BootstrapAuthorizationSchema>> = {
+  url: BOOTSTRAP_SETUP_URLS.AuthorizeLocalBootstrap,
+  response: BootstrapAuthorizationSchema,
+  successStatus: 200,
+  command: true,
+  idempotency: "none",
+  csrf: true,
+  expireOnUnauthorized: false,
+  errors: ["invalid_request", "forbidden", "csrf_failed", "conflict", "service_unavailable"],
 };
 const check = (
   url: typeof BOOTSTRAP_SETUP_URLS.CheckDatabase,
@@ -76,6 +89,7 @@ const Initialization: ConsoleEndpoint<z.infer<typeof InitializationObservationSc
 /** Endpoint metadata used only by the lazy first-run setup workflow. */
 export const BOOTSTRAP_SETUP_ENDPOINTS = Object.freeze({
   AuthorizeBootstrap,
+  AuthorizeLocalBootstrap,
   CheckDatabase: check(BOOTSTRAP_SETUP_URLS.CheckDatabase),
   CheckSource: check(BOOTSTRAP_SETUP_URLS.CheckSource),
   Initialize,

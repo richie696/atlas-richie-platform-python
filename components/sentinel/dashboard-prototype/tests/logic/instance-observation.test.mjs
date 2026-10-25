@@ -37,6 +37,14 @@ test("INSTANCE-CATALOG: pagination and anomaly/search filters never redefine who
   assert.equal(validInstanceCatalog(result, filtered), true);
   assert.equal(result.totalInstances, 4);
   assert.equal(result.filteredTotal, 1);
+  const beyondLastPage = { ...catalogQuery, page: 3 },
+    emptyLastPage = catalogFor(beyondLastPage),
+    impossibleNonEmptyPage = {
+      ...emptyLastPage,
+      items: [instanceFor(1, beyondLastPage)],
+    };
+  assert.equal(validInstanceCatalog(emptyLastPage, beyondLastPage), true);
+  assert.equal(validInstanceCatalog(impossibleNonEmptyPage, beyondLastPage), false);
   for (const bad of [
     { ...value, totalInstances: 1 },
     { ...value, attentionInstances: 5 },

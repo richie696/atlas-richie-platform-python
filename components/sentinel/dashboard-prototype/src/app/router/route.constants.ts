@@ -121,6 +121,7 @@ export const ROUTES: readonly RouteEntry[] = Object.freeze([
   entry(ROUTE.Realtime, "metrics", "fleet", true, 3, "shell.nav.realtime"),
   entry(ROUTE.Faults, "metrics", "fleet", true, 4, "shell.nav.faults"),
   entry(ROUTE.System, "admin", "fleet", true, 5, "shell.nav.system"),
+  entry(ROUTE.Documentation, "public", "fleet", true, 6, "shell.nav.documentation"),
   entry(ROUTE.Accounts, "admin", "fleet", false, null, "shell.nav.accounts"),
   entry(ROUTE.Roles, "admin", "fleet", false, null, "shell.nav.roles"),
   entry(ROUTE.ChangePassword, "session", "fleet", false, null, "shell.nav.changePassword"),
@@ -131,6 +132,11 @@ export const ROUTES: readonly RouteEntry[] = Object.freeze([
 const ROUTE_BY_ID: ReadonlyMap<RouteId, RouteEntry> = new Map(
   ROUTES.map((item) => [item.id, item]),
 );
+
+/** Stable links from older releases; new links always use the short route IDs above. */
+const LEGACY_ROUTE_ALIASES: Readonly<Record<string, RouteId>> = Object.freeze({
+  documentation: ROUTE.Documentation,
+});
 
 /** Runtime guard for local destinations received through an untrusted URL. */
 export function isRouteId(value: unknown): value is RouteId {
@@ -145,6 +151,7 @@ export const MAIN_NAVIGATION_IDS = Object.freeze([
   ROUTE.Realtime,
   ROUTE.Faults,
   ROUTE.System,
+  ROUTE.Documentation,
 ] as const);
 
 /** 主导航路由 id 联合；用于让图标表在编译期与导航表保持一致。 */
@@ -172,6 +179,7 @@ const CONTEXT_KEYS = Object.freeze({
   to: "to",
   accountId: "account",
   view: "view",
+  section: "section",
   instanceId: "instance",
   resource: "resource",
   eventId: "event",
@@ -206,6 +214,7 @@ export function pathFor(route: RouteId, context: NavigationContext = {}): string
       (field === "incidentSeverity" || field === "incidentCategory" || field === "incidentCursor")
     )
       continue;
+    if (route !== ROUTE.Rules && field === "section") continue;
     const value = context[field as keyof NavigationContext];
     if (
       typeof value === "string" &&
@@ -245,7 +254,9 @@ export function routeFromPath(hash: string): ParsedRoute {
   const separator = withoutHash.indexOf("?");
   const rawPath = separator < 0 ? withoutHash : withoutHash.slice(0, separator);
   const rawQuery = separator < 0 ? "" : withoutHash.slice(separator + 1);
-  const route = ROUTES.find((item) => item.id === rawPath)?.id ?? FALLBACK_ROUTE;
+  const resolvedRoute =
+    ROUTES.find((item) => item.id === rawPath)?.id ?? LEGACY_ROUTE_ALIASES[rawPath];
+  const route = resolvedRoute ?? FALLBACK_ROUTE;
 
   const search = new URLSearchParams(rawQuery);
   const appId = search.get(CONTEXT_KEYS.appId);
@@ -254,6 +265,7 @@ export function routeFromPath(hash: string): ParsedRoute {
   const to = search.get(CONTEXT_KEYS.to);
   const accountId = search.get(CONTEXT_KEYS.accountId);
   const view = search.get(CONTEXT_KEYS.view);
+  const section = search.get(CONTEXT_KEYS.section);
   const environmentId = search.get(CONTEXT_KEYS.environmentId);
   const instanceId = search.get(CONTEXT_KEYS.instanceId);
   const resource = search.get(CONTEXT_KEYS.resource);
@@ -267,11 +279,14 @@ export function routeFromPath(hash: string): ParsedRoute {
   const metricScope = search.get(CONTEXT_KEYS.metricScope);
   const query = search.get(CONTEXT_KEYS.search);
   const returnTo = search.get(CONTEXT_KEYS.returnTo);
-  const validReturnTo = route === ROUTE.Login && isRouteId(returnTo) ? returnTo : undefined;
+  const validReturnTo =
+    route !== ROUTE.Login
+      ? undefined
+      : returnTo && (isRouteId(returnTo) ? returnTo : LEGACY_ROUTE_ALIASES[returnTo]);
 
   return {
     route,
-    notFound: !!rawPath && !ROUTES.some((item) => item.id === rawPath),
+    notFound: !!rawPath && !resolvedRoute,
     context: {
       ...(validReturnTo ? { returnTo: validReturnTo } : {}),
       ...(environmentId ? { environmentId } : {}),
@@ -282,6 +297,7 @@ export function routeFromPath(hash: string): ParsedRoute {
       ...(accountId ? { accountId } : {}),
       // `view` 的合法值由拥有它的 feature 判定，这里只保证它是个非空字符串。
       ...(view ? { view } : {}),
+      ...(route === ROUTE.Rules && section ? { section } : {}),
       ...(instanceId ? { instanceId } : {}),
       ...(resource ? { resource } : {}),
       ...(eventId ? { eventId } : {}),

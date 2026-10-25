@@ -12,9 +12,12 @@ import { readMockPrincipal, writeMockPrincipal } from "../../src/core/api/mock/m
 import {
   auditPage,
   auditQuery,
+  deploymentGuides,
   systemAsOfMs,
   systemConnections,
   systemProtocols,
+  agentReportingObservationPage,
+  incidentEventObservationPage,
 } from "../fixtures/systemObservations";
 
 const origin = "http://system-observation.test",
@@ -35,6 +38,17 @@ const protocolsWire = (value) => ({
     observedAt: observedAtMs === null ? null : instant(observedAtMs),
   })),
 });
+const agentReportingWire = (value) => ({
+  asOf: instant(value.asOfMs),
+  page: value.page,
+  pageSize: value.pageSize,
+  total: value.total,
+  items: value.items.map(({ observedAtMs, ...item }) => ({
+    ...item,
+    observedAt: observedAtMs === null ? null : instant(observedAtMs),
+  })),
+});
+const incidentEventWire = agentReportingWire;
 const auditWire = (value) => ({
   query: {
     start: instant(value.query.startMs),
@@ -112,6 +126,37 @@ test("SYSTEM-CONNECTIONS: independent probes map UTC facts and expiry without ex
   }
 });
 
+test("SYSTEM-DEPLOYMENT-GUIDES: server catalog and advertised Collector endpoint are validated facts", async () => {
+  await run(
+    [
+      http.get(`${origin}/api/v1/system/deployment-guides`, ({ request }) =>
+        reply(request, deploymentGuides),
+      ),
+    ],
+    async (ports) => {
+      assert.deepEqual(await ports.deploymentGuides.readDeploymentGuides(signal()), deploymentGuides);
+    },
+  );
+
+  const invalid = {
+    ...deploymentGuides,
+    runtimeCollector: { state: "configured", endpoint: "http://collector.example.test" },
+  };
+  await run(
+    [
+      http.get(`${origin}/api/v1/system/deployment-guides`, ({ request }) =>
+        reply(request, invalid),
+      ),
+    ],
+    async (ports) => {
+      await assert.rejects(
+        ports.deploymentGuides.readDeploymentGuides(signal()),
+        (error) => error.code === "deployment_guide_read_invalid",
+      );
+    },
+  );
+});
+
 test("SYSTEM-PROTOCOLS: supported and active negotiation facts are distinct; invalid duplicate boundaries reject", async () => {
   const expected = systemProtocols,
     wire = protocolsWire(expected);
@@ -149,6 +194,80 @@ test("SYSTEM-PROTOCOLS: supported and active negotiation facts are distinct; inv
       },
     );
   }
+});
+
+test("SYSTEM-PROTOCOL-WORKERS: versioned read preserves each worker and unknown without leaking peer identity", async () => {
+  const expected = agentReportingObservationPage,
+    wire = agentReportingWire(expected);
+  let query;
+  await run(
+    [
+      http.get(`${origin}/api/v2/system/protocol-observations/agent-reporting`, ({ request }) => {
+        query = new URL(request.url).searchParams;
+        return reply(request, wire);
+      }),
+    ],
+    async (ports) => {
+      assert.deepEqual(
+        await ports.protocols.readAgentReportingObservations(1, 20, signal()),
+        expected,
+      );
+      assert.equal(query.get("page"), "1");
+      assert.equal(query.get("pageSize"), "20");
+    },
+  );
+  const invalid = structuredClone(wire);
+  invalid.items[0].certificatePrincipal = "secret-principal";
+  await run(
+    [
+      http.get(`${origin}/api/v2/system/protocol-observations/agent-reporting`, ({ request }) =>
+        reply(request, invalid),
+      ),
+    ],
+    async (ports) => {
+      await assert.rejects(
+        ports.protocols.readAgentReportingObservations(1, 20, signal()),
+        (error) => error.code === "console_response_invalid",
+      );
+    },
+  );
+});
+
+test("SYSTEM-INCIDENT-PROTOCOL-WORKERS: incident negotiation is an independent authority and keeps unknown per worker", async () => {
+  const expected = incidentEventObservationPage,
+    wire = incidentEventWire(expected);
+  let query;
+  await run(
+    [
+      http.get(`${origin}/api/v2/system/protocol-observations/incident-events`, ({ request }) => {
+        query = new URL(request.url).searchParams;
+        return reply(request, wire);
+      }),
+    ],
+    async (ports) => {
+      assert.deepEqual(
+        await ports.protocols.readIncidentEventObservations(1, 20, signal()),
+        expected,
+      );
+      assert.equal(query.get("page"), "1");
+      assert.equal(query.get("pageSize"), "20");
+    },
+  );
+  const invalid = structuredClone(wire);
+  invalid.items[0].boundary = "agent-reporting";
+  await run(
+    [
+      http.get(`${origin}/api/v2/system/protocol-observations/incident-events`, ({ request }) =>
+        reply(request, invalid),
+      ),
+    ],
+    async (ports) => {
+      await assert.rejects(
+        ports.protocols.readIncidentEventObservations(1, 20, signal()),
+        (error) => error.code === "console_response_invalid",
+      );
+    },
+  );
 });
 
 test("SYSTEM-AUDIT: bounded UTC query identity, stable page, and redacted record shape survive projection", async () => {

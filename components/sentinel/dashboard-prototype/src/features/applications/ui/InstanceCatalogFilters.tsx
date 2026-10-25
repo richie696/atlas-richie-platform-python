@@ -29,6 +29,7 @@ export function InstanceCatalogFilters({
   return (
     <form
       className={styles.filters}
+      data-observation-filters
       onSubmit={(event) => {
         event.preventDefault();
         onChange({ ...query, search, page: 1 });
@@ -38,6 +39,7 @@ export function InstanceCatalogFilters({
         context={query.context}
         environments={environments}
         applications={applications}
+        allowAllApplications={false}
         clock={clock}
         onChange={(context) => onChange({ ...query, context, page: 1 })}
       />
@@ -51,7 +53,9 @@ export function InstanceCatalogFilters({
         onChange={(value) => onChange({ ...query, attentionOnly: value === "attention", page: 1 })}
       />
       <TextField label={t("applications.observed.search")} value={search} onChange={setSearch} />
-      <ActionButton type="submit">{t("observation.query")}</ActionButton>
+      <ActionButton className={styles["filter-submit"]} type="submit">
+        {t("observation.query")}
+      </ActionButton>
     </form>
   );
 }

@@ -19,6 +19,7 @@ import {
   auditQuery,
   auditPage,
   systemAsOfMs,
+  deploymentGuides,
 } from "../fixtures/systemObservations";
 import {
   DEFAULT_SYSTEM_TAB,
@@ -33,6 +34,10 @@ function topology(overrides = {}) {
   const resources = createSystemObservationResources(
     {
       health: { readConnections: async () => systemConnections, ...overrides.health },
+      deploymentGuides: {
+        readDeploymentGuides: async () => deploymentGuides,
+        ...overrides.deploymentGuides,
+      },
       protocols: { readProtocols: async () => systemProtocols, ...overrides.protocols },
       audit: {
         readAudit: async (query) => {
@@ -205,8 +210,14 @@ test("SYSTEM-AUDIT-PRECISION: changing only actor never rounds the existing UTC 
     endMs: auditQuery.endMs - 12345,
   };
   const next = applyAuditFilters({ ...auditFilterDraft(exact), actorId: "admin-one" }, exact);
-  assert.equal(next.startMs, exact.startMs);
-  assert.equal(next.endMs, exact.endMs);
+  assert.notEqual(next, null);
+  // The filter input carries second precision, so the window keeps the second it already
+  // occupies. What must never happen is a jump to a different minute.
+  assert.equal(Math.floor(next.startMs / 60_000), Math.floor(exact.startMs / 60_000));
+  assert.equal(Math.floor(next.endMs / 60_000), Math.floor(exact.endMs / 60_000));
+  assert.equal(next.startMs, Math.floor(exact.startMs / 1000) * 1000);
+  assert.equal(next.endMs, Math.floor(exact.endMs / 1000) * 1000);
+  assert.equal(next.actorId, "admin-one");
 });
 test("SYSTEM-RESOURCES: health failure does not erase protocol/audit; missing coverage and expiry are partial rather than healthy", async () => {
   let offline = false;

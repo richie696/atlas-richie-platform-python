@@ -1,8 +1,9 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { LockKeyIcon as LockKey } from "@phosphor-icons/react";
+import { EyeIcon, EyeSlashIcon, LockKeyIcon as LockKey } from "@phosphor-icons/react";
 import { ActionButton } from "../../../../shared/ui/ActionButton";
 import { TextField } from "../../../../shared/ui/TextField";
+import { ROUTE } from "../../../../shared/types/navigation";
 import {
   validateLoginCredentials,
   type LoginCredentials,
@@ -35,11 +36,15 @@ function LoginCredentialForm({
   const [credentials, setCredentials] = useState<LoginCredentials>(EMPTY_CREDENTIALS);
   const [issue, setIssue] = useState<LoginIssue | null>(null);
   const [revealed, setRevealed] = useState(false);
+  const passwordVisible = allowPasswordReveal && !disabled && revealed;
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const issues = validateLoginCredentials(credentials);
     setIssue(issues[0] ?? null);
-    if (issues.length === 0) onSubmit(credentials);
+    if (issues.length === 0) {
+      setRevealed(false);
+      onSubmit(credentials);
+    }
   };
   const editUsername = (username: string) => {
     onCredentialsEdited();
@@ -61,29 +66,42 @@ function LoginCredentialForm({
       )}
       <form className={scopedClasses(modules, "password-form")} onSubmit={submit}>
         <TextField
+          className="sentinel-login-field"
           label={t("login.field.username")}
           autoComplete="username"
           value={credentials.username}
           onChange={editUsername}
           disabled={disabled}
         />
-        <TextField
-          label={t("login.field.password")}
-          type={revealed ? "text" : "password"}
-          autoComplete="current-password"
-          value={credentials.password}
-          onChange={editPassword}
-          disabled={disabled}
-        />
-        {allowPasswordReveal && (
-          <ActionButton
-            variant="ghost"
-            aria-pressed={revealed}
-            onClick={() => setRevealed((value) => !value)}
-          >
-            {t(revealed ? "login.remote.hidePassword" : "login.remote.showPassword")}
-          </ActionButton>
-        )}
+        <div className={identityStyles["login-password"]}>
+          <TextField
+            className="sentinel-login-field sentinel-login-password-field"
+            label={t("login.field.password")}
+            type={passwordVisible ? "text" : "password"}
+            autoComplete="current-password"
+            value={credentials.password}
+            onChange={editPassword}
+            disabled={disabled}
+          />
+          {allowPasswordReveal && (
+            <ActionButton
+              className={identityStyles["login-password-toggle"]}
+              variant="ghost"
+              aria-label={t(
+                passwordVisible ? "login.remote.hidePassword" : "login.remote.showPassword",
+              )}
+              aria-pressed={passwordVisible}
+              disabled={disabled}
+              onClick={() => setRevealed((value) => !value)}
+            >
+              {passwordVisible ? (
+                <EyeSlashIcon size={20} aria-hidden="true" />
+              ) : (
+                <EyeIcon size={20} aria-hidden="true" />
+              )}
+            </ActionButton>
+          )}
+        </div>
         <ActionButton
           className={scopedClasses(modules, "primary-button login-submit")}
           type="submit"
@@ -108,6 +126,7 @@ export function LoginSurface({
   allowPasswordReveal = false,
   description,
   demoNotice,
+  localeControl,
 }: {
   readonly onCredentialsEdited: () => void;
   readonly onSubmit: (credentials: LoginCredentials) => void;
@@ -119,24 +138,29 @@ export function LoginSurface({
   readonly allowPasswordReveal?: boolean;
   readonly description?: string;
   readonly demoNotice?: string;
+  /** App-owned locale selector; the identity feature only owns its placement. */
+  readonly localeControl?: ReactNode;
 }) {
   const { t } = useTranslation();
   return (
     <div className={scopedClasses(modules, "login-page")}>
+      {localeControl && <div className={identityStyles["login-locale"]}>{localeControl}</div>}
       <div className={scopedClasses(modules, "login-card")}>
-        <div className={scopedClasses(modules, "login-brand")}>
-          <span className={scopedClasses(modules, "login-mark")} aria-hidden="true">
-            ↗
-          </span>
-          <span>
-            Atlas Richie <b>Sentinel</b>
-          </span>
-        </div>
-        <span className={scopedClasses(modules, "eyebrow")}>OPERATIONS CONSOLE</span>
-        <h1>{t("login.title")}</h1>
-        {description && (
-          <p className={scopedClasses(modules, "login-description")}>{description}</p>
-        )}
+        <header className={identityStyles["login-intro"]}>
+          <div className={scopedClasses(modules, "login-brand")}>
+            <span className={scopedClasses(modules, "login-mark")} aria-hidden="true">
+              ↗
+            </span>
+            <span>
+              Atlas Richie <b>Sentinel</b>
+            </span>
+          </div>
+          <span className={scopedClasses(modules, "eyebrow")}>OPERATIONS CONSOLE</span>
+          <h1>{t("login.title")}</h1>
+          {description && (
+            <p className={scopedClasses(modules, "login-description")}>{description}</p>
+          )}
+        </header>
         {demoNotice && (
           <p className={scopedClasses(modules, "identity-notice login-demo-notice")} role="note">
             {demoNotice}
@@ -152,6 +176,11 @@ export function LoginSurface({
             allowPasswordReveal={allowPasswordReveal}
           />
         )}
+        <footer className={identityStyles["login-help"]}>
+          <a className={identityStyles["manual-link"]} href={`#/${ROUTE.Documentation}`}>
+            {t("documentation.help")}
+          </a>
+        </footer>
       </div>
     </div>
   );

@@ -40,6 +40,17 @@ export const OpaqueIdentifierSchema = utf16BoundedString(CONSOLE_WIRE_LIMIT.Iden
 export const RequestKeySchema = utf16BoundedString(CONSOLE_WIRE_LIMIT.RequestKey)
   .min(1)
   .regex(/^[A-Za-z0-9._:-]+$/);
+export type IdempotencyKeyHeader =
+  | { readonly kind: "missing" }
+  | { readonly kind: "invalid" }
+  | { readonly kind: "valid"; readonly requestKey: string };
+/** Parse the shared Console idempotency header without assigning endpoint-specific error semantics. */
+export function parseIdempotencyKeyHeader(headers: Headers): IdempotencyKeyHeader {
+  const value = headers.get(CONSOLE_HEADER.IdempotencyKey);
+  if (value === null) return { kind: "missing" };
+  const parsed = RequestKeySchema.safeParse(value);
+  return parsed.success ? { kind: "valid", requestKey: parsed.data } : { kind: "invalid" };
+}
 export const UtcInstantSchema = z.iso
   .datetime({ offset: false, local: false, precision: 3 })
   .regex(/^(?:19[7-9]\d|[2-9]\d{3})-/);
@@ -90,11 +101,23 @@ const FieldIssueSchema = z.strictObject({
     .regex(/^[A-Za-z0-9_.\[\]-]+$/),
   reason: z.enum(["required", "invalid", "out_of_range", "unsupported", "conflict"]),
 });
+const ConsoleErrorDetails = {
+  requestId: RequestKeySchema,
+  issues: z.array(FieldIssueSchema).max(CONSOLE_WIRE_LIMIT.Issues).optional(),
+};
+const RetryAfterMsSchema = z.int().min(0).max(CONSOLE_WIRE_LIMIT.RetryAfterMs);
 export const ConsoleErrorSchema = z.strictObject({
   error: z.strictObject({
     code: z.enum(Object.keys(CONSOLE_ERROR_STATUS) as [ConsoleErrorCode, ...ConsoleErrorCode[]]),
-    requestId: RequestKeySchema,
-    issues: z.array(FieldIssueSchema).max(CONSOLE_WIRE_LIMIT.Issues).optional(),
-    retryAfterMs: z.int().min(0).max(CONSOLE_WIRE_LIMIT.RetryAfterMs).optional(),
+    ...ConsoleErrorDetails,
+    retryAfterMs: RetryAfterMsSchema.optional(),
+  }),
+});
+/** A 429 response is unusable unless it carries the bounded retry delay required by clients. */
+export const RateLimitedConsoleErrorSchema = z.strictObject({
+  error: z.strictObject({
+    code: z.literal("rate_limited"),
+    ...ConsoleErrorDetails,
+    retryAfterMs: RetryAfterMsSchema,
   }),
 });

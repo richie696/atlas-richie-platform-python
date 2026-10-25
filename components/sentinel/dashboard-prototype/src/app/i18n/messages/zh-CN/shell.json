@@ -1,4 +1,5 @@
 {
+  "shell.nav.documentation": "文档中心",
   "shell.navigationGuard.discardFailed": "未能安全放弃当前内容，因此没有切换页面。请留在原页面明确处理更改后再导航。",
   "shell.navigationGuard.title": "离开当前页面？",
   "shell.navigationGuard.dirty": "当前有未保存的更改。确认放弃后才会切换页面；取消会保留输入和当前位置。",
@@ -61,7 +62,9 @@
   "shell.chart.empty": "当前时间窗口没有观测数据",
   "shell.chart.invalid": "时间轴或数值范围无效，无法绘制此序列。",
   "shell.chart.missing": "缺测",
-  "shell.chart.observations": "{{metric}}：{{valid}} / {{total}} 个观测点 · 查看数据",
+  "shell.chart.observations.summary": "{{metric}}：{{valid}} / {{total}} 个有效观测点",
+  "shell.chart.observations.view": "查看数据",
+  "shell.chart.observations.close": "关闭",
   "shell.chart.table": "观测数值（缺测不等于零）",
   "shell.chart.time": "时间",
   "shell.chart.metric.qps": "HTTP QPS",

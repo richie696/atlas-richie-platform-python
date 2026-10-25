@@ -12,18 +12,21 @@ import { useBeforeUnloadGuard } from "../../../shared/state/useBeforeUnloadGuard
 import { SystemQueryView } from "./SystemQueryView";
 import { SourceRegistrationDialog } from "./SourceRegistrationDialog";
 import { SourceOperationFeedback } from "./SourceOperationFeedback";
+import { SourceDeletionDialog } from "./SourceDeletionDialog";
 import styles from "./SystemObservation.module.scss";
 import { formatUtcDateTime } from "../../../shared/presentation/utcDateTime";
 /** Administrative registry, separate from connection health and one-time setup. No credential readback. */
 export function SourceRegistryPanel({
   workflow,
+  demoMode,
 }: {
   readonly workflow: ReturnType<typeof createSourceRegistrationWorkflow>;
+  readonly demoMode: boolean;
 }) {
   const state = useExternalSnapshot(workflow),
     { t } = useTranslation();
   return state.authorized ? (
-    <SourceRegistrySurface workflow={workflow} />
+    <SourceRegistrySurface workflow={workflow} demoMode={demoMode} />
   ) : (
     <FeedbackPanel
       tone="warning"
@@ -34,8 +37,10 @@ export function SourceRegistryPanel({
 /** Revocation unmounts modal intent and credential-local state, even when the same session regains access. */
 function SourceRegistrySurface({
   workflow,
+  demoMode,
 }: {
   readonly workflow: ReturnType<typeof createSourceRegistrationWorkflow>;
+  readonly demoMode: boolean;
 }) {
   const { t, i18n } = useTranslation(),
     state = useExternalSnapshot(workflow);
@@ -43,10 +48,15 @@ function SourceRegistrySurface({
       readonly owner: typeof workflow;
       readonly record: RegisteredSource | null;
     } | null>(null),
+    [deleteIntent, setDeleteIntent] = useState<{
+      readonly owner: typeof workflow;
+      readonly record: RegisteredSource;
+    } | null>(null),
     [failed, setFailed] = useState(false);
   const locked = state.inspecting || ["pending", "result-unknown"].includes(state.command.status),
     fresh = state.registry.status === "ready" || state.registry.status === "empty";
-  const open = state.authorized && intent?.owner === workflow;
+  const open = state.authorized && intent?.owner === workflow,
+    deleteOpen = state.authorized && deleteIntent?.owner === workflow;
   useBeforeUnloadGuard(locked, locked);
   useEffect(() => {
     if (state.authorized) void workflow.registry.load(null).catch(() => {});
@@ -66,29 +76,33 @@ function SourceRegistrySurface({
       title={t("system.source.title")}
       subtitle={t("system.source.subtitle")}
       action={
-        <ActionButton
-          disabled={!state.authorized || !fresh || locked}
-          onClick={() => {
-            workflow.invalidateCheck();
-            setIntent({ owner: workflow, record: null });
-          }}
-        >
-          {t("system.source.add")}
-        </ActionButton>
+        <div className={styles["registry-panel-actions"]}>
+          <ActionButton disabled={state.registry.status === "loading" || locked} onClick={refresh}>
+            {t("system.source.refresh")}
+          </ActionButton>
+          <ActionButton
+            disabled={!state.authorized || !fresh || locked}
+            onClick={() => {
+              workflow.invalidateCheck();
+              setIntent({ owner: workflow, record: null });
+            }}
+          >
+            {t("system.source.add")}
+          </ActionButton>
+        </div>
       }
     >
       <div className={styles.content}>
-        <p role="note">{t("system.source.mockNotice")}</p>
+        {demoMode && <p role="note">{t("system.source.mockNotice")}</p>}
         <SystemQueryView snapshot={state.registry} onRetry={refresh}>
           {(value) => (
-            <>
+            <div className={styles["source-registry-body"]}>
               <p>
                 {t("system.observed.readAt")}{" "}
                 <time dateTime={new Date(value.asOfMs).toISOString()}>
                   {formatUtcDateTime(value.asOfMs, i18n.resolvedLanguage ?? i18n.language)}
                 </time>
               </p>
-              <ActionButton onClick={refresh}>{t("system.source.refresh")}</ActionButton>
               <DataTable
                 heads={[
                   t("system.source.name"),
@@ -120,20 +134,28 @@ function SourceRegistrySurface({
                     </td>
                     <td>{record.revision}</td>
                     <td>
-                      <ActionButton
-                        disabled={!fresh || locked}
-                        onClick={() => {
-                          workflow.invalidateCheck();
-                          setIntent({ owner: workflow, record });
-                        }}
-                      >
-                        {t("system.source.edit")}
-                      </ActionButton>
+                      <div className={styles.actions}>
+                        <ActionButton
+                          disabled={!fresh || locked}
+                          onClick={() => {
+                            workflow.invalidateCheck();
+                            setIntent({ owner: workflow, record });
+                          }}
+                        >
+                          {t("system.source.edit")}
+                        </ActionButton>
+                        <ActionButton
+                          disabled={!fresh || locked}
+                          onClick={() => setDeleteIntent({ owner: workflow, record })}
+                        >
+                          {t("system.source.delete")}
+                        </ActionButton>
+                      </div>
                     </td>
                   </tr>
                 ))}
               />
-            </>
+            </div>
           )}
         </SystemQueryView>
         {!open && (
@@ -151,6 +173,14 @@ function SourceRegistrySurface({
           workflow={workflow}
           record={intent.record}
           onClose={() => setIntent(null)}
+        />
+      )}
+      {deleteOpen && deleteIntent && (
+        <SourceDeletionDialog
+          key={`${deleteIntent.record.id}:${deleteIntent.record.revision}`}
+          workflow={workflow}
+          record={deleteIntent.record}
+          onClose={() => setDeleteIntent(null)}
         />
       )}
     </Panel>

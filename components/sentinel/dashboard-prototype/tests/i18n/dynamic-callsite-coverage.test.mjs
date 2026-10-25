@@ -11,24 +11,6 @@ const dynamicCallsites = [
     producer: "/src/app/router/navigation.ts",
   },
   {
-    path: "src/features/applications/ui/InstanceDetailPanel.tsx",
-    call: "t(instanceStatusLabelKey(instance))",
-    suite: "I18N-DYNAMIC-PRESENTATION",
-    producer: "/src/features/applications/presentation/instanceStatus.ts",
-  },
-  {
-    path: "src/features/applications/ui/InstanceMatrixPanel.tsx",
-    call: "t(instanceStatusLabelKey(row))",
-    suite: "I18N-DYNAMIC-PRESENTATION",
-    producer: "/src/features/applications/presentation/instanceStatus.ts",
-  },
-  {
-    path: "src/features/identity/ui/AccountCreateDialog.tsx",
-    call: "t(issues[0].key)",
-    suite: "I18N-DYNAMIC-IDENTITY",
-    producer: "/src/features/identity/model/account.ts",
-  },
-  {
     path: "src/features/identity/ui/CreateAccountDialog.tsx",
     call: "t(issue.key, issue.params)",
     suite: "I18N-DYNAMIC-IDENTITY",
@@ -142,6 +124,20 @@ const dynamicCallsites = [
     suite: "I18N-DYNAMIC-DEPLOYMENT-PRESENTATION",
     producer: "/src/features/rules/presentation/deploymentLabels.ts",
   },
+  {
+    path: "src/features/system/ui/WorkerProtocolObservationList.tsx",
+    call: "t(titleKey)",
+    suite: "SYSTEM-PROTOCOL-WORKERS",
+    producer: "/src/features/system/ui/ObservedProtocolsPanel.tsx",
+    testFile: "tests/verification/worker-protocol-observation-mounted.test.mjs",
+  },
+  {
+    path: "src/features/system/ui/WorkerProtocolObservationList.tsx",
+    call: "t(emptyKey)",
+    suite: "SYSTEM-PROTOCOL-WORKERS",
+    producer: "/src/features/system/ui/ObservedProtocolsPanel.tsx",
+    testFile: "tests/verification/worker-protocol-observation-mounted.test.mjs",
+  },
 ];
 
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -163,8 +159,8 @@ test("I18N-DYNAMIC-CALLSITE-COVERAGE: every AST-unresolved callsite has a named 
     ),
     "update the explicit callsite-to-producer-runtime-test mapping when dynamic calls change",
   );
-  const runtimeTests = readFileSync("tests/i18n/catalog.test.mjs", "utf8");
-  for (const { path, call, suite, producer } of dynamicCallsites) {
+  for (const { path, call, suite, producer, testFile } of dynamicCallsites) {
+    const runtimeTests = readFileSync(testFile ?? "tests/i18n/catalog.test.mjs", "utf8");
     const suiteStart = runtimeTests.indexOf(`test(\"${suite}:`);
     assert.notEqual(suiteStart, -1, `${path} ${call} must have runtime suite ${suite}`);
     const nextSuite = runtimeTests.indexOf('\ntest("', suiteStart + 1);

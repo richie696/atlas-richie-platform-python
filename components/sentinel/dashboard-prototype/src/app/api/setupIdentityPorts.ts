@@ -19,29 +19,26 @@ export function createSetupIdentityPorts(
   authorization: BootstrapAuthorizationPort;
   initialization: InitializationPort;
 }> {
-  const createAccessReader = () => {
+  const readAccess = async (signal: AbortSignal, options?: BootstrapReadOptions) => {
+    signal.throwIfAborted();
     const current = authentication.getSnapshot().access;
-    const confirmedFacts = current.phase === "resolved" ? current.facts : undefined;
-    return async (signal: AbortSignal, options?: BootstrapReadOptions) => {
-      signal.throwIfAborted();
-      const access =
-        confirmedFacts && !options?.forceRefresh ? confirmedFacts : await authentication.restore();
-      signal.throwIfAborted();
-      return access;
-    };
+    const access =
+      current.phase === "resolved" && !options?.forceRefresh
+        ? current.facts
+        : await authentication.restore();
+    signal.throwIfAborted();
+    return access;
   };
-  const readGateAccess = createAccessReader();
-  const readInitializationAccess = createAccessReader();
   return Object.freeze({
     authorization: Object.freeze({
       ...authorization,
       readGate: async (signal: AbortSignal, options?: BootstrapReadOptions) =>
-        bootstrapOperatorGateFromAccess(await readGateAccess(signal, options)),
+        bootstrapOperatorGateFromAccess(await readAccess(signal, options)),
     }),
     initialization: Object.freeze({
       ...initialization,
       readBootstrap: async (signal: AbortSignal, options?: BootstrapReadOptions) =>
-        bootstrapFactFromAccess(await readInitializationAccess(signal, options)),
+        bootstrapFactFromAccess(await readAccess(signal, options)),
     }),
   });
 }

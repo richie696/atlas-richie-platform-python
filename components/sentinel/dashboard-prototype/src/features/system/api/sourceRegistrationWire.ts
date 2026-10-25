@@ -50,11 +50,19 @@ export const SourceRegistrySchema = z.strictObject({
   asOf: UtcInstantSchema,
   items: z.array(SourceRecordSchema).max(500),
 });
-export const SourceCheckInputSchema = z.strictObject({
-  sourceId: OpaqueIdentifierSchema.nullable(),
-  expectedRevision: OpaqueIdentifierSchema.nullable(),
-  source: z.union([ConfigurationSourceInputSchema, KeepSourceSchema]),
-});
+const SourceCheckSourceSchema = z.union([ConfigurationSourceInputSchema, KeepSourceSchema]);
+export const SourceCheckInputSchema = z.union([
+  z.strictObject({
+    sourceId: z.null(),
+    expectedRevision: z.null(),
+    source: SourceCheckSourceSchema,
+  }),
+  z.strictObject({
+    sourceId: OpaqueIdentifierSchema,
+    expectedRevision: OpaqueIdentifierSchema,
+    source: SourceCheckSourceSchema,
+  }),
+]);
 export const SourceCheckResultSchema = z.discriminatedUnion("status", [
   z.strictObject({
     status: z.literal("reachable"),
@@ -84,6 +92,12 @@ export const SourceMutationSchema = z.discriminatedUnion("kind", [
     name: OpaqueIdentifierSchema,
     source: z.union([ConfigurationSourceInputSchema, KeepSourceSchema]),
   }),
+  z.strictObject({
+    kind: z.literal("delete"),
+    requestKey: RequestKeySchema,
+    sourceId: OpaqueIdentifierSchema,
+    expectedRevision: OpaqueIdentifierSchema,
+  }),
 ]);
 const SourceReceipts = [
   z.strictObject({ status: z.literal("pending"), requestKey: RequestKeySchema }),
@@ -93,13 +107,18 @@ const SourceReceipts = [
     record: SourceRecordSchema,
   }),
   z.strictObject({
+    status: z.literal("completed"),
+    requestKey: RequestKeySchema,
+    deletedSourceId: OpaqueIdentifierSchema,
+  }),
+  z.strictObject({
     status: z.literal("rejected"),
     requestKey: RequestKeySchema,
-    reason: z.enum(["validation", "conflict", "not_found", "unavailable"]),
+    reason: z.enum(["validation", "conflict", "not_found", "unavailable", "source_in_use"]),
   }),
 ] as const;
-export const SourceCommandObservationSchema = z.discriminatedUnion("status", SourceReceipts);
-export const SourceOperationObservationSchema = z.discriminatedUnion("status", [
+export const SourceCommandObservationSchema = z.union(SourceReceipts);
+export const SourceOperationObservationSchema = z.union([
   z.strictObject({ status: z.literal("not_found"), requestKey: RequestKeySchema }),
   ...SourceReceipts,
 ]);

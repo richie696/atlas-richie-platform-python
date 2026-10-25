@@ -5,6 +5,7 @@ import {
   CONSOLE_HEADER,
   CsrfNonceSchema,
   CONSOLE_WIRE_LIMIT,
+  RateLimitedConsoleErrorSchema,
   RequestKeySchema,
 } from "../../core/api/protocol/common";
 import type { ConsoleOperationContract } from "../../core/api/protocol/operationContract";
@@ -18,6 +19,7 @@ import {
   OWN_PASSWORD_HTTP_CONTRACT,
 } from "../../features/identity/http";
 import { METRICS_HTTP_CONTRACT } from "../../features/realtime/http";
+import { HOST_METRICS_HTTP_CONTRACT } from "../../features/realtime/http";
 import { FLEET_HTTP_CONTRACT } from "../../features/overview/http";
 import {
   INSTANCE_HTTP_CONTRACT,
@@ -27,21 +29,39 @@ import { INCIDENT_HTTP_CONTRACT } from "../../features/faults/http";
 import {
   SOURCE_REGISTRATION_HTTP_CONTRACT,
   SYSTEM_OBSERVATION_HTTP_CONTRACT,
+  SYSTEM_SETTINGS_HTTP_CONTRACT,
+  MONITORING_SOURCE_HTTP_CONTRACT,
 } from "../../features/system/http";
 import { RULE_SET_HTTP_CONTRACT } from "../../features/rules/http";
+import { RULE_OBSERVATION_HTTP_CONTRACT } from "../../features/rules/http";
+import { HOST_ASSOCIATION_HTTP_CONTRACT } from "../../features/hosts/http";
+
+const STRICT_QUERY_POLICY = Object.freeze({
+  unknownParameters: "reject",
+  duplicateParameters: "reject",
+  rejection: Object.freeze({
+    status: CONSOLE_ERROR_STATUS.invalid_request,
+    code: "invalid_request",
+  }),
+} as const);
 
 export const CONSOLE_OPERATIONS: readonly ConsoleOperationContract[] = Object.freeze([
   ...IDENTITY_HTTP_CONTRACT,
   ...ACCOUNT_HTTP_CONTRACT,
   ...OWN_PASSWORD_HTTP_CONTRACT,
   ...METRICS_HTTP_CONTRACT,
+  ...HOST_METRICS_HTTP_CONTRACT,
+  ...HOST_ASSOCIATION_HTTP_CONTRACT,
   ...FLEET_HTTP_CONTRACT,
   ...INSTANCE_HTTP_CONTRACT,
   ...OBSERVATION_CATALOG_HTTP_CONTRACT,
   ...INCIDENT_HTTP_CONTRACT,
   ...SYSTEM_OBSERVATION_HTTP_CONTRACT,
+  ...SYSTEM_SETTINGS_HTTP_CONTRACT,
+  ...MONITORING_SOURCE_HTTP_CONTRACT,
   ...SOURCE_REGISTRATION_HTTP_CONTRACT,
   ...RULE_SET_HTTP_CONTRACT,
+  ...RULE_OBSERVATION_HTTP_CONTRACT,
 ]);
 const annotateUtf16Limits = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(annotateUtf16Limits);
@@ -62,10 +82,14 @@ const schemaFor = (schema: z.ZodType) =>
     z.toJSONSchema(schema, { target: "draft-2020-12", unrepresentable: "throw" }),
   );
 
+const hasSchemaType = (schema: unknown, expected: string): boolean =>
+  typeof schema === "object" && schema !== null && "type" in schema && schema.type === expected;
+
 interface OpenApiParameter {
   name: string;
   in: "header" | "path" | "query";
   required: boolean;
+  description?: string;
   schema: unknown;
   examples?: Record<string, { summary: string; value: unknown }>;
 }
@@ -136,6 +160,8 @@ export function createConsoleOpenApi(operations = CONSOLE_OPERATIONS) {
         name: CONSOLE_HEADER.RequestId,
         in: "header" as const,
         required: true,
+        description:
+          "Exactly one valid x-request-id is required; missing, duplicate, or malformed values are rejected with 400 invalid_request.",
         schema: schemaFor(RequestKeySchema),
       },
       ...operation.pathParameters.map((value) => ({
@@ -144,12 +170,18 @@ export function createConsoleOpenApi(operations = CONSOLE_OPERATIONS) {
         required: true,
         schema: schemaFor(value.schema),
       })),
-      ...(operation.queryParameters ?? []).map((value) => ({
-        name: value.name,
-        in: "query" as const,
-        required: !value.schema.isOptional(),
-        schema: schemaFor(value.schema),
-      })),
+      ...(operation.queryParameters ?? []).map((value) => {
+        const schema = schemaFor(value.schema);
+        return {
+          name: value.name,
+          in: "query" as const,
+          required: !value.schema.isOptional(),
+          schema,
+          ...(hasSchemaType(schema, "integer")
+            ? { "x-query-integer-encoding": "canonical-decimal" }
+            : {}),
+        };
+      }),
     ];
     if (endpoint.csrf)
       parameters.push({
@@ -208,9 +240,11 @@ export function createConsoleOpenApi(operations = CONSOLE_OPERATIONS) {
           content: {
             "application/json": {
               schema: schemaFor(
-                ConsoleErrorSchema.extend({
-                  error: ConsoleErrorSchema.shape.error.extend({ code: z.enum(codes) }),
-                }),
+                status === CONSOLE_ERROR_STATUS.rate_limited
+                  ? RateLimitedConsoleErrorSchema
+                  : ConsoleErrorSchema.extend({
+                      error: ConsoleErrorSchema.shape.error.extend({ code: z.enum(codes) }),
+                    }),
               ),
               ...(responseExamples.get(status) ? { examples: responseExamples.get(status) } : {}),
             },
@@ -265,6 +299,7 @@ export function createConsoleOpenApi(operations = CONSOLE_OPERATIONS) {
         capabilities: [...operation.requiredAccess.capabilities],
       },
       "x-semantic-rules": operation.semanticRules,
+      ...(operation.queryParameters?.length ? { "x-query-policy": STRICT_QUERY_POLICY } : {}),
       "x-unknown-outcome": endpoint.command,
       ...(examples.length > 0 ? { "x-contract-examples": examples } : {}),
     };
@@ -273,11 +308,11 @@ export function createConsoleOpenApi(operations = CONSOLE_OPERATIONS) {
     openapi: "3.1.0",
     info: {
       title: "Atlas Richie Sentinel Console API",
-      version: "0.4.0-draft",
+      version: "0.19.0",
       description:
-        "Generated from runtime DTOs. Bounded string schemas pair JSON Schema maxLength with x-max-utf16-code-units because JavaScript and Python enforce UTF-16 code units. Partial F6 implementation; not a frozen/released backend contract.",
+        "Frozen additive Console API 0.19.0 baseline (2026-10-24). Preserves 0.18.0 operations, including the source_in_use monitoring-source delete rejection, and adds the administrator system time zone settings endpoint. Prior operations and reporting wires are unchanged. Generated from runtime DTOs. Bounded string schemas pair JSON Schema maxLength with x-max-utf16-code-units because JavaScript and Python enforce UTF-16 code units. Contract declaration is not proof of real Prometheus integration, collector deployment, or browser E2E acceptance.",
     },
-    "x-contract-status": "draft-partial",
+    "x-contract-status": "frozen",
     "x-max-body-bytes": CONSOLE_WIRE_LIMIT.BodyBytes,
     "x-error-status": CONSOLE_ERROR_STATUS,
     "x-covered-capabilities": [
@@ -291,8 +326,14 @@ export function createConsoleOpenApi(operations = CONSOLE_OPERATIONS) {
       "incidents",
       "system-observation",
       "system-sources",
+      "monitoring-sources",
+      "host-metrics",
+      "host-associations",
       "observation-catalog",
       "rulesets",
+      "rule-binding-states",
+      "rule-load-observations",
+      "system-settings",
     ],
     "x-pending-capabilities": [],
     servers: [{ url: "/" }],

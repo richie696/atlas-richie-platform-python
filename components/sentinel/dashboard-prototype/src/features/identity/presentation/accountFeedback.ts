@@ -14,6 +14,7 @@ export function accountFeedbackKey(snapshot: AccountManagementSnapshot): Transla
   if (code === "account_username_taken") return "management.usernameTaken";
   if (code === "account_last_admin") return "management.lastAdmin";
   if (code === "account_built_in") return "management.builtIn";
+  if (code === "account_self_operation") return "management.useOwnPassword";
   if (command.status === "conflict") return "management.conflict";
   return "management.failed";
 }

@@ -10,6 +10,10 @@ import type { FeedbackCopy } from "../../../src/shared/ui/FeedbackPanel";
 const error = new AppError(AppErrorKind.SERVER, "SENSITIVE-RAW-ERROR-MUST-NOT-RENDER", {
   status: 500,
 });
+const rateLimitedError = new AppError(AppErrorKind.RATE_LIMITED, "SENSITIVE-RATE-LIMIT-DETAIL", {
+  status: 429,
+  retryAfterMs: 500,
+});
 const value = { key: "one-resource", data: "trusted observations", receivedAt: 1 };
 const queries: Readonly<Record<QuerySnapshot<string>["status"], QuerySnapshot<string>>> = {
   idle: { status: "idle" },
@@ -48,6 +52,7 @@ const commandCopy = Object.fromEntries(
 /** Local snapshot fixture for the real feedback components, not an application mock mode or transport. */
 export function FeedbackProbe() {
   const [query, setQuery] = useState<QuerySnapshot<string>["status"]>(QUERY_STATUS.Ready);
+  const [rateLimited, setRateLimited] = useState(false);
   const [command, setCommand] = useState<CommandSnapshot<string>["status"]>(COMMAND_STATUS.Idle);
   const [reads, setReads] = useState(0);
   const [inspections, setInspections] = useState(0);
@@ -68,11 +73,17 @@ export function FeedbackProbe() {
             <button
               data-query={status}
               key={status}
-              onClick={() => setQuery(status as typeof query)}
+              onClick={() => {
+                setRateLimited(false);
+                setQuery(status as typeof query);
+              }}
             >
               {status}
             </button>
           ))}
+          <button data-query-rate-limited onClick={() => setRateLimited(true)}>
+            rate-limited
+          </button>
         </div>
         <div>
           {Object.keys(commands).map((status) => (
@@ -88,7 +99,11 @@ export function FeedbackProbe() {
         <output>{JSON.stringify({ reads, inspections })}</output>
         <div data-query-probe>
           <QueryView
-            snapshot={queries[query]}
+            snapshot={
+              rateLimited
+                ? { status: QUERY_STATUS.Error, key: value.key, error: rateLimitedError }
+                : queries[query]
+            }
             copy={queryCopy}
             onRetry={() => setReads((count) => count + 1)}
           >

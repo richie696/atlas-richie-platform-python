@@ -38,8 +38,15 @@ export const METRICS_ENDPOINT: ConsoleEndpoint<z.infer<typeof MetricBundleSchema
     "service_unavailable",
   ],
 };
+const REGISTERED_METRIC_IDS = Object.values(METRIC_ID);
+const METRIC_ID_ALTERNATION = [...REGISTERED_METRIC_IDS].sort().join("|");
+const METRIC_SELECTION_PATTERN = new RegExp(
+  `^(?:${METRIC_ID_ALTERNATION})(?:,(?:${METRIC_ID_ALTERNATION}))*$`,
+);
 export const MetricParametersSchema = ObservationContextParametersSchema.extend({
-  metrics: utf16BoundedString(Object.values(METRIC_ID).join(",").length).min(1),
+  metrics: utf16BoundedString(REGISTERED_METRIC_IDS.join(",").length)
+    .min(1)
+    .regex(METRIC_SELECTION_PATTERN),
   stepMs: ObservationStepSchema,
 });
 /** Fixed/rolling windows are resolved by the caller, not silently replaced by a browser-local relative interval. */

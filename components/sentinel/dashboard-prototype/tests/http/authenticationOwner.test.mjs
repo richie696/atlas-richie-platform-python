@@ -261,3 +261,69 @@ test("AUTH-APP-OWNER: denied intent does not rotate credentials of the current v
     },
   );
 });
+test("AUTH-APP-OWNER F4.23: session authority failure hides stale identity and confirmed 401 expires it", async () => {
+  let current = null;
+  let sessionMode = "valid";
+  let sequence = 0;
+  const server = setupServer(
+    http.get(`${origin}/api/v1/system/bootstrap`, ({ request }) =>
+      respond(request, { initialized: true }, current ? sessionCsrf : anonymousCsrf),
+    ),
+    http.get(`${origin}/api/v1/auth/me`, ({ request }) => {
+      if (sessionMode === "unavailable")
+        return respond(
+          request,
+          {
+            error: { code: "service_unavailable", requestId: request.headers.get("x-request-id") },
+          },
+          current ? sessionCsrf : anonymousCsrf,
+          503,
+        );
+      if (sessionMode === "expired") {
+        current = null;
+        return respond(
+          request,
+          { error: { code: "unauthenticated", requestId: request.headers.get("x-request-id") } },
+          anonymousCsrf,
+          401,
+        );
+      }
+      return respond(request, current, current ? sessionCsrf : anonymousCsrf);
+    }),
+    http.post(`${origin}/api/v1/auth/login`, ({ request }) => {
+      assert.equal(request.headers.get("x-sentinel-csrf"), anonymousCsrf);
+      current = owner;
+      return respond(request, owner, sessionCsrf);
+    }),
+  );
+  server.listen({ onUnhandledRequest: "error" });
+  const runtime = createConsoleAuthentication({
+    baseUrl: origin,
+    requestId: () => `auth-session-owner-${++sequence}`,
+  });
+  try {
+    assert.deepEqual(await runtime.authentication.restore(), { kind: "anonymous" });
+    await runtime.authentication.login({ username: "admin", password: "PRIVATE-LOGIN-PASSWORD" });
+    assert.deepEqual(runtime.session.read(), {
+      phase: "resolved",
+      facts: { kind: "authenticated", identity: owner },
+    });
+
+    sessionMode = "unavailable";
+    await assert.rejects(runtime.authentication.revalidateAccess());
+    assert.equal(runtime.session.read().phase, "unavailable");
+    assert.doesNotMatch(JSON.stringify(runtime.session.read()), /admin-one|PRIVATE-LOGIN-PASSWORD/);
+
+    sessionMode = "expired";
+    await assert.rejects(runtime.authentication.revalidateAccess());
+    assert.equal(runtime.session.read().phase, "expired");
+    assert.doesNotMatch(JSON.stringify(runtime.session.read()), /admin-one|PRIVATE-LOGIN-PASSWORD/);
+
+    sessionMode = "valid";
+    assert.deepEqual(await runtime.authentication.restore(), { kind: "anonymous" });
+    assert.deepEqual(runtime.session.read(), { phase: "resolved", facts: { kind: "anonymous" } });
+  } finally {
+    runtime.dispose();
+    server.close();
+  }
+});

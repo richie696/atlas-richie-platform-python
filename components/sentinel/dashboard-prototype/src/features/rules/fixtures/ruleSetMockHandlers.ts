@@ -1,10 +1,14 @@
 import { http, HttpResponse } from "msw";
-import { CONSOLE_HEADER } from "../../../core/api/protocol/common";
+import { CONSOLE_HEADER, parseIdempotencyKeyHeader } from "../../../core/api/protocol/common";
 import { readMockPrincipal } from "../../../core/api/mock/mockRole";
 import {
   ActivationPlanSchema,
   RuleBindingPageSchema,
+  RuleCatalogPageSchema,
+  RuleCatalogRefreshRequestSchema,
+  RuleCatalogRefreshResultSchema,
   RuleBindingRegistrationRequestSchema,
+  RuleBindingRegistrationReceiptSchema,
   RuleBindingSchema,
   RuleCommandRequestSchema,
   RuleOperationObservationSchema,
@@ -14,14 +18,22 @@ import {
   StoredRuleDraftSchema,
   RuleValidationReportSchema,
 } from "../api/ruleSetWire";
+import { RuleBindingScopeCatalogSchema } from "../api/ruleBindingScopeWire";
+import {
+  RuleBindingStatesPageSchema,
+  RuleLoadObservationPageSchema,
+  RuleLoadObservationHistoryPageSchema,
+} from "../api/ruleObservationWire";
 import type {
   RuleBindingRegistrationTarget,
   RuleSourceOption,
 } from "../model/ruleBindingRegistration";
-import type { RuleBinding, RuleRecord, RuleSetSnapshot } from "../model/ruleSet";
+import type { RuleBinding, RuleRecord, RuleSetCandidate, RuleSetSnapshot } from "../model/ruleSet";
+import type { RuleSetDiff } from "../model/ruleSetOperations";
 import type { VersionedRulePublicationTarget } from "../model/rulePublicationTarget";
 import { RULE_MUTATION, RULE_REJECTION } from "../model/ruleSetOperations";
 import { activationScheduleIssues, SCHEDULE_ISSUE } from "../model/ruleActivation";
+import { validRuleValue } from "../model/ruleValue";
 
 export type RuleSetMockScenario = {
   readonly environment: { readonly id: string };
@@ -91,6 +103,66 @@ function demoAdminAllowed(): boolean {
 }
 const forbidden = (requestId: string | null) =>
   response(requestId, { error: { code: "forbidden", requestId } }, 403);
+
+function parseCandidateRequest(body: unknown) {
+  const parsed = RuleSetCandidateSchema.safeParse(body);
+  if (!parsed.success) {
+    const shapeFailure = parsed.error.issues.some(({ code, path }) => {
+      const field = path.at(-1);
+      return (
+        code === "invalid_type" ||
+        code === "unrecognized_keys" ||
+        code === "invalid_union" ||
+        (code === "invalid_value" && field === "kind") ||
+        (code === "too_big" && (field === "rules" || field === "paramFlowItemList"))
+      );
+    });
+    return { success: false as const, status: shapeFailure ? 400 : 422 };
+  }
+  if (!parsed.data.rules.every(({ rule }) => validRuleValue(rule)))
+    return { success: false as const, status: 422 as const };
+  return { success: true as const, data: parsed.data };
+}
+
+async function candidateChecksum(candidate: RuleSetCandidate): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify(candidate));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const hex = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0"));
+  return `sha256:${hex.join("")}`;
+}
+
+function diffCandidate(
+  candidate: RuleSetCandidate,
+  snapshot: RuleSetSnapshot,
+): RuleSetDiff["changes"] | null {
+  const retainedRecordIds = new Set<string>();
+  const changes: RuleSetDiff["changes"][number][] = [];
+
+  for (const entry of candidate.rules) {
+    if (entry.recordId === null) {
+      changes.push({ operation: "add", after: entry.rule });
+      continue;
+    }
+
+    const previous = snapshot.records.find((record) => record.id === entry.recordId);
+    if (!previous || retainedRecordIds.has(previous.id)) return null;
+    retainedRecordIds.add(previous.id);
+    if (JSON.stringify(previous.rule) !== JSON.stringify(entry.rule))
+      changes.push({
+        operation: "replace",
+        recordId: previous.id,
+        before: previous.rule,
+        after: entry.rule,
+      });
+  }
+
+  for (const previous of snapshot.records) {
+    if (!retainedRecordIds.has(previous.id))
+      changes.push({ operation: "remove", recordId: previous.id, before: previous.rule });
+  }
+
+  return changes;
+}
 
 /** State is ephemeral and process-local by design: this is a demo simulator, never durable persistence. */
 function createRuleMockState(
@@ -325,6 +397,162 @@ export function createRuleSetMockHandlers(
 ) {
   const state = createRuleMockState(scenario, adminAccountId, clock);
   const handlers = Object.freeze([
+    http.get("*/api/v2/rules/catalog/binding-states", ({ request }) => {
+      const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
+      const url = new URL(request.url);
+      const query = {
+        environmentId: url.searchParams.get("environmentId"),
+        appId: url.searchParams.get("appId") ?? null,
+        kind: url.searchParams.get("kind") ?? null,
+        page: Number(url.searchParams.get("page") ?? "1"),
+        pageSize: Number(url.searchParams.get("pageSize") ?? "20"),
+      };
+      const parsedQuery = RuleBindingStatesPageSchema.shape.query.safeParse(query);
+      if (!parsedQuery.success)
+        return response(requestId, { error: { code: "invalid_request", requestId } }, 400);
+      const matches = scenario.bindings
+        .filter(
+          (binding) =>
+            binding.environmentId === query.environmentId &&
+            (!query.appId || binding.appId === query.appId) &&
+            (!query.kind || binding.kind === query.kind),
+        )
+        .sort((left, right) => left.id.localeCompare(right.id));
+      const offset = (query.page - 1) * query.pageSize;
+      const pageItems = matches.slice(offset, offset + query.pageSize).map((binding) => {
+        const snapshot = scenario.snapshots.find((item) => item.binding.id === binding.id);
+        const count = snapshot?.records.length ?? null;
+        return {
+          binding,
+          state:
+            count === null ? "not_read" : count === 0 ? "configured_empty" : "current_with_rules",
+          ruleCount: count,
+          sourceRevision: count === null ? null : (snapshot?.sourceRevision ?? null),
+          lastAttemptAt: count === null ? null : instant(clock()),
+          freshness: count === null ? "not_read" : "current",
+          hasLastKnownGood: count !== null,
+        };
+      });
+      const body = {
+        query: parsedQuery.data,
+        asOf: instant(clock()),
+        coverage: "complete",
+        total: matches.length,
+        hasMore: offset + pageItems.length < matches.length,
+        items: pageItems,
+      };
+      const validated = RuleBindingStatesPageSchema.safeParse(body);
+      return validated.success
+        ? response(requestId, validated.data)
+        : response(requestId, { error: { code: "service_unavailable", requestId } }, 503);
+    }),
+    http.get("*/api/v2/rules/load-observations", ({ request }) => {
+      const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
+      const url = new URL(request.url);
+      const query = {
+        environmentId: url.searchParams.get("environmentId"),
+        appId: url.searchParams.get("appId"),
+        bindingId: url.searchParams.get("bindingId") ?? null,
+        instanceId: url.searchParams.get("instanceId") ?? null,
+        page: Number(url.searchParams.get("page") ?? "1"),
+        pageSize: Number(url.searchParams.get("pageSize") ?? "20"),
+      };
+      const parsedQuery = RuleLoadObservationPageSchema.shape.query.safeParse(query);
+      if (!parsedQuery.success)
+        return response(requestId, { error: { code: "invalid_request", requestId } }, 400);
+      const bindings = scenario.bindings.filter(
+        (binding) =>
+          binding.environmentId === query.environmentId &&
+          binding.appId === query.appId &&
+          (!query.bindingId || binding.id === query.bindingId),
+      );
+      const instances = scenario.instances.filter(
+        (instance) =>
+          instance.appId === query.appId && (!query.instanceId || instance.id === query.instanceId),
+      );
+      const expectedRows = bindings
+        .flatMap((binding) =>
+          instances.map((instance, index) => {
+            const snapshot = scenario.snapshots.find((item) => item.binding.id === binding.id);
+            const applied = index === 0 && snapshot !== undefined;
+            return {
+              bindingId: binding.id,
+              instanceId: instance.id,
+              processId: instance.id,
+              processEpoch: instance.processEpoch,
+              profileId: "sentinel-python-v1",
+              loadState: applied ? "applied" : "not_observed",
+              eventKind: applied ? "snapshot_applied" : null,
+              activeSnapshot: applied
+                ? {
+                    sourceRevision: snapshot.sourceRevision,
+                    canonicalRulesSha256: "a".repeat(64),
+                    membershipComplete: false,
+                    members: [],
+                  }
+                : null,
+              attempt: null,
+              observedAt: applied ? instant(clock()) : null,
+              receivedAt: applied ? instant(clock()) : null,
+              freshness: applied ? "current" : "unknown",
+            };
+          }),
+        )
+        .sort(
+          (left, right) =>
+            left.bindingId.localeCompare(right.bindingId) ||
+            left.instanceId.localeCompare(right.instanceId),
+        );
+      const offset = (query.page - 1) * query.pageSize;
+      const items = expectedRows.slice(offset, offset + query.pageSize);
+      const observed = expectedRows.filter((item) => item.eventKind !== null).length;
+      const body = {
+        query: parsedQuery.data,
+        asOf: instant(clock()),
+        coverage: "complete",
+        targets: {
+          source: "active_reporter_enrollment",
+          expected: expectedRows.length,
+          observed,
+          stale: 0,
+          notObserved: expectedRows.length - observed,
+        },
+        total: expectedRows.length,
+        hasMore: offset + items.length < expectedRows.length,
+        items,
+      };
+      const validated = RuleLoadObservationPageSchema.safeParse(body);
+      return validated.success
+        ? response(requestId, validated.data)
+        : response(requestId, { error: { code: "service_unavailable", requestId } }, 503);
+    }),
+    http.get("*/api/v2/rules/load-observation-history", ({ request }) => {
+      const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
+      const url = new URL(request.url);
+      const query = {
+        environmentId: url.searchParams.get("environmentId"),
+        appId: url.searchParams.get("appId"),
+        bindingId: url.searchParams.get("bindingId"),
+        instanceId: url.searchParams.get("instanceId") ?? null,
+        page: Number(url.searchParams.get("page") ?? "1"),
+        pageSize: Number(url.searchParams.get("pageSize") ?? "20"),
+      };
+      const parsedQuery = RuleLoadObservationHistoryPageSchema.shape.query.safeParse(query);
+      if (!parsedQuery.success)
+        return response(requestId, { error: { code: "invalid_request", requestId } }, 400);
+      const body = {
+        query: parsedQuery.data,
+        asOf: instant(clock()),
+        coverage: "complete",
+        total: 0,
+        hasMore: false,
+        items: [],
+      };
+      const validated = RuleLoadObservationHistoryPageSchema.safeParse(body);
+      return validated.success
+        ? response(requestId, validated.data)
+        : response(requestId, { error: { code: "service_unavailable", requestId } }, 503);
+    }),
     http.post("*/api/v1/rulesets", async ({ request }) => {
       const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
       if (!demoAdminAllowed()) return forbidden(requestId);
@@ -333,11 +561,11 @@ export function createRuleSetMockHandlers(
       const parsed = RuleBindingRegistrationRequestSchema.safeParse(
         await request.json().catch(() => null),
       );
-      if (
-        !parsed.success ||
-        request.headers.get(CONSOLE_HEADER.IdempotencyKey) !== parsed.data?.requestKey
-      )
-        return response(requestId, { error: { code: "invalid_request", requestId } }, 400);
+      if (!parsed.success)
+        return response(requestId, { error: { code: "validation_failed", requestId } }, 422);
+      const idempotencyKey = parseIdempotencyKeyHeader(request.headers);
+      if (idempotencyKey.kind !== "valid" || idempotencyKey.requestKey !== parsed.data.requestKey)
+        return response(requestId, { error: { code: "idempotency_conflict", requestId } }, 409);
 
       const registration = parsed.data;
       const fingerprint = JSON.stringify(registration);
@@ -421,6 +649,37 @@ export function createRuleSetMockHandlers(
       });
       return response(requestId, validBinding.data, 201);
     }),
+    http.get("*/api/v2/rules/binding-scopes", ({ request }) => {
+      const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
+      const environmentIds = [
+        ...new Set(state.bindings.map(({ environmentId }) => environmentId)),
+      ].sort((left, right) => left.localeCompare(right));
+      const applications = [
+        ...new Map(
+          state.bindings.map((binding) => [
+            JSON.stringify([binding.environmentId, binding.appId]),
+            {
+              id: binding.appId,
+              environmentId: binding.environmentId,
+              name: binding.appId,
+            },
+          ]),
+        ).values(),
+      ].sort((left, right) =>
+        `${left.environmentId}:${left.id}`.localeCompare(`${right.environmentId}:${right.id}`),
+      );
+      const parsed = RuleBindingScopeCatalogSchema.safeParse({
+        asOf: instant(clock()),
+        environments: environmentIds.map((id) => ({ id, name: id })),
+        applications,
+      });
+      if (!parsed.success)
+        return response(requestId, { error: { code: "dependency_unavailable", requestId } }, 503);
+      const result = response(requestId, parsed.data);
+      result.headers.set("cache-control", "no-store");
+      result.headers.set("vary", "Cookie");
+      return result;
+    }),
     http.get("*/api/v1/rulesets", ({ request }) => {
       const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
       const url = new URL(request.url);
@@ -452,6 +711,129 @@ export function createRuleSetMockHandlers(
         ? response(requestId, parsed.data)
         : response(requestId, { error: { code: "invalid_request", requestId } }, 400);
     }),
+    http.get("*/api/v2/rules/catalog", ({ request }) => {
+      const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
+      const url = new URL(request.url);
+      const environmentId = url.searchParams.get("environmentId") ?? "";
+      const appId = url.searchParams.get("appId");
+      const kind = url.searchParams.get("kind");
+      const search = url.searchParams.get("search") ?? "";
+      const page = Number(url.searchParams.get("page"));
+      const pageSize = Number(url.searchParams.get("pageSize"));
+      const scopedBindings = state.bindings.filter(
+        (binding) =>
+          binding.environmentId === environmentId && (appId === null || binding.appId === appId),
+      );
+      const currentSnapshots = scopedBindings.flatMap((binding) => {
+        const snapshot = state.snapshots.get(binding.id);
+        return snapshot ? [{ binding, snapshot }] : [];
+      });
+      const rows = currentSnapshots.flatMap(({ binding, snapshot }) =>
+        snapshot.records
+          .filter((record) => kind === null || record.rule.kind === kind)
+          .filter((record) => {
+            const value = record.rule.value;
+            const resource = "resource" in value ? value.resource : "system";
+            return (
+              !search ||
+              `${resource} ${binding.appId} ${binding.sourceLabel} ${binding.location}`.includes(
+                search,
+              )
+            );
+          })
+          .map((record) => ({
+            binding,
+            record,
+            snapshot: {
+              checksum: snapshot.checksum,
+              sourceRevision: snapshot.sourceRevision,
+              versionId: snapshot.versionId,
+              asOf: instant(snapshot.asOfMs),
+            },
+            read: { freshness: "current" as const, lastAttemptAt: instant(snapshot.asOfMs) },
+          })),
+      );
+      const total = currentSnapshots.length === scopedBindings.length ? rows.length : null;
+      const input = {
+        query: { environmentId, appId, kind, search, page, pageSize },
+        asOf: instant(clock()),
+        coverage: total === null ? "partial" : "complete",
+        bindings: {
+          total: scopedBindings.length,
+          current: currentSnapshots.length,
+          stale: 0,
+          notRead: scopedBindings.length - currentSnapshots.length,
+        },
+        total,
+        hasMore: page * pageSize < rows.length,
+        items: rows.slice((page - 1) * pageSize, page * pageSize),
+        issues: scopedBindings
+          .filter((binding) => !state.snapshots.has(binding.id))
+          .slice(0, 100)
+          .map((binding) => ({ binding, reason: "not_read", lastAttemptAt: null, stale: false })),
+      };
+      const parsed = RuleCatalogPageSchema.safeParse(input);
+      return parsed.success
+        ? response(requestId, parsed.data)
+        : response(requestId, { error: { code: "dependency_unavailable", requestId } }, 503);
+    }),
+    http.post("*/api/v2/rules/catalog/refresh", async ({ request }) => {
+      const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
+      if (!request.headers.get(CONSOLE_HEADER.Csrf))
+        return response(requestId, { error: { code: "csrf_failed", requestId } }, 403);
+      const body = RuleCatalogRefreshRequestSchema.safeParse(
+        await request.json().catch(() => null),
+      );
+      if (!body.success)
+        return response(requestId, { error: { code: "invalid_request", requestId } }, 400);
+      const scopedBindings = state.bindings.filter(
+        (binding) =>
+          binding.environmentId === body.data.environmentId &&
+          (body.data.appId === undefined ||
+            body.data.appId === null ||
+            binding.appId === body.data.appId),
+      );
+      const attempted = Math.min(scopedBindings.length, 24);
+      const current = scopedBindings.filter((binding) => state.snapshots.has(binding.id)).length;
+      const result = {
+        scope: { environmentId: body.data.environmentId, appId: body.data.appId ?? null },
+        asOf: instant(clock()),
+        coverage:
+          scopedBindings.length <= 24 && current === scopedBindings.length ? "complete" : "partial",
+        bindings: {
+          total: scopedBindings.length,
+          attempted,
+          current,
+          stale: 0,
+          notRead: scopedBindings.length - current,
+        },
+      };
+      const parsed = RuleCatalogRefreshResultSchema.safeParse(result);
+      return parsed.success
+        ? response(requestId, parsed.data)
+        : response(requestId, { error: { code: "dependency_unavailable", requestId } }, 503);
+    }),
+    http.get(
+      "*/api/v1/rulesets/:bindingId/registration-operations/:requestKey",
+      ({ request, params }) => {
+        const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
+        if (!demoAdminAllowed()) return forbidden(requestId);
+        const bindingId = String(params.bindingId);
+        const requestKey = String(params.requestKey);
+        const operation = state.registrationOperations.get(requestKey);
+        const receipt =
+          operation?.binding.id === bindingId
+            ? { requestKey, bindingId, status: "completed" as const, binding: operation.binding }
+            : { requestKey, bindingId, status: "not_found" as const, binding: null };
+        const parsed = RuleBindingRegistrationReceiptSchema.safeParse(receipt);
+        if (!parsed.success)
+          return response(requestId, { error: { code: "dependency_unavailable", requestId } }, 503);
+        const result = response(requestId, parsed.data);
+        result.headers.set("cache-control", "no-store");
+        result.headers.set("vary", "Cookie");
+        return result;
+      },
+    ),
     http.get("*/api/v1/rulesets/:bindingId/snapshot", ({ request, params }) => {
       const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
       const snapshot = state.snapshots.get(String(params.bindingId));
@@ -485,14 +867,27 @@ export function createRuleSetMockHandlers(
     http.post("*/api/v1/rulesets/:bindingId/validate", async ({ request, params }) => {
       const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
       if (!demoAdminAllowed()) return forbidden(requestId);
-      const candidate = RuleSetCandidateSchema.safeParse(await request.json().catch(() => null));
-      if (!candidate.success || candidate.data.bindingId !== params.bindingId)
+      if (!request.headers.get(CONSOLE_HEADER.Csrf))
+        return response(requestId, { error: { code: "csrf_failed", requestId } }, 403);
+      const candidate = parseCandidateRequest(await request.json().catch(() => null));
+      if (!candidate.success)
+        return response(
+          requestId,
+          {
+            error: {
+              code: candidate.status === 400 ? "invalid_request" : "validation_failed",
+              requestId,
+            },
+          },
+          candidate.status,
+        );
+      if (candidate.data.bindingId !== params.bindingId)
         return response(requestId, { error: { code: "invalid_request", requestId } }, 400);
       const report = {
         bindingId: candidate.data.bindingId,
         profile: candidate.data.profile,
         baseChecksum: candidate.data.baseChecksum,
-        candidateChecksum: `candidate-${candidate.data.kind}-${candidate.data.rules.length}`,
+        candidateChecksum: await candidateChecksum(candidate.data),
         validationId: `validation-${candidate.data.kind}`,
         isPublishable: true,
         issues: [],
@@ -505,14 +900,38 @@ export function createRuleSetMockHandlers(
     http.post("*/api/v1/rulesets/:bindingId/diff", async ({ request, params }) => {
       const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
       if (!demoAdminAllowed()) return forbidden(requestId);
-      const candidate = RuleSetCandidateSchema.safeParse(await request.json().catch(() => null));
-      if (!candidate.success || candidate.data.bindingId !== params.bindingId)
+      if (!request.headers.get(CONSOLE_HEADER.Csrf))
+        return response(requestId, { error: { code: "csrf_failed", requestId } }, 403);
+      const candidate = parseCandidateRequest(await request.json().catch(() => null));
+      if (!candidate.success)
+        return response(
+          requestId,
+          {
+            error: {
+              code: candidate.status === 400 ? "invalid_request" : "validation_failed",
+              requestId,
+            },
+          },
+          candidate.status,
+        );
+      if (candidate.data.bindingId !== params.bindingId)
         return response(requestId, { error: { code: "invalid_request", requestId } }, 400);
+      const snapshot = state.snapshots.get(String(params.bindingId));
+      if (
+        !snapshot ||
+        snapshot.checksum !== candidate.data.baseChecksum ||
+        snapshot.binding.kind !== candidate.data.kind ||
+        snapshot.binding.profile !== candidate.data.profile
+      )
+        return response(requestId, { error: { code: "conflict", requestId } }, 409);
+      const changes = diffCandidate(candidate.data, snapshot);
+      if (changes === null)
+        return response(requestId, { error: { code: "conflict", requestId } }, 409);
       return response(requestId, {
         bindingId: candidate.data.bindingId,
         baseChecksum: candidate.data.baseChecksum,
-        candidateChecksum: `candidate-${candidate.data.kind}-${candidate.data.rules.length}`,
-        changes: [],
+        candidateChecksum: await candidateChecksum(candidate.data),
+        changes,
       });
     }),
     http.get("*/api/v1/rulesets/:bindingId/versions", ({ request, params }) => {
@@ -604,10 +1023,15 @@ export function createRuleSetMockHandlers(
     http.post("*/api/v1/rulesets/:bindingId/commands", async ({ request, params }) => {
       const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
       if (!demoAdminAllowed()) return forbidden(requestId);
+      if (!request.headers.get(CONSOLE_HEADER.Csrf))
+        return response(requestId, { error: { code: "csrf_failed", requestId } }, 403);
       const parsed = RuleCommandRequestSchema.safeParse(await request.json().catch(() => null));
       const bindingId = String(params.bindingId);
       if (!parsed.success || parsed.data.mutation.kind === undefined)
-        return response(requestId, { error: { code: "invalid_request", requestId } }, 400);
+        return response(requestId, { error: { code: "validation_failed", requestId } }, 422);
+      const idempotencyKey = parseIdempotencyKeyHeader(request.headers);
+      if (idempotencyKey.kind !== "valid" || idempotencyKey.requestKey !== parsed.data.requestKey)
+        return response(requestId, { error: { code: "idempotency_conflict", requestId } }, 409);
       const operationKey = `${bindingId}:${parsed.data.requestKey}`;
       const previous = state.operations.get(operationKey);
       if (previous) return response(requestId, previous, 202);

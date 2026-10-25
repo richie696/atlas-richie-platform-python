@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { useExternalSnapshot } from "@richie696/react-framework-react";
 import type { createRuleDraftWorkflow } from "../application/ruleDraftWorkflow";
 import type { RuleBinding } from "../model/ruleSet";
-import { Intro } from "../../../shared/ui/Intro";
 import { Panel } from "../../../shared/ui/Panel";
 import { ActionButton } from "../../../shared/ui/ActionButton";
 import { RuleQueryView } from "./RuleQueryView";
@@ -39,11 +38,6 @@ export function RuleSetWorkbenchPage({
   }, [workflow]);
   return (
     <section className={styles.workspace} data-rule-workspace>
-      <Intro
-        eyebrow={t("rules.eyebrow")}
-        title={t("rules.title")}
-        description={t("rules.workspace.description")}
-      />
       <Panel
         title={t("rules.workspace.sourceTitle")}
         subtitle={binding.location}

@@ -198,6 +198,7 @@ export function validInstanceCatalog(value: InstanceCatalog, query: InstanceCata
     count(value.filteredTotal) &&
     value.filteredTotal <=
       (query.attentionOnly ? value.attentionInstances : value.totalInstances) &&
+    ((query.page - 1) * query.pageSize < value.filteredTotal || value.items.length === 0) &&
     value.items.length <= query.pageSize &&
     value.items.length <= value.filteredTotal &&
     new Set(value.items.map((item) => JSON.stringify([item.appId, item.instanceId]))).size ===

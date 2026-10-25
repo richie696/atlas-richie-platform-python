@@ -65,6 +65,10 @@ const PLOT_METRIC: Readonly<Record<MetricId, MetricKey>> = Object.freeze({
   memory_ratio: "memory",
   memory_bytes: "memoryBytes",
 });
+/** Resolve the chart's typed series key without exposing metric-to-chart mapping to feature UI. */
+export function metricChartKey(metric: MetricId): MetricKey {
+  return PLOT_METRIC[metric];
+}
 const UNIT_SYMBOL = Object.freeze({
   requests_per_second: "req/s",
   entries_per_second: "entries/s",
@@ -90,7 +94,7 @@ export function metricPlot(series: MetricSeries): {
   readonly points: readonly TrendPoint[];
   readonly unit: string;
 } {
-  const metric = PLOT_METRIC[series.metric];
+  const metric = metricChartKey(series.metric);
   return {
     metric,
     unit: metricUnitSymbol(series.metric),

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {prepareRuleSchedule,hasRuleScheduleChanges,INITIAL_RULE_SCHEDULE_DRAFT} from '../../src/features/rules/model/ruleScheduleDraft';
 import {canCancelRulePlan,resolveCivilMinute} from '../../src/features/rules/model/ruleActivation';
 import {scheduleOccurrenceOptions} from '../../src/features/rules/presentation/scheduleTime';
+import {getSystemTimeZone,setSystemTimeZone} from '../../src/shared/presentation/systemTimeZone';
 const draft={versionId:'event',restoreVersionId:'daily',timeZone:'UTC',startsAt:'2026-11-01T01:30',endsAt:'2026-11-01T03:30',startOccurrence:'',endOccurrence:''};
 test('SCHEDULE-DIRTY: every local field protects unsent input; pristine clones and reset are clean',()=>{
  assert.equal(Object.isFrozen(INITIAL_RULE_SCHEDULE_DRAFT),true);
@@ -22,19 +23,23 @@ test('SCHEDULE-DST: nonexistent time rejected; repeated time requires an explici
  assert.equal(prepareRuleSchedule('binding',{...ny,startsAt:'2026-03-08T02:30',endsAt:'2026-03-08T04:30'}).valid,false);
  assert.equal(prepareRuleSchedule('binding',{...draft,startOccurrence:String(candidates[0])}).valid,false);
 });
-test('F5.2 SCHEDULE-LOCALE: DST occurrence values stay stable while labels follow locale and explicit UTC',()=>{
+test('F5.2 SCHEDULE-LOCALE: DST occurrence values stay stable while labels follow locale and the configured zone',()=>{
  const values=resolveCivilMinute('2026-11-01T01:30','America/New_York');
  const original=[...values];
- const options=Object.fromEntries(['zh-CN','en-US','ja-JP'].map(locale=>[
-  locale,scheduleOccurrenceOptions(values,locale,'Choose occurrence')
- ]));
- for(const locale of Object.keys(options)){
-  assert.deepEqual(options[locale].map(option=>option.value),['',...values.map(String)]);
-  for(const option of options[locale].slice(1))assert.match(option.label,/UTC$/);
- }
- assert.notEqual(options['zh-CN'][1].label,options['en-US'][1].label);
- assert.deepEqual(values,original);
- assert.throws(()=>scheduleOccurrenceOptions([-1],'en-US','Choose occurrence'),RangeError);
+ const originalZone=getSystemTimeZone();
+ try{
+  setSystemTimeZone('Asia/Shanghai');
+  const options=Object.fromEntries(['zh-CN','en-US','ja-JP'].map(locale=>[
+   locale,scheduleOccurrenceOptions(values,locale,'Choose occurrence')
+  ]));
+  for(const locale of Object.keys(options)){
+   assert.deepEqual(options[locale].map(option=>option.value),['',...values.map(String)]);
+   for(const option of options[locale].slice(1))assert.match(option.label,/ GMT\+8$/);
+  }
+  assert.notEqual(options['zh-CN'][1].label,options['en-US'][1].label);
+  assert.deepEqual(values,original);
+  assert.throws(()=>scheduleOccurrenceOptions([-1],'en-US','Choose occurrence'),RangeError);
+ }finally{setSystemTimeZone(originalZone);}
 });
 test('SCHEDULE-CANCEL: presentation and commands share the same cancellation policy',()=>{
  for(const state of ['pending','blocked'])assert.equal(canCancelRulePlan({state}),true);

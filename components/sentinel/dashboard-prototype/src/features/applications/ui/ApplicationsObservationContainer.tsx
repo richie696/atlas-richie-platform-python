@@ -12,12 +12,15 @@ import {
   TIME_RANGE_MS,
 } from "../../../shared/types/navigation";
 import { ObservationQueryView } from "../../../shared/ui/observation/ObservationQueryView";
+import { ObservationContextFallback } from "../../../shared/ui/observation/ObservationContextFallback";
+import { ObservationCatalogNotice } from "../../../shared/ui/observation/ObservationCatalogNotice";
+import { Intro } from "../../../shared/ui/Intro";
 import { Select } from "../../../shared/ui/Select";
 import { createObservationCatalogResource } from "../application/catalogResource";
 import { createInstanceResources } from "../application/instanceResources";
 import type { ObservationCatalogPort } from "../api/catalogPort";
 import type { InstancePort } from "../api/instancePort";
-import { applicationForEnvironment } from "../model/observationCatalog";
+import { applicationForEnvironment, resolveEnvironmentId } from "../model/observationCatalog";
 import { withoutInstanceSelection } from "../model/instanceNavigation";
 import {
   INSTANCE_LAYER,
@@ -27,6 +30,7 @@ import {
   type InstanceDetailQuery,
 } from "../model/instanceObservation";
 import { InstanceObservationPage } from "./InstanceObservationPage";
+import { MissingApplicationState } from "./MissingApplicationState";
 
 type RoutePage = DashboardPageProps & {
   readonly environmentId?: string;
@@ -35,6 +39,7 @@ type RoutePage = DashboardPageProps & {
   readonly from?: string;
   readonly to?: string;
   readonly search?: string;
+  readonly onShowHosts?: () => void;
 };
 type PageContext = RoutePage & {
   readonly catalogPort: ObservationCatalogPort;
@@ -57,20 +62,13 @@ export function ApplicationsObservationContainer({
   const [environmentChoice, setEnvironmentChoice] = useState(page.environmentId ?? "");
   const catalog = "data" in catalogSnapshot ? catalogSnapshot.data : null;
   const appId = page.appId === ALL_APPLICATIONS ? null : page.appId;
-  const appMatches = catalog?.applications.filter((application) => application.id === appId) ?? [];
-  const inferredEnvironment = appMatches.length === 1 ? appMatches[0].environmentId : null;
-  const routeEnvironmentValid = catalog?.environments.some(
-    (environment) => environment.id === page.environmentId,
-  );
+  const routeEnvironmentValid =
+    catalog === null ||
+    catalog.environments.some((environment) => environment.id === page.environmentId);
   const chosenEnvironmentValid = catalog?.environments.some(
     (environment) => environment.id === environmentChoice,
   );
-  const environmentId = page.environmentId
-    ? routeEnvironmentValid
-      ? page.environmentId
-      : null
-    : (inferredEnvironment ??
-      (catalog?.environments.length === 1 ? catalog.environments[0].id : null));
+  const environmentId = resolveEnvironmentId(catalog, page.environmentId, appId);
 
   useEffect(
     () => () => {
@@ -85,31 +83,74 @@ export function ApplicationsObservationContainer({
 
   const chooseEnvironment = (id: string) => {
     setEnvironmentChoice(id);
+    const currentAppId = page.appId === ALL_APPLICATIONS ? null : page.appId;
+    const appId =
+      applicationForEnvironment(catalog?.applications ?? [], id, currentAppId) ??
+      catalog?.applications.find((application) => application.environmentId === id)?.id ??
+      ALL_APPLICATIONS;
     page.navigate(ROUTE.Applications, {
       environmentId: id,
-      appId: applicationForEnvironment(catalog?.applications ?? [], id, appId) ?? ALL_APPLICATIONS,
+      appId,
     });
   };
 
-  if (!catalog || !environmentId) {
-    return (
-      <ObservationQueryView
-        snapshot={catalogSnapshot}
-        onRetry={() => void catalogResource.load(undefined).catch(() => undefined)}
-      >
-        {() => (
-          <section className="fleet-environment-prompt">
-            <Select
-              label={t("observation.environment")}
-              value={chosenEnvironmentValid ? environmentChoice : ""}
-              options={
-                catalog?.environments.map((item) => ({ value: item.id, label: item.name })) ?? []
-              }
-              onChange={chooseEnvironment}
-            />
+  if ((!catalog && !page.environmentId) || !environmentId) {
+    const intro = (
+      <Intro
+        eyebrow="APPLICATIONS / INSTANCES"
+        title={t("applications.intro.title")}
+        description={t("applications.intro.description")}
+      />
+    );
+
+    if (!catalog && catalogSnapshot.status === "error") {
+      return (
+        <ObservationContextFallback
+          snapshot={catalogSnapshot}
+          onRetry={() => void catalogResource.load(undefined).catch(() => undefined)}
+          header={intro}
+          emptyTitle={t("applications.directory.title")}
+          emptyDescription={t("applications.directory.unavailable")}
+          readTitle={t("observation.catalog.directoryTitle")}
+          readErrorDescription={t("observation.catalog.readFailed")}
+        >
+          {() => null}
+        </ObservationContextFallback>
+      );
+    }
+
+    if (catalog && catalog.environments.length === 0) {
+      return (
+        <>
+          {intro}
+          <section className="fleet-environment-prompt" role="status" data-applications-empty>
+            <p>{t("applications.empty.directory")}</p>
           </section>
-        )}
-      </ObservationQueryView>
+        </>
+      );
+    }
+
+    return (
+      <>
+        {intro}
+        <ObservationQueryView
+          snapshot={catalogSnapshot}
+          onRetry={() => void catalogResource.load(undefined).catch(() => undefined)}
+        >
+          {() => (
+            <section className="fleet-environment-prompt">
+              <Select
+                label={t("observation.environment")}
+                value={chosenEnvironmentValid ? environmentChoice : ""}
+                options={
+                  catalog?.environments.map((item) => ({ value: item.id, label: item.name })) ?? []
+                }
+                onChange={chooseEnvironment}
+              />
+            </section>
+          )}
+        </ObservationQueryView>
+      </>
     );
   }
 
@@ -126,16 +167,48 @@ export function ApplicationsObservationContainer({
     );
   }
 
+  const requestedAppId = page.appId === ALL_APPLICATIONS ? null : page.appId;
+  const environmentApplications =
+    catalog?.applications.filter((application) => application.environmentId === environmentId) ??
+    [];
+  if (
+    requestedAppId &&
+    catalog &&
+    !environmentApplications.some((application) => application.id === requestedAppId)
+  ) {
+    return (
+      <MissingApplicationState
+        page={page}
+        environmentId={environmentId}
+        environments={catalog?.environments.map(({ id, name }) => ({ id, name })) ?? []}
+        applications={environmentApplications.map(({ id, name }) => ({ id, name }))}
+      />
+    );
+  }
+
   return (
-    <InstanceObservationOwner
-      page={page}
-      resources={instances}
-      environmentId={environmentId}
-      applications={catalog.applications
-        .filter((application) => application.environmentId === environmentId)
-        .map(({ id, name }) => ({ id, name }))}
-      environments={catalog.environments}
-    />
+    <>
+      {!catalog && (
+        <ObservationCatalogNotice
+          snapshot={catalogSnapshot}
+          onRetry={() => void catalogResource.load(undefined).catch(() => undefined)}
+          readErrorDescription={t("observation.catalog.readFailed")}
+          title={t("observation.catalog.directoryTitle")}
+        />
+      )}
+      <InstanceObservationOwner
+        page={page}
+        resources={instances}
+        environmentId={environmentId}
+        catalogAvailable={catalog !== null}
+        applications={
+          catalog?.applications
+            .filter((application) => application.environmentId === environmentId)
+            .map(({ id, name }) => ({ id, name })) ?? []
+        }
+        environments={catalog?.environments ?? []}
+      />
+    </>
   );
 }
 
@@ -143,19 +216,37 @@ function InstanceObservationOwner({
   page,
   resources,
   environmentId,
+  catalogAvailable,
   environments,
   applications,
 }: {
   readonly page: RoutePage;
   readonly resources: ReturnType<typeof createInstanceResources>;
   readonly environmentId: string;
+  readonly catalogAvailable: boolean;
   readonly environments: readonly { readonly id: string; readonly name: string }[];
   readonly applications: readonly { readonly id: string; readonly name: string }[];
 }) {
   const [windowAnchorMs] = useState(() => Date.now());
   const [queryDraft, setQueryDraft] = useState<InstanceCatalogQuery | null>(null);
   const [retainedSelection, setRetainedSelection] = useState<InstanceDetailQuery | null>(null);
-  const appId = page.appId === ALL_APPLICATIONS ? null : page.appId;
+  const requestedAppId = page.appId === ALL_APPLICATIONS ? null : page.appId;
+  const appId =
+    (requestedAppId &&
+    (!catalogAvailable || applications.some((application) => application.id === requestedAppId))
+      ? requestedAppId
+      : null) ??
+    applications[0]?.id ??
+    null;
+  const routeAppId = page.appId;
+  const navigate = page.navigate;
+  useEffect(() => {
+    if (!appId || routeAppId === appId) return;
+    // A single-application route must not leave an unresolved fleet selection
+    // in the URL. Resolve from the authorized environment catalog and replace
+    // the URL so refresh/share restore the same concrete app scope.
+    navigate(ROUTE.Applications, { environmentId, appId }, { history: "replace" });
+  }, [appId, environmentId, navigate, routeAppId]);
   const observationWindow = useMemo(() => {
     return observationWindowFromRoute(page.from, page.to, page.range, windowAnchorMs);
   }, [page.from, page.range, page.to, windowAnchorMs]);
@@ -216,6 +307,7 @@ function InstanceObservationOwner({
       environments={environments}
       applications={applications}
       navigate={page.navigate}
+      onShowHosts={page.onShowHosts}
       onQueryChange={(next) => {
         setQueryDraft(next);
         const duration = next.context.window.toMs - next.context.window.fromMs;

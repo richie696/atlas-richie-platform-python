@@ -75,6 +75,7 @@ export function createRealtimeMonitor(
     selection: RealtimeSelection | null = null,
     disposed = false;
   let ownerKey = accessObserver.read().ownerKey;
+  let retryNotBeforeMs = 0;
   const query = createOwnedQueryResource<RealtimeSelection, MetricBundle>(accessObserver, {
     keyOf: realtimeSelectionKey,
     timeoutMs: options.timeoutMs,
@@ -117,10 +118,35 @@ export function createRealtimeMonitor(
       selection = null;
       stop(MONITOR_MODE.Idle);
       query.reset();
+      retryNotBeforeMs = 0;
       ownerKey = next.ownerKey;
       publish();
     }
   });
+  const poll = async (selected: RealtimeSelection, signal: AbortSignal): Promise<void> => {
+    if (signal.aborted || disposed) throw new AppError(AppErrorKind.CANCELLED, "Monitor cancelled");
+    if (globalThis.performance.now() < retryNotBeforeMs) return;
+    try {
+      await query.load(selected);
+    } catch (cause: unknown) {
+      const error = AppError.fromUnknown(cause);
+      if (
+        !signal.aborted &&
+        !disposed &&
+        selection !== null &&
+        realtimeSelectionKey(selection) === realtimeSelectionKey(selected) &&
+        error.kind === AppErrorKind.RATE_LIMITED &&
+        error.retryAfterMs !== undefined &&
+        Number.isSafeInteger(error.retryAfterMs) &&
+        error.retryAfterMs >= 0
+      )
+        retryNotBeforeMs = Math.max(
+          retryNotBeforeMs,
+          globalThis.performance.now() + error.retryAfterMs,
+        );
+      throw cause;
+    }
+  };
   function start(selected: RealtimeSelection) {
     if (disposed) throw new AppError(AppErrorKind.CANCELLED, "Monitor owner disposed");
     if (!accessObserver.read().allowed)
@@ -137,19 +163,18 @@ export function createRealtimeMonitor(
     )
       return;
     stop(MONITOR_MODE.Stopped);
-    if (selection === null || realtimeSelectionKey(selection) !== realtimeSelectionKey(selected))
+    if (selection === null || realtimeSelectionKey(selection) !== realtimeSelectionKey(selected)) {
       query.reset();
+      retryNotBeforeMs = 0;
+    }
     selection = selected;
     mode = MONITOR_MODE.Polling;
     publish();
-    polling.start(
-      async (signal) => {
-        if (signal.aborted || disposed)
-          throw new AppError(AppErrorKind.CANCELLED, "Monitor cancelled");
-        await query.load(selected);
-      },
-      { intervalMs, immediate: true, retryCount: 0 },
-    );
+    polling.start((signal) => poll(selected, signal), {
+      intervalMs,
+      immediate: true,
+      retryCount: 0,
+    });
   }
   return Object.freeze({
     getSnapshot: state.getSnapshot,

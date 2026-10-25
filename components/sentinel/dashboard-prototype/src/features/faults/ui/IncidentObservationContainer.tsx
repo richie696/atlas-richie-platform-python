@@ -7,7 +7,9 @@ import { OBSERVATION_SCOPE } from "../../../shared/model/observation";
 import { observationWindowFromRoute } from "../../../shared/presentation/observation";
 import type { DashboardPageProps } from "../../../shared/types/dashboard";
 import { ALL_APPLICATIONS, ROUTE } from "../../../shared/types/navigation";
-import { ObservationQueryView } from "../../../shared/ui/observation/ObservationQueryView";
+import { ObservationContextFallback } from "../../../shared/ui/observation/ObservationContextFallback";
+import { ObservationCatalogNotice } from "../../../shared/ui/observation/ObservationCatalogNotice";
+import { Intro } from "../../../shared/ui/Intro";
 import { Select } from "../../../shared/ui/Select";
 import { createObservationCatalogResource, createInstanceResources } from "../../applications";
 import type { InstancePort, ObservationCatalogPort } from "../../applications";
@@ -66,13 +68,8 @@ export function IncidentObservationContainer({
   const appId = page.appId === ALL_APPLICATIONS ? null : page.appId;
   const appMatches = catalog?.applications.filter((app) => app.id === appId) ?? [];
   const inferredEnvironment = appMatches.length === 1 ? appMatches[0].environmentId : null;
-  const validRouteEnvironment = catalog?.environments.some(
-    (environment) => environment.id === page.environmentId,
-  );
   const environmentId = page.environmentId
-    ? validRouteEnvironment
-      ? page.environmentId
-      : null
+    ? page.environmentId
     : (inferredEnvironment ??
       (catalog?.environments.length === 1 ? catalog.environments[0].id : null));
 
@@ -87,11 +84,22 @@ export function IncidentObservationContainer({
     [catalogResource, instanceResources, resources],
   );
 
-  if (!catalog || !environmentId) {
+  if (!environmentId) {
     return (
-      <ObservationQueryView
+      <ObservationContextFallback
         snapshot={catalogSnapshot}
         onRetry={() => void catalogResource.load(undefined).catch(() => undefined)}
+        header={
+          <Intro
+            eyebrow={t("faults.intro.eyebrow")}
+            title={t("faults.intro.title")}
+            description={t("faults.intro.description")}
+          />
+        }
+        emptyTitle={t("faults.timeline.title")}
+        emptyDescription={t("observation.catalog.emptyBody")}
+        readErrorDescription={t("observation.catalog.readFailed")}
+        readTitle={t("observation.catalog.directoryTitle")}
       >
         {() => (
           <section className="fleet-environment-prompt">
@@ -115,42 +123,34 @@ export function IncidentObservationContainer({
             />
           </section>
         )}
-      </ObservationQueryView>
-    );
-  }
-
-  if (page.environmentId && !validRouteEnvironment) {
-    return (
-      <section className="fleet-environment-prompt">
-        <Select
-          label={t("observation.environment")}
-          value={
-            catalog.environments.some((item) => item.id === environmentChoice)
-              ? environmentChoice
-              : ""
-          }
-          options={catalog.environments.map((item) => ({ value: item.id, label: item.name }))}
-          onChange={(id) => {
-            setEnvironmentChoice(id);
-            page.navigate(ROUTE.Faults, { environmentId: id, appId: appId ?? ALL_APPLICATIONS });
-          }}
-        />
-      </section>
+      </ObservationContextFallback>
     );
   }
 
   return (
-    <IncidentObservationOwner
-      page={page}
-      resources={resources}
-      instanceResource={instanceResources.catalog}
-      instanceId={page.instanceId}
-      environmentId={environmentId}
-      applications={catalog.applications
-        .filter((application) => application.environmentId === environmentId)
-        .map(({ id, name }) => ({ id, name }))}
-      environments={catalog.environments}
-    />
+    <>
+      {!catalog && (
+        <ObservationCatalogNotice
+          snapshot={catalogSnapshot}
+          onRetry={() => void catalogResource.load(undefined).catch(() => undefined)}
+          readErrorDescription={t("observation.catalog.readFailed")}
+          title={t("observation.catalog.directoryTitle")}
+        />
+      )}
+      <IncidentObservationOwner
+        page={page}
+        resources={resources}
+        instanceResource={instanceResources.catalog}
+        instanceId={page.instanceId}
+        environmentId={environmentId}
+        applications={
+          catalog?.applications
+            .filter((application) => application.environmentId === environmentId)
+            .map(({ id, name }) => ({ id, name })) ?? []
+        }
+        environments={catalog?.environments ?? []}
+      />
+    </>
   );
 }
 

@@ -23,12 +23,30 @@ const INITIAL: RegisteredSource = {
 /** Isolated test Ports; secrets are not recorded in diagnostic snapshots. Persistence assertions still await real HTTP/Python acceptance. */
 export function createSourceRegistrationTopology() {
   const access = new StateStore({ ownerKey: "source-probe-session", allowed: true }),
-    counts = new StateStore({ reads: 0, writes: 0, checks: 0, lookups: 0, aborts: 0, keep: false });
+    counts = new StateStore({
+      reads: 0,
+      writes: 0,
+      checks: 0,
+      lookups: 0,
+      aborts: 0,
+      keep: false,
+      lastMutation: null as null | {
+        kind: "register" | "update";
+        name: string;
+        provider: "nacos" | "consul";
+        endpoint: string;
+        location: string;
+        authenticationMode: string;
+      },
+    });
   let records: readonly RegisteredSource[] = [INITIAL],
     key = 0,
     revision = 1,
     fail = false,
     conflict = false,
+    rateLimitNextMutation = false,
+    rateLimitNextCheck = false,
+    rateLimitNextLookup = false,
     held = false,
     outcomeVisible = false;
   let release: (() => void) | null = null,
@@ -41,7 +59,9 @@ export function createSourceRegistrationTopology() {
     expiresAtMs: NOW + 60_000,
     capabilities: ["read", "conditional-write"],
   };
-  function apply(mutation: SourceMutation): RegisteredSource {
+  function apply(
+    mutation: SourceMutation & { readonly kind: "register" | "update" },
+  ): RegisteredSource {
     const existing =
       mutation.kind === "update" ? records.find((item) => item.id === mutation.sourceId) : null;
     const mode =
@@ -74,6 +94,13 @@ export function createSourceRegistrationTopology() {
       },
       async checkSource(_input, signal) {
         count("checks");
+        if (rateLimitNextCheck) {
+          rateLimitNextCheck = false;
+          throw new AppError(AppErrorKind.RATE_LIMITED, "PRIVATE-CHECK-RATE-LIMIT", {
+            status: 429,
+            retryAfterMs: 500,
+          });
+        }
         if (!held) return checked;
         return new Promise<SourceCheckResult>((resolve) => {
           release = () => resolve(checked);
@@ -82,9 +109,42 @@ export function createSourceRegistrationTopology() {
       },
       async mutateSource(mutation) {
         count("writes");
+        if (rateLimitNextMutation) {
+          rateLimitNextMutation = false;
+          throw new AppError(AppErrorKind.RATE_LIMITED, "PRIVATE-SOURCE-RATE-LIMIT", {
+            status: 429,
+            retryAfterMs: 500,
+          });
+        }
+        if (mutation.kind === "delete") {
+          const current = records.find((item) => item.id === mutation.sourceId);
+          latest = !current
+            ? { requestKey: mutation.requestKey, status: "rejected", reason: "not-found" }
+            : current.revision !== mutation.expectedRevision
+              ? { requestKey: mutation.requestKey, status: "rejected", reason: "conflict" }
+              : {
+                  requestKey: mutation.requestKey,
+                  status: "completed",
+                  deletedSourceId: current.id,
+                };
+          if (latest.status === "completed")
+            records = records.filter((item) => item.id !== mutation.sourceId);
+          if (fail) throw new AppError(AppErrorKind.NETWORK, "PRIVATE-SOURCE-ERROR");
+          return latest;
+        }
+        const source = mutation.source;
+        const lastMutation = {
+          kind: mutation.kind,
+          name: mutation.name,
+          provider: source.provider,
+          endpoint: source.endpoint,
+          location: source.provider === "nacos" ? source.namespace : source.datacenter,
+          authenticationMode: source.authentication.mode,
+        } as const;
         counts.set({
           ...counts.getSnapshot(),
           keep: mutation.source.authentication.mode === "keep",
+          lastMutation,
         });
         if (conflict)
           throw new AppError(AppErrorKind.PROTOCOL, "PRIVATE-CONFLICT", { status: 409 });
@@ -94,6 +154,13 @@ export function createSourceRegistrationTopology() {
       },
       async readSourceOperation(requestKey) {
         count("lookups");
+        if (rateLimitNextLookup) {
+          rateLimitNextLookup = false;
+          throw new AppError(AppErrorKind.RATE_LIMITED, "PRIVATE-LOOKUP-RATE-LIMIT", {
+            status: 429,
+            retryAfterMs: 500,
+          });
+        }
         return outcomeVisible && latest ? latest : { requestKey, status: "pending" };
       },
     },
@@ -109,6 +176,15 @@ export function createSourceRegistrationTopology() {
     },
     conflict: () => {
       conflict = true;
+    },
+    rateLimitMutation: () => {
+      rateLimitNextMutation = true;
+    },
+    rateLimitCheck: () => {
+      rateLimitNextCheck = true;
+    },
+    rateLimitLookup: () => {
+      rateLimitNextLookup = true;
     },
     hold: () => {
       held = true;
@@ -139,6 +215,15 @@ export function SourceRegistrationProbe({
         </button>
         <button data-source-conflict onClick={topology.conflict}>
           Conflict
+        </button>
+        <button data-source-rate-limit-mutation onClick={topology.rateLimitMutation}>
+          Rate-limit next mutation
+        </button>
+        <button data-source-rate-limit onClick={topology.rateLimitCheck}>
+          Rate-limit next check
+        </button>
+        <button data-source-rate-limit-lookup onClick={topology.rateLimitLookup}>
+          Rate-limit next lookup
         </button>
         <button data-source-hold onClick={topology.hold}>
           Hold check
@@ -172,7 +257,7 @@ export function SourceRegistrationProbe({
           counts,
         })}
       </pre>
-      <SourceRegistryPanel workflow={topology.workflow} />
+      <SourceRegistryPanel workflow={topology.workflow} demoMode />
     </AstryxProvider>
   );
 }

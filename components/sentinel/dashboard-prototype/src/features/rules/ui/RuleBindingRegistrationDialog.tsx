@@ -1,9 +1,10 @@
 import { useEffect, useId, useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useExternalSnapshot } from "@richie696/react-framework-react";
-import type {
-  createRuleBindingRegistrationCommand,
-  createRuleSourceCatalogResource,
+import {
+  createRuleBindingRegistrationReceiptResource,
+  type createRuleBindingRegistrationCommand,
+  type createRuleSourceCatalogResource,
 } from "../application/ruleBindingRegistration";
 import {
   DEFAULT_NACOS_RULE_GROUP,
@@ -26,6 +27,7 @@ import styles from "./RuleSetWorkspace.module.scss";
 
 type SourceCatalogResource = ReturnType<typeof createRuleSourceCatalogResource>;
 type RegistrationCommand = ReturnType<typeof createRuleBindingRegistrationCommand>;
+type RegistrationReceiptResource = ReturnType<typeof createRuleBindingRegistrationReceiptResource>;
 const EMPTY_SOURCES: readonly RuleSourceOption[] = Object.freeze([]);
 
 function initialDraft(
@@ -59,20 +61,20 @@ function targetForSource(source: RuleSourceOption | undefined) {
 /** Admin-only rules feature dialog; shared DialogFrame owns modal anatomy and focus behavior. */
 export function RuleBindingRegistrationDialog({
   environmentId,
-  environments,
   applications,
   defaultKind,
   sourceResource,
   command,
+  receiptResource,
   onClose,
   onCreated,
 }: {
   readonly environmentId: string;
-  readonly environments: readonly { readonly id: string; readonly name: string }[];
   readonly applications: readonly { readonly id: string; readonly name: string }[];
   readonly defaultKind: RuleKind;
   readonly sourceResource: SourceCatalogResource;
   readonly command: RegistrationCommand;
+  readonly receiptResource: RegistrationReceiptResource;
   readonly onClose: () => void;
   readonly onCreated: (binding: RuleBinding) => void;
 }) {
@@ -81,25 +83,29 @@ export function RuleBindingRegistrationDialog({
   const formId = useId();
   const sourceState = useExternalSnapshot(sourceResource);
   const commandState = useExternalSnapshot(command);
+  const receiptState = useExternalSnapshot(receiptResource);
   const [draft, setDraft] = useState(() => initialDraft(environmentId, applications, defaultKind));
   const [invalid, setInvalid] = useState(false);
   const [submitted, setSubmitted] = useState<{
     readonly command: NonNullable<ReturnType<typeof prepareRuleBindingRegistration>>;
     readonly sourceCatalog: RuleSourceCatalog;
   } | null>(null);
+  const [inspecting, setInspecting] = useState(false);
+  const [inspectionMissed, setInspectionMissed] = useState(false);
 
   useEffect(() => {
     void sourceResource.load(null).catch(() => undefined);
     return () => sourceResource.cancel();
   }, [sourceResource]);
+  useEffect(() => () => receiptResource.cancel(), [receiptResource]);
   const sources = "data" in sourceState ? sourceState.data.items : EMPTY_SOURCES;
   const selectedSource = sources.find((source) => source.id === draft.sourceId);
-  const busy = commandState.status === "pending";
+  const busy = commandState.status === "pending" || inspecting;
   const unknown = commandState.status === "result-unknown";
   const registrationFailed = commandState.status === "error" || commandState.status === "conflict";
+  const sourceReadDenied = sourceState.status === "denied";
   const sourceReadFailed = sourceState.status === "error" || sourceState.status === "stale";
-  const canSubmit =
-    !!selectedSource && applications.some((application) => application.id === draft.appId);
+  const canSubmit = !!selectedSource && !!draft.environmentId.trim() && !!draft.appId.trim();
 
   const change = (patch: Partial<RuleBindingRegistrationDraft>) => {
     if (busy || unknown) return;
@@ -108,13 +114,34 @@ export function RuleBindingRegistrationDialog({
     setInvalid(false);
   };
 
-  const submitCommand = async (submission: NonNullable<typeof submitted>, isRetry: boolean) => {
+  const submitCommand = async (submission: NonNullable<typeof submitted>) => {
     try {
-      if (isRetry) command.reset();
       const binding = await command.run(submission);
       onCreated(binding);
     } catch {
       // The workflow exposes a redacted command snapshot with a stable failure class.
+    }
+  };
+
+  const inspectOriginalResult = async () => {
+    if (!submitted || inspecting || !unknown) return;
+    setInspecting(true);
+    setInspectionMissed(false);
+    try {
+      const receipt = await receiptResource.load({
+        bindingId: submitted.command.bindingId,
+        requestKey: submitted.command.requestKey,
+      });
+      if (receipt.status === "completed") {
+        command.reset();
+        onCreated(receipt.binding);
+      } else {
+        setInspectionMissed(true);
+      }
+    } catch {
+      // The receipt resource holds only redacted, user-presentable state.
+    } finally {
+      setInspecting(false);
     }
   };
 
@@ -132,7 +159,7 @@ export function RuleBindingRegistrationDialog({
     setInvalid(false);
     const input = { command: registration, sourceCatalog: sourceState.data };
     setSubmitted(input);
-    await submitCommand(input, false);
+    await submitCommand(input);
   };
 
   const close = () => {
@@ -196,13 +223,22 @@ export function RuleBindingRegistrationDialog({
             }
           />
         )}
-        {sourceState.status === "loading" && (
+        {(sourceState.status === "idle" || sourceState.status === "loading") && (
           <FeedbackPanel
             tone="info"
             isBusy
             copy={{
               title: t("rules.registration.sourcesLoading"),
               description: t("rules.registration.sourcesLoadingHint"),
+            }}
+          />
+        )}
+        {sourceReadDenied && (
+          <FeedbackPanel
+            tone="error"
+            copy={{
+              title: t("rules.registration.sourcesDenied"),
+              description: t("rules.registration.sourcesDeniedHint"),
             }}
           />
         )}
@@ -222,18 +258,16 @@ export function RuleBindingRegistrationDialog({
             disabled={busy || unknown}
             onChange={(bindingId) => change({ bindingId })}
           />
-          <Select
+          <TextField
             label={t("rules.registration.environment")}
             value={draft.environmentId}
-            options={environments.map(({ id, name }) => ({ value: id, label: name }))}
             disabled={busy || unknown}
             onChange={(environmentId) => change({ environmentId })}
           />
-          <Select
+          <TextField
             label={t("rules.registration.application")}
             value={draft.appId}
-            options={applications.map(({ id, name }) => ({ value: id, label: name }))}
-            disabled={busy || unknown || applications.length === 0}
+            disabled={busy || unknown}
             onChange={(appId) => change({ appId })}
           />
           <Select
@@ -334,15 +368,23 @@ export function RuleBindingRegistrationDialog({
             tone="warning"
             copy={{
               title: t("rules.registration.unknown"),
-              description: t("rules.registration.unknownHint"),
+              description: t(
+                inspectionMissed
+                  ? "rules.registration.notFoundHint"
+                  : receiptState.status === "error" || receiptState.status === "stale"
+                    ? "rules.registration.lookupFailedHint"
+                    : "rules.registration.unknownHint",
+              ),
             }}
             actions={
               <ActionButton
                 variant="primary"
-                onClick={() => submitted && void submitCommand(submitted, true)}
-                disabled={!submitted}
+                type="button"
+                onClick={() => void inspectOriginalResult()}
+                disabled={!submitted || inspecting}
+                isLoading={inspecting}
               >
-                {t("rules.registration.retrySame")}
+                {t("rules.registration.inspectOriginal")}
               </ActionButton>
             }
           />

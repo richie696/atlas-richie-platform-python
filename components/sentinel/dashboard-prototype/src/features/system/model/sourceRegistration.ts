@@ -48,7 +48,8 @@ export type SourceMutationInput =
       readonly expectedRevision: string;
       readonly name: string;
       readonly source: SourceUpdateInput;
-    };
+    }
+  | { readonly kind: "delete"; readonly sourceId: string; readonly expectedRevision: string };
 export type SourceMutation = SourceMutationInput & { readonly requestKey: string };
 export interface SourceCheckInput {
   readonly sourceId: string | null;
@@ -72,13 +73,14 @@ export type SourceCheckResult = { readonly checkedAtMs: number; readonly expires
 export type SourceOperationObservation =
   | { readonly requestKey: string; readonly status: "pending" | "not-found" }
   | { readonly requestKey: string; readonly status: "completed"; readonly record: RegisteredSource }
+  | { readonly requestKey: string; readonly status: "completed"; readonly deletedSourceId: string }
   | {
       readonly requestKey: string;
       readonly status: "rejected";
-      readonly reason: "validation" | "conflict" | "not-found" | "unavailable";
+      readonly reason: "validation" | "conflict" | "not-found" | "unavailable" | "source_in_use";
     };
-/** A safe private outcome expectation, not a retained write body. No password/token/reference copy. */
-export interface SourceOutcomeExpectation {
+/** Safe private expectation for register/update, never a retained source credential body. */
+export interface SourceMutationOutcomeExpectation {
   readonly requestKey: string;
   readonly kind: "register" | "update";
   readonly sourceId: string | null;
@@ -89,6 +91,16 @@ export interface SourceOutcomeExpectation {
   readonly authenticationMode: RuleSourceAuthenticationMode;
   readonly credentialConfigured: boolean;
 }
+/** Delete expectation deliberately retains only source identity/revision and request key. */
+export interface SourceDeletionOutcomeExpectation {
+  readonly requestKey: string;
+  readonly kind: "delete";
+  readonly sourceId: string;
+  readonly expectedRevision: string;
+}
+export type SourceOutcomeExpectation =
+  SourceMutationOutcomeExpectation | SourceDeletionOutcomeExpectation;
+export type SourceCommandResult = RegisteredSource | { readonly deletedSourceId: string };
 const EMPTY_CREDENTIALS = Object.freeze({
   reference: "",
   username: "",
@@ -225,7 +237,9 @@ export function prepareSourceMutation(
       }
     : { kind: "register", name: draft.name.trim(), source };
 }
-export function sourceCheckInput(input: SourceMutationInput): SourceCheckInput {
+export function sourceCheckInput(
+  input: SourceMutationInput & { readonly kind: "register" | "update" },
+): SourceCheckInput {
   return {
     sourceId: input.kind === "update" ? input.sourceId : null,
     expectedRevision: input.kind === "update" ? input.expectedRevision : null,
@@ -233,7 +247,7 @@ export function sourceCheckInput(input: SourceMutationInput): SourceCheckInput {
   };
 }
 export function sourceOutcomeExpectation(
-  mutation: SourceMutation,
+  mutation: SourceMutation & { readonly kind: "register" | "update" },
   record: RegisteredSource | null,
 ): SourceOutcomeExpectation {
   const keep = mutation.source.authentication.mode === "keep";
@@ -253,6 +267,18 @@ export function sourceOutcomeExpectation(
     credentialConfigured: keep
       ? record!.credentialConfigured
       : mutation.source.authentication.mode !== RULE_SOURCE_AUTHENTICATION.None,
+  };
+}
+export function sourceDeletionExpectation(
+  requestKey: string,
+  record: RegisteredSource,
+): SourceDeletionOutcomeExpectation {
+  if (!validRegisteredSource(record)) throw new Error("Valid source required for deletion");
+  return {
+    requestKey,
+    kind: "delete",
+    sourceId: record.id,
+    expectedRevision: record.revision,
   };
 }
 export function validSourceCheck(value: SourceCheckResult): boolean {
@@ -277,9 +303,18 @@ export function validSourceObservation(
 ): boolean {
   if (value.requestKey !== expected.requestKey) return false;
   if (value.status === "pending" || value.status === "not-found") return true;
-  if (value.status === "rejected")
-    return ["validation", "conflict", "not-found", "unavailable"].includes(value.reason);
-  if (value.status !== "completed" || !validRegisteredSource(value.record)) return false;
+  if (value.status === "rejected" && "reason" in value)
+    return ["validation", "conflict", "not-found", "unavailable", "source_in_use"].includes(
+      value.reason,
+    );
+  if (expected.kind === "delete")
+    return (
+      value.status === "completed" &&
+      "deletedSourceId" in value &&
+      value.deletedSourceId === expected.sourceId
+    );
+  if (value.status !== "completed" || !("record" in value) || !validRegisteredSource(value.record))
+    return false;
   const record = value.record;
   return (
     (expected.sourceId === null || record.id === expected.sourceId) &&

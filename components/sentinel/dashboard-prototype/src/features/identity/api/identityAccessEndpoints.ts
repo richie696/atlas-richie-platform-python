@@ -34,7 +34,7 @@ const Session: ConsoleEndpoint<z.infer<typeof SessionReadSchema>> = {
   idempotency: "none",
   csrf: false,
   expireOnUnauthorized: true,
-  errors: ["invalid_request", "unauthenticated", "service_unavailable"],
+  errors: ["invalid_request", "service_unavailable"],
   accept: (value) => value === null || validSessionWire(value),
 };
 const Login: ConsoleEndpoint<z.infer<typeof SessionIdentitySchema>> = {
@@ -61,7 +61,11 @@ const Logout: ConsoleEndpoint<undefined> = {
   command: true,
   idempotency: "none",
   csrf: true,
-  expireOnUnauthorized: true,
+  // A 401 is a definitive logout rejection, not an unknown command. The
+  // authentication workflow already drops the trusted facts before dispatch
+  // and keeps access unavailable until explicit session inspection. Let the
+  // command observe the typed response instead of expiring/cancelling itself.
+  expireOnUnauthorized: false,
   errors: ["invalid_request", "unauthenticated", "csrf_failed", "service_unavailable"],
 };
 

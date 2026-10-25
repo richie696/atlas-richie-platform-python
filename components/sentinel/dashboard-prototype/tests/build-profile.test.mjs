@@ -56,6 +56,41 @@ test("BUILD-LIVE: production artifact excludes mock worker, handlers, legacy gat
   assert.ok(await stat(path.join(liveRoot, "index.html")));
 });
 
+test("BUILD-TEST-ONLY: initialization lifecycle probe stays out of live and demo products", async () => {
+  const probeMarkers = [
+    "TEST ONLY · 初始化探针",
+    "Hold request",
+    "Simulate timeout after commit",
+    "Reopen setup for secret-clearing assertion",
+    '"writes":0,"checks":0,"lookups":0,"completions":0',
+    "initialization-lifecycle.html",
+    "Sentinel Dashboard performance probe",
+    "__performance-probe",
+    "performance-probe.html",
+  ];
+
+  for (const [profile, root] of [
+    ["live", liveRoot],
+    ["demo", demoRoot],
+  ]) {
+    const files = await listFiles(root);
+    const names = files.map((file) => path.basename(file));
+    const text = await artifactText(files);
+    for (const marker of probeMarkers) {
+      assert.equal(
+        text.includes(marker),
+        false,
+        `${profile} build contains test-only probe ${marker}`,
+      );
+      assert.equal(
+        names.some((name) => name.includes(marker)),
+        false,
+        `${profile} artifact emits test-only probe ${marker}`,
+      );
+    }
+  }
+});
+
 test("BUILD-CHUNKS: vendor boundaries keep each emitted JavaScript chunk below Vite's 500 KiB warning", async () => {
   const chunkLimitBytes = 500 * 1024;
 
@@ -145,6 +180,50 @@ test("BUILD-CHART-LAZY: Nivo line renderer remains outside the initial asset clo
     chartChunk.additionalAfterInitial.files.some((file) => file.file.includes("nivo-line")),
     "the deferred dependency maps to an emitted Nivo chunk",
   );
+});
+
+test("BUILD-ROUTE-LAZY: every product page owner is deferred from live and demo startup closures", async () => {
+  const routeOwners = [
+    "src/features/overview/index.ts",
+    "src/features/applications/index.ts",
+    "src/features/rules/index.ts",
+    "src/features/system/index.ts",
+    "src/features/realtime/index.ts",
+    "src/features/faults/index.ts",
+    "src/app/router/ConsoleSystemRoute.tsx",
+    "src/app/router/IdentityRouteOwners.tsx",
+    "src/app/router/SetupRouteOwner.tsx",
+  ];
+
+  for (const [profile, root] of [
+    ["live", liveRoot],
+    ["demo", demoRoot],
+  ]) {
+    const manifest = JSON.parse(await readFile(path.join(root, ".vite/manifest.json"), "utf8"));
+    const entryKey = Object.keys(manifest).find((key) => manifest[key].isEntry === true);
+    assert.ok(entryKey, `${profile} build has an app entry`);
+
+    const visitStatic = (key, visited = new Set()) => {
+      if (visited.has(key)) return visited;
+      visited.add(key);
+      for (const dependency of manifest[key].imports ?? []) visitStatic(dependency, visited);
+      return visited;
+    };
+    const initial = visitStatic(entryKey);
+    for (const routeOwner of routeOwners) {
+      assert.ok(manifest[routeOwner], `${profile} build emits route owner ${routeOwner}`);
+      assert.equal(
+        manifest[routeOwner].isDynamicEntry,
+        true,
+        `${profile}/${routeOwner} is a dynamic entry`,
+      );
+      assert.equal(
+        initial.has(routeOwner),
+        false,
+        `${profile}/${routeOwner} stays out of the initial closure`,
+      );
+    }
+  }
 });
 
 test("BUILD-SETUP-LAZY: first-run database/source commands stay out of the auth startup closure", async () => {

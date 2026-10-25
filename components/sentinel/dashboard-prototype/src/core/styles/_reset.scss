@@ -13,7 +13,6 @@ html {
 }
 body {
   margin: 0;
-  min-width: var(--sentinel-layout-min-width);
   background: var(--sentinel-page-background-image), var(--sentinel-color-background-base);
   -webkit-font-smoothing: antialiased;
 }

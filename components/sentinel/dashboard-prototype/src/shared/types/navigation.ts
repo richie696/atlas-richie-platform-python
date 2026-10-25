@@ -8,6 +8,7 @@ export const ROUTE = Object.freeze({
   Realtime: "realtime",
   Faults: "faults",
   System: "system",
+  Documentation: "docs",
   Accounts: "accounts",
   Roles: "roles",
   ChangePassword: "change-password",
@@ -100,6 +101,8 @@ export interface NavigationContext {
    * 任何页面的具体 tab，因此只做「非空字符串」这一层解析。
    */
   readonly view?: string;
+  /** Rules page section; stable URL state for the user's current task. */
+  readonly section?: string;
 }
 
 /** Maximum cursor length shared by the URL codec and feature-owned incident query contract. */

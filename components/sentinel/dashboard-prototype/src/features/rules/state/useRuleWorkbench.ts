@@ -38,7 +38,7 @@ import { filterRuleCatalog, validateRuleDraft } from "../editor/rulePolicy";
 export type { RuleValidationState } from "../editor/ruleEditing";
 
 export interface UseRuleWorkbenchOptions {
-  /** 目录全集。生产实现来自 gateway；原型阶段由 fixture 提供。 */
+  /** 由调用方装载的目录全集；此 Hook 只拥有编辑状态，不负责数据获取。 */
   readonly entries: readonly RuleWorkbenchEntry[];
   readonly appId: string;
   readonly range: TimeRangeId;

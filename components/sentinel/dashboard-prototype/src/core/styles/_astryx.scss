@@ -23,6 +23,13 @@
   outline: none;
   outline-offset: 0;
 }
+// Login TextInput owns the field border; reserve its trailing slot for the reveal button.
+.sentinel-login-field.astryx-text-field {
+  min-height: 48px;
+}
+.sentinel-login-password-field input {
+  padding-inline-end: 44px;
+}
 .astryx-button svg {
   display: inline-block;
   vertical-align: middle;

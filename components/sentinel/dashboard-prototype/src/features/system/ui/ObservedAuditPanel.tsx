@@ -7,6 +7,7 @@ import { ActionButton } from "../../../shared/ui/ActionButton";
 import { DataTable } from "../../../shared/ui/DataTable";
 import { FormGrid } from "../../../shared/ui/FormGrid";
 import { TextField } from "../../../shared/ui/TextField";
+import { DateTimeField } from "../../../shared/ui/DateTimeField";
 import { Select } from "../../../shared/ui/Select";
 import { FeedbackPanel } from "../../../shared/ui/FeedbackPanel";
 import {
@@ -63,7 +64,13 @@ export function ObservedAuditPanel(props: Props) {
             })}
           </p>
         )}
-        <SystemQueryView snapshot={state} onRetry={read}>
+        <SystemQueryView
+          snapshot={state}
+          onRetry={read}
+          title={t("system.audit.readTitle")}
+          emptyDescription={t("system.audit.readEmpty")}
+          filteredEmptyDescription={t("system.audit.readFilteredEmpty")}
+        >
           {(value) => (
             <DataTable
               heads={[
@@ -123,7 +130,7 @@ export function ObservedAuditPanel(props: Props) {
     </Panel>
   );
 }
-/** Apply is explicit, so invalid date text remains editable rather than instantly replacing the active query. */
+/** Apply is explicit, so incomplete date/time selections do not replace the active query. */
 function AuditFilters({
   query,
   onApply,
@@ -144,13 +151,13 @@ function AuditFilters({
       }}
     >
       <FormGrid>
-        <TextField
+        <DateTimeField
           label={t("system.audit.start")}
           hint={t("system.audit.utcHint")}
           value={draft.startUtc}
           onChange={(value) => setDraft({ ...draft, startUtc: value })}
         />
-        <TextField
+        <DateTimeField
           label={t("system.audit.end")}
           hint={t("system.audit.utcHint")}
           value={draft.endUtc}

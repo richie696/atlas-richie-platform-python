@@ -63,12 +63,12 @@ export function RuleBindingDirectory({
       subtitle={t("rules.directory.selectionHint")}
       action={
         <div className={styles.actions}>
+          <ActionButton onClick={read}>{t("rules.directory.refresh")}</ActionButton>
           {canRegister && onRegister && (
             <ActionButton variant="primary" onClick={onRegister}>
               {t("rules.registration.open")}
             </ActionButton>
           )}
-          <ActionButton onClick={read}>{t("rules.directory.refresh")}</ActionButton>
         </div>
       }
     >

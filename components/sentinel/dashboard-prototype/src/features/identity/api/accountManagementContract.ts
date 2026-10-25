@@ -109,7 +109,7 @@ export const ACCOUNT_HTTP_CONTRACT = Object.freeze([
   },
   {
     operationId: "mutateAccount",
-    summary: "创建账号、修改状态或绑定角色",
+    summary: "创建账号、修改状态、绑定角色、重置密码或删除账号",
     tag: "accounts",
     security: "session",
     requiredAccess: CONSOLE_ACCESS.Admin,
@@ -122,9 +122,13 @@ export const ACCOUNT_HTTP_CONTRACT = Object.freeze([
       "Original actor, canonical input and key are bound durably; same key with different input is rejected.",
       "Username validation and lookup use the shared trim/NFKC/lowercase identity; a unique SHA-256 username_key rejects case and compatibility variants.",
       "Status/role require the target's current revision; check and update are one transaction.",
+      "Changing an account from active to disabled revokes all of its active sessions in the same transaction; re-enabling does not restore or reissue those sessions.",
       "Built-in admin cannot be disabled/demoted, nor can the last active admin; concurrent mutations cannot bypass this invariant.",
       "Completed receipt matches the requested target/effect and has a new revision. Domain rejection is a safe operation fact; not-found is invalid as command acknowledgement.",
       "Password is write-only; safe operation lookup never includes the input or credential digest.",
+      "reset_password requires a single new password and current revision; deletes all target sessions without enabling a disabled account. The current admin may reset their own password, including the built-in admin; confirmed self-reset requires reauthentication. Self-delete remains prohibited.",
+      "delete is a soft deletion: hide the account from directory/detail, reserve its username, revoke sessions and retain audit/publication references. Its final receipt contains only the disabled safe snapshot.",
+      "Built-in accounts cannot be disabled, demoted, deleted, or reset by another admin. The current admin may reset their own built-in password. Self-delete rejects with self_operation; last active admin deletion is prohibited. These checks run in the transaction, independent of UI hints.",
     ],
     examples: [
       {

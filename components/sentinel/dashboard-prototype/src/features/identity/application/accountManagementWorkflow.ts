@@ -11,6 +11,7 @@ import type {
 import type { IdentitySessionOwner } from "../api/identityAccessPort";
 import { IDENTITY_ROLE, type AccountDraft, type AccountStatus } from "../model/account";
 import type { SessionIdentity } from "../model/controlPlaneAccess";
+import { PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH } from "../model/passwordPolicy";
 import {
   accountRoleIssue,
   accountStatusIssue,
@@ -37,6 +38,12 @@ export interface AccountManagementSnapshot {
   readonly inspecting: boolean;
 }
 export interface AccountManagementWorkflow {
+  readonly ownerAccountId: string;
+  readonly resetPassword: (
+    record: AccountRecord,
+    password: string,
+  ) => Promise<AccountCommandReceipt>;
+  readonly deleteAccount: (record: AccountRecord) => Promise<AccountCommandReceipt>;
   readonly getSnapshot: () => AccountManagementSnapshot;
   readonly subscribe: (listener: () => void) => () => void;
   readonly list: (query: AccountListQuery) => Promise<AccountPage>;
@@ -52,6 +59,8 @@ export interface AccountManagementWorkflow {
   ) => Promise<AccountCommandReceipt>;
   /** Read the original operation. Not-found is NOT proof of rollback and cannot unlock another write. */
   readonly inspect: () => Promise<AccountOperationObservation>;
+  /** Cancel only the directory read owned by account-list query effects. */
+  readonly cancelDirectory: () => void;
   readonly cancel: () => void;
   readonly dispose: () => void;
 }
@@ -60,10 +69,12 @@ const REJECTION_STATUS: Readonly<Record<AccountRejection, number>> = Object.free
   username_taken: 409,
   last_admin: 409,
   built_in: 409,
+  self_operation: 409,
   validation: 422,
   conflict: 409,
   not_found: 404,
 });
+const FINALIZED_MUTATION_STATUSES: ReadonlySet<string> = new Set(["success", "conflict", "error"]);
 function rejection(reason: AccountRejection): CommandSnapshot<AccountRecord> {
   const status = REJECTION_STATUS[reason];
   const error = new AppError(AppErrorKind.PROTOCOL, "Account operation rejected", {
@@ -99,12 +110,20 @@ export function createAccountManagementWorkflow(
     activeQuery: AccountListQuery | undefined,
     selectedId: string | undefined;
   let operation: AccountOperationIdentity | null = null,
-    verified: CommandSnapshot<AccountRecord> | undefined;
+    verified: CommandSnapshot<AccountRecord> | undefined,
+    verifiedAccountId: string | undefined;
   let inspecting = false,
     inspectGeneration = 0;
   // Keep only non-secret confirmation facts for a later operation lookup.
   let expected:
-    { readonly username?: string; readonly roleId?: string; readonly status?: string } | undefined;
+    | {
+        readonly username?: string;
+        readonly roleId?: string;
+        readonly status?: AccountStatus;
+        readonly builtIn?: boolean;
+        readonly lastLoginAt?: string | null;
+      }
+    | undefined;
   const idle = Object.freeze({ status: "idle" } as const);
   function authorized() {
     const access = session.read();
@@ -194,7 +213,9 @@ export function createAccountManagementWorkflow(
       expected &&
       ((expected.username !== undefined && value.account.username !== expected.username) ||
         (expected.roleId !== undefined && value.account.roleId !== expected.roleId) ||
-        (expected.status !== undefined && value.account.status !== expected.status))
+        (expected.status !== undefined && value.account.status !== expected.status) ||
+        (expected.builtIn !== undefined && value.account.builtIn !== expected.builtIn) ||
+        (expected.lastLoginAt !== undefined && value.account.lastLoginAt !== expected.lastLoginAt))
     )
       throw new AppError(AppErrorKind.SERVER, "Account receipt does not confirm mutation", {
         status: 502,
@@ -250,6 +271,10 @@ export function createAccountManagementWorkflow(
     inspection.reset();
     inspecting = false;
   }
+  function cancelDirectory() {
+    directory.cancel();
+    publish();
+  }
   stops.push(
     session.subscribe(() => {
       if (!authorized()) {
@@ -268,9 +293,10 @@ export function createAccountManagementWorkflow(
     if (inspecting || ["pending", "result-unknown"].includes(mutationSnapshot().status))
       throw new AppError(AppErrorKind.DUPLICATE, "Account mutation requires confirmation");
   }
-  function invalid(code: string, status = 400): never {
+  function invalid(code: string, status = 400, targetAccountId?: string): never {
     const error = new AppError(AppErrorKind.PROTOCOL, "Invalid account command", { status, code });
     verified = { status: status === 409 ? "conflict" : "error", error };
+    verifiedAccountId = targetAccountId;
     operation = null;
     publish();
     throw error;
@@ -290,6 +316,9 @@ export function createAccountManagementWorkflow(
   }
   async function reconcileConfirmedMutation() {
     const confirmed = operation;
+    // A self-reset revokes this session in the same server transaction. Avoid
+    // follow-up reads with a session that is already known to be invalid.
+    if (confirmed?.kind === "reset_password" && confirmed.accountId === accountId) return;
     if (
       confirmed &&
       confirmed.accountId === accountId &&
@@ -309,17 +338,40 @@ export function createAccountManagementWorkflow(
       ...(input.kind === "create" ? {} : { accountId: input.accountId }),
     });
     verified = undefined;
+    verifiedAccountId = undefined;
     expected = Object.freeze(
       input.kind === "create"
         ? {
             username: input.input.username,
             roleId: input.input.roleId,
+            status: "active",
+            builtIn: false,
+            lastLoginAt: null,
           }
         : input.kind === "role"
           ? { roleId: input.roleId }
-          : { status: input.status },
+          : input.kind === "status"
+            ? { status: input.status }
+            : input.kind === "delete"
+              ? { status: "disabled" }
+              : {},
     );
-    const receipt = await command.run(input);
+    let receipt: AccountCommandReceipt;
+    try {
+      receipt = await command.run(input);
+    } catch (cause) {
+      // A server-side role change can race the in-memory administrator projection.
+      // A definitive authorization denial is a reason to refresh authority before
+      // retaining any account-directory data; CSRF failures are not role changes.
+      if (
+        cause instanceof AppError &&
+        cause.kind === AppErrorKind.FORBIDDEN &&
+        cause.status === 403 &&
+        cause.code === "forbidden"
+      )
+        await session.revalidateAccess().catch(() => undefined);
+      throw cause;
+    }
     if (receipt.status === "completed") await reconcileConfirmedMutation();
     return receipt;
   }
@@ -329,6 +381,33 @@ export function createAccountManagementWorkflow(
     return key;
   }
   return Object.freeze({
+    ownerAccountId: accountId,
+    async resetPassword(record: AccountRecord, password: string) {
+      assertAvailable();
+      if (record.builtIn && record.id !== accountId)
+        return invalid("account_built_in", 409, record.id);
+      if (password.length < PASSWORD_MIN_LENGTH || password.length > PASSWORD_MAX_LENGTH)
+        return invalid("account_form_invalid");
+      return run({
+        kind: "reset_password",
+        requestKey: requestKey(),
+        accountId: record.id,
+        revision: record.revision,
+        password,
+      });
+    },
+    async deleteAccount(record: AccountRecord) {
+      assertAvailable();
+      if (record.builtIn) return invalid("account_built_in", 409, record.id);
+      if (record.id === accountId) return invalid("account_self_operation", 409, record.id);
+      if (record.lastActiveAdmin) return invalid("account_last_admin", 409, record.id);
+      return run({
+        kind: "delete",
+        requestKey: requestKey(),
+        accountId: record.id,
+        revision: record.revision,
+      });
+    },
     getSnapshot: state.getSnapshot,
     subscribe: state.subscribe,
     async list(query: AccountListQuery) {
@@ -349,7 +428,22 @@ export function createAccountManagementWorkflow(
           code: "account_target_required",
         });
       selectedId = id;
-      return detail.load(id);
+      const record = await detail.load(id);
+      if (
+        (operation?.accountId ?? verifiedAccountId) &&
+        FINALIZED_MUTATION_STATUSES.has(mutationSnapshot().status)
+      ) {
+        // A completed authoritative reread makes a previous terminal role/status
+        // outcome obsolete for the editor. Keep unknown outcomes until their
+        // original request key is explicitly inspected; never infer rollback.
+        operation = null;
+        verified = undefined;
+        verifiedAccountId = undefined;
+        expected = undefined;
+        command.reset();
+        publish();
+      }
+      return record;
     },
     async create(draft: AccountDraft) {
       assertAvailable();
@@ -364,6 +458,7 @@ export function createAccountManagementWorkflow(
         return invalid(
           `account_${issue ?? "not_found"}`,
           issue === "built_in" || issue === "last_admin" ? 409 : 400,
+          record?.id,
         );
       return run({
         kind: "status",
@@ -375,13 +470,16 @@ export function createAccountManagementWorkflow(
     },
     async setRole(record: AccountRecord | null, draft: RoleDraft) {
       assertAvailable();
-      if (!record || record.id !== draft.accountId) return invalid("account_not_found", 404);
-      if (record.revision !== draft.revision) return invalid("account_revision_conflict", 409);
+      if (!record || record.id !== draft.accountId)
+        return invalid("account_not_found", 404, record?.id);
+      if (record.revision !== draft.revision)
+        return invalid("account_revision_conflict", 409, record.id);
       const issue = accountRoleIssue(record, draft.roleId);
       if (issue)
         return invalid(
           `account_${issue}`,
           issue === "built_in" || issue === "last_admin" ? 409 : 400,
+          record.id,
         );
       return run({
         kind: "role",
@@ -411,6 +509,8 @@ export function createAccountManagementWorkflow(
             receipt.status === "completed"
               ? { status: "success", result: receipt.account }
               : rejection(receipt.reason);
+          verifiedAccountId =
+            receipt.status === "completed" ? receipt.account.id : current.accountId;
           command.reset();
           publish();
           if (receipt.status === "completed") await reconcileConfirmedMutation();
@@ -423,6 +523,7 @@ export function createAccountManagementWorkflow(
         }
       }
     },
+    cancelDirectory,
     cancel() {
       cancelInspection();
       directory.cancel();
@@ -443,6 +544,7 @@ export function createAccountManagementWorkflow(
       selectedId = undefined;
       operation = null;
       verified = undefined;
+      verifiedAccountId = undefined;
       expected = undefined;
       state.set({
         authorized: false,

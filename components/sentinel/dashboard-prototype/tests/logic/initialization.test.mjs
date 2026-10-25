@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AppError, AppErrorKind } from "@richie696/react-framework";
 import { createInitializationWorkflow } from "../../src/features/identity/application/initializationWorkflow";
+import { SETUP_CONNECTION_CHECK } from "../../src/features/identity/model/setup";
 import {
   initializationFeedbackKey,
   isSetupAuthorityClosed,
@@ -35,7 +36,9 @@ function make(overrides = {}) {
     calls = 0;
   const port = {
     readBootstrap: async () =>
-      initialized ? { initialized: true } : { initialized: false, setupAvailable: true },
+      initialized
+        ? { initialized: true }
+        : { initialized: false, setupAvailable: true, operatorAuthorized: true },
     checkDatabase: async () => ({ status: "reachable" }),
     checkSource: async () => ({ status: "reachable" }),
     initialize: async (request) => {
@@ -62,7 +65,7 @@ test("SETUP-BOOTSTRAP restore forwards an explicit force refresh to the read por
   const { workflow } = make({
     readBootstrap: async (_signal, options) => {
       receivedRefreshOptions.push(options?.forceRefresh ?? false);
-      return { initialized: false, setupAvailable: true };
+      return { initialized: false, setupAvailable: true, operatorAuthorized: true };
     },
   });
 
@@ -71,6 +74,127 @@ test("SETUP-BOOTSTRAP restore forwards an explicit force refresh to the read por
     await workflow.restore(true);
 
     assert.deepEqual(receivedRefreshOptions, [false, true]);
+  } finally {
+    workflow.dispose();
+  }
+});
+
+test("SETUP-AUTHORIZATION blocks initialization commands until the operator grant is confirmed", async () => {
+  let operatorAuthorized = false;
+  let initialized = false;
+  let databaseChecks = 0;
+  let sourceChecks = 0;
+  let writes = 0;
+  const { workflow } = make({
+    readBootstrap: async () =>
+      initialized
+        ? { initialized: true }
+        : { initialized: false, setupAvailable: true, operatorAuthorized },
+    checkDatabase: async () => {
+      databaseChecks++;
+      return { status: "reachable" };
+    },
+    checkSource: async () => {
+      sourceChecks++;
+      return { status: "reachable" };
+    },
+    initialize: async (request) => {
+      writes++;
+      initialized = true;
+      return completed(request.requestKey);
+    },
+  });
+
+  try {
+    await workflow.restore();
+    await assert.rejects(
+      workflow.checkDatabase(input.database),
+      (error) => error.kind === AppErrorKind.FORBIDDEN,
+    );
+    await assert.rejects(
+      workflow.checkSource(input.source),
+      (error) => error.kind === AppErrorKind.FORBIDDEN,
+    );
+    await assert.rejects(
+      workflow.initialize(input),
+      (error) => error.kind === AppErrorKind.FORBIDDEN,
+    );
+    assert.deepEqual([databaseChecks, sourceChecks, writes], [0, 0, 0]);
+
+    operatorAuthorized = true;
+    await workflow.restore(true);
+    assert.deepEqual(await workflow.checkDatabase(input.database), { status: "reachable" });
+    assert.deepEqual(await workflow.checkSource(input.source), { status: "reachable" });
+    assert.equal((await workflow.initialize(input)).status, "ready");
+    assert.deepEqual([databaseChecks, sourceChecks, writes], [1, 1, 1]);
+  } finally {
+    workflow.dispose();
+  }
+});
+
+test("SETUP-AUTHORIZATION rechecks the one-use operator grant immediately before initialization", async () => {
+  let reads = 0;
+  let writes = 0;
+  const { workflow } = make({
+    readBootstrap: async () => {
+      reads++;
+      return {
+        initialized: false,
+        setupAvailable: true,
+        operatorAuthorized: reads === 1,
+      };
+    },
+    initialize: async () => {
+      writes++;
+      return completed("unexpected-write");
+    },
+  });
+
+  try {
+    await workflow.restore();
+    await assert.rejects(
+      workflow.initialize(input),
+      (error) => error.kind === AppErrorKind.FORBIDDEN,
+    );
+
+    assert.equal(reads, 2, "the cached grant must be revalidated before the command");
+    assert.equal(writes, 0, "a revoked grant must not reach the initialization port");
+    assert.equal(workflow.getSnapshot().bootstrap.data.operatorAuthorized, false);
+  } finally {
+    workflow.dispose();
+  }
+});
+
+test("SETUP-INIT keeps a slow first-run initialization observable beyond the generic command timeout", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const operation = deferred();
+  let started;
+  const startedSignal = new Promise((resolve) => {
+    started = resolve;
+  });
+  const { workflow, setInitialized } = make({
+    initialize: async (request) => {
+      started();
+      await operation.promise;
+      setInitialized(true);
+      return completed(request.requestKey);
+    },
+  });
+
+  try {
+    await workflow.restore();
+    const result = workflow.initialize(input);
+    await startedSignal;
+    t.mock.timers.tick(10_001);
+    await Promise.resolve();
+    assert.equal(
+      workflow.getSnapshot().initialization.status,
+      "submitting",
+      "a database migration/hash operation must not be classified unknown at the generic 10s deadline",
+    );
+
+    operation.resolve();
+    assert.equal((await result).status, "ready");
   } finally {
     workflow.dispose();
   }
@@ -157,7 +281,9 @@ test("SETUP-COMMAND duplicate writes are blocked; completion requires correlated
     received;
   const { workflow } = make({
     readBootstrap: async () =>
-      initialized ? { initialized: true } : { initialized: false, setupAvailable: true },
+      initialized
+        ? { initialized: true }
+        : { initialized: false, setupAvailable: true, operatorAuthorized: true },
     initialize: async (request) => {
       calls++;
       received = request;
@@ -232,6 +358,69 @@ test("SETUP-COMMAND not-found is not proof of rollback; pending remains inspecta
   assert.equal(observations, 2);
   workflow.dispose();
 });
+test("SETUP-COMMAND-INSPECT is single-flight and keeps writes blocked until correlated lookup finishes", async () => {
+  const firstLookup = deferred();
+  const lookupStarted = deferred();
+  let lookups = 0,
+    writes = 0;
+  const { workflow } = make({
+    initialize: async ({ requestKey }) => {
+      writes++;
+      return {
+        status: "pending",
+        requestKey,
+        operationId: "setup-operation",
+      };
+    },
+    readInitialization: (requestKey) => {
+      lookups++;
+      if (lookups === 1) {
+        lookupStarted.resolve();
+        return firstLookup.promise;
+      }
+      return Promise.resolve({ status: "not-found", requestKey });
+    },
+  });
+
+  await workflow.restore();
+  await workflow.initialize(input);
+  const inspection = workflow.inspect();
+  await lookupStarted.promise;
+
+  try {
+    assert.equal(workflow.getSnapshot().initialization.status, "checking");
+    await assert.rejects(workflow.inspect(), (error) => error.kind === AppErrorKind.DUPLICATE);
+    await assert.rejects(
+      workflow.initialize(input),
+      (error) => error.kind === AppErrorKind.DUPLICATE,
+    );
+    assert.equal(writes, 1);
+    assert.equal(lookups, 1);
+  } finally {
+    firstLookup.resolve({
+      status: "pending",
+      requestKey: "synthetic-request-1",
+      operationId: "setup-operation",
+    });
+  }
+
+  assert.deepEqual(await inspection, {
+    status: "pending",
+    requestKey: "synthetic-request-1",
+    operationId: "setup-operation",
+  });
+  assert.equal(workflow.getSnapshot().initialization.status, "pending");
+
+  await workflow.inspect();
+  assert.equal(workflow.getSnapshot().initialization.status, "result-unknown");
+  await assert.rejects(
+    workflow.initialize(input),
+    (error) => error.kind === AppErrorKind.DUPLICATE,
+  );
+  assert.equal(writes, 1);
+  assert.equal(lookups, 2);
+  workflow.dispose();
+});
 test("SETUP-COMMAND mismatched receipt never succeeds or grants resubmission, even if setup globally completed", async () => {
   const { workflow } = make({ initialize: async () => completed("another-request") });
   await workflow.restore();
@@ -247,7 +436,7 @@ test("SETUP-COMMAND completed receipt with unavailable/incomplete confirmation r
   const { workflow } = make({
     readBootstrap: async () => {
       if (fail) throw new AppError(AppErrorKind.NETWORK, "offline");
-      return { initialized: false, setupAvailable: true };
+      return { initialized: false, setupAvailable: true, operatorAuthorized: true };
     },
     initialize: async (request) => {
       fail = true;
@@ -288,7 +477,9 @@ test("SETUP-COMMAND server validation receipt is a known rejection; only an expl
   const corrected = { ...input, admin: { ...input.admin, username: "operator" } };
   const { workflow } = make({
     readBootstrap: async () =>
-      initialized ? { initialized: true } : { initialized: false, setupAvailable: true },
+      initialized
+        ? { initialized: true }
+        : { initialized: false, setupAvailable: true, operatorAuthorized: true },
     initialize: async (request) => {
       received.push(request);
       if (received.length === 1)
@@ -328,7 +519,7 @@ test("SETUP-COMMAND setup-closed receipt is terminal even while cached bootstrap
   const { workflow } = make({
     readBootstrap: async () => {
       bootstrapReads++;
-      return { initialized: false, setupAvailable: true };
+      return { initialized: false, setupAvailable: true, operatorAuthorized: true };
     },
     initialize: async (request) => {
       writes++;
@@ -408,6 +599,47 @@ test("SETUP-CHECK revisions contain no secrets, changed input invalidates confir
   await workflow.checkDatabase(input.database);
   assert.equal(workflow.getSnapshot().databaseCheck.status, "ready");
   workflow.dispose();
+});
+test("SETUP-CHECK input invalidation preserves the independent dependency result", async () => {
+  const databasePending = deferred();
+  const sourcePending = deferred();
+  let databaseCalls = 0;
+  let sourceCalls = 0;
+  const { workflow } = make({
+    checkDatabase: async () =>
+      ++databaseCalls === 1 ? databasePending.promise : { status: "reachable" },
+    checkSource: async () =>
+      ++sourceCalls === 2 ? sourcePending.promise : { status: "reachable" },
+  });
+
+  try {
+    await workflow.restore();
+    await workflow.checkSource(input.source);
+    const databaseCheck = workflow.checkDatabase(input.database);
+    const databaseRejected = assert.rejects(databaseCheck);
+    workflow.invalidateCheck(SETUP_CONNECTION_CHECK.Database);
+    await databaseRejected;
+    databasePending.resolve({ status: "reachable" });
+    await Promise.resolve();
+    assert.equal(workflow.getSnapshot().databaseCheck.status, "idle");
+    assert.equal(workflow.getSnapshot().sourceCheck.status, "ready");
+
+    await workflow.checkDatabase(input.database);
+    const sourceCheck = workflow.checkSource(input.source);
+    const sourceRejected = assert.rejects(sourceCheck);
+    workflow.invalidateCheck(SETUP_CONNECTION_CHECK.Source);
+    await sourceRejected;
+    sourcePending.resolve({ status: "reachable" });
+    await Promise.resolve();
+    assert.equal(workflow.getSnapshot().databaseCheck.status, "ready");
+    assert.equal(workflow.getSnapshot().sourceCheck.status, "idle");
+
+    workflow.invalidateChecks();
+    assert.equal(workflow.getSnapshot().databaseCheck.status, "idle");
+    assert.equal(workflow.getSnapshot().sourceCheck.status, "idle");
+  } finally {
+    workflow.dispose();
+  }
 });
 test("SETUP-CHECK exposes only stable failure reasons and a deliberate retry replaces failure with success", async () => {
   const databaseResults = [

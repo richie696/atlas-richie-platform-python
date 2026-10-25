@@ -67,6 +67,7 @@ export const SYSTEM_TAB = Object.freeze({
   Audit: "audit",
   Accounts: "accounts",
   Roles: "roles",
+  Settings: "settings",
 } as const);
 
 /** {@link SYSTEM_TAB} 的值联合。 */
@@ -80,6 +81,7 @@ export const SYSTEM_TABS: readonly SystemTab[] = Object.freeze([
   SYSTEM_TAB.Audit,
   SYSTEM_TAB.Accounts,
   SYSTEM_TAB.Roles,
+  SYSTEM_TAB.Settings,
 ]);
 
 /** 首屏默认 tab。 */

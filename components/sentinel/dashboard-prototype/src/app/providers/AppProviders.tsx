@@ -9,6 +9,7 @@ import { ConsoleServicesProvider } from "./ConsoleServicesProvider";
 import { AuthenticatedSessionBridge } from "./AuthenticatedSessionBridge";
 import type { ConsoleServices } from "./consoleServices";
 import "../i18n/config";
+import { SystemTimeZoneRuntime } from "./SystemTimeZoneRuntime";
 
 // Immutable application options, not a per-render service construction.
 const frameworkOptions = Object.freeze({
@@ -37,9 +38,11 @@ export function AppProviders({
         <ConsoleServicesProvider services={services}>
           <AuthenticationProvider workflow={services.authentication}>
             <AuthenticatedSessionBridge>
-              <AstryxProvider>
-                <NavigationBoundary>{children}</NavigationBoundary>
-              </AstryxProvider>
+              <SystemTimeZoneRuntime>
+                <AstryxProvider>
+                  <NavigationBoundary>{children}</NavigationBoundary>
+                </AstryxProvider>
+              </SystemTimeZoneRuntime>
             </AuthenticatedSessionBridge>
           </AuthenticationProvider>
         </ConsoleServicesProvider>

@@ -1,5 +1,6 @@
 import type { MetricKey } from "../../types/dashboard";
 import { formatLocaleNumber } from "../../presentation/formatLocaleNumber";
+import { UTC_TIME_ZONE } from "../../presentation/utcDateTime";
 
 /** Presentation input, not a Console wire DTO. Missing/nonfinite observations stay gaps, never zero. */
 export type TrendPoint = Readonly<
@@ -138,7 +139,7 @@ export function formatTrendTime(
   time: string | number,
   locale: string,
   includeDate = false,
-  timeZone?: string,
+  timeZone = UTC_TIME_ZONE,
 ): string {
   return typeof time === "string"
     ? time
@@ -182,10 +183,47 @@ export function formatTrendValue(
   unit: string,
   compact = false,
 ): string {
-  return `${formatLocaleNumber(value, locale, {
+  // Capacity values are already scaled to B/KB/MB/GB by trendDisplayUnit.
+  // Applying locale compact notation again can produce labels such as "40亿B".
+  const capacityUnit = /^(?:b|kb|mb|gb|tb|pb)$/i.test(unit.trim());
+  const formattedValue = formatLocaleNumber(value, locale, {
     maximumFractionDigits: 2,
-    ...(compact ? { notation: "compact" } : {}),
-  })}${unit}`;
+    ...(compact && !capacityUnit ? { notation: "compact" } : {}),
+  });
+  return `${formattedValue}${capacityUnit ? ` ${unit.trim()}` : unit}`;
+}
+
+export interface TrendDisplayUnit {
+  readonly unit: string;
+  readonly divisor: number;
+}
+
+/** Select one readable decimal byte unit for an entire chart series without changing source samples. */
+export function trendDisplayUnit(
+  unit: string,
+  values: readonly (number | null)[],
+): TrendDisplayUnit {
+  // Console host metrics use the wire unit "bytes"; the charts also receive
+  // presentation units such as "B". Normalize both at this boundary so a
+  // large byte count never falls through to locale compact notation (for
+  // example, "40亿B") instead of a readable storage unit.
+  const normalizedUnit = unit.trim().toLowerCase();
+  if (normalizedUnit !== "b" && normalizedUnit !== "byte" && normalizedUnit !== "bytes") {
+    return { unit, divisor: 1 };
+  }
+  const largest = values.reduce<number>(
+    (maximum, value) =>
+      value !== null && Number.isFinite(value) ? Math.max(maximum, Math.abs(value)) : maximum,
+    0,
+  );
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"] as const;
+  let index = 0;
+  let divisor = 1;
+  while (largest >= divisor * 1000 && index < units.length - 1) {
+    divisor *= 1000;
+    index += 1;
+  }
+  return { unit: units[index], divisor };
 }
 
 /** Select ticks by available pixel spacing; keep endpoints without crowding irregular timestamp samples. */

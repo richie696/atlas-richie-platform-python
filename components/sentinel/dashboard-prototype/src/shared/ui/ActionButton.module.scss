@@ -1,4 +1,8 @@
 // Private presentation ownership; colors are supplied by the selected skin.
+.action-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 .primary-button {
   display: inline-flex;
   align-items: center;

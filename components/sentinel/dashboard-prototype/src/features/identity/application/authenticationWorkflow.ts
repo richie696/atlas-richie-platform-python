@@ -8,6 +8,12 @@ import type {
   SessionIdentity,
 } from "../model/controlPlaneAccess";
 import { accessStateFromResource, createAccessResource } from "../state/accessResource";
+import { loginRetryDelayMs } from "../model/loginRetry";
+
+export interface AuthenticationWorkflowOptions {
+  /** Monotonic time source; injectable so rate-limit policy can be tested without wall-clock sleeps. */
+  readonly clock?: () => number;
+}
 
 export interface AuthenticationSnapshot {
   readonly access: ControlPlaneAccessState;
@@ -25,6 +31,8 @@ export interface AuthenticationWorkflow {
   readonly revalidateAccess: () => Promise<AccessFacts | undefined>;
   /** Server login then separate session read-back. Return does not bypass access state. */
   readonly login: (credentials: LoginCredentials) => Promise<SessionIdentity>;
+  /** Remaining server-advised login cooldown in milliseconds, derived from a monotonic deadline. */
+  readonly getLoginRetryAfterMs: () => number;
   /** Clear only a known rejected login after credentials change; never dismiss an unknown write. */
   readonly clearLoginFailure: () => void;
   readonly logout: () => Promise<void>;
@@ -46,7 +54,9 @@ export interface AuthenticationObservationOwner {
 export function createAuthenticationWorkflow(
   port: IdentityAccessPort,
   observationOwner?: AuthenticationObservationOwner,
+  options: AuthenticationWorkflowOptions = {},
 ): AuthenticationWorkflow {
+  const clock = options.clock ?? (() => globalThis.performance.now());
   const access = createAccessResource(port);
   const login = createCommandResource((credentials: LoginCredentials, signal) =>
     port.login(credentials, signal),
@@ -63,6 +73,7 @@ export function createAuthenticationWorkflow(
     expired = false,
     confirmationFailed = false;
   let lastConfirmedFacts: AccessFacts | undefined;
+  let loginRetryUntilMs = 0;
   let active: "login" | "logout" | "inspection" | "foreground" | undefined;
   let foregroundRead: Promise<AccessFacts> | undefined;
 
@@ -150,6 +161,9 @@ export function createAuthenticationWorkflow(
   return Object.freeze({
     getSnapshot: state.getSnapshot,
     subscribe: state.subscribe,
+    getLoginRetryAfterMs() {
+      return Math.max(0, Math.ceil(loginRetryUntilMs - clock()));
+    },
     async restore() {
       assertOpen();
       if (active === "foreground") {
@@ -205,6 +219,13 @@ export function createAuthenticationWorkflow(
     },
     async login(credentials: LoginCredentials) {
       assertNoCommand();
+      const retryAfterMs = Math.max(0, Math.ceil(loginRetryUntilMs - clock()));
+      if (retryAfterMs > 0)
+        throw new AppError(AppErrorKind.RATE_LIMITED, "Login cooldown is active", {
+          status: 429,
+          code: "rate_limited",
+          retryAfterMs,
+        });
       if (confirmedFacts()?.kind !== "anonymous")
         throw new AppError(
           AppErrorKind.FORBIDDEN,
@@ -237,6 +258,10 @@ export function createAuthenticationWorkflow(
         }
         return result;
       } catch (cause) {
+        const delayMs = loginRetryDelayMs(cause);
+        const now = clock();
+        if (ticket === generation && delayMs !== null && Number.isFinite(now))
+          loginRetryUntilMs = Math.max(loginRetryUntilMs, now + delayMs);
         if (ticket === generation && login.getSnapshot().status === "success")
           confirmationFailed = true;
         throw cause;

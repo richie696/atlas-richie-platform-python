@@ -61,6 +61,17 @@ export const METRIC_BASIS = Object.freeze({
   ElapsedSeconds: "elapsed_seconds",
 } as const);
 export type MetricBasis = (typeof METRIC_BASIS)[keyof typeof METRIC_BASIS];
+/** Aggregation basis is a property of the metric, not a caller-selected display option. */
+export const METRIC_DENOMINATOR: Readonly<Record<MetricId, MetricBasis>> = Object.freeze({
+  [METRIC_ID.HttpQps]: METRIC_BASIS.CompletedRequests,
+  [METRIC_ID.EntryRate]: METRIC_BASIS.AttemptedEntries,
+  [METRIC_ID.Tps]: METRIC_BASIS.BusinessTransactions,
+  [METRIC_ID.RtP95]: METRIC_BASIS.CompletedRequests,
+  [METRIC_ID.BlockedRatio]: METRIC_BASIS.AttemptedEntries,
+  [METRIC_ID.CpuRatio]: METRIC_BASIS.CpuCores,
+  [METRIC_ID.MemoryRatio]: METRIC_BASIS.MemoryLimit,
+  [METRIC_ID.MemoryBytes]: METRIC_BASIS.Processes,
+});
 export const MAX_OBSERVATION_POINTS = 1000;
 export const MAX_OBSERVATION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -188,10 +199,11 @@ export function validMetricQuery(query: MetricQuery): boolean {
       MAX_OBSERVATION_POINTS
   );
 }
-function validMetadata(value: MetricMetadata): boolean {
+function validMetadata(value: MetricMetadata, metric: MetricId): boolean {
   return (
     !!value.source.trim() &&
     Object.values(METRIC_BASIS).includes(value.denominator) &&
+    value.denominator === METRIC_DENOMINATOR[metric] &&
     validCoverage(value.coverage) &&
     Object.values(OBSERVATION_QUALITY).includes(value.quality) &&
     (value.quality !== OBSERVATION_QUALITY.Available ||
@@ -213,7 +225,7 @@ export function validMetricReading(value: MetricReading, window: ObservationWind
   return (
     Object.hasOwn(METRIC_UNIT, value.metric) &&
     value.unit === METRIC_UNIT[value.metric] &&
-    validMetadata(value) &&
+    validMetadata(value, value.metric) &&
     validMetricValue(value.metric, value.value) &&
     (value.value === null || value.coverage.reporting > 0) &&
     (value.value === null || qualityAllowsValues(value.quality)) &&
@@ -227,7 +239,7 @@ export function validMetricSeries(value: MetricSeries, window: ObservationWindow
   if (
     !Object.hasOwn(METRIC_UNIT, value.metric) ||
     value.unit !== METRIC_UNIT[value.metric] ||
-    !validMetadata(value) ||
+    !validMetadata(value, value.metric) ||
     value.samples.length > MAX_OBSERVATION_POINTS
   )
     return false;
@@ -261,6 +273,19 @@ export function validMetricBundle(value: MetricBundle, query: MetricQuery): bool
     sameMetrics(value.series) &&
     value.summary.every((item) => validMetricReading(item, query.context.window)) &&
     value.series.every((item) => validMetricSeries(item, query.context.window)) &&
+    value.summary.every((reading) => {
+      const series = value.series.find((item) => item.metric === reading.metric);
+      return (
+        series !== undefined &&
+        reading.unit === series.unit &&
+        reading.source === series.source &&
+        reading.denominator === series.denominator &&
+        reading.quality === series.quality &&
+        reading.coverage.expected === series.coverage.expected &&
+        reading.coverage.inventorySource === series.coverage.inventorySource &&
+        reading.coverage.reporting === series.coverage.reporting
+      );
+    }) &&
     new Set(value.annotations.map((item) => item.id)).size === value.annotations.length &&
     value.annotations.every(
       (item) =>

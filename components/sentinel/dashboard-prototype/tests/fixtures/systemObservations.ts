@@ -1,11 +1,22 @@
 import type {
   SystemConnections,
   SystemProtocols,
+  AgentReportingObservationPage,
+  IncidentEventObservationPage,
   AuditQuery,
   AuditPage,
   AuditRecord,
 } from "../../src/features/system/model/systemObservation";
 export const systemAsOfMs = Date.parse("2026-10-07T12:00:00Z");
+export const deploymentGuides = {
+  catalogRevision: "2026-10-17.1",
+  runtimeCollector: { state: "not_configured", endpoint: null },
+  paths: [
+    { id: "existing", readiness: "configuration-required", profileRevision: null },
+    { id: "linux", readiness: "guide-only", profileRevision: null },
+    { id: "kubernetes", readiness: "guide-only", profileRevision: null },
+  ],
+} as const;
 /** Synthetic consumer facts only, never production fixtures or an integration/configuration source. */
 export const systemConnections: SystemConnections = {
   asOfMs: systemAsOfMs,
@@ -81,6 +92,46 @@ export const systemProtocols: SystemProtocols = {
       kind: "cluster-token",
       supported: ["V1"],
       active: null,
+      compatibility: "unknown",
+      observedAtMs: null,
+    },
+  ],
+};
+export const agentReportingObservationPage: AgentReportingObservationPage = {
+  asOfMs: systemAsOfMs,
+  page: 1,
+  pageSize: 20,
+  total: 1,
+  items: [
+    {
+      environmentId: "production",
+      appId: "orders",
+      instanceId: "orders-worker-0",
+      processId: "pid-orders-0",
+      reporterId: "reporter-orders-0",
+      boundary: "agent-reporting",
+      collectorSupported: ["atlas-richie.reporting/v1"],
+      runtimeVersion: null,
+      compatibility: "unknown",
+      observedAtMs: null,
+    },
+  ],
+};
+export const incidentEventObservationPage: IncidentEventObservationPage = {
+  asOfMs: systemAsOfMs,
+  page: 1,
+  pageSize: 20,
+  total: 1,
+  items: [
+    {
+      environmentId: "production",
+      appId: "orders",
+      instanceId: "orders-worker-0",
+      processId: "pid-orders-0",
+      reporterId: "reporter-orders-0",
+      boundary: "incident-events",
+      collectorSupported: ["atlas-richie.incident-events/v1"],
+      runtimeVersion: null,
       compatibility: "unknown",
       observedAtMs: null,
     },

@@ -8,8 +8,11 @@ import {
   bindingQueryKey,
   validBindingQuery,
   validBindingPage,
+  validRuleCatalogPage,
   type BindingQuery,
   type BindingPage,
+  type RuleCatalogPage,
+  type RuleCatalogQuery,
 } from "../model/ruleDirectory";
 import {
   validRuleSetSnapshot,
@@ -47,6 +50,31 @@ export function createRuleBindingDirectory(
         : page.query.search || page.query.kind !== null || page.total > 0
           ? "filtered-empty"
           : "empty",
+  });
+}
+
+/** Rule entries are projected from authoritative provider snapshots; partial reads never imply zero rules. */
+export function createRuleCatalogDirectory(
+  port: Pick<RuleSetPort, "readRuleCatalog">,
+  access: QueryAccessObserver,
+) {
+  return createOwnedQueryResource<RuleCatalogQuery, RuleCatalogPage>(access, {
+    keyOf: bindingQueryKey,
+    async read(query, signal) {
+      if (!validBindingQuery(query))
+        throw new AppError(AppErrorKind.PROTOCOL, "Invalid rule catalog query", { status: 422 });
+      const page = await port.readRuleCatalog(query, signal);
+      if (!validRuleCatalogPage(page, query)) throw invalid();
+      return page;
+    },
+    classify: (page) =>
+      page.coverage === "partial"
+        ? "partial"
+        : page.items.length
+          ? "ready"
+          : page.query.search || page.query.kind !== null || (page.total ?? 0) > 0
+            ? "filtered-empty"
+            : "empty",
   });
 }
 /** A deep-linked binding is read as its own cancellable owner; late responses cannot replace a newer target. */

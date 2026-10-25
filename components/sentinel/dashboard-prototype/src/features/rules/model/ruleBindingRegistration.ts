@@ -1,4 +1,5 @@
 import type { RuleKind } from "./ruleKinds";
+import type { RuleBinding } from "./ruleSet";
 
 /** Safe rule-source facts needed to register a binding; credentials never cross this contract. */
 export type RuleSourceOption =
@@ -145,4 +146,35 @@ export interface RuleBindingRegistration {
   readonly sourceId: string;
   readonly sourceRevision: string;
   readonly target: RuleBindingRegistrationTarget;
+}
+
+/** Safe read-only outcome of inspecting the exact original binding-create request. */
+export type RuleBindingRegistrationReceipt =
+  | {
+      readonly requestKey: string;
+      readonly bindingId: string;
+      readonly status: "completed";
+      readonly binding: RuleBinding;
+    }
+  | {
+      readonly requestKey: string;
+      readonly bindingId: string;
+      readonly status: "not_found";
+      readonly binding: null;
+    };
+
+/** Reject malformed or cross-request receipt facts before they can resolve an unknown command. */
+export function validRuleBindingRegistrationReceipt(
+  value: RuleBindingRegistrationReceipt,
+  requestKey: string,
+  bindingId: string,
+): boolean {
+  return (
+    !!value &&
+    value.requestKey === requestKey &&
+    value.bindingId === bindingId &&
+    (value.status === "completed"
+      ? !!value.binding && value.binding.id === bindingId
+      : value.status === "not_found" && value.binding === null)
+  );
 }

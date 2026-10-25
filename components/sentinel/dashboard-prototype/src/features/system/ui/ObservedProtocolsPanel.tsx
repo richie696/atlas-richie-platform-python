@@ -3,20 +3,32 @@ import type { QueryResource } from "../../../shared/state/queryResource";
 import { useQueryResource } from "../../../shared/state/useQueryResource";
 import { Panel } from "../../../shared/ui/Panel";
 import { ActionButton } from "../../../shared/ui/ActionButton";
-import type { SystemProtocols } from "../model/systemObservation";
+import type {
+  AgentReportingObservationPage,
+  IncidentEventObservationPage,
+  SystemProtocols,
+} from "../model/systemObservation";
 import { PROTOCOL_LABEL_KEY, COMPATIBILITY_LABEL_KEY } from "../presentation/observationLabels";
 import { SystemQueryView } from "./SystemQueryView";
 import styles from "./SystemObservation.module.scss";
 import { formatUtcDateTime } from "../../../shared/presentation/utcDateTime";
+import { WorkerProtocolObservationList } from "./WorkerProtocolObservationList";
+
+type PageQuery = { readonly page: number; readonly pageSize: number };
+
 /** Deployment negotiation facts, not the project's implementation/delivery checklist. */
 export function ObservedProtocolsPanel({
   resource,
+  agentReportingResource,
+  incidentEventResource,
 }: {
   readonly resource: QueryResource<null, SystemProtocols>;
+  readonly agentReportingResource: QueryResource<PageQuery, AgentReportingObservationPage>;
+  readonly incidentEventResource: QueryResource<PageQuery, IncidentEventObservationPage>;
 }) {
-  const { t, i18n } = useTranslation(),
-    state = useQueryResource(resource, null),
-    read = () => void resource.load(null).catch(() => {});
+  const { t, i18n } = useTranslation();
+  const state = useQueryResource(resource, null);
+  const read = () => void resource.load(null).catch(() => {});
   return (
     <Panel
       title={t("system.observed.protocols")}
@@ -65,6 +77,18 @@ export function ObservedProtocolsPanel({
                   </dl>
                 </section>
               ))}
+              <WorkerProtocolObservationList
+                resource={agentReportingResource}
+                sectionId="agent-reporting-workers-title"
+                titleKey="system.observed.workerProtocols.title"
+                emptyKey="system.observed.workerProtocols.empty"
+              />
+              <WorkerProtocolObservationList
+                resource={incidentEventResource}
+                sectionId="incident-event-workers-title"
+                titleKey="system.observed.incidentEventWorkers.title"
+                emptyKey="system.observed.incidentEventWorkers.empty"
+              />
             </>
           )}
         </SystemQueryView>

@@ -17,9 +17,28 @@ export type AccountMutation =
       readonly accountId: string;
       readonly revision: string;
       readonly roleId: IdentityRoleId;
+    }
+  | {
+      readonly kind: "reset_password";
+      readonly requestKey: string;
+      readonly accountId: string;
+      readonly revision: string;
+      readonly password: string;
+    }
+  | {
+      readonly kind: "delete";
+      readonly requestKey: string;
+      readonly accountId: string;
+      readonly revision: string;
     };
 export type AccountRejection =
-  "username_taken" | "last_admin" | "built_in" | "validation" | "conflict" | "not_found";
+  | "username_taken"
+  | "last_admin"
+  | "built_in"
+  | "self_operation"
+  | "validation"
+  | "conflict"
+  | "not_found";
 /** Safe operation fact. No credential or mutation body can be returned by lookup. */
 export type AccountOperationObservation =
   | { readonly status: "not-found"; readonly requestKey: string }

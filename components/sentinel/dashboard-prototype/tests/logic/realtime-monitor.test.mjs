@@ -156,6 +156,40 @@ test("MONITOR-STALE: rolling refresh failure retains the original data/window/as
     monitor.dispose();
   }
 });
+test("MONITOR-RATE-LIMIT: polling honors the server retry hint before reading again", async () => {
+  let calls = 0;
+  const monitor = createRealtimeMonitor(
+    {
+      async readMetrics(input) {
+        calls++;
+        if (calls === 2)
+          throw new AppError(AppErrorKind.RATE_LIMITED, "rate limited", {
+            status: 429,
+            code: "rate_limited",
+            retryAfterMs: 260,
+          });
+        return bundleFor(input.context, input.stepMs);
+      },
+    },
+    observer(access()),
+    { intervalMs: 100, clock: () => toMs },
+  );
+  try {
+    monitor.start(selected);
+    await until(() => calls === 1 && monitor.getSnapshot().observation.status === "partial");
+    const lastGood = monitor.getSnapshot().observation.data;
+    await until(() => calls === 2 && monitor.getSnapshot().observation.status === "stale");
+    await delay(180);
+    assert.equal(calls, 2, "ticks before retryAfterMs must not issue another HTTP read");
+    assert.equal(monitor.getSnapshot().observation.data, lastGood);
+    await until(() => calls === 3 && monitor.getSnapshot().observation.status === "partial");
+    assert.notEqual(monitor.getSnapshot().observation.data, lastGood);
+    monitor.pause();
+    assert.equal(calls, 3);
+  } finally {
+    monitor.dispose();
+  }
+});
 test("MONITOR-OWNER: changing query aborts previous work; revocation immediately clears selection/data and stops ticks", async () => {
   const permission = access();
   let calls = 0,

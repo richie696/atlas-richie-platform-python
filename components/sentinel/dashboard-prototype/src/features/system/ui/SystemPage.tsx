@@ -27,6 +27,7 @@ import type { ReactNode } from "react";
 import type { DashboardPageProps } from "../../../shared/types/dashboard";
 import type { createSystemObservationResources } from "../application/systemObservationResources";
 import type { createSourceRegistrationWorkflow } from "../application/sourceRegistrationWorkflow";
+import type { createMonitoringSourceWorkflow } from "../application/monitoringSourceWorkflow";
 import type { AuditQuery } from "../model/systemObservation";
 import type { ControlPlaneAccessState } from "../../identity";
 import { ROUTE } from "../../../shared/types/navigation";
@@ -38,6 +39,10 @@ import { ObservedConnectionsPanel } from "./ObservedConnectionsPanel";
 import { ObservedProtocolsPanel } from "./ObservedProtocolsPanel";
 import { ObservedAuditPanel } from "./ObservedAuditPanel";
 import { SourceRegistryPanel } from "./SourceRegistryPanel";
+import { MonitoringSourceRegistryPanel } from "./MonitoringSourceRegistryPanel";
+import { HostCollectionGuide } from "./HostCollectionGuide";
+import { TimeZoneSettingsPanel } from "./TimeZoneSettingsPanel";
+import type { SystemSettingsPort } from "../api/systemSettingsPort";
 
 type SystemObservationResources = ReturnType<typeof createSystemObservationResources>;
 
@@ -56,10 +61,14 @@ export interface SystemPageProps {
     readonly roles: ReactNode;
   };
   readonly access: ControlPlaneAccessState;
+  readonly demoMode: boolean;
   readonly observations: SystemObservationResources;
   readonly sourceRegistration: ReturnType<typeof createSourceRegistrationWorkflow> | null;
+  readonly monitoringSources: ReturnType<typeof createMonitoringSourceWorkflow>;
+  readonly canManageMonitoringSources: boolean;
   readonly auditQuery: AuditQuery;
   readonly onAuditQueryChange: (query: AuditQuery) => void;
+  readonly systemSettings: SystemSettingsPort;
 }
 
 /** Connection, protocol, permission and identity administration workspace. */
@@ -69,14 +78,22 @@ export function SystemPage({
   accountId,
   identityPanels,
   access,
+  demoMode,
   observations,
   sourceRegistration,
+  monitoringSources,
+  canManageMonitoringSources,
   auditQuery,
   onAuditQueryChange,
+  systemSettings,
 }: SystemPageProps) {
   const { t } = useTranslation();
   // 受控：tab 不再是本组件的 state，唯一来源是 URL。切换 = 写回 URL。
   const tab: SystemTab = resolveSystemTab(view);
+  const canManageSettings =
+    access.phase === "resolved" &&
+    access.facts.kind === "authenticated" &&
+    access.facts.identity.roleId === "admin";
   const selectTab = (next: SystemTab) => {
     if (next === tab) return;
     navigate(ROUTE.System, { view: next });
@@ -88,7 +105,11 @@ export function SystemPage({
         eyebrow="ADMIN / SYSTEM"
         title={t("system.intro.title")}
         description={t("system.intro.description")}
-        aside={<Status tone="blue">{t("system.intro.aside")}</Status>}
+        aside={
+          <Status tone="blue">
+            {t(demoMode ? "system.intro.demoAside" : "system.intro.liveAside")}
+          </Status>
+        }
       />
       <div
         className={scopedClasses(styleModules, "tabs")}
@@ -110,11 +131,25 @@ export function SystemPage({
       {tab === SYSTEM_TAB.Connections && (
         <>
           <ObservedConnectionsPanel resource={observations.connections} />
-          {sourceRegistration && <SourceRegistryPanel workflow={sourceRegistration} />}
+          <HostCollectionGuide resource={observations.deploymentGuides} />
+          {sourceRegistration && (
+            <SourceRegistryPanel workflow={sourceRegistration} demoMode={demoMode} />
+          )}
+          <MonitoringSourceRegistryPanel
+            workflow={monitoringSources}
+            canManage={canManageMonitoringSources}
+            demoMode={demoMode}
+          />
         </>
       )}
       {tab === SYSTEM_TAB.Permissions && <ObservedPermissionsPanel access={access} />}
-      {tab === SYSTEM_TAB.Protocol && <ObservedProtocolsPanel resource={observations.protocols} />}
+      {tab === SYSTEM_TAB.Protocol && (
+        <ObservedProtocolsPanel
+          resource={observations.protocols}
+          agentReportingResource={observations.agentReporting}
+          incidentEventResource={observations.incidentEvents}
+        />
+      )}
       {tab === SYSTEM_TAB.Audit && (
         <ObservedAuditPanel
           resource={observations.audit}
@@ -133,6 +168,12 @@ export function SystemPage({
       )}
       {tab === SYSTEM_TAB.Accounts && identityPanels.accounts}
       {tab === SYSTEM_TAB.Roles && identityPanels.roles}
+      {tab === SYSTEM_TAB.Settings && (
+        <>
+          <TimeZoneSettingsPanel settings={systemSettings} canManage={canManageSettings} />
+          {!canManageSettings && <p>{t("system.timeZone.readOnly")}</p>}
+        </>
+      )}
     </>
   );
 }

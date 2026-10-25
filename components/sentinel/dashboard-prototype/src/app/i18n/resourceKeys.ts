@@ -1,5 +1,6 @@
 /** Compile-time resource shape is derived from the canonical English JSON bundles. */
 import type applications from "./messages/en-US/applications.json";
+import type documentation from "./messages/en-US/documentation.json";
 import type faults from "./messages/en-US/faults.json";
 import type identity from "./messages/en-US/identity.json";
 import type observation from "./messages/en-US/observation.json";
@@ -12,6 +13,7 @@ import type system from "./messages/en-US/system.json";
 /** Flat runtime catalogue type; locale JSON remains the sole source of message keys. */
 export type TranslationResources = {
   readonly translation: typeof applications &
+    typeof documentation &
     typeof faults &
     typeof identity &
     typeof observation &

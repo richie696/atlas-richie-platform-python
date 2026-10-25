@@ -1,11 +1,11 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
-import { E2E_BASE_URL, launchBrowser } from "./cdp.mjs";
+import { E2E_BASE_URL, connectIabBrowser } from "./cdp.mjs";
 
 let browser;
 
 before(async () => {
-  browser = await launchBrowser();
+  browser = await connectIabBrowser();
 });
 
 after(async () => {

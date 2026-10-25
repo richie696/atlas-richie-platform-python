@@ -8,8 +8,10 @@ import type { RuleSetPort } from "../api/ruleSetPort";
 import {
   validRuleSourceCatalog,
   type RuleBindingRegistration,
+  type RuleBindingRegistrationReceipt,
   type RuleSourceCatalog,
   type RuleSourceCatalogPort,
+  validRuleBindingRegistrationReceipt,
 } from "../model/ruleBindingRegistration";
 import { validRuleBinding, type RuleBinding } from "../model/ruleSet";
 
@@ -117,6 +119,47 @@ export function createRuleBindingRegistrationCommand(
           code,
         });
       }
+    },
+  );
+}
+
+/** Correlated parameters for a read-only inspection of an unknown create outcome. */
+export interface RuleBindingRegistrationLookup {
+  readonly bindingId: string;
+  readonly requestKey: string;
+}
+
+/**
+ * Session-owned receipt lookup for the exact original create request. `not_found` remains an
+ * unknown write outcome; this resource never calls registerBinding or changes command state.
+ */
+export function createRuleBindingRegistrationReceiptResource(
+  port: Pick<RuleSetPort, "readBindingRegistration">,
+  access: QueryAccessObserver,
+) {
+  const ownerKey = access.read().ownerKey;
+  const allowed = () => access.read().allowed && access.read().ownerKey === ownerKey;
+  return createOwnedQueryResource<RuleBindingRegistrationLookup, RuleBindingRegistrationReceipt>(
+    access,
+    {
+      keyOf: ({ bindingId, requestKey }) => JSON.stringify([bindingId, requestKey]),
+      async read(query, signal) {
+        if (!allowed())
+          throw new AppError(AppErrorKind.FORBIDDEN, "Rule-binding receipt access unavailable", {
+            status: 403,
+          });
+        const receipt = await port.readBindingRegistration(
+          query.bindingId,
+          query.requestKey,
+          signal,
+        );
+        if (!validRuleBindingRegistrationReceipt(receipt, query.requestKey, query.bindingId))
+          throw invalidReceipt();
+        if (!allowed() || signal.aborted)
+          throw new AppError(AppErrorKind.CANCELLED, "Rule-binding receipt owner changed");
+        return receipt;
+      },
+      classify: (receipt) => (receipt.status === "completed" ? "ready" : "empty"),
     },
   );
 }

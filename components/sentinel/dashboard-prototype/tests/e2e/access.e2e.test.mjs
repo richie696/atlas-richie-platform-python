@@ -1,12 +1,12 @@
 import {after,before,test} from 'node:test';
 import assert from 'node:assert/strict';
-import {E2E_BASE_URL,launchBrowser} from './cdp.mjs';
+import {E2E_BASE_URL,connectIabBrowser} from './cdp.mjs';
 let browser;
-before(async()=>{browser=await launchBrowser();});after(async()=>{await browser?.close();});
+before(async()=>{browser=await connectIabBrowser();});after(async()=>{await browser?.close();});
 async function withProbe(run){
   const page=await browser.newPage();
   try{
-    await page.clearStorage(new URL(E2E_BASE_URL).origin);await page.goto(`${E2E_BASE_URL}/#/accounts`);await page.waitFor(`!!document.querySelector('[data-account-management] table')`);
+    await page.clearStorage(new URL(E2E_BASE_URL).origin);await page.goto(`${new URL(E2E_BASE_URL).origin}/tests/e2e/probes/host.html`);await page.waitFor(`!!document.querySelector('#root')`);
     await page.eval(`(async()=>{const React=(await import('/node_modules/.vite/deps/react.js')).default;const {createRoot}=(await import('/node_modules/.vite/deps/react-dom_client.js')).default;const {AccessProbe}=await import('/tests/e2e/probes/AccessProbe.tsx');const host=document.createElement('section');host.id='access-probe';document.body.prepend(host);const root=createRoot(host);root.render(React.createElement(React.StrictMode,null,React.createElement(AccessProbe)));window.__accessCleanup=()=>{root.unmount();host.remove();};})()`);
     await page.waitFor(`document.querySelector('#access-probe output')?.textContent.includes('"decision":"allow"')`);await run(page);await page.eval(`window.__accessCleanup()`);assert.deepEqual(page.consoleErrors,[]);
   }finally{await page.close();}

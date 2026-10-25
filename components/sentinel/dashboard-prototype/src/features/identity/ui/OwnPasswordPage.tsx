@@ -13,6 +13,7 @@ import { IdentityPanel } from "./components/IdentityPanel";
 import { PasswordFields } from "./components/PasswordFields";
 import styles from "./Identity.module.scss";
 import { useBeforeUnloadGuard } from "../../../shared/state/useBeforeUnloadGuard";
+import { useOwnPasswordCooldown } from "../state/useOwnPasswordCooldown";
 
 /**
  * Own-account password entry. App supplies a stable session-bound workflow and
@@ -35,9 +36,11 @@ export function OwnPasswordPage({
   const form = usePasswordForm();
   const { clear } = form;
   const snapshot = useExternalSnapshot(workflow);
+  const retryAfterSeconds = useOwnPasswordCooldown(workflow, snapshot);
   const unresolved = ["pending", "result-unknown"].includes(snapshot.status);
+  const hasUnsavedDraft = Object.values(form.values).some((value) => value !== "");
   useBeforeUnloadGuard(
-    Object.values(form.values).some((value) => value !== "") || unresolved,
+    snapshot.status !== "success" && (hasUnsavedDraft || unresolved),
     unresolved,
     clear,
   );
@@ -58,7 +61,9 @@ export function OwnPasswordPage({
         : snapshot.error.code === "validation_failed"
           ? "password.remote.policy"
           : snapshot.error.code === "rate_limited"
-            ? "password.remote.rateLimited"
+            ? retryAfterSeconds > 0
+              ? "password.remote.rateLimitedFor"
+              : "password.remote.rateLimited"
             : snapshot.error.code === "unauthenticated" || snapshot.error.code === "csrf_failed"
               ? "password.remote.session"
               : "password.remote.failed"
@@ -96,15 +101,20 @@ export function OwnPasswordPage({
           isBusy={snapshot.status === "pending"}
           copy={{
             title: t("password.remote.title"),
-            description: t(
-              snapshot.status === "success"
-                ? "password.remote.success"
-                : snapshot.status === "pending"
-                  ? "password.remote.pending"
-                  : snapshot.status === "result-unknown"
-                    ? "password.remote.unknown"
-                    : errorKey,
-            ),
+            description:
+              snapshot.status === "error" &&
+              snapshot.error.code === "rate_limited" &&
+              retryAfterSeconds > 0
+                ? t(errorKey, { count: retryAfterSeconds })
+                : t(
+                    snapshot.status === "success"
+                      ? "password.remote.success"
+                      : snapshot.status === "pending"
+                        ? "password.remote.pending"
+                        : snapshot.status === "result-unknown"
+                          ? "password.remote.unknown"
+                          : errorKey,
+                  ),
           }}
           actions={
             snapshot.status === "result-unknown" ? (
@@ -127,7 +137,7 @@ export function OwnPasswordPage({
         <form className={styles["password-form"]} onSubmit={submit}>
           <PasswordFields form={form} disabled={locked} />
           <div className={styles["identity-form-actions"]}>
-            <ActionButton type="submit" disabled={locked}>
+            <ActionButton type="submit" disabled={locked || retryAfterSeconds > 0}>
               {t("changePassword.submit")}
             </ActionButton>
           </div>

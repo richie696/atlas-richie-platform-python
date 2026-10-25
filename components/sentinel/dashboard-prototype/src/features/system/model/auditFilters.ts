@@ -17,14 +17,12 @@ export function auditFilterDraft(query: AuditQuery): AuditFilterDraft {
   };
 }
 function formatUtcInput(value: number): string {
-  const iso = new Date(value).toISOString();
-  return value % 60_000 === 0 ? iso.slice(0, 16) : iso.slice(0, -1);
+  return new Date(value).toISOString().slice(0, 19);
 }
 function utcInput(value: string): number | null {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{3})?)?$/.test(value)) return null;
-  const canonical =
-    value.length === 16 ? value + ":00.000" : value.length === 19 ? value + ".000" : value;
-  const time = Date.parse(canonical + "Z");
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(value)) return null;
+  const canonical = `${value}.000`;
+  const time = Date.parse(`${canonical}Z`);
   return Number.isFinite(time) && new Date(time).toISOString().slice(0, -1) === canonical
     ? time
     : null;

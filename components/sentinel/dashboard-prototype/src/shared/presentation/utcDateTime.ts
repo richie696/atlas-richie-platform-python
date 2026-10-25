@@ -1,4 +1,5 @@
-/** The protocol carries UTC instants; only their user-facing representation follows the UI locale. */
+/** Wire values are UTC instants; rendering follows the configured system IANA zone. */
+import { getSystemTimeZone } from "./systemTimeZone";
 export const UTC_TIME_ZONE = "UTC";
 export interface UtcDateTimeStyle {
   readonly dateStyle: NonNullable<Intl.DateTimeFormatOptions["dateStyle"]>;
@@ -17,7 +18,7 @@ export function formatUtcInstant(
 ): string {
   return new Intl.DateTimeFormat(locale, {
     ...style,
-    timeZone: UTC_TIME_ZONE,
+    timeZone: getSystemTimeZone(),
   }).format(value);
 }
 
@@ -27,5 +28,12 @@ export function formatUtcDateTime(
   locale: string,
   style: UtcDateTimeStyle = DEFAULT_UTC_DATE_TIME_STYLE,
 ): string {
-  return `${formatUtcInstant(value, locale, style)} ${UTC_TIME_ZONE}`;
+  const zone = getSystemTimeZone();
+  const offset = new Intl.DateTimeFormat(locale, {
+    timeZone: zone,
+    timeZoneName: "shortOffset",
+  })
+    .formatToParts(value)
+    .find((part) => part.type === "timeZoneName")?.value;
+  return `${formatUtcInstant(value, locale, style)} ${offset ?? zone}`;
 }

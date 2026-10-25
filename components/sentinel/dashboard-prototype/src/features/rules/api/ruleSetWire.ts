@@ -153,6 +153,109 @@ export const RuleBindingPageSchema = z.strictObject({
   total: TotalCountSchema,
   items: z.array(RuleBindingSchema).max(MAX_BINDING_PAGE_SIZE),
 });
+const RuleCatalogCoverageSchema = z.enum(["complete", "partial"]);
+const RuleCatalogFreshnessSchema = z.enum(["current", "stale"]);
+const RuleCatalogIssueReasonSchema = z.enum(["source_unavailable", "content_invalid", "not_read"]);
+const RuleCatalogBindingCoverageSchema = z.strictObject({
+  total: TotalCountSchema,
+  current: TotalCountSchema,
+  stale: TotalCountSchema,
+  notRead: TotalCountSchema,
+});
+const RuleCatalogEntrySchema = z.strictObject({
+  binding: RuleBindingSchema,
+  record: RuleRecordSchema,
+  snapshot: z.strictObject({
+    checksum: OpaqueIdentifierSchema,
+    sourceRevision: NullableIdentifierSchema,
+    versionId: NullableIdentifierSchema,
+    asOf: UtcInstantSchema,
+  }),
+  read: z.strictObject({
+    freshness: RuleCatalogFreshnessSchema,
+    lastAttemptAt: UtcInstantSchema,
+  }),
+});
+const RuleCatalogIssueSchema = z.strictObject({
+  binding: RuleBindingSchema,
+  reason: RuleCatalogIssueReasonSchema,
+  lastAttemptAt: UtcInstantSchema.nullable(),
+  stale: z.boolean(),
+});
+export const RuleCatalogQuerySchema = z.strictObject({
+  environmentId: OpaqueIdentifierSchema,
+  appId: NullableIdentifierSchema,
+  kind: RuleKindSchema.nullable(),
+  search: utf16BoundedString(MAX_BINDING_SEARCH_LENGTH),
+  page: PageNumberSchema,
+  pageSize: PageSizeSchema.max(MAX_BINDING_PAGE_SIZE),
+});
+export const RuleCatalogParametersSchema = z.strictObject({
+  environmentId: OpaqueIdentifierSchema,
+  appId: OpaqueIdentifierSchema.optional(),
+  kind: RuleKindSchema.optional(),
+  search: utf16BoundedString(MAX_BINDING_SEARCH_LENGTH).optional(),
+  page: PageNumberSchema,
+  pageSize: PageSizeSchema.max(MAX_BINDING_PAGE_SIZE),
+});
+export const RuleCatalogPageSchema = z
+  .strictObject({
+    query: RuleCatalogQuerySchema,
+    asOf: UtcInstantSchema,
+    coverage: RuleCatalogCoverageSchema,
+    bindings: RuleCatalogBindingCoverageSchema,
+    total: TotalCountSchema.nullable(),
+    hasMore: z.boolean(),
+    items: z.array(RuleCatalogEntrySchema).max(MAX_BINDING_PAGE_SIZE),
+    issues: z.array(RuleCatalogIssueSchema).max(100),
+  })
+  .superRefine((value, context) => {
+    if (
+      value.bindings.current + value.bindings.stale + value.bindings.notRead !==
+      value.bindings.total
+    ) {
+      context.addIssue({ code: "custom", message: "inconsistent rule catalog coverage" });
+    }
+    if ((value.coverage === "complete") !== (value.total !== null)) {
+      context.addIssue({ code: "custom", message: "inconsistent rule catalog total" });
+    }
+    if (
+      value.coverage === "complete" &&
+      value.total !== null &&
+      value.hasMore !==
+        (value.query.page - 1) * value.query.pageSize + value.items.length < value.total
+    ) {
+      context.addIssue({ code: "custom", message: "inconsistent rule catalog pagination" });
+    }
+  });
+export const RuleCatalogRefreshRequestSchema = z.strictObject({
+  environmentId: OpaqueIdentifierSchema,
+  appId: NullableIdentifierSchema.optional(),
+});
+export const RuleCatalogRefreshResultSchema = z
+  .strictObject({
+    scope: z.strictObject({
+      environmentId: OpaqueIdentifierSchema,
+      appId: NullableIdentifierSchema,
+    }),
+    asOf: UtcInstantSchema,
+    coverage: RuleCatalogCoverageSchema,
+    bindings: z.strictObject({
+      total: TotalCountSchema,
+      attempted: TotalCountSchema.max(24),
+      current: TotalCountSchema,
+      stale: TotalCountSchema,
+      notRead: TotalCountSchema,
+    }),
+  })
+  .superRefine((value, context) => {
+    if (
+      value.bindings.current + value.bindings.stale + value.bindings.notRead !==
+      value.bindings.total
+    ) {
+      context.addIssue({ code: "custom", message: "inconsistent rule catalog refresh counts" });
+    }
+  });
 export const RuleBindingRegistrationTargetSchema = z.discriminatedUnion("provider", [
   z.strictObject({
     provider: z.literal("nacos"),
@@ -177,6 +280,20 @@ export const RuleBindingRegistrationRequestSchema = z.strictObject({
   sourceRevision: OpaqueIdentifierSchema,
   target: RuleBindingRegistrationTargetSchema,
 });
+export const RuleBindingRegistrationReceiptSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    requestKey: RequestKeySchema,
+    bindingId: OpaqueIdentifierSchema,
+    status: z.literal("completed"),
+    binding: RuleBindingSchema,
+  }),
+  z.strictObject({
+    requestKey: RequestKeySchema,
+    bindingId: OpaqueIdentifierSchema,
+    status: z.literal("not_found"),
+    binding: z.null(),
+  }),
+]);
 export const RuleSetSnapshotSchema = z.strictObject({
   binding: RuleBindingSchema,
   versionId: NullableIdentifierSchema,

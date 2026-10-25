@@ -88,6 +88,48 @@ function make(overrides = {}, options = {}, sessionOverrides = {}) {
     },
   };
 }
+test("ACCOUNT-LIFECYCLE: allow own password reset while protecting self-delete, foreign built-in, and last admin", async () => {
+  const seen = [];
+  const { workflow } = make({
+    mutateAccount: async (input) => {
+      seen.push(input);
+      return {
+        status: "completed",
+        requestKey: input.requestKey,
+        account: {
+          ...record,
+          id: input.accountId,
+          revision: "9007199254740994",
+          status: input.kind === "delete" ? "disabled" : "active",
+        },
+      };
+    },
+  });
+  assert.equal(workflow.ownerAccountId, owner.accountId);
+  await workflow.resetPassword(record, draft.password);
+  assert.equal(seen[0].revision, record.revision);
+  assert.equal(seen[0].password, draft.password);
+  assert.doesNotMatch(JSON.stringify(workflow.getSnapshot()), /SYNTHETIC-ACCOUNT-PASSWORD/);
+  await workflow.deleteAccount(record);
+  assert.equal(seen[1].kind, "delete");
+  const selfReset = await workflow.resetPassword(
+    { ...record, id: owner.accountId },
+    draft.password,
+  );
+  assert.equal(selfReset.status, "completed");
+  assert.equal(seen[2].kind, "reset_password");
+  assert.equal(seen[2].accountId, owner.accountId);
+  for (const target of [{ ...record, builtIn: true }]) {
+    await assert.rejects(workflow.resetPassword(target, draft.password));
+    await assert.rejects(workflow.deleteAccount(target));
+  }
+  await assert.rejects(workflow.deleteAccount({ ...record, id: owner.accountId }));
+  await assert.rejects(workflow.deleteAccount({ ...record, lastActiveAdmin: true }));
+  await assert.rejects(workflow.resetPassword(record, "short"));
+  assert.equal(seen.length, 3);
+  workflow.dispose();
+});
+
 test("ACCOUNT-OWNER: viewer/unresolved/new session cannot read or mutate; privilege loss immediately drops every published directory/detail", async () => {
   const { workflow, calls, setAccess } = make();
   await workflow.list(query);
@@ -129,10 +171,44 @@ test("ACCOUNT-LIST: complete ownership/filter key; unknown target is empty, neve
   const key = workflow.getSnapshot().directory.key;
   await workflow.list({ ...query, search: "other", page: 2 });
   assert.notEqual(workflow.getSnapshot().directory.key, key);
+  await workflow.list({ ...query, search: "  VIEWER  " });
+  assert.equal(calls.at(-1)[1].search, "VIEWER");
   await workflow.select("missing");
   assert.equal(workflow.getSnapshot().detail.status, "empty");
   assert.equal(workflow.getSnapshot().detail.data, null);
   workflow.dispose();
+});
+test("ACCOUNT-LIST: cancelling a directory query does not cancel selected detail or a pending command", async () => {
+  const listing = deferred(),
+    detail = deferred(),
+    mutation = deferred();
+  const { workflow, calls } = make({
+    listAccounts: async (input) => {
+      calls.push(["list", input]);
+      return listing.promise;
+    },
+    readAccount: async (id) => {
+      calls.push(["read", id]);
+      return detail.promise;
+    },
+    mutateAccount: async (input) => {
+      calls.push(["mutate", input.kind]);
+      return mutation.promise;
+    },
+  });
+  const listRequest = workflow.list(query),
+    detailRequest = workflow.select(record.id),
+    commandRequest = workflow.create(draft);
+
+  workflow.cancelDirectory();
+
+  await assert.rejects(listRequest, (error) => error.kind === AppErrorKind.CANCELLED);
+  assert.equal(workflow.getSnapshot().detail.status, "loading");
+  assert.equal(workflow.getSnapshot().mutation.status, "pending");
+  detail.resolve(record);
+  assert.equal(await detailRequest, record);
+  workflow.dispose();
+  await assert.rejects(commandRequest, (error) => error.kind === AppErrorKind.CANCELLED);
 });
 test("ACCOUNT-SELECT: a late detail read cannot replace the current URL account target", async () => {
   const first = deferred(),
@@ -179,6 +255,59 @@ test("ACCOUNT-CREATE: pending single flight, safe operation identity and server 
   assert.equal(calls.filter(([kind]) => kind === "list").length, 2);
   workflow.dispose();
 });
+test("ACCOUNT-CREATE: completed receipts must match active non-built-in never-logged-in creation facts", async () => {
+  const mismatchedFacts = [
+    { status: "disabled" },
+    { builtIn: true },
+    { lastLoginAt: "2026-10-11T00:00:00Z" },
+  ];
+
+  for (const facts of mismatchedFacts) {
+    let writes = 0;
+    const { workflow } = make({
+      mutateAccount: async (input) => {
+        writes++;
+        return {
+          status: "completed",
+          requestKey: input.requestKey,
+          account: { ...record, ...facts },
+        };
+      },
+    });
+
+    await assert.rejects(
+      workflow.create(draft),
+      (error) => error.code === "account_receipt_invalid",
+    );
+    assert.equal(workflow.getSnapshot().mutation.status, "result-unknown");
+    assert.doesNotMatch(JSON.stringify(workflow.getSnapshot()), /SYNTHETIC/);
+    await assert.rejects(workflow.create(draft), (error) => error.kind === AppErrorKind.DUPLICATE);
+    assert.equal(writes, 1, "a malformed completion must never be blindly replayed");
+    workflow.dispose();
+  }
+});
+test("ACCOUNT-CREATE: operation inspection cannot accept a mismatched completed account", async () => {
+  let writes = 0;
+  const { workflow } = make({
+    mutateAccount: async () => {
+      writes++;
+      throw new AppError(AppErrorKind.TIMEOUT, "PRIVATE-ACCOUNT-ERROR");
+    },
+    readAccountOperation: async (requestKey) => ({
+      status: "completed",
+      requestKey,
+      account: { ...record, status: "disabled" },
+    }),
+  });
+
+  await assert.rejects(workflow.create(draft));
+  await assert.rejects(workflow.inspect(), (error) => error.code === "account_receipt_invalid");
+  assert.equal(workflow.getSnapshot().mutation.status, "result-unknown");
+  assert.doesNotMatch(JSON.stringify(workflow.getSnapshot()), /PRIVATE-ACCOUNT-ERROR|SYNTHETIC/);
+  await assert.rejects(workflow.create(draft), (error) => error.kind === AppErrorKind.DUPLICATE);
+  assert.equal(writes, 1);
+  workflow.dispose();
+});
 test("ACCOUNT-CREATE: unknown result cannot be replayed; correlated explicit lookup resolves it, missing/incorrect lookup never unlocks", async () => {
   let mode = "missing",
     writes = 0;
@@ -206,6 +335,48 @@ test("ACCOUNT-CREATE: unknown result cannot be replayed; correlated explicit loo
   await workflow.inspect();
   assert.equal(workflow.getSnapshot().mutation.status, "success");
   assert.equal(writes, 1);
+  workflow.dispose();
+});
+test("ACCOUNT-INSPECT-CONCURRENCY: unknown mutation allows one lookup, keeps reads available, and blocks writes", async () => {
+  const lookup = deferred();
+  const lookupStarted = deferred();
+  let writes = 0,
+    lookups = 0;
+  const { workflow, calls } = make({
+    mutateAccount: async () => {
+      writes++;
+      calls.push(["mutate", "create"]);
+      throw new AppError(AppErrorKind.TIMEOUT, "PRIVATE-ACCOUNT-ERROR");
+    },
+    readAccountOperation: (requestKey) => {
+      lookups++;
+      calls.push(["inspect", requestKey]);
+      lookupStarted.resolve();
+      return lookup.promise.then(() => ({ status: "not-found", requestKey }));
+    },
+  });
+
+  await assert.rejects(workflow.create(draft));
+  const inspecting = workflow.inspect();
+  await lookupStarted.promise;
+
+  assert.equal(workflow.getSnapshot().inspecting, true);
+  await assert.rejects(workflow.inspect(), (error) => error.kind === AppErrorKind.DUPLICATE);
+  await workflow.list(query);
+  await workflow.select(record.id);
+  assert.equal(workflow.getSnapshot().inspecting, true);
+  assert.equal(workflow.getSnapshot().mutation.status, "result-unknown");
+  await assert.rejects(workflow.create(draft), (error) => error.kind === AppErrorKind.DUPLICATE);
+  assert.equal(lookups, 1);
+  assert.equal(writes, 1);
+
+  lookup.resolve();
+  assert.deepEqual(await inspecting, { status: "not-found", requestKey: "request-1" });
+  assert.equal(workflow.getSnapshot().inspecting, false);
+  assert.equal(workflow.getSnapshot().mutation.status, "result-unknown");
+  assert.equal(calls.filter(([kind]) => kind === "mutate").length, 1);
+  assert.equal(calls.filter(([kind]) => kind === "inspect").length, 1);
+  assert.doesNotMatch(JSON.stringify(workflow.getSnapshot()), /PRIVATE-ACCOUNT-ERROR|SYNTHETIC/);
   workflow.dispose();
 });
 test("ACCOUNT-CREATE: an HTTP timeout is unknown until final server rejection is inspected; retry uses a new key", async () => {
@@ -260,6 +431,83 @@ test("ACCOUNT-STATUS / ROLE-COMMIT: missing/protected/unchanged and stale baseli
   assert.equal(mutations[0].accountId, record.id);
   assert.equal(mutations[0].revision, record.revision);
   assert.equal(mutations[0].roleId, "admin");
+  workflow.dispose();
+});
+test("ROLE-REFRESH: an authoritative latest read clears a terminal role conflict without replaying the write", async () => {
+  const latest = { ...record, roleId: "admin", revision: "9007199254740994" };
+  let writes = 0,
+    failRead = false;
+  const { workflow } = make({
+    readAccount: async (id) => {
+      if (failRead) throw new AppError(AppErrorKind.NETWORK, "private account read failure");
+      return id === record.id ? latest : null;
+    },
+    mutateAccount: async (input) => {
+      writes++;
+      return { status: "rejected", requestKey: input.requestKey, reason: "conflict" };
+    },
+  });
+  const changed = changeRoleDraft(createRoleDraft(record), "admin");
+
+  const receipt = await workflow.setRole(record, changed);
+  assert.equal(receipt.status, "rejected");
+  assert.equal(workflow.getSnapshot().mutation.status, "conflict");
+
+  failRead = true;
+  await assert.rejects(workflow.select(record.id));
+  assert.equal(workflow.getSnapshot().mutation.status, "conflict");
+  failRead = false;
+  const reread = await workflow.select(record.id);
+  assert.equal(reread.revision, latest.revision);
+  assert.equal(reread.roleId, latest.roleId);
+  assert.equal(workflow.getSnapshot().detail.data.revision, latest.revision);
+  assert.equal(workflow.getSnapshot().mutation.status, "idle");
+  assert.equal(workflow.getSnapshot().operation, null);
+  assert.equal(writes, 1, "reading the latest record must not replay the rejected command");
+  workflow.dispose();
+});
+test("ROLE-REFRESH: an authoritative latest read clears a locally detected stale-revision conflict", async () => {
+  const latest = { ...record, revision: "9007199254740994" };
+  let writes = 0;
+  const { workflow } = make({
+    readAccount: async (id) => (id === record.id ? latest : null),
+    mutateAccount: async () => {
+      writes++;
+      return { status: "completed", requestKey: "unexpected", account: latest };
+    },
+  });
+  const staleDraft = changeRoleDraft(createRoleDraft(record), "admin");
+
+  await assert.rejects(workflow.setRole(latest, staleDraft), (error) => error.status === 409);
+  assert.equal(workflow.getSnapshot().mutation.status, "conflict");
+  assert.equal(
+    workflow.getSnapshot().operation,
+    null,
+    "local validation must not invent a request key",
+  );
+  await workflow.select(record.id);
+  assert.equal(workflow.getSnapshot().mutation.status, "idle");
+  assert.equal(writes, 0, "a stale local draft must never reach the mutation port");
+  workflow.dispose();
+});
+test("ROLE-REFRESH: a latest read cannot clear an unknown write outcome", async () => {
+  let writes = 0;
+  const { workflow } = make({
+    readAccount: async (id) => (id === record.id ? { ...record, revision: "2" } : null),
+    mutateAccount: async () => {
+      writes++;
+      throw new AppError(AppErrorKind.TIMEOUT, "private account write timeout");
+    },
+  });
+  const changed = changeRoleDraft(createRoleDraft(record), "admin");
+
+  await assert.rejects(workflow.setRole(record, changed));
+  assert.equal(workflow.getSnapshot().mutation.status, "result-unknown");
+  await workflow.select(record.id);
+  assert.equal(workflow.getSnapshot().detail.data.revision, "2");
+  assert.equal(workflow.getSnapshot().mutation.status, "result-unknown");
+  assert.equal(workflow.getSnapshot().operation.requestKey, "request-1");
+  assert.equal(writes, 1);
   workflow.dispose();
 });
 test("ROLE-IN-FLIGHT: synchronous role command stays single-flight until its final receipt arrives", async () => {

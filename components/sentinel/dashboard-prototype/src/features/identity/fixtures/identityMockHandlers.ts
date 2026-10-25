@@ -1,6 +1,10 @@
 import { http, HttpResponse } from "msw";
-import { CONSOLE_HEADER } from "../../../core/api/protocol/common";
-import { readMockPrincipal, writeMockPrincipal } from "../../../core/api/mock/mockRole";
+import { CONSOLE_HEADER, parseIdempotencyKeyHeader } from "../../../core/api/protocol/common";
+import {
+  readMockPassword,
+  readMockPrincipal,
+  writeMockPrincipal,
+} from "../../../core/api/mock/mockRole";
 import { canonicalizeAccountUsername, IDENTITY_ROLE } from "../model/account";
 import {
   BootstrapAuthorizationInputSchema,
@@ -112,6 +116,18 @@ export function createIdentityMockHandlers(scenario: IdentityMockScenario) {
       window.localStorage.setItem(scenario.storageKeys.operatorAuthorized, "true");
       return HttpResponse.json({ authorized: true }, { headers: headers(requestId) });
     }),
+    http.post("*/api/v1/system/bootstrap/authorize-local", async ({ request }) => {
+      const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
+      const facts = setupFacts(scenario);
+      const setupAvailable = !facts.initialized && facts.setupAvailable;
+      if (!setupAvailable)
+        return HttpResponse.json(
+          { error: { code: "conflict", requestId } },
+          { status: 409, headers: headers(requestId, false) },
+        );
+      window.localStorage.setItem(scenario.storageKeys.operatorAuthorized, "true");
+      return HttpResponse.json({ authorized: true }, { headers: headers(requestId) });
+    }),
     http.post("*/api/v1/system/bootstrap/database-check", async ({ request }) => {
       const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
       const input = SetupStorageSchema.safeParse(await request.json().catch(() => null));
@@ -142,10 +158,21 @@ export function createIdentityMockHandlers(scenario: IdentityMockScenario) {
       const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
       const parsed = InitializeCommandSchema.safeParse(await request.json().catch(() => null));
       const facts = setupFacts(scenario);
-      if (!parsed.success || request.headers.get("idempotency-key") !== parsed.data?.requestKey)
+      if (!parsed.success)
         return HttpResponse.json(
           { error: { code: "invalid_request", requestId } },
           { status: 400, headers: headers(requestId, false) },
+        );
+      const keyHeader = parseIdempotencyKeyHeader(request.headers);
+      if (keyHeader.kind === "missing")
+        return HttpResponse.json(
+          { error: { code: "invalid_request", requestId } },
+          { status: 400, headers: headers(requestId, false) },
+        );
+      if (keyHeader.kind !== "valid" || keyHeader.requestKey !== parsed.data.requestKey)
+        return HttpResponse.json(
+          { error: { code: "idempotency_conflict", requestId } },
+          { status: 409, headers: headers(requestId, false) },
         );
       if (facts.initialized || !facts.operatorAuthorized)
         return HttpResponse.json(
@@ -211,7 +238,7 @@ export function createIdentityMockHandlers(scenario: IdentityMockScenario) {
       const account = scenario.accounts.find(
         (candidate) => canonicalizeAccountUsername(candidate.username) === username,
       );
-      if (!account || body.password !== scenario.password)
+      if (!account || body.password !== readMockPassword(account.username, scenario.password))
         return HttpResponse.json(
           { error: { code: "unauthenticated", requestId } },
           { status: 401, headers: headers(requestId, false) },

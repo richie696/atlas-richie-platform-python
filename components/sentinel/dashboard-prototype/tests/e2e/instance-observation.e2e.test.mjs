@@ -1,49 +1,202 @@
-import { before, after, test } from 'node:test';
-import assert from 'node:assert/strict';
-import {mkdirSync,writeFileSync} from 'node:fs';
-import {E2E_BASE_URL,launchBrowser} from './cdp.mjs';
-let browser;before(async()=>{browser=await launchBrowser();});after(async()=>{await browser?.close();});
-async function withPage(run){const page=await browser.newPage();try{
-  await page.clearStorage(new URL(E2E_BASE_URL).origin);await page.goto(`${E2E_BASE_URL}/#/login`);await page.waitFor(`!!document.querySelector('.app-shell')`);
-  await page.eval(`(async()=>{const React=(await import('/node_modules/.vite/deps/react.js')).default;const {createRoot}=(await import('/node_modules/.vite/deps/react-dom_client.js')).default;const {InstanceObservationProbe,createInstanceProbeTopology}=await import('/tests/e2e/probes/InstanceObservationProbe.tsx');document.getElementById('root').style.display='none';const host=document.createElement('section');host.id='instance-probe';document.body.append(host);const topology=createInstanceProbeTopology(),root=createRoot(host,{identifierPrefix:'instance-probe-'});root.render(React.createElement(React.StrictMode,null,React.createElement(InstanceObservationProbe,{topology})));window.__instanceCleanup=()=>{root.unmount();topology.dispose();host.remove();};})()`);
-  await page.waitFor(`document.querySelectorAll('#instance-probe [data-observed-instance]').length===2`);await run(page);assert.deepEqual(page.consoleErrors,[]);await page.eval('window.__instanceCleanup()');
-}finally{await page.close();}}
-const summary=page=>page.eval(`JSON.parse(document.querySelector('#instance-probe [data-instance-summary]').textContent)`);
-const waitState=(page,state)=>page.waitFor(`JSON.parse(document.querySelector('#instance-probe [data-instance-summary]').textContent).detailState===${JSON.stringify(state)}`);
-const click=(page,text)=>page.clickByText(text,'#instance-probe button');
-const selectInstance=(page,id)=>page.click(`#instance-probe [data-observed-instance=${id}] button`);
-async function select(page,label,value){const id=await page.eval(`[...document.querySelectorAll('#instance-probe label')].find(node=>node.textContent===${JSON.stringify(label)}).htmlFor`);await page.click('#'+id.replace(/[^a-zA-Z0-9_-]/g,x=>'\\'+x));await page.waitFor(`[...document.querySelectorAll('[role=option]')].some(node=>node.textContent.trim()===${JSON.stringify(value)}&&node.getBoundingClientRect().width>0&&node.getBoundingClientRect().height>0)`);const index=await page.eval(`[...document.querySelectorAll('[role=option]')].findIndex(node=>node.textContent.trim()===${JSON.stringify(value)}&&node.getBoundingClientRect().width>0&&node.getBoundingClientRect().height>0)`);await page.click('[role=option]',{index});}
-test('INSTANCE rendered: explicit selection survives pagination and anomaly filter; other app never borrows its detail',async()=>withPage(async page=>{
-  assert.match(await page.text('#instance-probe'),/全范围 3 个实例/);assert.match(await page.text('#instance-probe'),/请选择一个具体实例/);assert.equal(await page.count('#instance-probe [data-metric-card]'),0);
-  await selectInstance(page,'instance-1');await waitState(page,'partial');assert.match(await page.text('#instance-probe [data-instance-receipt]'),/当前进程已加载/);
-  await click(page,'下一页');await page.waitFor(`!!document.querySelector('#instance-probe [data-observed-instance=instance-3]')`);assert.equal((await summary(page)).selection.context.instanceId,'instance-1');assert.ok(await page.count('#instance-probe [data-metric-card]')>0);
-  await select(page,'实例状态','仅看异常');await page.waitFor(`!!document.querySelector('#instance-probe [data-observed-instance=instance-2]')`);assert.equal((await summary(page)).selection.context.instanceId,'instance-1');assert.match(await page.text('#instance-probe'),/全范围 3 个实例 · 需关注 1 个 · 已筛选 1 个/);
-  await select(page,'应用','app-two');await page.waitFor(`JSON.parse(document.querySelector('#instance-probe [data-instance-summary]').textContent).catalogState==='filtered-empty'`);assert.equal(await page.count('#instance-probe [data-metric-card]'),0);assert.match(await page.text('#instance-probe'),/请选择一个具体实例/);
-}));
-test('INSTANCE rendered: unsupported host is explicit, layer refresh error is stale, wrong process never becomes trusted',async()=>withPage(async page=>{
-  await selectInstance(page,'instance-1');await waitState(page,'partial');await click(page,'宿主机');await page.waitFor(`!!document.querySelector('#instance-probe [data-instance-unsupported]')`);assert.equal(await page.count('#instance-probe [data-metric-card]'),0);
-  await click(page,'容器');await page.waitFor(`document.querySelectorAll('#instance-probe [data-metric-card]').length===6`);
-  await page.click('#instance-probe [data-instance-mode=offline]');await page.click('#instance-probe [data-instance-detail-refresh]');await waitState(page,'stale');assert.match(await page.text('#instance-probe'),/并非最新状态/);assert.doesNotMatch(await page.text('#instance-probe'),/PRIVATE-INSTANCE-ERROR/);
-  await page.click('#instance-probe [data-instance-mode=wrong]');await click(page,'进程');await waitState(page,'error');assert.equal(await page.count('#instance-probe [data-metric-card]'),0);assert.doesNotMatch(await page.text('#instance-probe'),/old-incarnation/);
-  await page.click('#instance-probe [data-instance-mode=success]');await click(page,'重试读取');await waitState(page,'partial');
-  await page.click('#instance-probe [data-instance-revoke]');await waitState(page,'denied');assert.equal(await page.count('#instance-probe [data-metric-card]'),0);assert.equal(await page.count('#instance-probe [data-observed-instance]'),0);
-}));
-test('INSTANCE rendered: changed layer aborts old request and missing target never falls back; exact UTC drill-down survives',async()=>withPage(async page=>{
-  await selectInstance(page,'instance-1');await waitState(page,'partial');await click(page,'实时监控');const target=(await summary(page)).navigation;assert.equal(target.route,'realtime');assert.equal(target.context.instanceId,'instance-1');assert.equal(target.context.from,'2026-10-06T23:55:00.000Z');assert.equal(target.context.to,'2026-10-07T00:10:00.000Z');
-  await page.click('#instance-probe [data-instance-mode=held]');await click(page,'容器');await waitState(page,'loading');await click(page,'宿主机');await waitState(page,'loading');assert.ok((await summary(page)).aborts>0);await page.click('#instance-probe [data-instance-release]');await page.waitFor(`!!document.querySelector('#instance-probe [data-instance-unsupported]')`);
-  await page.click('#instance-probe [data-instance-mode=missing]');await click(page,'进程');await waitState(page,'error');assert.equal(await page.count('#instance-probe [data-metric-card]'),0);assert.equal((await summary(page)).selection.context.instanceId,'instance-1');
-  await page.click('#instance-probe [data-instance-missing-app]');await page.waitFor(`JSON.parse(document.querySelector('#instance-probe [data-instance-summary]').textContent).catalogState==='empty'`);assert.equal(await page.count('#instance-probe [data-observed-instance]'),0);assert.equal(await page.count('#instance-probe [data-instance-receipt]'),0);
-}));
-test('INSTANCE rendered: Japanese 320px controls and selected layer retain bounded layout with readable metadata',async()=>withPage(async page=>{
-  await selectInstance(page,'instance-1');await waitState(page,'partial');await page.send('Emulation.setDeviceMetricsOverride',{width:320,height:900,deviceScaleFactor:1,mobile:false});
-  await page.eval(`(async()=>{const {default:i18n}=await import('/src/app/i18n/config.ts');await i18n.changeLanguage('ja-JP');await Promise.all(document.getAnimations().filter(animation=>animation.playState==='running'&&Number.isFinite(animation.effect?.getTiming().iterations)).map(animation=>animation.finished.catch(()=>{})));})()`);
-  assert.ok(await page.eval('document.documentElement.scrollWidth<=321'));assert.match(await page.text('#instance-probe'),/現在のプロセスで読み込み済み/);assert.doesNotMatch(await page.text('#instance-probe'),/applications\.observed\./);
-  const directory=artifactDirectory('sentinel-f4-instances-20261007');mkdirSync(directory,{recursive:true});writeFileSync(`${directory}/instance-narrow-ja.png`,await page.screenshot());
-  await page.send('Emulation.setDeviceMetricsOverride',{width:1280,height:1400,deviceScaleFactor:1,mobile:false});await page.eval(`document.querySelector('#instance-probe [data-instance-receipt]').scrollIntoView({block:'center'})`);writeFileSync(`${directory}/instance-detail-ja.png`,await page.screenshot());
-}));
-test('INSTANCE rendered: same-key deletion and process replacement clear confirmed receipts instead of stale fallback',async()=>withPage(async page=>{
-  await selectInstance(page,'instance-1');await waitState(page,'partial');assert.ok(await page.count('#instance-probe [data-instance-receipt]')>0);
-  await page.click('#instance-probe [data-instance-mode=missing]');await page.click('#instance-probe [data-instance-detail-refresh]');await waitState(page,'error');assert.equal(await page.count('#instance-probe [data-instance-receipt]'),0);assert.equal(await page.count('#instance-probe [data-metric-card]'),0);assert.match(await page.text('#instance-probe'),/对象不存在或已移除/);assert.equal((await summary(page)).selection.context.instanceId,'instance-1');
-  await page.click('#instance-probe [data-instance-mode=success]');await click(page,'重试读取');await waitState(page,'partial');await page.click('#instance-probe [data-instance-mode=replaced]');await page.click('#instance-probe [data-instance-detail-refresh]');await waitState(page,'error');assert.equal(await page.count('#instance-probe [data-instance-receipt]'),0);assert.equal(await page.count('#instance-probe [data-metric-card]'),0);assert.match(await page.text('#instance-probe'),/进程已更换/);assert.doesNotMatch(await page.text('#instance-probe'),/PRIVATE-/);
-}));
-import {artifactDirectory} from './artifacts.mjs';
+import { before, after, test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { E2E_BASE_URL, connectIabBrowser } from "./cdp.mjs";
+import { mountReactProbe } from "./probeHarness.mjs";
+let browser;
+before(async () => {
+  browser = await connectIabBrowser();
+});
+after(async () => {
+  await browser?.close();
+});
+async function withPage(run) {
+  const page = await browser.newPage();
+  try {
+    await page.clearStorage(new URL(E2E_BASE_URL).origin);
+    await mountReactProbe(page, E2E_BASE_URL, {
+      id: "instance-probe",
+      modulePath: "/tests/e2e/probes/InstanceObservationProbe.tsx",
+      componentName: "InstanceObservationProbe",
+      topologyFactoryName: "createInstanceProbeTopology",
+      cleanupName: "__instanceCleanup",
+      topologyName: "__instanceTopology",
+    });
+    await page.waitFor(
+      `document.querySelectorAll('#instance-probe [data-observed-instance]').length===2`,
+    );
+    await run(page);
+    assert.deepEqual(page.consoleErrors, []);
+    await page.eval("window.__instanceCleanup()");
+  } finally {
+    await page.close();
+  }
+}
+const summary = (page) =>
+  page.eval(
+    `JSON.parse(document.querySelector('#instance-probe [data-instance-summary]').textContent)`,
+  );
+const waitState = (page, state) =>
+  page.waitFor(
+    `JSON.parse(document.querySelector('#instance-probe [data-instance-summary]').textContent).detailState===${JSON.stringify(state)}`,
+  );
+const click = (page, text) => page.clickByText(text, "#instance-probe button");
+const selectInstance = (page, id) =>
+  page.click(`#instance-probe [data-observed-instance=${id}] button`);
+async function select(page, label, value) {
+  const id = await page.eval(
+    `[...document.querySelectorAll('#instance-probe label')].find(node=>node.textContent===${JSON.stringify(label)}).htmlFor`,
+  );
+  await page.click("#" + id.replace(/[^a-zA-Z0-9_-]/g, (x) => "\\" + x));
+  await page.waitFor(
+    `[...document.querySelectorAll('[role=option]')].some(node=>node.textContent.trim()===${JSON.stringify(value)}&&node.getBoundingClientRect().width>0&&node.getBoundingClientRect().height>0)`,
+  );
+  const index = await page.eval(
+    `[...document.querySelectorAll('[role=option]')].findIndex(node=>node.textContent.trim()===${JSON.stringify(value)}&&node.getBoundingClientRect().width>0&&node.getBoundingClientRect().height>0)`,
+  );
+  await page.click("[role=option]", { index });
+}
+test("INSTANCE rendered: explicit selection survives pagination and anomaly filter; other app never borrows its detail", async () =>
+  withPage(async (page) => {
+    assert.match(await page.text("#instance-probe"), /全范围 4 个实例/);
+    assert.match(await page.text("#instance-probe"), /请选择一个具体实例/);
+    assert.equal(await page.count("#instance-probe [data-metric-card]"), 0);
+    await selectInstance(page, "instance-1");
+    await waitState(page, "partial");
+    assert.match(await page.text("#instance-probe [data-instance-receipt]"), /当前进程已加载/);
+    await click(page, "下一页");
+    await page.waitFor(
+      `!!document.querySelector('#instance-probe [data-observed-instance=instance-3]')`,
+    );
+    assert.equal((await summary(page)).selection.context.instanceId, "instance-1");
+    assert.ok((await page.count("#instance-probe [data-metric-card]")) > 0);
+    await select(page, "实例状态", "仅看异常");
+    await page.waitFor(
+      `!!document.querySelector('#instance-probe [data-observed-instance=instance-2]')`,
+    );
+    assert.equal((await summary(page)).selection.context.instanceId, "instance-1");
+    assert.match(await page.text("#instance-probe"), /全范围 4 个实例 · 需关注 1 个 · 已筛选 1 个/);
+    await select(page, "应用", "app-two");
+    await page.waitFor(
+      `JSON.parse(document.querySelector('#instance-probe [data-instance-summary]').textContent).catalogState==='filtered-empty'`,
+    );
+    assert.equal(await page.count("#instance-probe [data-metric-card]"), 0);
+    assert.match(await page.text("#instance-probe"), /请选择一个具体实例/);
+  }));
+test("INSTANCE rendered: unsupported host is explicit, layer refresh error is stale, wrong process never becomes trusted", async () =>
+  withPage(async (page) => {
+    await selectInstance(page, "instance-1");
+    await waitState(page, "partial");
+    await click(page, "宿主机");
+    await page.waitFor(`!!document.querySelector('#instance-probe [data-instance-unsupported]')`);
+    assert.equal(await page.count("#instance-probe [data-metric-card]"), 0);
+    await click(page, "容器");
+    await page.waitFor(`!!document.querySelector('#instance-probe [data-instance-unsupported]')`);
+    assert.equal(await page.count("#instance-probe [data-metric-card]"), 0);
+    await click(page, "进程");
+    await page.waitFor(
+      `document.querySelectorAll('#instance-probe [data-metric-card]').length===6`,
+    );
+    await page.click("#instance-probe [data-instance-mode=offline]");
+    await page.click("#instance-probe [data-instance-detail-refresh]");
+    await waitState(page, "stale");
+    assert.match(await page.text("#instance-probe"), /并非最新状态/);
+    assert.doesNotMatch(await page.text("#instance-probe"), /PRIVATE-INSTANCE-ERROR/);
+    await page.click("#instance-probe [data-instance-mode=wrong]");
+    await page.click("#instance-probe [data-instance-detail-refresh]");
+    await waitState(page, "stale");
+    assert.equal(await page.count("#instance-probe [data-metric-card]"), 6);
+    assert.equal((await summary(page)).selection.processEpoch, "incarnation-1");
+    assert.doesNotMatch(await page.text("#instance-probe"), /old-incarnation/);
+    await page.click("#instance-probe [data-instance-mode=success]");
+    await click(page, "重试读取");
+    await waitState(page, "partial");
+    await page.click("#instance-probe [data-instance-revoke]");
+    await waitState(page, "denied");
+    assert.equal(await page.count("#instance-probe [data-metric-card]"), 0);
+    assert.equal(await page.count("#instance-probe [data-observed-instance]"), 0);
+  }));
+test("INSTANCE rendered: changed layer aborts old request and missing target never falls back; exact UTC drill-down survives", async () =>
+  withPage(async (page) => {
+    await selectInstance(page, "instance-1");
+    await waitState(page, "partial");
+    await click(page, "实时监控");
+    const target = (await summary(page)).navigation;
+    assert.equal(target.route, "realtime");
+    assert.equal(target.context.instanceId, "instance-1");
+    assert.equal(target.context.from, "2026-10-06T23:55:00.000Z");
+    assert.equal(target.context.to, "2026-10-07T00:10:00.000Z");
+    await page.click("#instance-probe [data-instance-mode=held]");
+    await click(page, "容器");
+    await waitState(page, "loading");
+    await click(page, "宿主机");
+    await waitState(page, "loading");
+    assert.ok((await summary(page)).aborts > 0);
+    await page.click("#instance-probe [data-instance-release]");
+    await page.waitFor(`!!document.querySelector('#instance-probe [data-instance-unsupported]')`);
+    await page.click("#instance-probe [data-instance-mode=missing]");
+    await click(page, "进程");
+    await waitState(page, "error");
+    assert.equal(await page.count("#instance-probe [data-metric-card]"), 0);
+    assert.equal((await summary(page)).selection.context.instanceId, "instance-1");
+    await page.click("#instance-probe [data-instance-missing-app]");
+    await page.waitFor(
+      `JSON.parse(document.querySelector('#instance-probe [data-instance-summary]').textContent).catalogState==='empty'`,
+    );
+    assert.equal(await page.count("#instance-probe [data-observed-instance]"), 0);
+    assert.equal(await page.count("#instance-probe [data-instance-receipt]"), 0);
+  }));
+test("INSTANCE rendered: Japanese 320px controls and selected layer retain bounded layout with readable metadata", async () =>
+  withPage(async (page) => {
+    await selectInstance(page, "instance-1");
+    await waitState(page, "partial");
+    await page.send("Emulation.setDeviceMetricsOverride", {
+      width: 320,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await page.eval(
+      `(async()=>{const {changeLocale}=await import('/src/app/i18n/changeLocale.ts');await changeLocale('ja-JP');await Promise.all(document.getAnimations().filter(animation=>animation.playState==='running'&&Number.isFinite(animation.effect?.getTiming().iterations)).map(animation=>animation.finished.catch(()=>{})));})()`,
+    );
+    assert.ok(await page.eval("document.documentElement.scrollWidth<=321"));
+    assert.match(await page.text("#instance-probe"), /現在のプロセスで読み込み済み/);
+    assert.doesNotMatch(await page.text("#instance-probe"), /applications\.observed\./);
+    const directory = artifactDirectory("sentinel-f4-instances-20261007");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(`${directory}/instance-narrow-ja.png`, await page.screenshot());
+    await page.send("Emulation.setDeviceMetricsOverride", {
+      width: 1280,
+      height: 1400,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await page.eval(
+      `document.querySelector('#instance-probe [data-instance-receipt]').scrollIntoView({block:'center'})`,
+    );
+    writeFileSync(`${directory}/instance-detail-ja.png`, await page.screenshot());
+  }));
+test("INSTANCE rendered: same-key deletion and process replacement clear confirmed receipts instead of stale fallback", async () =>
+  withPage(async (page) => {
+    await selectInstance(page, "instance-1");
+    await waitState(page, "partial");
+    assert.ok((await page.count("#instance-probe [data-instance-receipt]")) > 0);
+    await page.click("#instance-probe [data-instance-mode=missing]");
+    await page.click("#instance-probe [data-instance-detail-refresh]");
+    await waitState(page, "error");
+    assert.equal(await page.count("#instance-probe [data-instance-receipt]"), 0);
+    assert.equal(await page.count("#instance-probe [data-metric-card]"), 0);
+    assert.match(await page.text("#instance-probe"), /对象不存在或已移除/);
+    assert.equal((await summary(page)).selection.context.instanceId, "instance-1");
+    await page.click("#instance-probe [data-instance-mode=success]");
+    await click(page, "重试读取");
+    await waitState(page, "partial");
+    await page.click("#instance-probe [data-instance-mode=replaced]");
+    await page.click("#instance-probe [data-instance-detail-refresh]");
+    await waitState(page, "error");
+    assert.equal(await page.count("#instance-probe [data-instance-receipt]"), 0);
+    assert.equal(await page.count("#instance-probe [data-metric-card]"), 0);
+    assert.match(await page.text("#instance-probe"), /进程已更换/);
+    assert.doesNotMatch(await page.text("#instance-probe"), /PRIVATE-/);
+  }));
+import { artifactDirectory } from "./artifacts.mjs";

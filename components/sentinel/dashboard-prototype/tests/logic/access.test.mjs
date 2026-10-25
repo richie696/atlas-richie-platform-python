@@ -112,15 +112,17 @@ test("F2 server bootstrap is sequenced before session; uninitialized deployments
   );
   resource.dispose();
 });
-test("F2.4 setup consumes the confirmed route fact before later refreshes use the sole auth owner", async () => {
+test("F4.21 setup ports read refreshed authorization from the single auth owner", async () => {
   let restores = 0;
-  let facts = { kind: "uninitialized", setupAvailable: true, operatorAuthorized: true };
+  let facts = { kind: "uninitialized", setupAvailable: true, operatorAuthorized: false };
+  let currentAccess = resolved(facts);
   const authentication = {
     getSnapshot() {
-      return { access: { phase: "resolved", facts } };
+      return { access: currentAccess };
     },
     async restore() {
       restores++;
+      currentAccess = resolved(facts);
       return facts;
     },
   };
@@ -141,28 +143,35 @@ test("F2.4 setup consumes the confirmed route fact before later refreshes use th
   );
   assert.deepEqual(await ports.authorization.readGate(new AbortController().signal), {
     kind: "open",
-    authorized: true,
+    authorized: false,
   });
+  assert.deepEqual(await ports.initialization.readBootstrap(new AbortController().signal), {
+    initialized: false,
+    setupAvailable: true,
+    operatorAuthorized: false,
+  });
+  assert.equal(restores, 0);
+  facts = { kind: "uninitialized", setupAvailable: true, operatorAuthorized: true };
+  assert.deepEqual(
+    await ports.authorization.readGate(new AbortController().signal, { forceRefresh: true }),
+    {
+      kind: "open",
+      authorized: true,
+    },
+  );
   assert.deepEqual(await ports.initialization.readBootstrap(new AbortController().signal), {
     initialized: false,
     setupAvailable: true,
     operatorAuthorized: true,
   });
-  assert.equal(restores, 0);
-  assert.deepEqual(await ports.authorization.readGate(new AbortController().signal), {
-    kind: "open",
-    authorized: true,
-  });
-  assert.deepEqual(await ports.initialization.readBootstrap(new AbortController().signal), {
-    initialized: false,
-    setupAvailable: true,
-    operatorAuthorized: true,
-  });
-  assert.equal(restores, 0);
+  assert.equal(restores, 1, "initialization observes the authorization owner's refreshed fact");
   facts = { kind: "uninitialized", setupAvailable: true, operatorAuthorized: false };
   assert.deepEqual(
     await ports.authorization.readGate(new AbortController().signal, { forceRefresh: true }),
-    { kind: "open", authorized: false },
+    {
+      kind: "open",
+      authorized: false,
+    },
   );
   assert.deepEqual(
     await ports.initialization.readBootstrap(new AbortController().signal, {
@@ -170,7 +179,7 @@ test("F2.4 setup consumes the confirmed route fact before later refreshes use th
     }),
     { initialized: false, setupAvailable: true, operatorAuthorized: false },
   );
-  assert.equal(restores, 2);
+  assert.equal(restores, 3);
   assert.deepEqual(bootstrapFactFromAccess({ kind: "anonymous" }), { initialized: true });
   assert.deepEqual(
     bootstrapOperatorGateFromAccess({

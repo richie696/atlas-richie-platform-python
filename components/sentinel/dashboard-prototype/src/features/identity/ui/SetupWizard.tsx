@@ -5,6 +5,7 @@ import { scopedClasses } from "../../../shared/ui/styles/scopedClasses";
 import { CheckCircleIcon, ArrowRightIcon } from "@phosphor-icons/react";
 import { useTranslation } from "react-i18next";
 import { ActionButton } from "../../../shared/ui/ActionButton";
+import { ROUTE } from "../../../shared/types/navigation";
 import { SETUP_STEP, type SetupField } from "../model/setup";
 import type { SetupFlow } from "../state/useSetupFlow";
 import type { ReactNode } from "react";
@@ -63,6 +64,14 @@ export function SetupWizard({
           <span className={scopedClasses(styleModules, "eyebrow")}>FIRST-RUN SETUP</span>
           <h1>{t("setup.intro.title")}</h1>
           <p>{t("setup.intro.description")}</p>
+          <a
+            className={identityStyles["manual-link"]}
+            href={`#/${ROUTE.Documentation}?view=setup`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {t("documentation.setupHelp")}
+          </a>
         </div>
         <div className={scopedClasses(styleModules, "setup-layout")}>
           <ol

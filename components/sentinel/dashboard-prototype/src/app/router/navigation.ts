@@ -13,6 +13,7 @@
  */
 import {
   ActivityIcon,
+  BookOpenIcon,
   GearSixIcon,
   SlidersHorizontalIcon,
   SquaresFourIcon,
@@ -44,6 +45,7 @@ export const NAVIGATION_ICONS: Readonly<Record<MainNavRouteId, Icon>> = Object.f
   realtime: ActivityIcon,
   faults: WarningIcon,
   system: GearSixIcon,
+  docs: BookOpenIcon,
 });
 
 /** 按顺序返回可直接渲染的导航项，已附图标。 */
@@ -84,6 +86,20 @@ export function mayPreserveAuthorizedSetupRoute(access: ControlPlaneAccessState)
     access.previousFacts?.kind === "uninitialized" &&
     access.previousFacts.setupAvailable &&
     access.previousFacts.operatorAuthorized
+  );
+}
+
+/** Keep the login owner mounted for every confirmed identity so its effect can route to setup or the authorized destination. */
+export function shouldKeepLoginEntryMounted(
+  access: ControlPlaneAccessState,
+  hasLoginAttempt: boolean,
+): boolean {
+  if (access.phase === "resolved") return true;
+  return (
+    hasLoginAttempt &&
+    (access.phase === "authenticating" ||
+      access.phase === "checking" ||
+      access.phase === "unavailable")
   );
 }
 

@@ -1,10 +1,11 @@
 import { before, after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { E2E_BASE_URL, launchBrowser } from "./cdp.mjs";
+import { E2E_BASE_URL, connectIabBrowser } from "./cdp.mjs";
+import { mountReactProbe } from "./probeHarness.mjs";
 let browser;
 before(async () => {
-  browser = await launchBrowser();
+  browser = await connectIabBrowser();
 });
 after(async () => {
   await browser?.close();
@@ -13,11 +14,14 @@ async function withPage(run) {
   const page = await browser.newPage();
   try {
     await page.clearStorage(new URL(E2E_BASE_URL).origin);
-    await page.goto(`${E2E_BASE_URL}/#/login`);
-    await page.waitFor(`!!document.querySelector('.app-shell')`);
-    await page.eval(
-      `(async()=>{const React=(await import('/node_modules/.vite/deps/react.js')).default;const {createRoot}=(await import('/node_modules/.vite/deps/react-dom_client.js')).default;const {SystemObservationProbe,createSystemObservationTopology}=await import('/tests/e2e/probes/SystemObservationProbe.tsx');document.getElementById('root').style.display='none';const host=document.createElement('section');host.id='system-probe';document.body.append(host);const topology=createSystemObservationTopology(),root=createRoot(host,{identifierPrefix:'system-probe-'});root.render(React.createElement(React.StrictMode,null,React.createElement(SystemObservationProbe,{topology})));window.__systemCleanup=()=>{root.unmount();topology.dispose();host.remove();};})()`,
-    );
+    await mountReactProbe(page, E2E_BASE_URL, {
+      id: "system-probe",
+      modulePath: "/tests/e2e/probes/SystemObservationProbe.tsx",
+      componentName: "SystemObservationProbe",
+      topologyFactoryName: "createSystemObservationTopology",
+      cleanupName: "__systemCleanup",
+      topologyName: "__systemTopology",
+    });
     await wait(
       page,
       `state.connections==='partial'&&state.protocols==='partial'&&state.audit==='ready'`,
@@ -33,18 +37,38 @@ const summary = (page) =>
   page.eval(
     `JSON.parse(document.querySelector('#system-probe [data-system-summary]').textContent)`,
   );
-test("SYSTEM permissions rendered: current session facts are readonly, view has no write grant and expiry removes all identity facts", async () => withPage(async (page) => {
-  assert.match(await page.text('#system-probe [data-session-permissions]'), /system-admin/);
-  assert.match(await page.text('#system-probe [data-session-capability="rules:write"]'), /已授予/);
-  assert.equal(await page.count('#system-probe [data-session-permissions] input,#system-probe [data-session-permissions] button'),0);
-  await page.click('#system-probe [data-session-view]');
-  await page.waitFor(`document.querySelector('#system-probe [data-session-permissions]').textContent.includes('system-view')`);
-  assert.match(await page.text('#system-probe [data-session-capability="rules:write"]'), /未授予/);
-  assert.match(await page.text('#system-probe [data-session-capability="metrics:view"]'), /已授予/);
-  await page.click('#system-probe [data-session-expire]');
-  await page.waitFor(`!document.querySelector('#system-probe [data-session-permissions]')`);
-  assert.doesNotMatch(await page.text('#system-probe'),/system-admin|system-view|account-view-test/);
-}));
+test("SYSTEM permissions rendered: current session facts are readonly, view has no write grant and expiry removes all identity facts", async () =>
+  withPage(async (page) => {
+    assert.match(await page.text("#system-probe [data-session-permissions]"), /system-admin/);
+    assert.match(
+      await page.text('#system-probe [data-session-capability="rules:write"]'),
+      /已授予/,
+    );
+    assert.equal(
+      await page.count(
+        "#system-probe [data-session-permissions] input,#system-probe [data-session-permissions] button",
+      ),
+      0,
+    );
+    await page.click("#system-probe [data-session-view]");
+    await page.waitFor(
+      `document.querySelector('#system-probe [data-session-permissions]').textContent.includes('system-view')`,
+    );
+    assert.match(
+      await page.text('#system-probe [data-session-capability="rules:write"]'),
+      /未授予/,
+    );
+    assert.match(
+      await page.text('#system-probe [data-session-capability="metrics:view"]'),
+      /已授予/,
+    );
+    await page.click("#system-probe [data-session-expire]");
+    await page.waitFor(`!document.querySelector('#system-probe [data-session-permissions]')`);
+    assert.doesNotMatch(
+      await page.text("#system-probe"),
+      /system-admin|system-view|account-view-test/,
+    );
+  }));
 const wait = (page, predicate) =>
   page.waitFor(
     `(()=>{const state=JSON.parse(document.querySelector('#system-probe [data-system-summary]')?.textContent??'{}');return ${predicate};})()`,
@@ -150,7 +174,7 @@ test("SYSTEM rendered: first permission notification hides privileged facts; ign
 test("SYSTEM rendered: Japanese narrow filters stay visible and UTC audit/probe tables retain their own scroll regions", async () =>
   withPage(async (page) => {
     await page.eval(
-      `(async()=>{const {default:i18n}=await import('/src/app/i18n/config.ts');await i18n.changeLanguage('ja-JP');})()`,
+      `(async()=>{const {changeLocale}=await import('/src/app/i18n/changeLocale.ts');await changeLocale('ja-JP');})()`,
     );
     const dir = artifactDirectory("sentinel-f4-system-20261007");
     mkdirSync(dir, { recursive: true });
@@ -177,4 +201,4 @@ test("SYSTEM rendered: Japanese narrow filters stay visible and UTC audit/probe 
       writeFileSync(`${dir}/${name}.png`, await page.screenshot());
     }
   }));
-import {artifactDirectory} from './artifacts.mjs';
+import { artifactDirectory } from "./artifacts.mjs";

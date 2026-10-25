@@ -1,10 +1,11 @@
 import { before, after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { E2E_BASE_URL, launchBrowser } from "./cdp.mjs";
+import { E2E_BASE_URL, connectIabBrowser } from "./cdp.mjs";
+import { mountReactProbe } from "./probeHarness.mjs";
 let browser;
 before(async () => {
-  browser = await launchBrowser();
+  browser = await connectIabBrowser();
 });
 after(async () => {
   await browser?.close();
@@ -13,11 +14,14 @@ async function withPage(run) {
   const page = await browser.newPage();
   try {
     await page.clearStorage(new URL(E2E_BASE_URL).origin);
-    await page.goto(`${E2E_BASE_URL}/#/login`);
-    await page.waitFor(`!!document.querySelector('.app-shell')`);
-    await page.eval(
-      `(async()=>{const React=(await import('/node_modules/.vite/deps/react.js')).default;const {createRoot}=(await import('/node_modules/.vite/deps/react-dom_client.js')).default;const {FleetObservationProbe,createFleetProbeTopology}=await import('/tests/e2e/probes/FleetObservationProbe.tsx');document.getElementById('root').style.display='none';const host=document.createElement('section');host.id='fleet-probe';document.body.append(host);const topology=createFleetProbeTopology(),root=createRoot(host,{identifierPrefix:'fleet-probe-'});root.render(React.createElement(React.StrictMode,null,React.createElement(FleetObservationProbe,{topology})));window.__fleetCleanup=()=>{root.unmount();topology.dispose();host.remove();};})()`,
-    );
+    await mountReactProbe(page, E2E_BASE_URL, {
+      id: "fleet-probe",
+      modulePath: "/tests/e2e/probes/FleetObservationProbe.tsx",
+      componentName: "FleetObservationProbe",
+      topologyFactoryName: "createFleetProbeTopology",
+      cleanupName: "__fleetCleanup",
+      topologyName: "__fleetTopology",
+    });
     await page.waitFor(`!!document.querySelector('#fleet-probe [data-fleet-application]')`);
     await run(page);
     assert.deepEqual(page.consoleErrors, []);
@@ -42,14 +46,14 @@ test("FLEET rendered: unknown inventory preserves measurements without manufactu
     await state(page, "partial");
     const card = await page.text("#fleet-probe [data-metric-card=http_qps]");
     assert.match(card, /189/);
-    assert.match(card, /已上报 3；实例总数未知/);
+    assert.match(card, /已上报 4；实例总数未知/);
     assert.doesNotMatch(card, /采样覆盖|test-inventory/);
     assert.match(
       await page.text("#fleet-probe tr[data-fleet-application=app-one]"),
       /已上报 1；实例总数未知/,
     );
     await page.eval(
-      `(async()=>{const {default:i18n}=await import('/src/app/i18n/config.ts');await i18n.changeLanguage('en-US');})()`,
+      `(async()=>{const [{changeLocale},{writeStoredLocale}]=await Promise.all([import('/src/app/i18n/changeLocale.ts'),import('/src/app/i18n/locales.ts')]);await changeLocale('en-US',writeStoredLocale);})()`,
     );
     await page.waitFor(
       `document.querySelector('#fleet-probe [data-metric-card=http_qps]').textContent.includes('total instance count unknown')`,
@@ -93,7 +97,7 @@ test("FLEET rendered: totals/pagination/filter are real queries, missing TPS is 
     assert.equal(await page.count("#fleet-probe tr[data-fleet-application]"), 2);
     assert.match(await page.text("#fleet-probe [data-metric-card=tps]"), /尚未接入/);
     assert.doesNotMatch(await page.text("#fleet-probe [data-metric-card=tps]"), /0txn/);
-    assert.match(await page.text("#fleet-probe [data-metric-card=cpu_ratio]"), /25%/);
+    assert.match(await page.text("#fleet-probe [data-metric-card=cpu_ratio]"), /49%/);
     await click(page, "下一页");
     await page.waitFor(
       `!!document.querySelector('#fleet-probe tr[data-fleet-application=app-three]')`,
@@ -131,13 +135,20 @@ test("FLEET rendered: stale refresh retains labeled trusted data, wrong context 
     await page.click("#fleet-probe [data-fleet-mode=wrong]");
     await page.click("#fleet-probe [data-fleet-env]");
     await state(page, "error");
-    assert.equal(await page.count("#fleet-probe [data-metric-card]"), 0);
+    assert.equal(
+      await page.count('#fleet-probe [data-metric-card][data-quality="unavailable"]'),
+      6,
+    );
+    assert.doesNotMatch(await page.text("#fleet-probe"), /189|49%/);
     await page.click("#fleet-probe [data-fleet-mode=success]");
     await click(page, "重试读取");
     await state(page, "partial");
     await page.click("#fleet-probe [data-fleet-revoke]");
     await state(page, "denied");
-    assert.equal(await page.count("#fleet-probe [data-metric-card]"), 0);
+    assert.equal(
+      await page.count('#fleet-probe [data-metric-card][data-quality="unavailable"]'),
+      6,
+    );
     assert.match(await page.text("#fleet-probe"), /没有查看该数据的权限/);
   }));
 test("FLEET rendered: changed owner query aborts pending read, no old values paired with new environment; missing target stays empty", async () =>
@@ -147,7 +158,11 @@ test("FLEET rendered: changed owner query aborts pending read, no old values pai
     await state(page, "refreshing");
     await page.click("#fleet-probe [data-fleet-env]");
     await state(page, "loading");
-    assert.equal(await page.count("#fleet-probe [data-metric-card]"), 0);
+    assert.equal(
+      await page.count('#fleet-probe [data-metric-card][data-quality="unavailable"]'),
+      6,
+    );
+    assert.doesNotMatch(await page.text("#fleet-probe"), /189|49%/);
     assert.ok((await summary(page)).aborts >= 1);
     await page.click("#fleet-probe [data-fleet-release]");
     await state(page, "partial");
@@ -156,7 +171,10 @@ test("FLEET rendered: changed owner query aborts pending read, no old values pai
     await page.click("#fleet-probe [data-fleet-missing]");
     await state(page, "empty");
     assert.equal(await page.count("#fleet-probe tr[data-fleet-application]"), 0);
-    assert.equal(await page.count("#fleet-probe [data-metric-card]"), 0);
+    assert.equal(
+      await page.count('#fleet-probe [data-metric-card][data-quality="unavailable"]'),
+      6,
+    );
   }));
 test("FLEET rendered: exact-window drill-down, between-sample publication marker and Japanese 320px layout", async () =>
   withPage(async (page) => {
@@ -166,6 +184,7 @@ test("FLEET rendered: exact-window drill-down, between-sample publication marker
     assert.equal(first.context.appId, "app-one");
     assert.equal(first.context.from, "2026-10-06T23:55:00.000Z");
     assert.equal(first.context.to, "2026-10-07T00:10:00.000Z");
+    await select(page, "应用", "app-one");
     await page.waitFor(
       `[...document.querySelectorAll('#fleet-probe svg text')].some(node=>node.textContent==='规则发布')`,
     );
@@ -176,7 +195,7 @@ test("FLEET rendered: exact-window drill-down, between-sample publication marker
       mobile: false,
     });
     await page.eval(
-      `(async()=>{const {default:i18n}=await import('/src/app/i18n/config.ts');await i18n.changeLanguage('ja-JP');await Promise.all(document.getAnimations().filter(animation=>animation.playState==='running'&&Number.isFinite(animation.effect?.getTiming().iterations)).map(animation=>animation.finished.catch(()=>{})));})()`,
+      `(async()=>{const [{changeLocale},{writeStoredLocale}]=await Promise.all([import('/src/app/i18n/changeLocale.ts'),import('/src/app/i18n/locales.ts')]);await changeLocale('ja-JP',writeStoredLocale);await Promise.all(document.getAnimations().filter(animation=>animation.playState==='running'&&Number.isFinite(animation.effect?.getTiming().iterations)).map(animation=>animation.finished.catch(()=>{})));})()`,
     );
     const directory = artifactDirectory("sentinel-f4-observation-20261007");
     mkdirSync(directory, { recursive: true });

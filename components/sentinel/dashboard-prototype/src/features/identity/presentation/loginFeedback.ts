@@ -1,7 +1,10 @@
-import { AppError, AppErrorKind } from "@richie696/react-framework";
-import { CONSOLE_ERROR_STATUS, CONSOLE_WIRE_LIMIT } from "../../../core/api/protocol/common";
+import { AppErrorKind } from "@richie696/react-framework";
+import { CONSOLE_ERROR_STATUS } from "../../../core/api/protocol/common";
 import type { AuthenticationSnapshot } from "../application/authenticationWorkflow";
 import type { MessageValues, TranslationKey } from "../../../shared/types/translation";
+import { loginRetryDelayMs } from "../model/loginRetry";
+
+export { loginRetryDelayMs } from "../model/loginRetry";
 
 /** Display decisions only. This projection cannot grant authentication or issue a request. */
 export interface LoginFeedback {
@@ -10,19 +13,6 @@ export interface LoginFeedback {
   readonly busy: boolean;
   readonly canInspect: boolean;
   readonly values?: MessageValues;
-}
-
-/** Return only a valid, bounded server delay for the known login rate-limit response. */
-export function loginRetryDelayMs(error: unknown): number | null {
-  if (
-    !(error instanceof AppError) ||
-    error.status !== CONSOLE_ERROR_STATUS.rate_limited ||
-    error.code !== "rate_limited"
-  )
-    return null;
-  const delay = error.retryAfterMs;
-  if (!Number.isSafeInteger(delay) || delay === undefined || delay <= 0) return null;
-  return Math.min(delay, CONSOLE_WIRE_LIMIT.RetryAfterMs);
 }
 
 /** Map confirmed access/command facts to safe wording; never expose exception messages. */

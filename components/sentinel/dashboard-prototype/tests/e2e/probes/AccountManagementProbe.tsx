@@ -54,6 +54,16 @@ const records: readonly AccountRecord[] = [
     lastLoginAt: null,
     revision: "1",
   },
+  {
+    id: "last-admin",
+    username: "sole-admin",
+    roleId: "admin",
+    status: "active",
+    builtIn: false,
+    lastActiveAdmin: true,
+    lastLoginAt: null,
+    revision: "1",
+  },
 ];
 /** The test effect owner holds transport counters and records; no mutable control object enters component props. */
 function createManagementTopology() {
@@ -122,7 +132,13 @@ function createManagementTopology() {
             : {
                 ...existing!,
                 revision: String(Number(existing!.revision) + 1),
-                ...(input.kind === "role" ? { roleId: input.roleId } : { status: input.status }),
+                ...(input.kind === "role"
+                  ? { roleId: input.roleId }
+                  : input.kind === "status"
+                    ? { status: input.status }
+                    : input.kind === "delete"
+                      ? { status: "disabled" as const }
+                      : {}),
               };
         control.records =
           input.kind === "create"
@@ -268,12 +284,15 @@ export function AccountManagementProbe({
             setAccountId(id);
             setPage("roles");
           }}
+          onOwnPasswordReset={() => {}}
         />
       ) : (
         <RoleManagementPage
           workflow={workflow}
           accountId={accountId}
+          sessionEpoch={owner.sessionEpoch}
           onAccountSelection={setAccountId}
+          onBack={() => setPage("accounts")}
         />
       )}
       <output data-management-summary>

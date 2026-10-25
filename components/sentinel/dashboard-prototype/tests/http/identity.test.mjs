@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { http, HttpResponse } from "msw/http";
 import { setupServer } from "msw/node";
 import { z } from "zod";
+import { AppError, AppErrorKind } from "@richie696/react-framework";
 import { createConsoleTransport } from "../../src/core/api/transport/consoleTransport";
 import {
   createIdentityHttp,
@@ -13,6 +14,8 @@ import { createAuthenticationWorkflow } from "../../src/features/identity/applic
 import { createInitializationWorkflow } from "../../src/features/identity/application/initializationWorkflow";
 import { createBootstrapAuthorizationWorkflow } from "../../src/features/identity/application/bootstrapAuthorizationWorkflow";
 import { createIdentityMockHandlers } from "../../src/features/identity/mock";
+import { createAppConsoleMockAssembly } from "../../src/app/api/mockConsoleHandlers";
+import { createConsoleAuthentication } from "../../src/app/api/consoleAuthentication";
 import {
   MOCK_IDENTITY_SCENARIO,
   MOCK_BOOTSTRAP_PROFILE,
@@ -115,6 +118,117 @@ test("IDENTITY-MOCK: initialized bootstrap uses the strict production wire and r
   }
 });
 
+test("IDENTITY-APP-MOCK: admin and viewer repeated login/logout cycles clear the app mock session", async () => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const values = new Map([
+    ["sentinel.mock.initialized", "true"],
+    ["sentinel.mock.role", "anonymous"],
+  ]);
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      localStorage: {
+        getItem: (key) => values.get(key) ?? null,
+        setItem: (key, value) => values.set(key, value),
+        removeItem: (key) => values.delete(key),
+      },
+    },
+  });
+  const server = setupServer(...createAppConsoleMockAssembly().handlers);
+  server.listen({ onUnhandledRequest: "error" });
+  const runtime = createConsoleAuthentication({
+    baseUrl: origin,
+    requestId: (() => {
+      let sequence = 0;
+      return () => `identity-app-${++sequence}`;
+    })(),
+  });
+  try {
+    for (const roleId of ["admin", "view"]) {
+      values.set("sentinel.mock.role", roleId);
+      const restored = await runtime.authentication.restore();
+      assert.equal(restored.kind, "authenticated");
+      assert.equal(restored.identity.roleId, roleId);
+
+      await runtime.authentication.logout();
+
+      assert.deepEqual(runtime.session.read(), { phase: "resolved", facts: { kind: "anonymous" } });
+      assert.equal(values.get("sentinel.mock.role"), "anonymous");
+
+      const credentials = {
+        username: roleId === "admin" ? "admin" : "viewer",
+        password: "synthetic-password",
+      };
+      const loggedIn = await runtime.authentication.login(credentials);
+      assert.equal(loggedIn.roleId, roleId);
+      assert.equal(values.get("sentinel.mock.role"), roleId);
+      await runtime.authentication.logout();
+
+      assert.deepEqual(runtime.session.read(), { phase: "resolved", facts: { kind: "anonymous" } });
+      assert.equal(values.get("sentinel.mock.role"), "anonymous");
+    }
+  } finally {
+    runtime.dispose();
+    server.close();
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else delete globalThis.window;
+  }
+});
+
+test("IDENTITY-APP-MOCK: a definitive unauthenticated logout rejection is not converted into an unknown write", async () => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const values = new Map([
+    ["sentinel.mock.initialized", "true"],
+    ["sentinel.mock.role", "admin"],
+  ]);
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      localStorage: {
+        getItem: (key) => values.get(key) ?? null,
+        setItem: (key, value) => values.set(key, value),
+        removeItem: (key) => values.delete(key),
+      },
+    },
+  });
+  const server = setupServer(...createAppConsoleMockAssembly().handlers);
+  server.listen({ onUnhandledRequest: "error" });
+  const runtime = createConsoleAuthentication({ baseUrl: origin });
+  try {
+    assert.equal((await runtime.authentication.restore()).kind, "authenticated");
+    server.use(
+      http.post(`${origin}/api/v1/auth/logout`, ({ request }) => {
+        values.set("sentinel.mock.role", "anonymous");
+        return HttpResponse.json(
+          {
+            error: {
+              code: "unauthenticated",
+              requestId: request.headers.get("x-request-id"),
+            },
+          },
+          {
+            status: 401,
+            headers: { "x-request-id": request.headers.get("x-request-id") },
+          },
+        );
+      }),
+    );
+
+    await assert.rejects(
+      runtime.authentication.logout(),
+      (error) => error.code === "unauthenticated" && error.status === 401,
+    );
+    assert.equal(runtime.authentication.getSnapshot().logout.status, "error");
+    assert.equal(runtime.session.read().phase, "unavailable");
+    assert.deepEqual(await runtime.authentication.inspectSession(), { kind: "anonymous" });
+  } finally {
+    runtime.dispose();
+    server.close();
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else delete globalThis.window;
+  }
+});
+
 test("IDENTITY-HTTP: bootstrap invalid_request remains a typed HTTP 400", async () => {
   await withTransport(
     [
@@ -201,9 +315,7 @@ test("BOOTSTRAP-AUTH single-use authorization blocks duplicate writes and reads 
 
   try {
     await workflow.restore();
-    const initialAuthorization = workflow.authorize(
-      "SYNTHETIC-ONE-TIME-CODE-0123456789ABC",
-    );
+    const initialAuthorization = workflow.authorize("SYNTHETIC-ONE-TIME-CODE-0123456789ABC");
     await confirmationStarted;
 
     await assert.rejects(
@@ -225,6 +337,104 @@ test("BOOTSTRAP-AUTH single-use authorization blocks duplicate writes and reads 
     releaseConfirmation({ kind: "open", authorized: true });
     await initialAuthorization;
     assert.deepEqual(workflow.getSnapshot().gate.data, { kind: "open", authorized: true });
+  } finally {
+    workflow.dispose();
+  }
+});
+test("BOOTSTRAP-AUTH a successful one-time write stays unknown until an inspection confirms the gate", async () => {
+  let forcedReads = 0;
+  let authorizationWrites = 0;
+  const workflow = createBootstrapAuthorizationWorkflow({
+    async readGate(_signal, { forceRefresh }) {
+      if (!forceRefresh) return { kind: "open", authorized: false };
+      forcedReads++;
+      if (forcedReads === 1) throw new Error("synthetic read-back failure");
+      if (forcedReads === 2) throw new Error("synthetic inspection failure");
+      if (forcedReads === 3) return { kind: "open", authorized: false };
+      return { kind: "open", authorized: true };
+    },
+    async authorize() {
+      authorizationWrites++;
+    },
+  });
+
+  try {
+    await workflow.restore();
+    await assert.rejects(workflow.authorize("SYNTHETIC-ONE-TIME-CODE-0123456789ABC"));
+    assert.equal(workflow.getSnapshot().command.status, "result-unknown");
+    assert.doesNotMatch(JSON.stringify(workflow.getSnapshot()), /SYNTHETIC-ONE-TIME-CODE/);
+    await assert.rejects(
+      workflow.authorize("SYNTHETIC-SECOND-CODE"),
+      (error) => error.kind === "duplicate",
+    );
+    assert.equal(authorizationWrites, 1, "a successful one-time write must never be replayed");
+
+    await assert.rejects(workflow.inspect());
+    assert.equal(workflow.getSnapshot().command.status, "result-unknown");
+    await assert.rejects(
+      workflow.authorize("SYNTHETIC-THIRD-CODE"),
+      (error) => error.kind === "duplicate",
+    );
+    assert.equal(authorizationWrites, 1, "a failed inspection must not unlock authorization");
+
+    await workflow.inspect();
+    assert.deepEqual(workflow.getSnapshot().gate.data, { kind: "open", authorized: false });
+    assert.equal(workflow.getSnapshot().command.status, "result-unknown");
+    await assert.rejects(
+      workflow.authorize("SYNTHETIC-FOURTH-CODE"),
+      (error) => error.kind === "duplicate",
+    );
+    assert.equal(authorizationWrites, 1);
+
+    await workflow.inspect();
+    assert.deepEqual(workflow.getSnapshot().gate.data, { kind: "open", authorized: true });
+    assert.equal(workflow.getSnapshot().command.status, "idle");
+    assert.equal(authorizationWrites, 1);
+  } finally {
+    workflow.dispose();
+  }
+});
+test("BOOTSTRAP-AUTH an unknown authorization write cannot be replayed before gate inspection", async () => {
+  let authorized = false;
+  let authorizationWrites = 0;
+  const workflow = createBootstrapAuthorizationWorkflow({
+    async readGate(_signal, { forceRefresh }) {
+      if (!forceRefresh) return { kind: "open", authorized: false };
+      return { kind: "open", authorized };
+    },
+    async authorize() {
+      authorizationWrites++;
+      throw new AppError(AppErrorKind.NETWORK, "synthetic response loss");
+    },
+  });
+
+  try {
+    await workflow.restore();
+    await assert.rejects(
+      workflow.authorize("SYNTHETIC-ONE-TIME-CODE-0123456789ABC"),
+      (error) => error.kind === AppErrorKind.NETWORK,
+    );
+    assert.equal(workflow.getSnapshot().command.status, "result-unknown");
+    assert.doesNotMatch(JSON.stringify(workflow.getSnapshot()), /SYNTHETIC-ONE-TIME-CODE/);
+    await assert.rejects(
+      workflow.authorize("SYNTHETIC-SECOND-CODE"),
+      (error) => error.kind === AppErrorKind.DUPLICATE,
+    );
+    assert.equal(authorizationWrites, 1, "an unknown one-time write must not be replayed");
+
+    await workflow.inspect();
+    assert.equal(workflow.getSnapshot().command.status, "result-unknown");
+    await assert.rejects(
+      workflow.authorize("SYNTHETIC-THIRD-CODE"),
+      (error) => error.kind === AppErrorKind.DUPLICATE,
+    );
+    assert.equal(authorizationWrites, 1, "an unauthorized inspection does not clear uncertainty");
+
+    authorized = true;
+    await workflow.inspect();
+    assert.deepEqual(workflow.getSnapshot().gate.data, { kind: "open", authorized: true });
+    assert.equal(workflow.getSnapshot().command.status, "idle");
+    assert.equal(authorizationWrites, 1);
   } finally {
     workflow.dispose();
   }
@@ -282,6 +492,71 @@ test("IDENTITY-MOCK: completing first-run initialization closes setup but does n
       }
     });
   } finally {
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else delete globalThis.window;
+  }
+});
+
+test("IDENTITY-MOCK: initialization header/body idempotency mismatch is a 409 without closing setup", async () => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const values = new Map([
+    ["sentinel.mock.initialized", "false"],
+    ["sentinel.mock.operator-authorized", "true"],
+    ["sentinel.mock.role", "anonymous"],
+  ]);
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      localStorage: {
+        getItem: (key) => values.get(key) ?? null,
+        setItem: (key, value) => values.set(key, value),
+        removeItem: (key) => values.delete(key),
+      },
+    },
+  });
+  const server = setupServer(...createIdentityMockHandlers(MOCK_IDENTITY_SCENARIO));
+  server.listen({ onUnhandledRequest: "error" });
+  try {
+    const body = JSON.stringify({
+      requestKey: "setup-original-key",
+      input: {
+        database: { kind: "sqlite" },
+        admin: { username: "synthetic-admin", password: "SYNTHETIC-ADMIN-PASSWORD" },
+        source: {
+          provider: "nacos",
+          endpoint: "https://nacos.synthetic.internal",
+          namespace: "synthetic",
+          authentication: { mode: "none" },
+        },
+      },
+    });
+    const send = (headers) =>
+      fetch(`${origin}/api/v1/system/bootstrap/initialize`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body,
+      });
+    const missingKey = await send({
+      "x-request-id": "bootstrap-idempotency-missing",
+      "x-sentinel-csrf": csrf,
+    });
+    assert.equal(missingKey.status, 400);
+    assert.deepEqual(await missingKey.json(), {
+      error: { code: "invalid_request", requestId: "bootstrap-idempotency-missing" },
+    });
+    const response = await send({
+      "x-request-id": "bootstrap-idempotency-mismatch",
+      "x-sentinel-csrf": csrf,
+      "idempotency-key": "different-setup-key",
+    });
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), {
+      error: { code: "idempotency_conflict", requestId: "bootstrap-idempotency-mismatch" },
+    });
+    assert.equal(values.get("sentinel.mock.initialized"), "false");
+    assert.equal(values.get("sentinel.mock.operator-authorized"), "true");
+  } finally {
+    server.close();
     if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
     else delete globalThis.window;
   }
@@ -484,6 +759,78 @@ test("IDENTITY-HTTP: actual authentication workflow restores anonymous, logs in/
     },
   );
 });
+test("IDENTITY-HTTP F4.22: credential rejection stays anonymous and a decoded 429 cooldown blocks dispatch", async () => {
+  let loginCalls = 0;
+  let now = 1_000;
+  await withTransport(
+    [
+      http.get(`${origin}/api/v1/system/bootstrap`, ({ request }) =>
+        json(request, { initialized: true }),
+      ),
+      http.get(`${origin}/api/v1/auth/me`, ({ request }) => json(request, null)),
+      http.post(`${origin}/api/v1/auth/login`, ({ request }) => {
+        loginCalls++;
+        const status = loginCalls === 2 ? 429 : 401;
+        const code = status === 429 ? "rate_limited" : "unauthenticated";
+        return HttpResponse.json(
+          {
+            error: {
+              code,
+              requestId: request.headers.get("x-request-id"),
+              ...(status === 429 ? { retryAfterMs: 1_500 } : {}),
+            },
+          },
+          {
+            status,
+            headers: { "x-request-id": request.headers.get("x-request-id") },
+          },
+        );
+      }),
+    ],
+    async (transport) => {
+      const workflow = createAuthenticationWorkflow(createIdentityHttp(transport), undefined, {
+        clock: () => now,
+      });
+      try {
+        assert.deepEqual(await workflow.restore(), { kind: "anonymous" });
+
+        await assert.rejects(
+          workflow.login({ username: "operator", password: "PRIVATE-LOGIN-PASSWORD" }),
+          (error) => error.status === 401 && error.code === "unauthenticated",
+        );
+        assert.equal(workflow.getSnapshot().login.status, "error");
+        assert.deepEqual(workflow.getSnapshot().access.facts, { kind: "anonymous" });
+        workflow.clearLoginFailure();
+
+        await assert.rejects(
+          workflow.login({ username: "operator", password: "PRIVATE-LOGIN-PASSWORD" }),
+          (error) =>
+            error.status === 429 && error.code === "rate_limited" && error.retryAfterMs === 1_500,
+        );
+        assert.equal(workflow.getLoginRetryAfterMs(), 1_500);
+        assert.deepEqual(workflow.getSnapshot().access.facts, { kind: "anonymous" });
+        assert.doesNotMatch(JSON.stringify(workflow.getSnapshot()), /PRIVATE-LOGIN-PASSWORD/);
+
+        now += 1_499;
+        await assert.rejects(
+          workflow.login({ username: "operator", password: "CORRECTED-SECRET" }),
+          (error) => error.code === "rate_limited" && error.retryAfterMs === 1,
+        );
+        assert.equal(loginCalls, 2, "the workflow must enforce the decoded deadline before HTTP");
+
+        now += 1;
+        await assert.rejects(
+          workflow.login({ username: "operator", password: "CORRECTED-SECRET" }),
+          (error) => error.status === 401 && error.code === "unauthenticated",
+        );
+        assert.equal(loginCalls, 3);
+        assert.deepEqual(workflow.getSnapshot().access.facts, { kind: "anonymous" });
+      } finally {
+        workflow.dispose();
+      }
+    },
+  );
+});
 test("IDENTITY-HTTP: secret-bearing malformed login ACK stays unknown; inspection confirms session without a second login", async () => {
   let authenticated = false,
     writes = 0;
@@ -586,6 +933,12 @@ test("BOOTSTRAP-HTTP: operator grant remains distinct, source/database checks do
         authorized = true;
         return json(request, { authorized: true });
       }),
+      http.post(`${origin}/api/v1/system/bootstrap/authorize-local`, async ({ request }) => {
+        assert.equal(request.headers.get("x-sentinel-csrf"), csrf);
+        assert.deepEqual(await request.json(), {});
+        authorized = true;
+        return json(request, { authorized: true });
+      }),
       ...["database-check", "source-check"].map((name) =>
         http.post(`${origin}/api/v1/system/bootstrap/${name}`, async ({ request }) => {
           assert.equal(authorized, true);
@@ -616,7 +969,7 @@ test("BOOTSTRAP-HTTP: operator grant remains distinct, source/database checks do
         setup = createInitializationHttp(transport),
         signal = new AbortController().signal;
       assert.deepEqual(await operator.readGate(signal), { kind: "open", authorized: false });
-      await operator.authorize("PRIVATE-OPERATOR-CODE-0123456789ABC", signal);
+      await operator.authorizeLocal(signal);
       assert.deepEqual(await operator.readGate(signal), { kind: "open", authorized: true });
       assert.deepEqual(await setup.checkDatabase(input.database, signal), { status: "reachable" });
       assert.deepEqual(await setup.checkSource(input.source, signal), { status: "reachable" });
@@ -660,6 +1013,30 @@ test("BOOTSTRAP-AUTH-WIRE: operator code matches deployment syntax before transp
     },
   );
   assert.equal(dispatched, 0);
+});
+test("BOOTSTRAP-AUTH-WIRE: local setup authorization sends no operator code", async () => {
+  let received;
+  await withTransport(
+    [
+      http.get(`${origin}/api/v1/system/bootstrap`, ({ request }) =>
+        json(request, {
+          initialized: false,
+          setupAvailable: true,
+          operatorAuthorized: false,
+        }),
+      ),
+      http.post(`${origin}/api/v1/system/bootstrap/authorize-local`, async ({ request }) => {
+        received = await request.json();
+        return json(request, { authorized: true });
+      }),
+    ],
+    async (transport) => {
+      const operator = createBootstrapAuthorizationHttp(transport);
+      await operator.readGate(new AbortController().signal);
+      await operator.authorizeLocal(new AbortController().signal);
+    },
+  );
+  assert.deepEqual(received, {});
 });
 test("BOOTSTRAP-DATABASE-WIRE: database check rejects non-scalar and over-bound fields before dispatch", async () => {
   let dispatched = 0;

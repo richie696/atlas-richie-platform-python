@@ -10,31 +10,46 @@ import {
   sourceRecordKey,
   sourceCheckInput,
   sourceOutcomeExpectation,
+  sourceDeletionExpectation,
   validSourceRegistry,
   validSourceCheck,
   validSourceObservation,
+  validRegisteredSource,
   type RegisteredSource,
   type SourceRegistrationDraft,
   type SourceCheckInput,
   type SourceCheckResult,
   type SourceOutcomeExpectation,
   type SourceOperationObservation,
+  type SourceCommandResult,
   type SourceMutation,
+  type SourceMutationInput,
 } from "../model/sourceRegistration";
+
+function isDeletedSource(
+  value: SourceCommandResult,
+  sourceId: string,
+): value is { readonly deletedSourceId: string } {
+  return "deletedSourceId" in value && value.deletedSourceId === sourceId;
+}
 /** Published state excludes all credential branches, including reference identifiers and original error text. */
 export function createSourceRegistrationWorkflow(
   port: SourceRegistrationPort,
   access: QueryAccessObserver,
   newRequestKey: () => string,
-  options: { readonly timeoutMs?: number } = {},
+  options: { readonly timeoutMs?: number; readonly clock?: () => number } = {},
 ) {
+  const clock = options.clock ?? (() => globalThis.performance.now());
   const ownerKey = access.read().ownerKey;
   let disposed = false,
     active = false,
     inspecting = false,
     checkGeneration = 0,
+    checkRetryUntilMs = 0,
+    commandRetryUntilMs = 0,
+    inspectionRetryUntilMs = 0,
     expected: SourceOutcomeExpectation | null = null,
-    confirmed: CommandSnapshot<RegisteredSource> | null = null;
+    confirmed: CommandSnapshot<SourceCommandResult> | null = null;
   const allowed = () => !disposed && access.read().allowed && access.read().ownerKey === ownerKey;
   const assertOwner = () => {
     if (!allowed())
@@ -47,11 +62,43 @@ export function createSourceRegistrationWorkflow(
       status: 502,
       code: "source_receipt_invalid",
     });
+  const cooldownError = (deadline: number, message: string) => {
+    const retryAfterMs = Math.ceil(deadline - clock());
+    return Number.isSafeInteger(retryAfterMs) && retryAfterMs > 0
+      ? new AppError(AppErrorKind.RATE_LIMITED, message, {
+          status: 429,
+          retryAfterMs,
+        })
+      : undefined;
+  };
+  const extendRetryDeadline = (deadline: number, cause: unknown) => {
+    const error = AppError.fromUnknown(cause),
+      now = clock();
+    return error.kind === AppErrorKind.RATE_LIMITED &&
+      error.retryAfterMs !== undefined &&
+      Number.isSafeInteger(error.retryAfterMs) &&
+      error.retryAfterMs > 0 &&
+      Number.isFinite(now)
+      ? Math.max(deadline, now + error.retryAfterMs)
+      : deadline;
+  };
   const redact = (cause: unknown) => {
     const error = AppError.fromUnknown(cause);
-    return new AppError(error.kind, "Source operation failed", { status: error.status });
+    const safeCode =
+      error.code === "source_in_use" ||
+      error.code === "conflict" ||
+      error.code === "not-found" ||
+      error.code === "unavailable"
+        ? error.code
+        : undefined;
+    return new AppError(error.kind, "Source operation failed", {
+      status: error.status,
+      retryAfterMs: error.retryAfterMs,
+      code: safeCode,
+    });
   };
   function rejected(value: SourceOperationObservation): AppError {
+    if (value.status !== "rejected") return invalidReceipt();
     const status =
       value.status !== "rejected"
         ? 502
@@ -62,7 +109,10 @@ export function createSourceRegistrationWorkflow(
             : value.reason === "unavailable"
               ? 503
               : 422;
-    return new AppError(AppErrorKind.PROTOCOL, "Source operation rejected", { status });
+    return new AppError(AppErrorKind.PROTOCOL, "Source operation rejected", {
+      status,
+      code: value.reason,
+    });
   }
   const registry = createOwnedQueryResource<
     null,
@@ -102,7 +152,7 @@ export function createSourceRegistrationWorkflow(
     },
     classify: (value) => (value.status === "reachable" ? "ready" : "partial"),
   });
-  const command = createCommandResource<SourceMutation, RegisteredSource>(
+  const command = createCommandResource<SourceMutation, SourceCommandResult>(
     async (mutation, signal) => {
       assertOwner();
       const expectation = expected;
@@ -113,6 +163,11 @@ export function createSourceRegistrationWorkflow(
       if (!validSourceObservation(value, expectation)) throw invalidReceipt();
       if (value.status === "rejected") throw rejected(value);
       if (value.status !== "completed") throw invalidReceipt();
+      if (expectation.kind === "delete") {
+        if (!("deletedSourceId" in value)) throw invalidReceipt();
+        return { deletedSourceId: value.deletedSourceId };
+      }
+      if (!("record" in value)) throw invalidReceipt();
       return value.record;
     },
     options,
@@ -147,18 +202,24 @@ export function createSourceRegistrationWorkflow(
   function snapshot() {
     const authorized = allowed(),
       raw = confirmed ?? command.getSnapshot();
-    const safe: CommandSnapshot<RegisteredSource> =
+    const inspectionState = inspection.getSnapshot();
+    const safe: CommandSnapshot<SourceCommandResult> =
       "error" in raw ? { ...raw, error: redact(raw.error) } : raw;
     return {
       authorized,
       registry: authorized ? registry.getSnapshot() : denied,
       check: authorized ? check.getSnapshot() : denied,
+      checkRetryUntilMs: authorized ? checkRetryUntilMs : 0,
       command: authorized ? safe : idle,
       operation:
         authorized && expected
           ? { requestKey: expected.requestKey, kind: expected.kind, sourceId: expected.sourceId }
           : null,
       inspecting: authorized && inspecting,
+      inspectionError:
+        authorized && (inspectionState.status === "error" || inspectionState.status === "stale")
+          ? redact(inspectionState.error)
+          : undefined,
     };
   }
   const state = new StateStore(snapshot()),
@@ -169,10 +230,14 @@ export function createSourceRegistrationWorkflow(
     registry.subscribe(publish),
     check.subscribe(publish),
     command.subscribe(publish),
+    inspection.subscribe(publish),
     access.subscribe(() => {
       if (!allowed()) {
         checkGeneration++;
         check.reset();
+        checkRetryUntilMs = 0;
+        commandRetryUntilMs = 0;
+        inspectionRetryUntilMs = 0;
         command.cancel();
         inspection.reset();
         confirmed = null;
@@ -194,9 +259,12 @@ export function createSourceRegistrationWorkflow(
     )
       throw new AppError(AppErrorKind.DUPLICATE, "Source operation requires investigation");
   }
-  function prepare(draft: SourceRegistrationDraft, record: RegisteredSource | null) {
+  function prepare(
+    draft: SourceRegistrationDraft,
+    record: RegisteredSource | null,
+  ): Extract<SourceMutationInput, { readonly kind: "register" | "update" }> {
     const value = prepareSourceMutation(draft, record);
-    if (!value)
+    if (!value || value.kind === "delete")
       throw new AppError(AppErrorKind.PROTOCOL, "Invalid source configuration", { status: 422 });
     const current = registry.getSnapshot();
     if (current.status !== "ready" && current.status !== "empty")
@@ -223,7 +291,22 @@ export function createSourceRegistrationWorkflow(
     async checkSource(draft: SourceRegistrationDraft, record: RegisteredSource | null) {
       assertMutable();
       const input = sourceCheckInput(prepare(draft, record));
-      return check.load({ generation: ++checkGeneration, input });
+      const blocked = cooldownError(checkRetryUntilMs, "Source check cooldown is active");
+      if (blocked) throw blocked;
+      if (checkRetryUntilMs !== 0) {
+        checkRetryUntilMs = 0;
+        publish();
+      }
+      try {
+        const result = await check.load({ generation: ++checkGeneration, input });
+        checkRetryUntilMs = 0;
+        publish();
+        return result;
+      } catch (cause) {
+        checkRetryUntilMs = extendRetryDeadline(checkRetryUntilMs, cause);
+        if (checkRetryUntilMs > 0) publish();
+        throw cause;
+      }
     },
     invalidateCheck() {
       checkGeneration++;
@@ -235,6 +318,9 @@ export function createSourceRegistrationWorkflow(
       record: RegisteredSource | null,
     ): Promise<RegisteredSource> {
       assertMutable();
+      const blocked = cooldownError(commandRetryUntilMs, "Source save cooldown is active");
+      if (blocked) throw blocked;
+      commandRetryUntilMs = 0;
       const input = prepare(draft, record),
         requestKey = newRequestKey();
       if (!requestKey.trim() || requestKey === expected?.requestKey)
@@ -250,8 +336,51 @@ export function createSourceRegistrationWorkflow(
         const result = await command.run(mutation);
         assertOwner();
         refresh();
+        if (!("id" in result) || result.id !== (record?.id ?? result.id)) throw invalidReceipt();
         return result;
       } catch (cause) {
+        commandRetryUntilMs = extendRetryDeadline(commandRetryUntilMs, cause);
+        throw redact(cause);
+      } finally {
+        active = false;
+        publish();
+      }
+    },
+    async deleteSource(record: RegisteredSource): Promise<void> {
+      assertMutable();
+      const current = registry.getSnapshot();
+      if (
+        !validRegisteredSource(record) ||
+        (current.status !== "ready" && current.status !== "empty") ||
+        !current.data.items.some(
+          (item) => item.id === record.id && item.revision === record.revision,
+        )
+      )
+        throw new AppError(AppErrorKind.PROTOCOL, "Source revision changed", {
+          status: 409,
+        });
+      const requestKey = newRequestKey();
+      if (!requestKey.trim() || requestKey === expected?.requestKey)
+        throw new AppError(AppErrorKind.PROTOCOL, "Invalid new source operation identity", {
+          status: 422,
+        });
+      const mutation: SourceMutation = {
+        kind: "delete",
+        requestKey,
+        sourceId: record.id,
+        expectedRevision: record.revision,
+      };
+      expected = sourceDeletionExpectation(requestKey, record);
+      confirmed = null;
+      active = true;
+      check.reset();
+      try {
+        const result = await command.run(mutation);
+        assertOwner();
+        if (!isDeletedSource(result, record.id)) throw invalidReceipt();
+        refresh();
+      } catch (cause) {
+        commandRetryUntilMs = extendRetryDeadline(commandRetryUntilMs, cause);
         throw redact(cause);
       } finally {
         active = false;
@@ -262,6 +391,12 @@ export function createSourceRegistrationWorkflow(
       assertOwner();
       if (active || inspecting || !expected || command.getSnapshot().status !== "result-unknown")
         throw new AppError(AppErrorKind.DUPLICATE, "No unresolved source operation");
+      const blocked = cooldownError(
+        inspectionRetryUntilMs,
+        "Source operation inspection cooldown is active",
+      );
+      if (blocked) throw blocked;
+      inspectionRetryUntilMs = 0;
       const expectation = expected;
       inspecting = true;
       publish();
@@ -270,7 +405,15 @@ export function createSourceRegistrationWorkflow(
         assertOwner();
         if (expected !== expectation) throw invalidReceipt();
         if (value.status === "completed") {
-          confirmed = { status: "success", result: value.record };
+          let result: SourceCommandResult;
+          if (expectation.kind === "delete") {
+            if (!("deletedSourceId" in value)) throw invalidReceipt();
+            result = { deletedSourceId: value.deletedSourceId };
+          } else {
+            if (!("record" in value)) throw invalidReceipt();
+            result = value.record;
+          }
+          confirmed = { status: "success", result };
           command.reset();
           refresh();
         } else if (value.status === "rejected") {
@@ -280,6 +423,7 @@ export function createSourceRegistrationWorkflow(
         }
         return value;
       } catch (cause) {
+        inspectionRetryUntilMs = extendRetryDeadline(inspectionRetryUntilMs, cause);
         throw redact(cause);
       } finally {
         inspecting = false;

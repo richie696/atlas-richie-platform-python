@@ -21,6 +21,8 @@ import { FeedbackPanel } from "../../shared/ui/FeedbackPanel";
 import { ROUTE } from "./route.constants";
 import { routeAfterAuthentication } from "./navigation";
 import { useOwnedDisposal } from "../../shared/state/useOwnedDisposal";
+import { useConsoleRuntime } from "../../core/api/runtime/ConsoleRuntimeProvider";
+import { PublicLocaleControl } from "../shell/PublicLocaleControl";
 
 const newRequestKey = () => crypto.randomUUID();
 const EMPTY_DIRECTORY: AccountListQuery = Object.freeze({ page: 1, pageSize: 20, search: "" });
@@ -35,6 +37,7 @@ function useCurrentIdentity() {
 /** Build and dispose an account owner for exactly the authenticated session epoch. */
 export function ConsoleAccountsRoute({ navigate }: DashboardPageProps) {
   const { t } = useTranslation();
+  const { workflow: authentication } = useAuthentication();
   const identity = useCurrentIdentity();
   const services = useConsoleServices();
   const [query, setQuery] = useState(EMPTY_DIRECTORY);
@@ -50,6 +53,10 @@ export function ConsoleAccountsRoute({ navigate }: DashboardPageProps) {
         : null,
     [identity, services],
   );
+  const onOwnPasswordReset = useCallback(() => {
+    authentication.expire();
+    navigate(ROUTE.Login, {}, { history: "replace" });
+  }, [authentication, navigate]);
   useOwnedDisposal(workflow);
   if (!workflow)
     return <FeedbackPanel isBusy copy={{ title: t("shell.route.loading"), description: "" }} />;
@@ -59,6 +66,7 @@ export function ConsoleAccountsRoute({ navigate }: DashboardPageProps) {
       query={query}
       onQueryChange={setQuery}
       onBindRole={(accountId) => navigate(ROUTE.Roles, { accountId })}
+      onOwnPasswordReset={onOwnPasswordReset}
     />
   );
 }
@@ -81,13 +89,15 @@ export function ConsoleRolesRoute({ navigate, accountId }: DashboardPageProps) {
     [identity, services],
   );
   useOwnedDisposal(workflow);
-  if (!workflow)
+  if (!workflow || !identity)
     return <FeedbackPanel isBusy copy={{ title: t("shell.route.loading"), description: "" }} />;
   return (
     <RoleManagementPage
       workflow={workflow}
       accountId={accountId || undefined}
+      sessionEpoch={identity.sessionEpoch}
       onAccountSelection={(nextId) => navigate(ROUTE.Roles, { accountId: nextId })}
+      onBack={() => navigate(ROUTE.Accounts)}
     />
   );
 }
@@ -130,6 +140,7 @@ export function ConsoleOwnPasswordRoute({ navigate }: DashboardPageProps) {
 
 /** Real application login entry; only confirmed identity can leave the page. */
 export function ConsoleLoginRoute({ navigate, returnTo }: DashboardPageProps) {
+  const runtime = useConsoleRuntime();
   const authenticated = useCallback(
     (identity: SessionIdentity) =>
       navigate(
@@ -145,9 +156,10 @@ export function ConsoleLoginRoute({ navigate, returnTo }: DashboardPageProps) {
   );
   return (
     <LoginEntryPage
+      localeControl={<PublicLocaleControl />}
       onAuthenticated={authenticated}
       onSetupRequired={setupRequired}
-      demoMode={__SENTINEL_CONSOLE_BUILD_PROFILE__ === "demo"}
+      demoMode={runtime.mode === "mock"}
     />
   );
 }

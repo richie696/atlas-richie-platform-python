@@ -28,6 +28,7 @@ import {
   clearSetupSecrets,
   INITIAL_SETUP_DRAFT,
   SETUP_STEPS,
+  SETUP_CONNECTION_CHECK,
   setupStepForField,
   type RuleSourceCredentials,
   type SetupAdminDraft,
@@ -36,6 +37,7 @@ import {
   type SetupIssue,
   type SetupRuleSourceDraft,
   type SetupStepId,
+  type SetupConnectionCheckTarget,
 } from "../model/setup";
 import {
   changeSetupDatabase,
@@ -85,8 +87,10 @@ export interface SetupFlow {
   clearSensitive: () => void;
 }
 
-/** Connection edits notify the optional check owner before the new draft can render. */
-export function useSetupFlow(onConnectionChange?: () => void): SetupFlow {
+/** Connection edits invalidate only the corresponding optional check authority. */
+export function useSetupFlow(
+  onConnectionChange?: (target?: SetupConnectionCheckTarget) => void,
+): SetupFlow {
   const [stepIndex, setStepIndex] = useState(0);
   const [draft, setDraft] = useState<SetupDraft>(INITIAL_SETUP_DRAFT);
   const [notice, setNotice] = useState<SetupNotice | null>(null);
@@ -111,86 +115,78 @@ export function useSetupFlow(onConnectionChange?: () => void): SetupFlow {
   const selectDatabase = useCallback(
     (value: string) => {
       if (!isControlPlaneDatabaseKind(value)) return;
-      onConnectionChange?.();
+      onConnectionChange?.(SETUP_CONNECTION_CHECK.Database);
       clearNotice();
-      markValidated([step]);
       setDraft((current) => changeSetupDatabase(current, value));
     },
-    [clearNotice, markValidated, onConnectionChange, step],
+    [clearNotice, onConnectionChange],
   );
 
   const selectRuleSource = useCallback(
     (value: string) => {
       if (!isRuleSourceKind(value)) return;
-      onConnectionChange?.();
+      onConnectionChange?.(SETUP_CONNECTION_CHECK.Source);
       clearNotice();
-      markValidated([step]);
       setDraft((current) => changeSetupSource(current, value));
     },
-    [clearNotice, markValidated, onConnectionChange, step],
+    [clearNotice, onConnectionChange],
   );
 
   const selectAuthenticationMode = useCallback(
     (value: string) => {
       if (!isRuleSourceAuthenticationMode(value)) return;
-      onConnectionChange?.();
+      onConnectionChange?.(SETUP_CONNECTION_CHECK.Source);
       clearNotice();
-      markValidated([step]);
       setDraft((current) => changeSetupAuthentication(current, value));
     },
-    [clearNotice, markValidated, onConnectionChange, step],
+    [clearNotice, onConnectionChange],
   );
 
   const setDatabasePort = useCallback(
     (value: string) => {
-      onConnectionChange?.();
+      onConnectionChange?.(SETUP_CONNECTION_CHECK.Database);
       clearNotice();
-      markValidated([step]);
       setDraft((current) => ({ ...current, databasePort: value }));
     },
-    [clearNotice, markValidated, onConnectionChange, step],
+    [clearNotice, onConnectionChange],
   );
 
   const patchDatabase = useCallback(
     (patch: Partial<SetupDatabaseDraft>) => {
-      onConnectionChange?.();
+      onConnectionChange?.(SETUP_CONNECTION_CHECK.Database);
       clearNotice();
-      markValidated([step]);
       setDraft((current) => ({ ...current, database: { ...current.database, ...patch } }));
     },
-    [clearNotice, markValidated, onConnectionChange, step],
+    [clearNotice, onConnectionChange],
   );
 
   const patchRuleSource = useCallback(
     (patch: Partial<SetupRuleSourceDraft>) => {
-      onConnectionChange?.();
+      onConnectionChange?.(SETUP_CONNECTION_CHECK.Source);
       clearNotice();
-      markValidated([step]);
       setDraft((current) => ({ ...current, source: { ...current.source, ...patch } }));
     },
-    [clearNotice, markValidated, onConnectionChange, step],
+    [clearNotice, onConnectionChange],
   );
 
   const patchSourceCredentials = useCallback(
     (patch: Partial<RuleSourceCredentials>) => {
-      onConnectionChange?.();
+      onConnectionChange?.(SETUP_CONNECTION_CHECK.Source);
       clearNotice();
-      markValidated([step]);
       setDraft((current) => ({
         ...current,
         sourceCredentials: { ...current.sourceCredentials, ...patch },
       }));
     },
-    [clearNotice, markValidated, onConnectionChange, step],
+    [clearNotice, onConnectionChange],
   );
 
   const patchAdmin = useCallback(
     (patch: Partial<SetupAdminDraft>) => {
       clearNotice();
-      markValidated([step]);
       setDraft((current) => ({ ...current, admin: { ...current.admin, ...patch } }));
     },
-    [clearNotice, markValidated, step],
+    [clearNotice],
   );
 
   const goNext = useCallback(() => {

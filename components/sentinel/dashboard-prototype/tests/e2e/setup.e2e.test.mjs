@@ -1,10 +1,10 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { E2E_BASE_URL, launchBrowser } from "./cdp.mjs";
+import { E2E_BASE_URL, connectIabBrowser } from "./cdp.mjs";
 let browser;
 before(async () => {
-  browser = await launchBrowser();
+  browser = await connectIabBrowser();
 });
 after(async () => {
   await browser?.close();
@@ -44,7 +44,9 @@ async function typeField(page, label, value) {
 const CSSescape = (value) => value.replace(/[^a-zA-Z0-9_-]/g, (character) => `\\${character}`);
 async function sourceStep(page) {
   await typeField(page, "主机", "db.synthetic.internal");
+  await typeField(page, "数据库名", "sentinel_e2e");
   await typeField(page, "用户名", "synthetic");
+  await typeField(page, "密码", "SYNTHETIC-DB");
   await page.clickByText("下一步");
   await page.waitFor(
     `document.querySelector('.setup-workspace').textContent.includes('创建内置管理员')`,
@@ -57,14 +59,14 @@ async function sourceStep(page) {
 test("SETUP-VALIDATE rendered: 必填/端口失败不前进，修正后进入管理员步骤且保留非敏感输入", async () => {
   await withSetup(async (page) => {
     await page.clickByText("下一步");
-    await page.waitFor(
-      `document.querySelector('.identity-notice')?.textContent.includes('数据库主机')`,
-    );
+    await page.waitFor(`document.querySelectorAll('.setup-workspace input[aria-invalid="true"]').length > 0`);
     await typeField(page, "主机", "db.synthetic.internal");
+    await typeField(page, "数据库名", "sentinel_e2e");
     await typeField(page, "用户名", "synthetic");
+    await typeField(page, "密码", "SYNTHETIC-DB");
     await typeField(page, "端口", "65536");
     await page.clickByText("下一步");
-    await page.waitFor(`document.querySelector('.identity-notice')?.textContent.includes('65535')`);
+    await page.waitFor(`document.querySelector('.setup-workspace').textContent.includes('65535')`);
     assert.equal(await field(page, "主机"), "db.synthetic.internal");
     await typeField(page, "端口", "5432");
     await page.clickByText("下一步");
@@ -117,7 +119,7 @@ test("SETUP-STEP rendered: 未填写服务地址不能确认，完整确认页�
     await sourceStep(page);
     await page.clickByText("不启用认证", ".setup-authentication .astryx-radio-list-item");
     await page.clickByText("下一步");
-    await page.waitFor(`document.querySelector('.identity-notice')?.textContent.includes('HTTP')`);
+    await page.waitFor(`document.querySelectorAll('.setup-workspace input[aria-invalid="true"]').length > 0`);
     await typeField(page, "服务地址", "https://nacos.synthetic.internal/nacos");
     const directory = artifactDirectory("sentinel-f4-setup-20261007");
     mkdirSync(directory, { recursive: true });

@@ -4,6 +4,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { createInstance } from "i18next";
 import { AppError, AppErrorKind, StateStore } from "@richie696/react-framework";
 import {
+  METRIC_BASIS,
+  METRIC_DENOMINATOR,
+  METRIC_ID,
   metricQueryKey,
   validMetricQuery,
   validMetricReading,
@@ -13,12 +16,14 @@ import {
   validObservationWindow,
   MAX_OBSERVATION_POINTS,
 } from "../../src/shared/model/observation";
+import { observationMetricReadings } from "../../src/shared/api/observationContractExamples";
 import {
   metricDisplayValue,
   formatMetricReading,
   metricPlot,
   observationNavigation,
   observationWindowFromRoute,
+  OBSERVATION_HEALTH_LABEL_KEY,
 } from "../../src/shared/presentation/observation";
 import { createFleetResource } from "../../src/features/overview/application/fleetResource";
 import {
@@ -33,21 +38,26 @@ import {
 } from "../../src/shared/ui/charts/trendPlot";
 import { pathFor, routeFromPath } from "../../src/app/router/route.constants";
 import { TIME_RANGE_MS } from "../../src/shared/types/navigation";
-import { applicationForEnvironment } from "../../src/features/applications/model/observationCatalog";
-import { instanceStatusLabelKey } from "../../src/features/applications/presentation/instanceStatus";
+import {
+  applicationForEnvironment,
+  resolveEnvironmentId,
+} from "../../src/features/applications/model/observationCatalog";
 import { formatLocaleNumber } from "../../src/shared/presentation/formatLocaleNumber";
 import { formatAccountLastLogin } from "../../src/features/identity/presentation/accountTime";
 import { formatUtcDateTime, formatUtcInstant } from "../../src/shared/presentation/utcDateTime";
+import {
+  getSystemTimeZone,
+  setSystemTimeZone,
+} from "../../src/shared/presentation/systemTimeZone";
 import { assembleMessageCatalog } from "../../src/app/i18n/catalog";
 import { navigationItemsForAccess } from "../../src/app/router/navigation";
-import { HEALTH_LEVEL } from "../../src/features/applications/model/instance";
-import { APPLICATION_HEALTH_LABEL_KEY } from "../../src/features/overview/presentation/overviewLabels";
 import { IDENTITY_ROLES } from "../../src/features/identity/model/account";
 import { rolePresentationFor } from "../../src/features/identity/presentation/rolePresentation";
 import { accountFeedbackKey } from "../../src/features/identity/presentation/accountFeedback";
 import { withoutInstanceSelection } from "../../src/features/applications/model/instanceNavigation";
 import { catalogFor, catalogQuery, detailFor, instanceFor } from "../fixtures/instances";
 import {
+  INSTANCE_HEALTH,
   INSTANCE_LAYER,
   instanceSelection,
   validInstanceObservation,
@@ -72,6 +82,22 @@ test("APP-ENVIRONMENT: retain only an application registered in the destination 
   assert.equal(applicationForEnvironment(applications, "prod-env", "app-one"), "app-one");
   assert.equal(applicationForEnvironment(applications, "test-env", "app-two"), null);
   assert.equal(applicationForEnvironment(applications, "prod-env", null), null);
+});
+
+test("APP-ENVIRONMENT: explicit route scope survives catalog failure but is validated after recovery", () => {
+  const catalog = {
+    asOfMs: Date.parse("2026-10-15T00:00:00Z"),
+    environments: [{ id: "prod-env", name: "Production" }],
+    applications: [{ id: "orders", environmentId: "prod-env", name: "Orders" }],
+  };
+
+  assert.equal(resolveEnvironmentId(null, "prod-env", "orders"), "prod-env");
+  assert.equal(resolveEnvironmentId(null, "unconfirmed-env", null), "unconfirmed-env");
+  assert.equal(resolveEnvironmentId(null, undefined, "orders"), null);
+  assert.equal(resolveEnvironmentId(catalog, "prod-env", "orders"), "prod-env");
+  assert.equal(resolveEnvironmentId(catalog, "unconfirmed-env", "orders"), null);
+  assert.equal(resolveEnvironmentId(catalog, undefined, "orders"), "prod-env");
+  assert.equal(resolveEnvironmentId(catalog, undefined, null), "prod-env");
 });
 
 test("MOCK-SCENARIO: fleet and instance fixtures share the app-owned identity, window, and QPS facts", () => {
@@ -192,6 +218,10 @@ test("OBS-METRIC: ratios never become percent twice; unavailable TPS is not infe
   assert.equal(validMetricReading({ ...cpu, value: 1.1 }, query.context.window), false);
   assert.equal(validMetricReading({ ...cpu, unit: "milliseconds" }, query.context.window), false);
   assert.equal(
+    validMetricReading({ ...cpu, denominator: METRIC_BASIS.ElapsedSeconds }, query.context.window),
+    false,
+  );
+  assert.equal(
     validMetricReading({ ...tps, value: 0, sampledAtMs: fromMs }, query.context.window),
     false,
   );
@@ -199,6 +229,13 @@ test("OBS-METRIC: ratios never become percent twice; unavailable TPS is not infe
   assert.equal(validMetricReading({ ...cpu, value: Infinity }, query.context.window), false);
   assert.equal(validMetricReading({ ...cpu, sampledAtMs: toMs }, query.context.window), false);
   const cpuSeries = bundle.series.find((item) => item.metric === "cpu_ratio");
+  assert.equal(
+    validMetricSeries(
+      { ...cpuSeries, denominator: METRIC_BASIS.ElapsedSeconds },
+      query.context.window,
+    ),
+    false,
+  );
   assert.equal(cpuSeries.samples.length, 15);
   assert.equal(cpuSeries.samples[0].atMs, fromMs);
   assert.equal(cpuSeries.samples.at(-1).atMs, fromMs + 14 * query.stepMs);
@@ -241,6 +278,24 @@ test("OBS-METRIC: ratios never become percent twice; unavailable TPS is not infe
   assert.equal(plot.points.length, 15);
   assert.equal(plot.points.at(-1).cpu, 49);
   assert.ok(new Set(plot.points.map(({ cpu }) => cpu)).size > 1);
+});
+
+test("OBS-DENOMINATOR: metric aggregation bases have explicit cross-layer semantics", () => {
+  assert.deepEqual(METRIC_DENOMINATOR, {
+    http_qps: METRIC_BASIS.CompletedRequests,
+    resource_entry_rate: METRIC_BASIS.AttemptedEntries,
+    tps: METRIC_BASIS.BusinessTransactions,
+    rt_p95: METRIC_BASIS.CompletedRequests,
+    blocked_ratio: METRIC_BASIS.AttemptedEntries,
+    cpu_ratio: METRIC_BASIS.CpuCores,
+    memory_ratio: METRIC_BASIS.MemoryLimit,
+    memory_bytes: METRIC_BASIS.Processes,
+  });
+  const unavailable = observationMetricReadings(Object.keys(METRIC_DENOMINATOR));
+  assert.deepEqual(
+    Object.fromEntries(unavailable.map(({ metric, denominator }) => [metric, denominator])),
+    METRIC_DENOMINATOR,
+  );
 });
 
 test("MOCK-SERIES: scenario profiles are deterministic, step-bounded and absent facts stay unavailable", () => {
@@ -327,11 +382,26 @@ test("OBS-BUNDLE: wrong app/window/step, omitted metrics, duplicated annotations
     query.stepMs,
   );
   assert.equal(validMetricBundle(value, value.query), true);
+  const tpsSeries = value.series.find((item) => item.metric === METRIC_ID.Tps);
+  const replaceTpsSeries = (replacement) =>
+    value.series.map((item) => (item.metric === METRIC_ID.Tps ? replacement : item));
   for (const bad of [
     { ...value, query: { ...value.query, context: { ...query.context, appId: "wrong" } } },
     { ...value, query: { ...value.query, stepMs: 120_000 } },
     { ...value, summary: value.summary.slice(1) },
     { ...value, series: value.series.slice(1) },
+    { ...value, series: replaceTpsSeries({ ...tpsSeries, source: "other-reporter" }) },
+    {
+      ...value,
+      series: replaceTpsSeries({ ...tpsSeries, quality: "no_samples" }),
+    },
+    {
+      ...value,
+      series: replaceTpsSeries({
+        ...tpsSeries,
+        coverage: { expected: 1, reporting: 0, inventorySource: "other-inventory" },
+      }),
+    },
     { ...value, annotations: [value.annotations[0], value.annotations[0]] },
     { ...value, annotations: [{ ...value.annotations[0], atMs: toMs }] },
   ])
@@ -592,55 +662,96 @@ test("F5.2 instance QPS follows UI locale without changing the numeric observati
   assert.equal(qps, 12_345);
 });
 
-test("F5.2 account login timestamps follow UI locale while remaining explicitly UTC", () => {
+test("F5.2 account login timestamps follow UI locale while remaining explicitly zoned", () => {
   const instant = "2026-10-08T05:00:00Z";
-  for (const locale of ["zh-CN", "en-US", "ja-JP"]) {
-    assert.match(formatAccountLastLogin(instant, locale), /UTC$/);
-    assert.equal(new Date(instant).toISOString(), "2026-10-08T05:00:00.000Z");
+  const original = getSystemTimeZone();
+  try {
+    setSystemTimeZone("Asia/Shanghai");
+    for (const locale of ["zh-CN", "en-US", "ja-JP"]) {
+      // The zone is named explicitly so a reader can tell which zone the wall clock belongs to.
+      assert.match(formatAccountLastLogin(instant, locale), / GMT\+8$/);
+      assert.equal(new Date(instant).toISOString(), "2026-10-08T05:00:00.000Z");
+    }
+    assert.notEqual(
+      formatAccountLastLogin(instant, "en-US"),
+      formatAccountLastLogin(instant, "ja-JP"),
+    );
+    // The same wire instant rendered in another configured zone names that zone instead.
+    setSystemTimeZone("UTC");
+    assert.match(formatAccountLastLogin(instant, "en-US"), / GMT\+0$/);
+  } finally {
+    setSystemTimeZone(original);
   }
-  assert.notEqual(
-    formatAccountLastLogin(instant, "en-US"),
-    formatAccountLastLogin(instant, "ja-JP"),
-  );
 });
 
 test("F5.2 observed UTC instants use locale date conventions without changing the instant", () => {
   const instant = Date.UTC(2026, 9, 8, 5, 0, 0);
-  const chinese = formatUtcDateTime(instant, "zh-CN");
-  const english = formatUtcDateTime(instant, "en-US");
-  const japanese = formatUtcDateTime(instant, "ja-JP");
-  assert.match(chinese, /UTC$/);
-  assert.match(english, /UTC$/);
-  assert.match(japanese, /UTC$/);
-  assert.notEqual(chinese, english);
-  assert.notEqual(english, japanese);
-  assert.equal(new Date(instant).toISOString(), "2026-10-08T05:00:00.000Z");
+  const original = getSystemTimeZone();
+  try {
+    setSystemTimeZone("Asia/Shanghai");
+    const chinese = formatUtcDateTime(instant, "zh-CN");
+    const english = formatUtcDateTime(instant, "en-US");
+    const japanese = formatUtcDateTime(instant, "ja-JP");
+    assert.match(chinese, / GMT\+8$/);
+    assert.match(english, / GMT\+8$/);
+    assert.match(japanese, / GMT\+8$/);
+    assert.notEqual(chinese, english);
+    assert.notEqual(english, japanese);
+    // 05:00 UTC is 13:00 in the configured zone: the wall clock moved, the instant did not.
+    assert.match(english, /1:00:00 PM/);
+    assert.equal(new Date(instant).toISOString(), "2026-10-08T05:00:00.000Z");
+  } finally {
+    setSystemTimeZone(original);
+  }
 });
 
 test("F5.2 shared UTC formatter supports compact page timestamps and locale-independent zone semantics", () => {
-  const beforeDaylightSavingChange = Date.UTC(2026, 2, 8, 1, 59, 0);
-  const afterDaylightSavingChange = Date.UTC(2026, 2, 8, 3, 1, 0);
-  for (const locale of ["zh-CN", "en-US", "ja-JP"]) {
-    const compact = formatUtcDateTime(beforeDaylightSavingChange, locale, {
-      dateStyle: "short",
-      timeStyle: "medium",
-    });
-    const markerless = formatUtcInstant(afterDaylightSavingChange, locale, {
-      dateStyle: "short",
-      timeStyle: "medium",
-    });
-    assert.match(compact, /UTC$/);
-    assert.doesNotMatch(markerless, /UTC/);
-    assert.notEqual(
-      compact,
-      formatUtcDateTime(afterDaylightSavingChange, locale, {
+  // 06:59Z and 07:01Z straddle the America/New_York daylight-saving change, so the same
+  // configured zone reports a different offset on either side of it.
+  const beforeDaylightSavingChange = Date.UTC(2026, 2, 8, 6, 59, 0);
+  const afterDaylightSavingChange = Date.UTC(2026, 2, 8, 7, 1, 0);
+  const original = getSystemTimeZone();
+  try {
+    setSystemTimeZone("Asia/Shanghai");
+    for (const locale of ["zh-CN", "en-US", "ja-JP"]) {
+      const compact = formatUtcDateTime(beforeDaylightSavingChange, locale, {
         dateStyle: "short",
         timeStyle: "medium",
-      }),
-    );
+      });
+      const markerless = formatUtcInstant(afterDaylightSavingChange, locale, {
+        dateStyle: "short",
+        timeStyle: "medium",
+      });
+      assert.match(compact, / GMT\+8$/);
+      // The compact formatter carries no zone marker of its own; the caller owns that.
+      assert.doesNotMatch(markerless, / GMT[+-]/);
+      assert.notEqual(
+        compact,
+        formatUtcDateTime(afterDaylightSavingChange, locale, {
+          dateStyle: "short",
+          timeStyle: "medium",
+        }),
+      );
+    }
+    // Zone semantics belong to the configured zone, not to the host machine: a zone with a
+    // daylight-saving change keeps the same gap between the two instants.
+    setSystemTimeZone("America/New_York");
+    const before = formatUtcDateTime(beforeDaylightSavingChange, "en-US", {
+      dateStyle: "short",
+      timeStyle: "medium",
+    });
+    const after = formatUtcDateTime(afterDaylightSavingChange, "en-US", {
+      dateStyle: "short",
+      timeStyle: "medium",
+    });
+    assert.match(before, / GMT-5$/);
+    assert.match(after, / GMT-4$/);
+    assert.notEqual(before, after);
+  } finally {
+    setSystemTimeZone(original);
   }
-  assert.equal(new Date(beforeDaylightSavingChange).toISOString(), "2026-03-08T01:59:00.000Z");
-  assert.equal(new Date(afterDaylightSavingChange).toISOString(), "2026-03-08T03:01:00.000Z");
+  assert.equal(new Date(beforeDaylightSavingChange).toISOString(), "2026-03-08T06:59:00.000Z");
+  assert.equal(new Date(afterDaylightSavingChange).toISOString(), "2026-03-08T07:01:00.000Z");
 });
 
 test("F5.2 finite navigation, role, health and status keys render in every locale", async () => {
@@ -675,13 +786,6 @@ test("F5.2 finite navigation, role, health and status keys render in every local
     const copy = rolePresentationFor(role.id);
     return [copy.labelKey, copy.descriptionKey];
   });
-  const statusKeys = Object.values(HEALTH_LEVEL).map((status) =>
-    instanceStatusLabelKey({ status, cpu: 0, memory: 0 }),
-  );
-  const pressureKeys = [
-    instanceStatusLabelKey({ status: HEALTH_LEVEL.Healthy, cpu: 91, memory: 0 }),
-    instanceStatusLabelKey({ status: HEALTH_LEVEL.Healthy, cpu: 0, memory: 91 }),
-  ];
   const feedbackKeys = [
     accountFeedbackKey({ authorized: false, inspecting: false, mutation: { status: "idle" } }),
     accountFeedbackKey({ authorized: true, inspecting: true, mutation: { status: "idle" } }),
@@ -700,9 +804,7 @@ test("F5.2 finite navigation, role, health and status keys render in every local
     ...new Set([
       ...navigation,
       ...roleKeys,
-      ...Object.values(APPLICATION_HEALTH_LABEL_KEY),
-      ...statusKeys,
-      ...pressureKeys,
+      ...Object.values(OBSERVATION_HEALTH_LABEL_KEY),
       ...feedbackKeys,
     ]),
   ];
@@ -715,19 +817,9 @@ test("F5.2 finite navigation, role, health and status keys render in every local
     }
 });
 
-test("F5.2 instance status presentation uses a finite map and prioritizes CPU then memory pressure", () => {
-  const base = instanceFor(1);
-  assert.equal(
-    instanceStatusLabelKey({ ...base, cpu: 81, memory: 82 }),
-    "applications.status.cpuHigh",
+test("F5.2 instance health labels match the server-owned finite observation vocabulary", () => {
+  assert.deepEqual(
+    Object.keys(OBSERVATION_HEALTH_LABEL_KEY).sort(),
+    [...Object.values(INSTANCE_HEALTH)].sort(),
   );
-  assert.equal(
-    instanceStatusLabelKey({ ...base, cpu: 80, memory: 81 }),
-    "applications.status.memoryHigh",
-  );
-  for (const status of ["healthy", "warning", "critical"])
-    assert.equal(
-      instanceStatusLabelKey({ ...base, cpu: 80, memory: 80, status }),
-      `applications.status.${status}`,
-    );
 });

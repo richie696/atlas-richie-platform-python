@@ -3,6 +3,7 @@ import { useExternalSnapshot } from "@richie696/react-framework-react";
 import { useTranslation } from "react-i18next";
 import type { AccountManagementWorkflow } from "../application/accountManagementWorkflow";
 import { IDENTITY_ROLE, type AccountDraft, type AccountDraftIssue } from "../model/account";
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "../model/passwordPolicy";
 import { prepareAccountCreation } from "../model/accountManagement";
 import { DialogFrame } from "../../../shared/ui/DialogFrame";
 import { ActionButton } from "../../../shared/ui/ActionButton";
@@ -102,7 +103,9 @@ export function CreateAccountDialog({
       )}
       <form id={formId} className={styles["account-dialog-form"]} onSubmit={submit}>
         <AccountFields draft={draft} onChange={setDraft} disabled={locked} />
-        <p className={styles["account-dialog-password-note"]}>{t("accountDialog.passwordHint")}</p>
+        <p className={styles["account-dialog-password-note"]}>
+          {t("accountDialog.passwordHint", { min: PASSWORD_MIN_LENGTH, max: PASSWORD_MAX_LENGTH })}
+        </p>
       </form>
     </DialogFrame>
   );

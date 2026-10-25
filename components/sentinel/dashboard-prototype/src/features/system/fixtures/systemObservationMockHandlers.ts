@@ -4,7 +4,10 @@ import { CONSOLE_HEADER } from "../../../core/api/protocol/common";
 import {
   AuditQueryParametersSchema,
   SystemConnectionsSchema,
+  DeploymentGuidesSchema,
   SystemProtocolsSchema,
+  AgentReportingObservationPageSchema,
+  IncidentEventObservationPageSchema,
 } from "../api/systemObservationWire";
 type AuditParameters = z.infer<typeof AuditQueryParametersSchema>;
 
@@ -154,10 +157,107 @@ export function createSystemObservationMockHandlers(
         return response({ error: { code: "dependency_unavailable", requestId } }, requestId, 503);
       return response(data, requestId);
     }),
+    http.get("*/api/v1/system/deployment-guides", ({ request }) => {
+      const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
+      const data = {
+        catalogRevision: "2026-10-17.1",
+        runtimeCollector: { state: "not_configured", endpoint: null },
+        paths: [
+          { id: "existing", readiness: "configuration-required", profileRevision: null },
+          { id: "linux", readiness: "guide-only", profileRevision: null },
+          { id: "kubernetes", readiness: "guide-only", profileRevision: null },
+        ],
+      };
+      if (!DeploymentGuidesSchema.safeParse(data).success)
+        return response({ error: { code: "dependency_unavailable", requestId } }, requestId, 503);
+      return response(data, requestId);
+    }),
     http.get("*/api/v1/system/protocols", ({ request }) => {
       const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
       const data = protocolWire(now(), scenario);
       if (!SystemProtocolsSchema.safeParse(data).success)
+        return response({ error: { code: "dependency_unavailable", requestId } }, requestId, 503);
+      return response(data, requestId);
+    }),
+    http.get("*/api/v2/system/protocol-observations/agent-reporting", ({ request }) => {
+      const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
+      const query = new URL(request.url).searchParams;
+      const page = Number(query.get("page") ?? 1);
+      const pageSize = Number(query.get("pageSize") ?? 20);
+      if (
+        !Number.isSafeInteger(page) ||
+        page < 1 ||
+        !Number.isSafeInteger(pageSize) ||
+        pageSize < 1 ||
+        pageSize > 100
+      )
+        return response({ error: { code: "invalid_request", requestId } }, requestId, 400);
+      const asOf = now();
+      const data = {
+        asOf: instant(asOf),
+        page,
+        pageSize,
+        total: 1,
+        items:
+          page === 1
+            ? [
+                {
+                  environmentId: scenario.environmentId,
+                  appId: scenario.applicationId,
+                  instanceId: "orders-worker-0",
+                  processId: "mock-process-0",
+                  reporterId: "mock-reporter-0",
+                  boundary: "agent-reporting",
+                  collectorSupported: ["atlas-richie.reporting/v1"],
+                  runtimeVersion: null,
+                  compatibility: "unknown",
+                  observedAt: null,
+                },
+              ]
+            : [],
+      };
+      if (!AgentReportingObservationPageSchema.safeParse(data).success)
+        return response({ error: { code: "dependency_unavailable", requestId } }, requestId, 503);
+      return response(data, requestId);
+    }),
+    http.get("*/api/v2/system/protocol-observations/incident-events", ({ request }) => {
+      const requestId = request.headers.get(CONSOLE_HEADER.RequestId);
+      const query = new URL(request.url).searchParams;
+      const page = Number(query.get("page") ?? 1);
+      const pageSize = Number(query.get("pageSize") ?? 20);
+      if (
+        !Number.isSafeInteger(page) ||
+        page < 1 ||
+        !Number.isSafeInteger(pageSize) ||
+        pageSize < 1 ||
+        pageSize > 100
+      )
+        return response({ error: { code: "invalid_request", requestId } }, requestId, 400);
+      const asOf = now();
+      const data = {
+        asOf: instant(asOf),
+        page,
+        pageSize,
+        total: 1,
+        items:
+          page === 1
+            ? [
+                {
+                  environmentId: scenario.environmentId,
+                  appId: scenario.applicationId,
+                  instanceId: "orders-worker-0",
+                  processId: "mock-process-0",
+                  reporterId: "mock-reporter-0",
+                  boundary: "incident-events",
+                  collectorSupported: ["atlas-richie.incident-events/v1"],
+                  runtimeVersion: null,
+                  compatibility: "unknown",
+                  observedAt: null,
+                },
+              ]
+            : [],
+      };
+      if (!IncidentEventObservationPageSchema.safeParse(data).success)
         return response({ error: { code: "dependency_unavailable", requestId } }, requestId, 503);
       return response(data, requestId);
     }),

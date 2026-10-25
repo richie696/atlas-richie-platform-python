@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import { CONSOLE_HEADER } from "../../../core/api/protocol/common";
+import { CONSOLE_HEADER, parseIdempotencyKeyHeader } from "../../../core/api/protocol/common";
 import { readMockPrincipal } from "../../../core/api/mock/mockRole";
 import {
   SourceCheckInputSchema,
@@ -23,10 +23,11 @@ export type SourceCheckMockScenario = {
 };
 type Operation =
   | { readonly status: "completed"; readonly requestKey: string; readonly record: SafeSource }
+  | { readonly status: "completed"; readonly requestKey: string; readonly deletedSourceId: string }
   | {
       readonly status: "rejected";
       readonly requestKey: string;
-      readonly reason: "validation" | "conflict" | "not_found" | "unavailable";
+      readonly reason: "validation" | "conflict" | "not_found" | "unavailable" | "source_in_use";
     };
 interface StoredOperation {
   readonly fingerprint: string;
@@ -36,13 +37,18 @@ interface StoredOperation {
 interface MockState {
   readonly sources: Map<string, SafeSource>;
   readonly operations: Map<string, StoredOperation>;
+  readonly referencedSourceIds: ReadonlySet<string>;
   generation: number;
   sequence: number;
 }
 
-const createState = (initialSources: readonly SafeSource[]): MockState => ({
+const createState = (
+  initialSources: readonly SafeSource[],
+  referencedSourceIds: readonly string[],
+): MockState => ({
   sources: new Map(initialSources.map((source) => [source.id, Object.freeze({ ...source })])),
   operations: new Map<string, StoredOperation>(),
+  referencedSourceIds: new Set(referencedSourceIds),
   generation: 1,
   sequence: 0,
 });
@@ -78,7 +84,7 @@ async function fingerprint(input: Mutation): Promise<string> {
 }
 
 function safeRecord(
-  input: Mutation,
+  input: Extract<Mutation, { kind: "register" | "update" }>,
   current: SafeSource | undefined,
   state: MockState,
 ): SafeSource {
@@ -113,11 +119,11 @@ async function handleMutation(request: Request, state: MockState): Promise<Respo
   if (!authorized()) return forbidden(requestId);
   if (!request.headers.get(CONSOLE_HEADER.Csrf)) return problem(requestId, "csrf_failed", 403);
   const input = SourceMutationSchema.safeParse(await request.json().catch(() => null));
-  if (
-    !input.success ||
-    request.headers.get(CONSOLE_HEADER.IdempotencyKey) !== input.data?.requestKey
-  )
-    return problem(requestId, "invalid_request", 400);
+  if (!input.success) return problem(requestId, "validation_failed", 422);
+  const keyHeader = parseIdempotencyKeyHeader(request.headers);
+  if (keyHeader.kind !== "valid") return problem(requestId, "validation_failed", 422);
+  if (keyHeader.requestKey !== input.data.requestKey)
+    return problem(requestId, "idempotency_conflict", 409);
 
   const mutation = input.data;
   const digest = await fingerprint(mutation);
@@ -145,18 +151,36 @@ async function handleMutation(request: Request, state: MockState): Promise<Respo
       result = { status: "completed", requestKey: mutation.requestKey, record };
     }
   } else {
-    const current = state.sources.get(mutation.sourceId);
-    if (!current)
-      result = { status: "rejected", requestKey: mutation.requestKey, reason: "not_found" };
-    else if (
-      current.revision !== mutation.expectedRevision ||
-      current.provider !== mutation.source.provider
-    )
-      result = { status: "rejected", requestKey: mutation.requestKey, reason: "conflict" };
-    else {
-      const record = safeRecord(mutation, current, state);
-      state.sources.set(record.id, record);
-      result = { status: "completed", requestKey: mutation.requestKey, record };
+    if (mutation.kind === "delete") {
+      const current = state.sources.get(mutation.sourceId);
+      if (!current)
+        result = { status: "rejected", requestKey: mutation.requestKey, reason: "not_found" };
+      else if (current.revision !== mutation.expectedRevision)
+        result = { status: "rejected", requestKey: mutation.requestKey, reason: "conflict" };
+      else if (state.referencedSourceIds.has(mutation.sourceId))
+        result = { status: "rejected", requestKey: mutation.requestKey, reason: "source_in_use" };
+      else {
+        state.sources.delete(mutation.sourceId);
+        result = {
+          status: "completed",
+          requestKey: mutation.requestKey,
+          deletedSourceId: mutation.sourceId,
+        };
+      }
+    } else {
+      const current = state.sources.get(mutation.sourceId);
+      if (!current)
+        result = { status: "rejected", requestKey: mutation.requestKey, reason: "not_found" };
+      else if (
+        current.revision !== mutation.expectedRevision ||
+        current.provider !== mutation.source.provider
+      )
+        result = { status: "rejected", requestKey: mutation.requestKey, reason: "conflict" };
+      else {
+        const record = safeRecord(mutation, current, state);
+        state.sources.set(record.id, record);
+        result = { status: "completed", requestKey: mutation.requestKey, record };
+      }
     }
   }
   state.operations.set(mutation.requestKey, { fingerprint: digest, result });
@@ -171,8 +195,9 @@ export function createSourceRegistrationMockHandlers(
   initialSources: readonly SafeSource[],
   checkScenario: SourceCheckMockScenario,
   now: () => number = Date.now,
+  referencedSourceIds: readonly string[] = [],
 ) {
-  let state = createState(initialSources);
+  let state = createState(initialSources, referencedSourceIds);
   const handlers = Object.freeze([
     http.get("*/api/v1/system/sources", ({ request }) => {
       const requestId = requestIdOf(request);
@@ -230,7 +255,7 @@ export function createSourceRegistrationMockHandlers(
     /** Current non-secret registry facts let sibling demo handlers share this single authority. */
     readRegisteredSources: () => Object.freeze([...state.sources.values()]),
     reset: () => {
-      state = createState(initialSources);
+      state = createState(initialSources, referencedSourceIds);
     },
   });
 }

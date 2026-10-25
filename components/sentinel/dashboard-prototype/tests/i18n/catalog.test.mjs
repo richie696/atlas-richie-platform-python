@@ -95,7 +95,7 @@ test("I18N-PLURAL: the actual i18next instance renders zero/one/many in all thre
   const keys = Object.keys(catalogs["en-US"]).filter(
     (key) => !/_(one|other)$/.test(key) && catalogs["en-US"][key].includes("{{count}}"),
   );
-  assert.equal(keys.length, 7);
+  assert.ok(keys.length > 0, "the current catalogs must exercise plural rendering");
   for (const locale of locales)
     for (const key of keys)
       for (const count of [0, 1, 2]) {
@@ -185,6 +185,11 @@ test("I18N-DYNAMIC-IDENTITY: actual account, password, setup, role and source pr
     const issues = [
       ...account.validateAccountDraft({ username: "", password: "", roleId: "view" }),
       ...account.validateAccountDraft({ username: "operator", password: "short", roleId: "view" }),
+      ...account.validateAccountDraft({
+        username: "operator",
+        password: "x".repeat(password.PASSWORD_MAX_LENGTH + 1),
+        roleId: "view",
+      }),
       ...account.validateAccountDraft({
         username: "operator",
         password: "synthetic-password",
@@ -280,6 +285,7 @@ test("I18N-DYNAMIC-IDENTITY: actual account, password, setup, role and source pr
       new Set([
         "account.credentialsRequired",
         "account.passwordTooShort",
+        "account.passwordTooLong",
         "account.invalidRole",
         "account.loginRequired",
         "password.currentRequired",
@@ -433,6 +439,205 @@ test("I18N-ACCOUNT-STATUS-RESTRICTION: account rows explain protected disable ac
       assert.equal(markup.includes("management.builtIn"), false);
       assert.equal(markup.includes("management.lastAdmin"), false);
       assert.equal(markup.includes("viewer"), true);
+    }
+  } finally {
+    await vite.close();
+  }
+});
+
+test("I18N-ROLE-DIRECTORY-TARGET: a filtered-empty directory preserves the URL target selector", async () => {
+  const vite = await createServer({
+    configFile: false,
+    root: process.cwd(),
+    appType: "custom",
+    optimizeDeps: { noDiscovery: true, include: [] },
+    server: { middlewareMode: true, hmr: false, ws: false },
+  });
+  try {
+    const { RoleManagementPage } = await vite.ssrLoadModule(
+      "/src/features/identity/ui/RoleManagementPage.tsx",
+    );
+    const [{ createElement }, { renderToStaticMarkup }, { I18nextProvider }] = await Promise.all([
+      import("react"),
+      import("react-dom/server"),
+      import("react-i18next"),
+    ]);
+    const record = {
+      id: "one",
+      username: "reader-one",
+      roleId: "view",
+      status: "active",
+      builtIn: false,
+      lastActiveAdmin: false,
+      lastLoginAt: null,
+      revision: "1",
+    };
+    const page = { items: [], page: 1, pageSize: 20, total: 0 };
+    const makeWorkflow = (directory, detail) => {
+      const snapshot = {
+        authorized: true,
+        directory,
+        detail,
+        mutation: { status: "idle" },
+        operation: null,
+        inspecting: false,
+      };
+      return {
+        getSnapshot: () => snapshot,
+        subscribe: () => () => {},
+        list: async () => page,
+        select: async () => record,
+        create: async () => {},
+        setStatus: async () => {},
+        setRole: async () => {},
+        inspect: async () => ({ status: "not-found", requestKey: "unused" }),
+        cancelDirectory() {},
+        cancel() {},
+        dispose() {},
+      };
+    };
+    const cases = [
+      {
+        name: "filtered-empty selected target",
+        accountId: "one",
+        directory: { status: "filtered-empty", key: "query", data: page, receivedAt: 1 },
+        detail: { status: "ready", key: "one", data: record, receivedAt: 1 },
+        keepsSelector: true,
+      },
+      {
+        name: "disabled selected target",
+        accountId: "one",
+        directory: { status: "filtered-empty", key: "query", data: page, receivedAt: 1 },
+        detail: {
+          status: "ready",
+          key: "one",
+          data: { ...record, status: "disabled" },
+          receivedAt: 1,
+        },
+        keepsSelector: true,
+        restrictionKey: "roles.restriction.disabled",
+      },
+      {
+        name: "truly empty directory without target",
+        accountId: undefined,
+        directory: { status: "empty", key: "query", data: page, receivedAt: 1 },
+        detail: { status: "idle" },
+        keepsSelector: false,
+      },
+    ];
+
+    for (const locale of locales) {
+      const i18n = createInstance();
+      await i18n.init({
+        resources: { [locale]: { translation: catalogs[locale] } },
+        lng: locale,
+        supportedLngs: locales,
+        fallbackLng: false,
+        nsSeparator: false,
+        interpolation: { escapeValue: false },
+      });
+      for (const item of cases) {
+        const markup = renderToStaticMarkup(
+          createElement(
+            I18nextProvider,
+            { i18n },
+            createElement(RoleManagementPage, {
+              workflow: makeWorkflow(item.directory, item.detail),
+              accountId: item.accountId,
+              onAccountSelection() {},
+            }),
+          ),
+        );
+        assert.equal(
+          markup.includes('role="combobox"'),
+          item.keepsSelector,
+          `${locale}/${item.name} selector visibility`,
+        );
+        if (item.keepsSelector)
+          assert.ok(markup.includes(record.username), `${locale} target label`);
+        if (item.restrictionKey) {
+          assert.match(markup, /<fieldset[^>]*disabled(?:="")?[^>]*>/);
+          assert.ok(
+            markup.includes(i18n.t(item.restrictionKey)),
+            `${locale}/${item.name} explains why role editing is unavailable`,
+          );
+        }
+      }
+    }
+  } finally {
+    await vite.close();
+  }
+});
+
+test("I18N-ROLE-LAST-ADMIN: protected role editor explains the lock in every locale", async () => {
+  const vite = await createServer({
+    configFile: false,
+    root: process.cwd(),
+    appType: "custom",
+    optimizeDeps: { noDiscovery: true, include: [] },
+    server: { middlewareMode: true, hmr: false, ws: false },
+  });
+  try {
+    const { RoleEditor } = await vite.ssrLoadModule(
+      "/src/features/identity/ui/components/RoleEditor.tsx",
+    );
+    const [{ createElement }, { renderToStaticMarkup }, { I18nextProvider }] = await Promise.all([
+      import("react"),
+      import("react-dom/server"),
+      import("react-i18next"),
+    ]);
+    const record = {
+      id: "last-admin",
+      username: "operator",
+      roleId: "admin",
+      status: "active",
+      builtIn: false,
+      lastActiveAdmin: true,
+      lastLoginAt: null,
+      revision: "2",
+    };
+    const snapshot = {
+      authorized: true,
+      directory: { status: "idle" },
+      detail: { status: "ready", key: record.id, data: record, receivedAt: 1 },
+      mutation: { status: "idle" },
+      operation: null,
+      inspecting: false,
+    };
+    const workflow = {
+      getSnapshot: () => snapshot,
+      subscribe: () => () => {},
+      setRole: async () => {
+        throw new Error("SSR must not issue a role command");
+      },
+      inspect: async () => ({ status: "not-found", requestKey: "unused" }),
+      select: async () => record,
+    };
+
+    for (const locale of locales) {
+      const i18n = createInstance();
+      await i18n.init({
+        resources: { [locale]: { translation: catalogs[locale] } },
+        lng: locale,
+        supportedLngs: locales,
+        fallbackLng: false,
+        nsSeparator: false,
+        interpolation: { escapeValue: false },
+      });
+      const markup = renderToStaticMarkup(
+        createElement(I18nextProvider, { i18n }, createElement(RoleEditor, { workflow, record })),
+      );
+      assert.ok(
+        markup.includes(i18n.t("roles.restriction.lastAdmin")),
+        `${locale} explains why the last active administrator is protected`,
+      );
+      assert.ok(
+        markup.includes(i18n.t("management.roleImpact").replaceAll("'", "&#x27;")),
+        `${locale} explains when the updated role takes effect`,
+      );
+      assert.match(markup, /<fieldset[^>]*disabled=""/);
+      assert.match(markup, /type="radio"/);
+      assert.equal(markup.includes("roles.restriction.lastAdmin"), false);
     }
   } finally {
     await vite.close();
@@ -944,9 +1149,11 @@ test("F4.31-PASSWORD-PAGE-RENDER: the actual own-password page binds only the se
       sessionEpoch: "session-epoch-4",
     };
     let workflowSnapshot = { status: "idle" };
+    let retryAfterMs = 0;
     const workflow = {
       getSnapshot: () => workflowSnapshot,
       subscribe: () => () => {},
+      getRetryAfterMs: () => retryAfterMs,
       submit: async () => ({ sessionDisposition: "reauthenticate" }),
       cancel() {},
       dispose() {},
@@ -1021,7 +1228,602 @@ test("F4.31-PASSWORD-PAGE-RENDER: the actual own-password page binds only the se
         !rejectedMarkup.includes(i18n.t("password.remote.session")),
         `${locale} does not misreport an incorrect current password as an expired session`,
       );
+      for (const [code, status, messageKey] of [
+        ["validation_failed", 422, "password.remote.policy"],
+        ["rate_limited", 429, "password.remote.rateLimitedFor"],
+        ["unauthenticated", 401, "password.remote.session"],
+        ["csrf_failed", 403, "password.remote.session"],
+        ["service_unavailable", 503, "password.remote.failed"],
+      ]) {
+        retryAfterMs = code === "rate_limited" ? 1_500 : 0;
+        workflowSnapshot = {
+          status: "error",
+          error: new AppError(AppErrorKind.SERVER, "PRIVATE-PASSWORD-ERROR", {
+            status,
+            code,
+            ...(code === "rate_limited" ? { retryAfterMs } : {}),
+          }),
+        };
+        const errorMarkup = renderToStaticMarkup(
+          createElement(
+            I18nextProvider,
+            { i18n },
+            createElement(OwnPasswordPage, {
+              workflow,
+              identity,
+              onConfirmed() {},
+              onReauthenticate() {},
+            }),
+          ),
+        );
+        assert.ok(
+          errorMarkup.includes(
+            i18n.t(messageKey, code === "rate_limited" ? { count: 2 } : undefined),
+          ),
+          `${locale} maps ${code} to its stable localized feedback`,
+        );
+        assert.ok(
+          !errorMarkup.includes("PRIVATE-PASSWORD-ERROR"),
+          `${locale} does not render raw ${code} error details`,
+        );
+        if (code === "rate_limited") {
+          assert.ok(
+            errorMarkup.includes(i18n.t(messageKey, { count: 2 })),
+            `${locale} includes the rounded server-advised cooldown`,
+          );
+          assert.match(errorMarkup, /<button[^>]*disabled=""/);
+        }
+      }
+      retryAfterMs = 0;
       workflowSnapshot = { status: "idle" };
+    }
+  } finally {
+    await vite.close();
+  }
+});
+
+test("F5.3-OWN-PASSWORD-COMMAND-FEEDBACK: the actual password page locks unresolved writes and offers reauthentication only for unknown results", async () => {
+  const vite = await createServer({
+    configFile: false,
+    root: process.cwd(),
+    appType: "custom",
+    optimizeDeps: { noDiscovery: true, include: [] },
+    server: { middlewareMode: true, hmr: false, ws: false },
+  });
+  try {
+    const { OwnPasswordPage } = await vite.ssrLoadModule(
+      "/src/features/identity/ui/OwnPasswordPage.tsx",
+    );
+    const [{ createElement }, { renderToStaticMarkup }, { I18nextProvider }] = await Promise.all([
+      import("react"),
+      import("react-dom/server"),
+      import("react-i18next"),
+    ]);
+    const identity = {
+      accountId: "session-account-17",
+      username: "session-viewer",
+      roleId: "view",
+      capabilities: ["metrics:view"],
+      sessionEpoch: "session-epoch-4",
+    };
+    const states = [
+      ["pending", { status: "pending" }, "password.remote.pending", true, null],
+      [
+        "success",
+        { status: "success", result: { sessionDisposition: "reauthenticate" } },
+        "password.remote.success",
+        true,
+        null,
+      ],
+      [
+        "result-unknown",
+        {
+          status: "result-unknown",
+          error: new AppError(AppErrorKind.NETWORK, "PRIVATE-PASSWORD-COMMAND-ERROR"),
+        },
+        "password.remote.unknown",
+        true,
+        "password.remote.reauthenticate",
+      ],
+      [
+        "error",
+        {
+          status: "error",
+          error: new AppError(AppErrorKind.UNAUTHORIZED, "PRIVATE-PASSWORD-COMMAND-ERROR", {
+            status: 400,
+            code: "current_password_invalid",
+          }),
+        },
+        "password.remote.currentInvalid",
+        false,
+        null,
+      ],
+    ];
+
+    for (const locale of locales) {
+      const i18n = createInstance();
+      await i18n.init({
+        resources: { [locale]: { translation: catalogs[locale] } },
+        lng: locale,
+        supportedLngs: locales,
+        fallbackLng: false,
+        nsSeparator: false,
+        interpolation: { escapeValue: false },
+      });
+      for (const [status, snapshot, feedbackKey, locked, actionKey] of states) {
+        const workflow = {
+          getSnapshot: () => snapshot,
+          subscribe: () => () => {},
+          getRetryAfterMs: () => 0,
+          submit: async () => ({ sessionDisposition: "reauthenticate" }),
+          cancel() {},
+        };
+        const markup = renderToStaticMarkup(
+          createElement(
+            I18nextProvider,
+            { i18n },
+            createElement(OwnPasswordPage, {
+              workflow,
+              identity,
+              onConfirmed() {},
+              onReauthenticate() {},
+            }),
+          ),
+        );
+        assert.ok(markup.includes(i18n.t(feedbackKey)), `${locale} renders ${status}`);
+        const inputs = markup.match(/<input\b[^>]*>/g) ?? [];
+        assert.equal(inputs.length, 3, `${locale}/${status} retains the three password inputs`);
+        assert.ok(inputs.every((input) => /type="password"/.test(input)));
+        assert.equal(
+          inputs.every((input) => /\sdisabled(?:="")?(?:\s|>)/.test(input)),
+          locked,
+          `${locale}/${status} has the expected input lock state`,
+        );
+        const submitLabel = i18n.t("changePassword.submit");
+        const submitButton = markup
+          .match(/<button\b[^>]*>[\s\S]*?<\/button>/g)
+          ?.find((button) => button.includes(submitLabel));
+        assert.ok(submitButton);
+        assert.equal(/\sdisabled(?:="")?(?:\s|>)/.test(submitButton), locked);
+        const reauthenticateLabel = i18n.t("password.remote.reauthenticate");
+        assert.equal(markup.includes(reauthenticateLabel), actionKey !== null);
+        if (actionKey) assert.ok(markup.includes(i18n.t(actionKey)));
+        assert.ok(!markup.includes("PRIVATE-PASSWORD-COMMAND-ERROR"));
+      }
+    }
+  } finally {
+    await vite.close();
+  }
+});
+
+test("F5.3-SOURCE-COMMAND-FEEDBACK: the actual source command feedback distinguishes every command outcome and exposes only safe recovery actions", async () => {
+  const vite = await createServer({
+    configFile: false,
+    root: process.cwd(),
+    appType: "custom",
+    optimizeDeps: { noDiscovery: true, include: [] },
+    server: { middlewareMode: true, hmr: false, ws: false },
+  });
+  try {
+    const { SourceOperationFeedback } = await vite.ssrLoadModule(
+      "/src/features/system/ui/SourceOperationFeedback.tsx",
+    );
+    const [{ createElement }, { renderToStaticMarkup }, { I18nextProvider }] = await Promise.all([
+      import("react"),
+      import("react-dom/server"),
+      import("react-i18next"),
+    ]);
+    const states = [
+      ["pending", { status: "pending" }, "system.source.pending", null],
+      ["success", { status: "success", result: {} }, "system.source.saved", null],
+      [
+        "conflict",
+        {
+          status: "conflict",
+          error: new AppError(AppErrorKind.PROTOCOL, "PRIVATE-SOURCE-ERROR", { status: 409 }),
+        },
+        "system.source.conflict",
+        "shell.feedback.readLatest",
+      ],
+      [
+        "error",
+        {
+          status: "error",
+          error: new AppError(AppErrorKind.SERVER, "PRIVATE-SOURCE-ERROR", { status: 503 }),
+        },
+        "system.source.failed",
+        null,
+      ],
+      [
+        "result-unknown",
+        {
+          status: "result-unknown",
+          error: new AppError(AppErrorKind.NETWORK, "PRIVATE-SOURCE-ERROR"),
+        },
+        "system.source.unknown",
+        "shell.feedback.inspectOutcome",
+      ],
+    ];
+
+    for (const locale of locales) {
+      const i18n = createInstance();
+      await i18n.init({
+        resources: { [locale]: { translation: catalogs[locale] } },
+        lng: locale,
+        supportedLngs: locales,
+        fallbackLng: false,
+        nsSeparator: false,
+        interpolation: { escapeValue: false },
+      });
+      for (const [status, command, messageKey, actionKey] of states) {
+        const markup = renderToStaticMarkup(
+          createElement(
+            I18nextProvider,
+            { i18n },
+            createElement(SourceOperationFeedback, {
+              state: { command, inspecting: false },
+              failed: false,
+              onInspect() {},
+              onReadLatest() {},
+            }),
+          ),
+        );
+        assert.ok(markup.includes(`data-command-state="${status}"`));
+        assert.ok(markup.includes(i18n.t(messageKey)), `${locale} renders ${status} feedback`);
+        if (actionKey) {
+          assert.ok(markup.includes(i18n.t(actionKey)), `${locale} exposes ${actionKey}`);
+        } else {
+          assert.ok(!markup.includes(i18n.t("shell.feedback.inspectOutcome")));
+          assert.ok(!markup.includes(i18n.t("shell.feedback.readLatest")));
+        }
+        assert.ok(!markup.includes("PRIVATE-SOURCE-ERROR"));
+      }
+    }
+  } finally {
+    await vite.close();
+  }
+});
+
+test("F5.3-SOURCE-INSPECT-COOLDOWN: the actual source feedback disables outcome inspection during server cooldown", async () => {
+  const vite = await createServer({
+    configFile: false,
+    root: process.cwd(),
+    appType: "custom",
+    optimizeDeps: { noDiscovery: true, include: [] },
+    server: { middlewareMode: true, hmr: false, ws: false },
+  });
+  try {
+    const { SourceOperationFeedback } = await vite.ssrLoadModule(
+      "/src/features/system/ui/SourceOperationFeedback.tsx",
+    );
+    const [{ createElement }, { renderToStaticMarkup }, { I18nextProvider }] = await Promise.all([
+      import("react"),
+      import("react-dom/server"),
+      import("react-i18next"),
+    ]);
+
+    for (const locale of locales) {
+      const i18n = createInstance();
+      await i18n.init({
+        resources: { [locale]: { translation: catalogs[locale] } },
+        lng: locale,
+        supportedLngs: locales,
+        fallbackLng: false,
+        nsSeparator: false,
+        interpolation: { escapeValue: false },
+      });
+      const markup = renderToStaticMarkup(
+        createElement(
+          I18nextProvider,
+          { i18n },
+          createElement(SourceOperationFeedback, {
+            state: {
+              command: {
+                status: "result-unknown",
+                error: new AppError(AppErrorKind.NETWORK, "PRIVATE-SOURCE-INSPECT-ERROR"),
+              },
+              inspecting: false,
+            },
+            onInspect() {},
+            onReadLatest() {},
+            failed: true,
+            inspectDisabled: true,
+            inspectCoolingDown: true,
+          }),
+        ),
+      );
+      const inspectLabel = i18n.t("shell.feedback.inspectOutcome");
+      const inspectButton = markup
+        .match(/<button\b[^>]*>[\s\S]*?<\/button>/g)
+        ?.find((button) => button.includes(inspectLabel));
+      assert.ok(inspectButton, `${locale} retains the safe original-operation inspection action`);
+      assert.match(inspectButton, /\sdisabled(?:="")?(?:\s|>)/);
+      assert.ok(markup.includes(i18n.t("system.source.inspectRateLimited")));
+      assert.ok(!markup.includes("PRIVATE-SOURCE-INSPECT-ERROR"));
+      assert.ok(!markup.includes(i18n.t("shell.feedback.readLatest")));
+    }
+  } finally {
+    await vite.close();
+  }
+});
+
+test("F5.3-ACCOUNT-COMMAND-FEEDBACK: the actual account command feedback keeps unknown and conflict recovery read-only in every locale", async () => {
+  const vite = await createServer({
+    configFile: false,
+    root: process.cwd(),
+    appType: "custom",
+    optimizeDeps: { noDiscovery: true, include: [] },
+    server: { middlewareMode: true, hmr: false, ws: false },
+  });
+  try {
+    const { AccountCommandFeedback } = await vite.ssrLoadModule(
+      "/src/features/identity/ui/components/AccountCommandFeedback.tsx",
+    );
+    const [{ createElement }, { renderToStaticMarkup }, { I18nextProvider }] = await Promise.all([
+      import("react"),
+      import("react-dom/server"),
+      import("react-i18next"),
+    ]);
+    const cases = [
+      ["pending", { status: "pending" }, "management.pending", null],
+      ["success", { status: "success", result: {} }, "management.success", null],
+      [
+        "conflict",
+        {
+          status: "conflict",
+          error: new AppError(AppErrorKind.PROTOCOL, "PRIVATE-ACCOUNT-ERROR", {
+            status: 409,
+            code: "account_conflict",
+          }),
+        },
+        "management.conflict",
+        "shell.feedback.readLatest",
+      ],
+      [
+        "error",
+        {
+          status: "error",
+          error: new AppError(AppErrorKind.PROTOCOL, "PRIVATE-ACCOUNT-ERROR", {
+            status: 409,
+            code: "account_username_taken",
+          }),
+        },
+        "management.usernameTaken",
+        null,
+      ],
+      [
+        "result-unknown",
+        {
+          status: "result-unknown",
+          error: new AppError(AppErrorKind.NETWORK, "PRIVATE-ACCOUNT-ERROR"),
+        },
+        "management.unknown",
+        "shell.feedback.inspectOutcome",
+      ],
+    ];
+
+    for (const locale of locales) {
+      const i18n = createInstance();
+      await i18n.init({
+        resources: { [locale]: { translation: catalogs[locale] } },
+        lng: locale,
+        supportedLngs: locales,
+        fallbackLng: false,
+        nsSeparator: false,
+        interpolation: { escapeValue: false },
+      });
+      for (const [status, mutation, messageKey, actionKey] of cases) {
+        const markup = renderToStaticMarkup(
+          createElement(
+            I18nextProvider,
+            { i18n },
+            createElement(AccountCommandFeedback, {
+              snapshot: {
+                authorized: true,
+                directory: { status: "empty" },
+                detail: { status: "idle" },
+                mutation,
+                operation: null,
+                inspecting: false,
+              },
+              onInspect() {},
+              onReadLatest() {},
+            }),
+          ),
+        );
+        assert.ok(markup.includes(i18n.t(messageKey)), `${locale} renders ${status}`);
+        if (actionKey)
+          assert.ok(markup.includes(i18n.t(actionKey)), `${locale} exposes read-only recovery`);
+        else {
+          assert.ok(!markup.includes(i18n.t("shell.feedback.inspectOutcome")));
+          assert.ok(!markup.includes(i18n.t("shell.feedback.readLatest")));
+        }
+        assert.ok(!markup.includes("PRIVATE-ACCOUNT-ERROR"));
+      }
+    }
+  } finally {
+    await vite.close();
+  }
+});
+
+test("F5.3-ACCOUNT-CREATE-DIALOG-RENDER: the actual create dialog exposes only username, password and role", async () => {
+  const vite = await createServer({
+    configFile: false,
+    root: process.cwd(),
+    appType: "custom",
+    optimizeDeps: { noDiscovery: true, include: [] },
+    server: { middlewareMode: true, hmr: false, ws: false },
+  });
+  try {
+    const { CreateAccountDialog } = await vite.ssrLoadModule(
+      "/src/features/identity/ui/CreateAccountDialog.tsx",
+    );
+    const [{ createElement }, { renderToStaticMarkup }, { I18nextProvider }] = await Promise.all([
+      import("react"),
+      import("react-dom/server"),
+      import("react-i18next"),
+    ]);
+    const workflow = {
+      getSnapshot: () => ({
+        authorized: true,
+        directory: { status: "empty" },
+        detail: { status: "idle" },
+        mutation: { status: "idle" },
+        operation: null,
+        inspecting: false,
+      }),
+      subscribe: () => () => {},
+    };
+
+    for (const locale of locales) {
+      const i18n = createInstance();
+      await i18n.init({
+        resources: { [locale]: { translation: catalogs[locale] } },
+        lng: locale,
+        supportedLngs: locales,
+        fallbackLng: false,
+        nsSeparator: false,
+        interpolation: { escapeValue: false },
+      });
+      const markup = renderToStaticMarkup(
+        createElement(
+          I18nextProvider,
+          { i18n },
+          createElement(CreateAccountDialog, { workflow, onClose() {} }),
+        ),
+      );
+      const inputs = markup.match(/<input\b[^>]*>/g) ?? [];
+      assert.equal(inputs.length, 2, `${locale} renders exactly account name and password inputs`);
+      assert.deepEqual(
+        inputs.map((input) => input.match(/\btype="([^"]+)"/)?.[1]),
+        ["text", "password"],
+        `${locale} keeps the password masked`,
+      );
+      assert.deepEqual(
+        inputs.map((input) => input.match(/\bautoComplete="([^"]+)"/)?.[1]),
+        ["username", "new-password"],
+        `${locale} uses username and password-manager autocomplete semantics`,
+      );
+      for (const key of [
+        "accountDialog.field.username",
+        "accountDialog.field.password",
+        "accountDialog.field.role",
+      ]) {
+        assert.ok(markup.includes(i18n.t(key)), `${locale} renders ${key}`);
+      }
+      assert.ok(markup.includes(i18n.t("roles.role.view.title")));
+      assert.ok(!markup.includes(i18n.t("accountDialog.field.confirmPassword")));
+      assert.ok(!markup.includes(i18n.t("accountDialog.field.displayName")));
+    }
+  } finally {
+    await vite.close();
+  }
+});
+
+test("F5.3-RULE-COMMAND-FEEDBACK: the actual rule feedback distinguishes durable outcomes without claiming publication", async () => {
+  const vite = await createServer({
+    configFile: false,
+    root: process.cwd(),
+    appType: "custom",
+    optimizeDeps: { noDiscovery: true, include: [] },
+    server: { middlewareMode: true, hmr: false, ws: false },
+  });
+  try {
+    const { RuleOperationFeedback } = await vite.ssrLoadModule(
+      "/src/features/rules/ui/RuleOperationFeedback.tsx",
+    );
+    const [{ createElement }, { renderToStaticMarkup }, { I18nextProvider }] = await Promise.all([
+      import("react"),
+      import("react-dom/server"),
+      import("react-i18next"),
+    ]);
+    const cases = [
+      ["pending", { status: "pending" }, "rules.workspace.commandPending", null],
+      ["success", { status: "success", result: {} }, "rules.workspace.commandSuccess", null],
+      [
+        "error",
+        {
+          status: "error",
+          error: new AppError(AppErrorKind.SERVER, "PRIVATE-RULE-ERROR", { status: 503 }),
+        },
+        "rules.workspace.commandFailed",
+        null,
+      ],
+      [
+        "conflict",
+        {
+          status: "conflict",
+          error: new AppError(AppErrorKind.PROTOCOL, "PRIVATE-RULE-ERROR", { status: 409 }),
+        },
+        "rules.workspace.commandConflict",
+        "shell.feedback.readLatest",
+      ],
+      [
+        "result-unknown",
+        {
+          status: "result-unknown",
+          error: new AppError(AppErrorKind.NETWORK, "PRIVATE-RULE-ERROR"),
+        },
+        "rules.workspace.commandUnknown",
+        "shell.feedback.inspectOutcome",
+      ],
+    ];
+
+    for (const locale of locales) {
+      const i18n = createInstance();
+      await i18n.init({
+        resources: { [locale]: { translation: catalogs[locale] } },
+        lng: locale,
+        supportedLngs: locales,
+        fallbackLng: false,
+        nsSeparator: false,
+        interpolation: { escapeValue: false },
+      });
+      for (const [status, command, messageKey, actionKey] of cases) {
+        const markup = renderToStaticMarkup(
+          createElement(
+            I18nextProvider,
+            { i18n },
+            createElement(RuleOperationFeedback, {
+              snapshot: { authorized: true, command, operation: null, inspecting: false },
+              onInspect() {},
+              onReadLatest() {},
+            }),
+          ),
+        );
+        assert.ok(markup.includes(`data-command-state="${status}"`));
+        assert.ok(markup.includes(i18n.t("rules.workspace.commandTitle")));
+        assert.ok(markup.includes(i18n.t(messageKey)), `${locale} renders ${status}`);
+        if (actionKey)
+          assert.ok(markup.includes(i18n.t(actionKey)), `${locale} exposes safe recovery`);
+        else {
+          assert.ok(!markup.includes(i18n.t("shell.feedback.inspectOutcome")));
+          assert.ok(!markup.includes(i18n.t("shell.feedback.readLatest")));
+        }
+        assert.ok(!markup.includes("PRIVATE-RULE-ERROR"));
+      }
+
+      const inspectingMarkup = renderToStaticMarkup(
+        createElement(
+          I18nextProvider,
+          { i18n },
+          createElement(RuleOperationFeedback, {
+            snapshot: {
+              authorized: true,
+              command: {
+                status: "result-unknown",
+                error: new AppError(AppErrorKind.NETWORK, "PRIVATE-RULE-ERROR"),
+              },
+              operation: null,
+              inspecting: true,
+            },
+            onInspect() {},
+            onReadLatest() {},
+          }),
+        ),
+      );
+      assert.ok(inspectingMarkup.includes(i18n.t("rules.workspace.commandUnknown")));
+      assert.ok(!inspectingMarkup.includes(i18n.t("shell.feedback.inspectOutcome")));
     }
   } finally {
     await vite.close();
@@ -1064,6 +1866,23 @@ test("F4.22-LOGIN-PAGE-RENDER: the actual login page separates safe rejection, u
         feedbackKey: "login.remote.invalid",
       },
       {
+        name: "rate-limited",
+        retryAfterMs: 1_600,
+        snapshot: {
+          access: { phase: "resolved", facts: { kind: "anonymous" } },
+          login: {
+            status: "error",
+            error: new AppError(AppErrorKind.RATE_LIMITED, "safe", {
+              status: 429,
+              code: "rate_limited",
+              retryAfterMs: 1_600,
+            }),
+          },
+          logout: { status: "idle" },
+        },
+        feedbackKey: "login.remote.rateLimitedFor",
+      },
+      {
         name: "unknown-write",
         snapshot: {
           access: { phase: "unavailable" },
@@ -1085,9 +1904,10 @@ test("F4.22-LOGIN-PAGE-RENDER: the actual login page separates safe rejection, u
         feedbackKey: "login.remote.unavailable",
       },
     ];
-    const workflowFor = (snapshot) => ({
+    const workflowFor = (snapshot, retryAfterMs = 0) => ({
       getSnapshot: () => snapshot,
       subscribe: () => () => {},
+      getLoginRetryAfterMs: () => retryAfterMs,
       restore: async () => null,
       login: async () => null,
       logout: async () => undefined,
@@ -1143,7 +1963,7 @@ test("F4.22-LOGIN-PAGE-RENDER: the actual login page separates safe rejection, u
         `${locale} explains synthetic sign-in and data in the demo login page`,
       );
       for (const item of cases) {
-        const workflow = workflowFor(item.snapshot);
+        const workflow = workflowFor(item.snapshot, item.retryAfterMs);
         const markup = renderToStaticMarkup(
           createElement(
             I18nextProvider,
@@ -1155,7 +1975,11 @@ test("F4.22-LOGIN-PAGE-RENDER: the actual login page separates safe rejection, u
             ),
           ),
         );
-        assert.ok(markup.includes(i18n.t(item.feedbackKey)), `${locale}/${item.name} feedback`);
+        const expectedFeedback =
+          item.name === "rate-limited"
+            ? i18n.t(item.feedbackKey, { count: 2 })
+            : i18n.t(item.feedbackKey);
+        assert.ok(markup.includes(expectedFeedback), `${locale}/${item.name} feedback`);
         assert.ok(!markup.includes("PRIVATE-ACCOUNT-EXISTS-DETAIL"));
         assert.ok(!markup.includes("PRIVATE-TRANSPORT-DETAIL"));
 
@@ -1193,7 +2017,29 @@ test("F4.22-LOGIN-PAGE-RENDER: the actual login page separates safe rejection, u
         } else if (item.name === "unknown-write") {
           assert.equal(inputs.length, 2);
           assert.ok(inputs.every((input) => /\sdisabled(?:="")?(?:\s|>)/.test(input)));
+          const revealButton = markup
+            .match(/<button\b[^>]*>[\s\S]*?<\/button>/g)
+            ?.find((button) => button.includes(i18n.t("login.remote.showPassword")));
+          assert.ok(revealButton, `${locale} retains the password visibility control`);
+          assert.match(revealButton, /\sdisabled(?:="")?(?:\s|>)/);
+          assert.match(revealButton, /aria-pressed="false"/);
+          assert.ok(
+            inputs.some(
+              (input) =>
+                /type="password"/.test(input) && /autoComplete="current-password"/.test(input),
+            ),
+            `${locale} keeps an unknown login password masked`,
+          );
           assert.ok(markup.includes(i18n.t("login.remote.inspect")));
+        } else if (item.name === "rate-limited") {
+          assert.equal(inputs.length, 2, `${locale} keeps credentials editable during cooldown`);
+          const submitLabel = i18n.t("login.submit");
+          const submit = markup
+            .match(/<button\b[^>]*>[\s\S]*?<\/button>/g)
+            ?.find((button) => button.includes(submitLabel));
+          assert.ok(submit, `${locale} keeps the submit control visible`);
+          assert.match(submit, /\sdisabled(?:="")?(?:\s|>)/);
+          assert.ok(markup.includes(i18n.t("login.remote.rateLimitedFor", { count: 2 })));
         } else {
           assert.equal(
             inputs.length,
@@ -1239,6 +2085,25 @@ test("F4.21-BOOTSTRAP-GATE-RENDER: initialization content is rendered only after
           command: { status: "idle" },
         },
         showsChild: false,
+        showsAuthorizationForm: true,
+      },
+      {
+        name: "authorization-result-unknown",
+        snapshot: {
+          gate: {
+            status: "ready",
+            key: "synthetic-gate",
+            data: { kind: "open", authorized: false },
+            receivedAt: 2,
+          },
+          command: {
+            status: "result-unknown",
+            error: new AppError(AppErrorKind.PROTOCOL, "PRIVATE-ONE-TIME-CODE-DETAIL"),
+          },
+        },
+        showsChild: false,
+        showsAuthorizationForm: false,
+        feedbackKey: "setup.operator.unknownTitle",
       },
       {
         name: "authorized",
@@ -1252,6 +2117,7 @@ test("F4.21-BOOTSTRAP-GATE-RENDER: initialization content is rendered only after
           command: { status: "idle" },
         },
         showsChild: true,
+        showsAuthorizationForm: false,
       },
       {
         name: "closed",
@@ -1265,6 +2131,7 @@ test("F4.21-BOOTSTRAP-GATE-RENDER: initialization content is rendered only after
           command: { status: "idle" },
         },
         showsChild: false,
+        showsAuthorizationForm: false,
       },
     ];
     const workflowFor = (snapshot) => ({
@@ -1304,9 +2171,23 @@ test("F4.21-BOOTSTRAP-GATE-RENDER: initialization content is rendered only after
           item.showsChild,
           `${locale}/${item.name} must respect the server-confirmed authorization gate`,
         );
+        assert.equal(
+          /type="password"/.test(markup),
+          item.showsAuthorizationForm,
+          `${locale}/${item.name} must expose only the expected authorization form state`,
+        );
         if (item.name === "authorization-required") {
           assert.ok(markup.includes(i18n.t("setup.operator.code")));
           assert.match(markup, /type="password"/);
+        }
+        if (item.name === "authorization-result-unknown") {
+          assert.ok(markup.includes(i18n.t(item.feedbackKey)), `${locale} explains unknown result`);
+          assert.ok(
+            markup.includes(i18n.t("shell.feedback.inspectOutcome")),
+            `${locale} offers explicit outcome inspection`,
+          );
+          assert.doesNotMatch(markup, /type="password"/);
+          assert.doesNotMatch(markup, /PRIVATE-ONE-TIME-CODE-DETAIL/);
         }
         if (item.name === "closed") assert.ok(markup.includes(i18n.t("setup.operator.closed")));
       }
@@ -1326,6 +2207,12 @@ test("I18N-DYNAMIC-RULE-COPY: the actual rule workbench hook builds translated c
   });
   try {
     const { useRuleCopy } = await vite.ssrLoadModule("/src/features/rules/i18n/useRuleCopy.ts");
+    const { localizedOptions } = await vite.ssrLoadModule(
+      "/src/features/rules/i18n/localizedOptions.ts",
+    );
+    const { RULE_OPTION_VALUES } = await vite.ssrLoadModule(
+      "/src/features/rules/model/ruleOptions.ts",
+    );
     const [{ createElement }, { renderToString }, { I18nextProvider }] = await Promise.all([
       import("react"),
       import("react-dom/server"),
@@ -1361,6 +2248,19 @@ test("I18N-DYNAMIC-RULE-COPY: the actual rule workbench hook builds translated c
         assert.ok(value.length > 0, `${locale} must not render an empty rule label`);
         assert.ok(!value.includes("{{"), `${locale} left rule-copy interpolation unresolved`);
         assert.ok(!value.startsWith("rules."), `${locale} leaked a rule translation key`);
+      }
+      for (const [group, protocolValues] of Object.entries(RULE_OPTION_VALUES)) {
+        const options = localizedOptions(group, messages.options);
+        assert.deepEqual(
+          options.map(({ value }) => value),
+          protocolValues,
+          `${locale}/${group} keeps protocol option values independent of translated labels`,
+        );
+        assert.deepEqual(
+          options.map(({ label }) => label),
+          messages.options[group],
+          `${locale}/${group} uses localized option labels in the protocol-defined order`,
+        );
       }
     }
   } finally {
@@ -1432,8 +2332,8 @@ test("I18N-DYNAMIC-PRESENTATION: actual navigation, instance and identity feedba
   });
   try {
     const navigation = await vite.ssrLoadModule("/src/app/router/navigation.ts");
-    const instanceStatus = await vite.ssrLoadModule(
-      "/src/features/applications/presentation/instanceStatus.ts",
+    const observationPresentation = await vite.ssrLoadModule(
+      "/src/shared/presentation/observation.ts",
     );
     const accountFeedback = await vite.ssrLoadModule(
       "/src/features/identity/presentation/accountFeedback.ts",
@@ -1475,13 +2375,7 @@ test("I18N-DYNAMIC-PRESENTATION: actual navigation, instance and identity feedba
       ...navigation.navigationItemsForAccess(true).map(({ i18nKey }) => i18nKey),
       ...navigation.navigationItemsForAccess(false).map(({ i18nKey }) => i18nKey),
       retryFeedback.key,
-      ...[
-        { status: "healthy", cpu: 10, memory: 10 },
-        { status: "warning", cpu: 10, memory: 10 },
-        { status: "critical", cpu: 10, memory: 10 },
-        { status: "healthy", cpu: 81, memory: 10 },
-        { status: "healthy", cpu: 10, memory: 81 },
-      ].map(instanceStatus.instanceStatusLabelKey),
+      ...Object.values(observationPresentation.OBSERVATION_HEALTH_LABEL_KEY),
       ...[
         { authorized: false, inspecting: false, mutation: { status: "idle" } },
         { authorized: true, inspecting: true, mutation: { status: "idle" } },

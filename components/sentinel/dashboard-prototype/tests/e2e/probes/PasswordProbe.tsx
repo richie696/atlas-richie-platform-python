@@ -41,6 +41,12 @@ function createPasswordTopology() {
             ? new AppError(AppErrorKind.TIMEOUT, "PRIVATE-PASSWORD-ERROR")
             : new AppError(AppErrorKind.PROTOCOL, "PRIVATE-PASSWORD-ERROR", {
                 status: control.mode === "current" ? 400 : control.mode === "policy" ? 422 : 429,
+                code:
+                  control.mode === "current"
+                    ? "current_password_invalid"
+                    : control.mode === "policy"
+                      ? "validation_failed"
+                      : "rate_limited",
               });
         return { sessionDisposition: "reauthenticate" };
       },

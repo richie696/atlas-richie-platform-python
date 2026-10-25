@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertSupportedBrowserExecutable, Connection } from "./cdp.mjs";
+import { connectE2EBrowser, Connection } from "./cdp.mjs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -36,29 +36,17 @@ test("CDP response releases the timeout and transport errors reject immediately"
   client.close();
 });
 
-test("browser launcher rejects Microsoft Edge executable paths", () => {
-  for (const executable of [
-    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    "/usr/bin/microsoft-edge-stable",
-  ]) {
-    assert.throws(() => assertSupportedBrowserExecutable(executable), /Microsoft Edge is blocked/);
-  }
-
-  const chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-  assert.equal(assertSupportedBrowserExecutable(chrome), chrome);
-});
-
-test("launchBrowser refuses an Edge override before starting any browser process", () => {
+test("E2E browser connector refuses to run without an explicit endpoint", () => {
   const cdpModule = new URL("./cdp.mjs", import.meta.url).href;
   const { NODE_TEST_CONTEXT: _runnerContext, ...environment } = process.env;
+  delete environment.SENTINEL_E2E_CDP_URL;
   const result = spawnSync(
     process.execPath,
-    ["--input-type=module", "-e", `import { launchBrowser } from ${JSON.stringify(cdpModule)}; await launchBrowser();`],
+    ["--input-type=module", "-e", `import { connectE2EBrowser } from ${JSON.stringify(cdpModule)}; await connectE2EBrowser();`],
     {
       env: {
         ...environment,
-        CHROME_BIN: "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        EDGE_BIN: "/usr/bin/false",
       },
       encoding: "utf8",
       timeout: 5000,
@@ -67,23 +55,25 @@ test("launchBrowser refuses an Edge override before starting any browser process
 
   assert.equal(result.error, undefined);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /Microsoft Edge is blocked/);
-  assert.doesNotMatch(result.stderr, /Chrome 提前退出|ENOENT/);
+  assert.match(result.stderr, /SENTINEL_E2E_CDP_URL is required/);
+  assert.doesNotMatch(result.stderr, /ENOENT|Microsoft Edge/);
 });
 
-test("failed Chrome launch cannot produce a green E2E file or capture exit", () => {
+test("E2E and visual capture fail fast without the Edge DevTools endpoint", () => {
   const cwd = fileURLToPath(new URL("../../", import.meta.url));
   // A nested node:test child must not inherit the parent's IPC-only runner mode.
   const { NODE_TEST_CONTEXT: _runnerContext, ...environment } = process.env;
+  delete environment.SENTINEL_E2E_CDP_URL;
   for (const arguments_ of [
     ["--test", "--test-reporter=spec", "tests/e2e/app.e2e.test.mjs"],
     ["tests/visual/capture-baseline.mjs", "capture", "/private/tmp/sentinel-tool-negative-unused"],
   ]) {
     const result = spawnSync(process.execPath, arguments_, {
-      cwd, env: { ...environment, CHROME_BIN: "/usr/bin/false" }, encoding: "utf8", timeout: 10000,
+      cwd, env: { ...environment, EDGE_BIN: "/usr/bin/false" }, encoding: "utf8", timeout: 10000,
     });
     assert.equal(result.error, undefined);
-    assert.notEqual(result.status, 0, `Failed Chrome incorrectly accepted: ${result.stdout}`);
-    assert.match(result.stdout + result.stderr, /Chrome 提前退出/);
+    assert.notEqual(result.status, 0, `E2E incorrectly accepted a missing endpoint: ${result.stdout}`);
+    assert.match(result.stdout + result.stderr, /SENTINEL_E2E_CDP_URL is required/);
+    assert.doesNotMatch(result.stdout + result.stderr, /Microsoft Edge 提前退出|ENOENT/);
   }
 });

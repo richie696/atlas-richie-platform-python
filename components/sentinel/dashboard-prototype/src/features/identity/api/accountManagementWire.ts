@@ -11,7 +11,8 @@ import {
 } from "../../../core/api/protocol/common";
 import { WriteOnlySecretSchema } from "../../../shared/api/writeOnlySecretWire";
 import { ACCOUNT_STATUS, IDENTITY_ROLE } from "../model/account";
-import { PASSWORD_MIN_LENGTH } from "../model/passwordPolicy";
+import { ACCOUNT_SEARCH_MAX_LENGTH } from "../model/accountManagement";
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "../model/passwordPolicy";
 import { RoleIdSchema, UsernameSchema } from "./identityAccessWire";
 
 const MAX_ACCOUNT_REVISION = "9223372036854775807";
@@ -48,7 +49,7 @@ export const AccountRecordSchema = z.strictObject({
 export const AccountListQuerySchema = z.strictObject({
   page: PageNumberSchema,
   pageSize: PageSizeSchema,
-  search: utf16BoundedString(200),
+  search: utf16BoundedString(ACCOUNT_SEARCH_MAX_LENGTH),
   status: AccountStatusSchema.optional(),
 });
 export const AccountPageSchema = z.strictObject({
@@ -59,7 +60,7 @@ export const AccountPageSchema = z.strictObject({
 });
 export const AccountCreateInputSchema = z.strictObject({
   username: UsernameSchema,
-  password: WriteOnlySecretSchema.min(PASSWORD_MIN_LENGTH),
+  password: WriteOnlySecretSchema.min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
   roleId: RoleIdSchema,
 });
 export const AccountMutationSchema = z.discriminatedUnion("kind", [
@@ -82,6 +83,19 @@ export const AccountMutationSchema = z.discriminatedUnion("kind", [
     revision: AccountRevisionSchema,
     roleId: RoleIdSchema,
   }),
+  z.strictObject({
+    kind: z.literal("reset_password"),
+    requestKey: RequestKeySchema,
+    accountId: OpaqueIdentifierSchema,
+    revision: AccountRevisionSchema,
+    password: WriteOnlySecretSchema.min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
+  }),
+  z.strictObject({
+    kind: z.literal("delete"),
+    requestKey: RequestKeySchema,
+    accountId: OpaqueIdentifierSchema,
+    revision: AccountRevisionSchema,
+  }),
 ]);
 const ACCOUNT_FINAL_RECEIPTS = [
   z.strictObject({
@@ -96,6 +110,7 @@ const ACCOUNT_FINAL_RECEIPTS = [
       "username_taken",
       "last_admin",
       "built_in",
+      "self_operation",
       "validation",
       "conflict",
       "not_found",
@@ -147,6 +162,12 @@ export function validAccountAcknowledgement(
   return (
     account.id === input.accountId &&
     account.revision !== input.revision &&
-    (input.kind === "status" ? account.status === input.status : account.roleId === input.roleId)
+    (input.kind === "status"
+      ? account.status === input.status
+      : input.kind === "role"
+        ? account.roleId === input.roleId
+        : input.kind === "delete"
+          ? account.status === ACCOUNT_STATUS.Disabled
+          : true)
   );
 }

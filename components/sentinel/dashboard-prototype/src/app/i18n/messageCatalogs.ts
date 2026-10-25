@@ -6,6 +6,7 @@ type MessageFileLoader = () => Promise<{ readonly default: MessageFile }>;
 type LocaleCatalogLoader = () => Promise<Readonly<Record<string, string>>>;
 
 const bundleNames = Object.freeze([
+  "documentation",
   "shell",
   "overview",
   "faults",
@@ -20,6 +21,7 @@ const bundleNames = Object.freeze([
 /** Explicit paths make adding or removing a locale bundle a compile-time edit. */
 const bundlesByLocale: Readonly<Record<Locale, readonly MessageFileLoader[]>> = Object.freeze({
   "zh-CN": [
+    () => import("./messages/zh-CN/documentation.json"),
     () => import("./messages/zh-CN/shell.json"),
     () => import("./messages/zh-CN/overview.json"),
     () => import("./messages/zh-CN/faults.json"),
@@ -31,6 +33,7 @@ const bundlesByLocale: Readonly<Record<Locale, readonly MessageFileLoader[]>> = 
     () => import("./messages/zh-CN/observation.json"),
   ],
   "en-US": [
+    () => import("./messages/en-US/documentation.json"),
     () => import("./messages/en-US/shell.json"),
     () => import("./messages/en-US/overview.json"),
     () => import("./messages/en-US/faults.json"),
@@ -42,6 +45,7 @@ const bundlesByLocale: Readonly<Record<Locale, readonly MessageFileLoader[]>> = 
     () => import("./messages/en-US/observation.json"),
   ],
   "ja-JP": [
+    () => import("./messages/ja-JP/documentation.json"),
     () => import("./messages/ja-JP/shell.json"),
     () => import("./messages/ja-JP/overview.json"),
     () => import("./messages/ja-JP/faults.json"),

@@ -7,7 +7,10 @@ import { useQueryResource } from "../../../shared/state/useQueryResource";
 import { useOwnedDisposal } from "../../../shared/state/useOwnedDisposal";
 import type { DashboardPageProps } from "../../../shared/types/dashboard";
 import { ALL_APPLICATIONS, ROUTE, TIME_RANGE } from "../../../shared/types/navigation";
-import { ObservationQueryView } from "../../../shared/ui/observation/ObservationQueryView";
+import { ObservationContextFallback } from "../../../shared/ui/observation/ObservationContextFallback";
+import { ObservationCatalogNotice } from "../../../shared/ui/observation/ObservationCatalogNotice";
+import { MetricUnavailableView } from "../../../shared/ui/observation/MetricUnavailableView";
+import { Intro } from "../../../shared/ui/Intro";
 import { Select } from "../../../shared/ui/Select";
 import { createInstanceResources, createObservationCatalogResource } from "../../applications";
 import type {
@@ -17,13 +20,17 @@ import type {
 } from "../../applications";
 import { INSTANCE_LAYER, isInstanceLayer } from "../../applications";
 import { createRealtimeMonitor } from "../application/realtimeMonitor";
+import { createHostMetricsResources } from "../application/hostMetricsResources";
 import { WINDOW_MODE, type RealtimeSelection } from "../model/monitoring";
+import type { HostMetricsPort, HostMetricsSourceDirectoryPort } from "../api/hostMetricsPort";
 import { LiveMonitoringPage } from "./LiveMonitoringPage";
 
 type PageContext = DashboardPageProps & {
   readonly catalogPort: ObservationCatalogPort;
   readonly instancePort: InstancePort;
   readonly metricsPort: RealtimePort;
+  readonly hostMetricsSourcePort: HostMetricsSourceDirectoryPort;
+  readonly hostMetricsPort: HostMetricsPort;
   readonly instanceId?: string;
   readonly metricScope?: string;
   readonly environmentId?: string;
@@ -38,6 +45,8 @@ export function RealtimeObservationContainer({
   catalogPort,
   instancePort,
   metricsPort,
+  hostMetricsSourcePort,
+  hostMetricsPort,
   ...page
 }: PageContext) {
   const { t } = useTranslation();
@@ -47,8 +56,14 @@ export function RealtimeObservationContainer({
   );
   const monitor = useMemo(() => createRealtimeMonitor(metricsPort), [metricsPort]);
   const instanceResources = useMemo(() => createInstanceResources(instancePort), [instancePort]);
+  const hostMetricsResources = useMemo(
+    () => createHostMetricsResources(hostMetricsSourcePort, hostMetricsPort),
+    [hostMetricsPort, hostMetricsSourcePort],
+  );
   useOwnedDisposal(monitor);
   useOwnedDisposal(instanceResources);
+  useOwnedDisposal(hostMetricsResources.sources);
+  useOwnedDisposal(hostMetricsResources.metrics);
   const catalogSnapshot = useQueryResource(catalogResource, undefined);
   const [environmentChoice, setEnvironmentChoice] = useState(page.environmentId ?? "");
   const catalog = "data" in catalogSnapshot ? catalogSnapshot.data : null;
@@ -56,16 +71,11 @@ export function RealtimeObservationContainer({
   const appEnvironments = catalog?.applications.filter((app) => app.id === appId) ?? [];
   const inferredEnvironment =
     appEnvironments.length === 1 ? appEnvironments[0].environmentId : null;
-  const routeEnvironmentValid = catalog?.environments.some(
-    (environment) => environment.id === page.environmentId,
-  );
   const chosenEnvironmentValid = catalog?.environments.some(
     (environment) => environment.id === environmentChoice,
   );
   const environmentId = page.environmentId
-    ? routeEnvironmentValid
-      ? page.environmentId
-      : null
+    ? page.environmentId
     : (inferredEnvironment ??
       (catalog?.environments.length === 1 ? catalog.environments[0].id : null));
 
@@ -87,52 +97,67 @@ export function RealtimeObservationContainer({
     });
   };
 
-  if (!catalog || !environmentId) {
+  if (!environmentId) {
     return (
-      <ObservationQueryView
-        snapshot={catalogSnapshot}
-        onRetry={() => void catalogResource.load(undefined).catch(() => undefined)}
-      >
-        {() => (
-          <section className="fleet-environment-prompt">
-            <Select
-              label={t("observation.environment")}
-              value={chosenEnvironmentValid ? environmentChoice : ""}
-              options={
-                catalog?.environments.map((item) => ({ value: item.id, label: item.name })) ?? []
-              }
-              onChange={chooseEnvironment}
+      <>
+        <ObservationContextFallback
+          snapshot={catalogSnapshot}
+          onRetry={() => void catalogResource.load(undefined).catch(() => undefined)}
+          header={
+            <Intro
+              eyebrow="LIVE / TELEMETRY"
+              title={t("realtime.intro.title")}
+              description={t("realtime.intro.description")}
             />
-          </section>
-        )}
-      </ObservationQueryView>
-    );
-  }
-
-  if (page.environmentId && !routeEnvironmentValid) {
-    return (
-      <section className="fleet-environment-prompt">
-        <Select
-          label={t("observation.environment")}
-          value={chosenEnvironmentValid ? environmentChoice : ""}
-          options={catalog.environments.map((item) => ({ value: item.id, label: item.name }))}
-          onChange={chooseEnvironment}
-        />
-      </section>
+          }
+          emptyTitle={t("observation.catalog.dataArea")}
+          emptyDescription={t("observation.catalog.emptyBody")}
+          readErrorDescription={t("observation.catalog.readFailed")}
+          readTitle={t("observation.catalog.directoryTitle")}
+        >
+          {() => (
+            <section className="fleet-environment-prompt">
+              <Select
+                label={t("observation.environment")}
+                value={chosenEnvironmentValid ? environmentChoice : ""}
+                options={
+                  catalog?.environments.map((item) => ({ value: item.id, label: item.name })) ?? []
+                }
+                onChange={chooseEnvironment}
+              />
+            </section>
+          )}
+        </ObservationContextFallback>
+        <MetricUnavailableView />
+      </>
     );
   }
 
   return (
-    <RealtimeObservationOwner
-      page={page}
-      monitor={monitor}
-      instanceResource={instanceResources.catalog}
-      environmentId={environmentId}
-      environments={catalog.environments}
-      applications={catalog.applications
-        .filter((application) => application.environmentId === environmentId)
-        .map(({ id, name }) => ({ id, name }))}
-    />
+    <>
+      {!catalog && (
+        <ObservationCatalogNotice
+          snapshot={catalogSnapshot}
+          onRetry={() => void catalogResource.load(undefined).catch(() => undefined)}
+          readErrorDescription={t("observation.catalog.readFailed")}
+          title={t("observation.catalog.directoryTitle")}
+        />
+      )}
+      <RealtimeObservationOwner
+        page={page}
+        monitor={monitor}
+        instanceResource={instanceResources.catalog}
+        hostMetricsSources={hostMetricsResources.sources}
+        hostMetricsResource={hostMetricsResources.metrics}
+        environmentId={environmentId}
+        environments={catalog?.environments ?? []}
+        applications={
+          catalog?.applications
+            .filter((application) => application.environmentId === environmentId)
+            .map(({ id, name }) => ({ id, name })) ?? []
+        }
+      />
+    </>
   );
 }
 
@@ -140,13 +165,20 @@ function RealtimeObservationOwner({
   page,
   monitor,
   instanceResource,
+  hostMetricsSources,
+  hostMetricsResource,
   environmentId,
   environments,
   applications,
 }: {
-  readonly page: Omit<PageContext, "catalogPort" | "instancePort" | "metricsPort">;
+  readonly page: Omit<
+    PageContext,
+    "catalogPort" | "instancePort" | "metricsPort" | "hostMetricsSourcePort" | "hostMetricsPort"
+  >;
   readonly monitor: ReturnType<typeof createRealtimeMonitor>;
   readonly instanceResource: ReturnType<typeof createInstanceResources>["catalog"];
+  readonly hostMetricsSources: ReturnType<typeof createHostMetricsResources>["sources"];
+  readonly hostMetricsResource: ReturnType<typeof createHostMetricsResources>["metrics"];
   readonly environmentId: string;
   readonly environments: readonly { readonly id: string; readonly name: string }[];
   readonly applications: readonly { readonly id: string; readonly name: string }[];
@@ -238,6 +270,9 @@ function RealtimeObservationOwner({
   return (
     <LiveMonitoringPage
       monitor={monitor}
+      hostMetricsSources={hostMetricsSources}
+      hostMetricsResource={hostMetricsResource}
+      onConfigureHostMetrics={() => page.navigate(ROUTE.System, { view: "connections" })}
       selection={selection}
       environments={environments}
       applications={applications}

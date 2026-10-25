@@ -16,7 +16,7 @@
  * - 校验返回**结构化问题**（消息键 + 参数），翻译由 UI 层完成；这样「管理员密码是否
  *   够长」这种领域判断不再被绑死在界面语言上。
  */
-import { PASSWORD_MIN_LENGTH, type IdentityIssue } from "./passwordPolicy";
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, type IdentityIssue } from "./passwordPolicy";
 import { SESSION_CAPABILITY, type SessionCapability } from "../../../core/session/capabilities";
 
 /** 授权角色。值即 API 契约里的 `roleId`，不是展示文案。 */
@@ -151,7 +151,10 @@ export function toAccountSummary(
 
 /** 新建账号表单校验的消息键。翻译发生在 UI 层。 */
 export type AccountDraftIssueKey =
-  "account.credentialsRequired" | "account.passwordTooShort" | "account.invalidRole";
+  | "account.credentialsRequired"
+  | "account.passwordTooShort"
+  | "account.passwordTooLong"
+  | "account.invalidRole";
 
 /** 登录表单校验的消息键。 */
 export type LoginIssueKey = "account.loginRequired";
@@ -172,6 +175,9 @@ export function validateAccountDraft(draft: AccountDraft): readonly AccountDraft
   }
   if (draft.password.length < PASSWORD_MIN_LENGTH) {
     return [{ key: "account.passwordTooShort", params: { min: PASSWORD_MIN_LENGTH } }];
+  }
+  if (draft.password.length > PASSWORD_MAX_LENGTH) {
+    return [{ key: "account.passwordTooLong", params: { max: PASSWORD_MAX_LENGTH } }];
   }
   if (!isIdentityRoleId(draft.roleId)) return [{ key: "account.invalidRole" }];
   return [];

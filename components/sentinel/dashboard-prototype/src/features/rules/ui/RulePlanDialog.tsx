@@ -79,19 +79,24 @@ export function RulePlanDialog({
         onReadLatest={() => void workflow.refreshPlans().catch(() => {})}
       />
       {failed && (
-        <FeedbackPanel
-          tone="warning"
-          copy={{
-            title: t("rules.workspace.actionBlocked"),
-            description: t("rules.deployment.planInvalid"),
-          }}
-        />
+        <div data-plan-validation-feedback>
+          <FeedbackPanel
+            tone="warning"
+            copy={{
+              title: t("rules.workspace.actionBlocked"),
+              description: t("rules.deployment.planInvalid"),
+            }}
+          />
+        </div>
       )}
       <RulePlanFields
         draft={draft}
         versions={"data" in state.versions ? state.versions.data.items : []}
         disabled={state.locked}
-        onChange={setDraft}
+        onChange={(nextDraft) => {
+          setDraft(nextDraft);
+          setFailed(false);
+        }}
       />
       {prepared.valid ? (
         <p data-schedule-utc>

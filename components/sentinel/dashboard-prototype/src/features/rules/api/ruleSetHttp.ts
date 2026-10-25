@@ -17,11 +17,20 @@ import {
   validPublicationReceipts,
   validRulePublication,
 } from "../model/ruleDeployment";
-import { MAX_BINDING_PAGE_SIZE, validBindingPage, validBindingQuery } from "../model/ruleDirectory";
+import {
+  MAX_BINDING_PAGE_SIZE,
+  bindingQueryKey,
+  validBindingPage,
+  validBindingQuery,
+  validRuleCatalogPage,
+  validRuleCatalogRefreshResult,
+  type RuleCatalogQuery,
+} from "../model/ruleDirectory";
 import { validRuleSetSnapshot } from "../model/ruleSet";
 import { validRuleActivationPlan, validRuleCollection } from "../model/ruleDeploymentState";
 import { validRuleSetDiff, validValidationReport } from "../model/ruleDraftState";
 import { validRuleOperationObservation } from "../model/ruleOperationPolicy";
+import { validRuleBindingRegistrationReceipt } from "../model/ruleBindingRegistration";
 import { validRuleValue } from "../model/ruleValue";
 import type { RuleRecord, RuleSetCandidate } from "../model/ruleSet";
 import type { RuleKind } from "../model/ruleKinds";
@@ -33,8 +42,13 @@ import {
   ActivationPlanSchema,
   PublicationReceiptPageSchema,
   RuleBindingPageSchema,
+  RuleCatalogPageSchema,
+  RuleCatalogParametersSchema,
+  RuleCatalogRefreshRequestSchema,
+  RuleCatalogRefreshResultSchema,
   RuleBindingParametersSchema,
   RuleBindingRegistrationRequestSchema,
+  RuleBindingRegistrationReceiptSchema,
   RuleBindingSchema,
   RuleCommandRequestSchema,
   RuleOperationObservationSchema,
@@ -51,6 +65,7 @@ import {
 import {
   bindingPageFromWire,
   bindingRegistrationToWire,
+  bindingRegistrationReceiptFromWire,
   bindingParametersToWire,
   candidateToWire,
   diffFromWire,
@@ -61,6 +76,8 @@ import {
   receiptsFromWire,
   ruleCollectionFromWire,
   ruleSetSnapshotFromWire,
+  ruleCatalogPageFromWire,
+  ruleCatalogRefreshFromWire,
   ruleValidationFromWire,
   storedDraftFromWire,
   versionFromWire,
@@ -136,12 +153,33 @@ function endpoint<T>(
 const BindingsEndpoint = {
   ...endpoint("/api/v1/rulesets", RuleBindingPageSchema),
 };
+const RuleCatalogEndpoint = endpoint("/api/v2/rules/catalog", RuleCatalogPageSchema);
+const RuleCatalogRefreshEndpoint = endpoint(
+  "/api/v2/rules/catalog/refresh",
+  RuleCatalogRefreshResultSchema,
+  {
+    method: HttpMethod.POST,
+    csrf: true,
+    errors: [
+      "invalid_request",
+      "unauthenticated",
+      "csrf_failed",
+      "validation_failed",
+      "service_unavailable",
+    ],
+  },
+);
 const RegisterBindingEndpoint = endpoint("/api/v1/rulesets", RuleBindingSchema, {
   command: true,
   method: HttpMethod.POST,
   successStatus: 201,
   errors: registrationErrors,
 });
+const BindingRegistrationOperationEndpoint = endpoint(
+  "/api/v1/rulesets/{bindingId}/registration-operations/{requestKey}",
+  RuleBindingRegistrationReceiptSchema,
+  { errors: operationReadErrors },
+);
 const SnapshotEndpoint = endpoint("/api/v1/rulesets/{bindingId}/snapshot", RuleSetSnapshotSchema);
 const DraftsEndpoint = endpoint(
   "/api/v1/rulesets/{bindingId}/drafts",
@@ -205,7 +243,10 @@ const OperationEndpoint = endpoint(
 
 export const RULE_SET_ENDPOINTS = Object.freeze({
   Bindings: BindingsEndpoint,
+  Catalog: RuleCatalogEndpoint,
+  CatalogRefresh: RuleCatalogRefreshEndpoint,
   RegisterBinding: RegisterBindingEndpoint,
+  BindingRegistrationOperation: BindingRegistrationOperationEndpoint,
   Snapshot: SnapshotEndpoint,
   Drafts: DraftsEndpoint,
   Draft: DraftEndpoint,
@@ -290,6 +331,53 @@ export function createRuleSetHttp(transport: ConsoleTransport): RuleSetPort {
       );
       return bindingPageFromWire(wire);
     },
+    async readRuleCatalog(query, signal) {
+      if (!validBindingQuery(query)) throw invalidInput();
+      const parsed = parseConsoleInput(RuleCatalogParametersSchema, bindingParametersToWire(query));
+      const wire = await transport.send(
+        {
+          ...RuleCatalogEndpoint,
+          accept: (response) => {
+            try {
+              return validRuleCatalogPage(ruleCatalogPageFromWire(response), query);
+            } catch {
+              return false;
+            }
+          },
+        },
+        { signal, query: parsed },
+      );
+      const page = ruleCatalogPageFromWire(wire);
+      if (bindingQueryKey(page.query) !== bindingQueryKey(query)) throw invalidResponse();
+      return page;
+    },
+    async refreshRuleCatalog(environmentId, appId, signal) {
+      const body = parseConsoleInput(RuleCatalogRefreshRequestSchema, {
+        environmentId,
+        appId,
+      });
+      const wire = await transport.send(
+        {
+          ...RuleCatalogRefreshEndpoint,
+          accept: (response) => {
+            try {
+              const parsed = ruleCatalogRefreshFromWire(response);
+              return (
+                validRuleCatalogRefreshResult(parsed) &&
+                parsed.scope.environmentId === environmentId &&
+                parsed.scope.appId === appId
+              );
+            } catch {
+              return false;
+            }
+          },
+        },
+        { signal, body },
+      );
+      const result = ruleCatalogRefreshFromWire(wire);
+      if (!validRuleCatalogRefreshResult(result)) throw invalidResponse();
+      return result;
+    },
     async registerBinding(command, signal) {
       const body = parseConsoleInput(
         RuleBindingRegistrationRequestSchema,
@@ -313,6 +401,31 @@ export function createRuleSetHttp(transport: ConsoleTransport): RuleSetPort {
       );
       if (!matchesCommand(wire)) throw invalidResponse();
       return RuleBindingSchema.parse(wire);
+    },
+    async readBindingRegistration(bindingId, requestKey, signal) {
+      const id = bindingPath(bindingId);
+      const key = parseConsoleInput(RequestKeySchema, requestKey);
+      const wire = await transport.send(
+        {
+          ...BindingRegistrationOperationEndpoint,
+          accept: (response) => {
+            const parsed = RuleBindingRegistrationReceiptSchema.safeParse(response);
+            return (
+              parsed.success &&
+              validRuleBindingRegistrationReceipt(
+                bindingRegistrationReceiptFromWire(parsed.data),
+                requestKey,
+                bindingId,
+              )
+            );
+          },
+        },
+        { signal, pathParams: [id, key] },
+      );
+      const receipt = bindingRegistrationReceiptFromWire(wire);
+      if (!validRuleBindingRegistrationReceipt(receipt, requestKey, bindingId))
+        throw invalidResponse();
+      return receipt;
     },
     async readSnapshot(bindingId, signal) {
       const id = bindingPath(bindingId);

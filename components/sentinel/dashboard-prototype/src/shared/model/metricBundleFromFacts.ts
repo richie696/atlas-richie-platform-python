@@ -1,5 +1,5 @@
 import {
-  METRIC_BASIS,
+  METRIC_DENOMINATOR,
   METRIC_ID,
   METRIC_UNIT,
   MAX_OBSERVATION_POINTS,
@@ -64,14 +64,7 @@ export function metricBundleFromFacts(
       value,
       sampledAtMs: value === null ? null : sampledAtMs,
       source,
-      denominator:
-        metric === METRIC_ID.HttpQps || metric === METRIC_ID.Tps
-          ? METRIC_BASIS.ElapsedSeconds
-          : metric === METRIC_ID.RtP95
-            ? METRIC_BASIS.CompletedRequests
-            : metric === METRIC_ID.BlockedRatio
-              ? METRIC_BASIS.AttemptedEntries
-              : METRIC_BASIS.Processes,
+      denominator: METRIC_DENOMINATOR[metric],
       coverage: metricCoverage,
       quality,
     };

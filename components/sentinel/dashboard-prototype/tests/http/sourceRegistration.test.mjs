@@ -5,6 +5,7 @@ import { setupServer } from "msw/node";
 import { createConsoleTransport } from "../../src/core/api/transport/consoleTransport";
 import { createSourceRegistrationHttp } from "../../src/features/system/api/sourceRegistrationHttp";
 import { ConfigurationEndpointSchema } from "../../src/shared/api/configurationSourceWire";
+import { SourceCheckInputSchema } from "../../src/features/system/api/sourceRegistrationWire";
 
 const origin = "http://source-http.test";
 const now = Date.parse("2026-10-07T03:00:00.000Z");
@@ -171,6 +172,72 @@ test("SOURCE-CHECK: POST is a CSRF-protected read-only probe, with no idempotenc
   );
 });
 
+test("SOURCE-CHECK: rate-limited replies require a bounded retry delay", async () => {
+  const input = {
+    sourceId: null,
+    expectedRevision: null,
+    source: {
+      provider: "nacos",
+      endpoint: "https://nacos.example.com",
+      namespace: "sentinel",
+      authentication: { mode: "none" },
+    },
+  };
+  for (const body of [
+    { error: { code: "rate_limited", requestId: "source-1" } },
+    { error: { code: "rate_limited", requestId: "source-1", retryAfterMs: 300_001 } },
+  ]) {
+    await run(
+      [
+        http.get(`${origin}/api/v1/system/sources`, ({ request }) =>
+          reply(request, { asOf: at(), items: [] }),
+        ),
+        http.post(`${origin}/api/v1/system/sources/check`, ({ request }) =>
+          reply(
+            request,
+            { error: { ...body.error, requestId: request.headers.get("x-request-id") } },
+            429,
+          ),
+        ),
+      ],
+      async (port) => {
+        await port.readSources(new AbortController().signal);
+        await assert.rejects(
+          port.checkSource(input, new AbortController().signal),
+          (error) => error.code === "console_response_invalid",
+        );
+      },
+    );
+  }
+  await run(
+    [
+      http.get(`${origin}/api/v1/system/sources`, ({ request }) =>
+        reply(request, { asOf: at(), items: [] }),
+      ),
+      http.post(`${origin}/api/v1/system/sources/check`, ({ request }) =>
+        reply(
+          request,
+          {
+            error: {
+              code: "rate_limited",
+              requestId: request.headers.get("x-request-id"),
+              retryAfterMs: 250,
+            },
+          },
+          429,
+        ),
+      ),
+    ],
+    async (port) => {
+      await port.readSources(new AbortController().signal);
+      await assert.rejects(
+        port.checkSource(input, new AbortController().signal),
+        (error) => error.code === "rate_limited" && error.retryAfterMs === 250,
+      );
+    },
+  );
+});
+
 test("SOURCE-CHECK-WIRE: UTF-16 bounds and nonblank credential identifiers reject before dispatch", async () => {
   let dispatches = 0;
   const validEndpoint = "https://例子.测试/nacos";
@@ -273,6 +340,43 @@ test("SOURCE-CHECK-WIRE: UTF-16 bounds and nonblank credential identifiers rejec
           `invalid endpoint should be rejected locally: ${input.source.endpoint}`,
         );
       }
+      assert.equal(dispatches, 0);
+    },
+  );
+});
+
+test("SOURCE-CHECK-WIRE: source identity and expected revision are both present or both absent", async () => {
+  const source = {
+    provider: "nacos",
+    endpoint: "https://nacos.example.com",
+    namespace: "sentinel",
+    authentication: { mode: "none" },
+  };
+  const validUnregistered = { sourceId: null, expectedRevision: null, source };
+  const validRegistered = { sourceId: record.id, expectedRevision: record.revision, source };
+  const invalid = [
+    { sourceId: null, expectedRevision: record.revision, source },
+    { sourceId: record.id, expectedRevision: null, source },
+  ];
+  assert.equal(SourceCheckInputSchema.safeParse(validUnregistered).success, true);
+  assert.equal(SourceCheckInputSchema.safeParse(validRegistered).success, true);
+  for (const input of invalid)
+    assert.equal(SourceCheckInputSchema.safeParse(input).success, false);
+
+  let dispatches = 0;
+  await run(
+    [
+      http.post(`${origin}/api/v1/system/sources/check`, ({ request }) => {
+        dispatches += 1;
+        return reply(request, {});
+      }),
+    ],
+    async (port) => {
+      for (const input of invalid)
+        await assert.rejects(
+          port.checkSource(input, new AbortController().signal),
+          (error) => error.code === "console_request_invalid",
+        );
       assert.equal(dispatches, 0);
     },
   );

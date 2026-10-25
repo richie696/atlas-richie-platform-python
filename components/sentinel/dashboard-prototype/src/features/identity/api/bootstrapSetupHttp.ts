@@ -7,6 +7,7 @@ import { IDENTITY_ACCESS_ENDPOINTS } from "./identityAccessEndpoints";
 import { BOOTSTRAP_SETUP_ENDPOINTS } from "./bootstrapSetupEndpoints";
 import {
   BootstrapAuthorizationInputSchema,
+  LocalBootstrapAuthorizationInputSchema,
   InitializeCommandSchema,
   SetupStorageSchema,
 } from "./bootstrapSetupWire";
@@ -27,6 +28,12 @@ export function createBootstrapAuthorizationHttp(
     async authorize(code, signal) {
       const body = parseConsoleInput(BootstrapAuthorizationInputSchema, { operatorCode: code });
       await transport.send(BOOTSTRAP_SETUP_ENDPOINTS.AuthorizeBootstrap, { signal, body });
+    },
+    async authorizeLocal(signal) {
+      await transport.send(BOOTSTRAP_SETUP_ENDPOINTS.AuthorizeLocalBootstrap, {
+        signal,
+        body: parseConsoleInput(LocalBootstrapAuthorizationInputSchema, {}),
+      });
     },
   } satisfies BootstrapAuthorizationPort);
 }

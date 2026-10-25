@@ -29,6 +29,7 @@ export function FleetQueryEditor({
   return (
     <form
       className={styles.filters}
+      data-observation-filters
       onSubmit={(event) => {
         event.preventDefault();
         onChange({ ...query, page: 1, search });

@@ -1,12 +1,13 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { E2E_BASE_URL, launchBrowser } from "./cdp.mjs";
+import { E2E_BASE_URL, connectIabBrowser } from "./cdp.mjs";
 import { artifactDirectory } from "./artifacts.mjs";
+import { gotoMockAdministrator } from "./mock-auth.mjs";
 
 let browser;
 before(async () => {
-  browser = await launchBrowser();
+  browser = await connectIabBrowser();
 });
 after(async () => {
   await browser?.close();
@@ -16,7 +17,7 @@ test("system observations use HTTP and audit is an independently addressable tab
   const page = await browser.newPage();
   try {
     await page.clearStorage(new URL(E2E_BASE_URL).origin);
-    await page.goto(`${E2E_BASE_URL}/#/system?view=connections`);
+    await gotoMockAdministrator(page, `${E2E_BASE_URL}/#/system?view=connections`);
     await page.waitFor(
       `!!document.querySelector('[data-system-connection="source-nacos-primary"]')`,
       {

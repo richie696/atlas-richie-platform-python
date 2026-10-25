@@ -6,7 +6,11 @@ import {
   createIdentityMockHandlers,
 } from "../../src/features/identity/mock";
 import { MOCK_IDENTITY_SCENARIO } from "../../src/app/api/mockIdentityScenario";
-import { MOCK_ROLE_STORAGE_KEY } from "../../src/core/api/mock/mockRole";
+import { MOCK_ROLE_STORAGE_KEY, writeMockPassword } from "../../src/core/api/mock/mockRole";
+import { createAppConsoleMockAssembly } from "../../src/app/api/mockConsoleHandlers";
+import { createConsoleAuthentication } from "../../src/app/api/consoleAuthentication";
+import { createAccountManagementHttp } from "../../src/features/identity/api/accountManagementHttp";
+import { createAccountManagementWorkflow } from "../../src/features/identity/application/accountManagementWorkflow";
 
 test("ACCOUNT-MOCK-IDENTITY: HTTP mock rejects trimmed, case and NFKC duplicate usernames", async () => {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -72,6 +76,57 @@ test("ACCOUNT-MOCK-IDENTITY: missing or malformed browser role storage cannot au
         headers: { "x-request-id": "missing-role" },
       });
       assert.equal(response.status, 403);
+    }
+  } finally {
+    server.close();
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else delete globalThis.window;
+  }
+});
+
+test("ACCOUNT-MOCK-AUTHZ: viewer is denied by every account-management HTTP endpoint", async () => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      localStorage: {
+        getItem: (key) => (key === MOCK_ROLE_STORAGE_KEY ? "view" : null),
+      },
+    },
+  });
+  const server = setupServer(...createAccountManagementMockHandlers(MOCK_IDENTITY_SCENARIO));
+  server.listen({ onUnhandledRequest: "error" });
+  try {
+    const endpoints = [
+      fetch("http://identity-mock.test/api/v1/accounts?page=1&pageSize=20&search=", {
+        headers: { "x-request-id": "viewer-account-list" },
+      }),
+      fetch("http://identity-mock.test/api/v1/accounts/account-view", {
+        headers: { "x-request-id": "viewer-account-detail" },
+      }),
+      fetch("http://identity-mock.test/api/v1/accounts/commands", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-request-id": "viewer-account-role-command",
+          "x-sentinel-csrf": "C".repeat(48),
+          "idempotency-key": "viewer-role-command",
+        },
+        body: JSON.stringify({
+          kind: "role",
+          requestKey: "viewer-role-command",
+          accountId: "account-view",
+          revision: "1",
+          roleId: "admin",
+        }),
+      }),
+      fetch("http://identity-mock.test/api/v1/accounts/operations/viewer-role-command", {
+        headers: { "x-request-id": "viewer-account-operation" },
+      }),
+    ];
+    for (const [index, response] of (await Promise.all(endpoints)).entries()) {
+      assert.equal(response.status, 403, `endpoint ${index} must deny viewer access`);
+      assert.equal((await response.json()).error.code, "forbidden");
     }
   } finally {
     server.close();
@@ -196,6 +251,135 @@ test("ACCOUNT-MOCK-COMMAND-STATE: role/status writes update the directory and re
   }
 });
 
+test("ACCOUNT-APP-MOCK-STATUS: application auth owner confirms and refreshes a viewer status command", async () => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const values = new Map([
+    ["sentinel.mock.initialized", "true"],
+    [MOCK_ROLE_STORAGE_KEY, "admin"],
+  ]);
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      localStorage: {
+        getItem: (key) => values.get(key) ?? null,
+        setItem: (key, value) => values.set(key, value),
+        removeItem: (key) => values.delete(key),
+      },
+    },
+  });
+  const server = setupServer(...createAppConsoleMockAssembly().handlers);
+  server.listen({ onUnhandledRequest: "error" });
+  const runtime = createConsoleAuthentication({
+    baseUrl: "http://identity-mock.test",
+    requestId: (() => {
+      let sequence = 0;
+      return () => `account-app-${++sequence}`;
+    })(),
+  });
+  let workflow;
+  try {
+    const restored = await runtime.authentication.restore();
+    assert.equal(restored.kind, "authenticated");
+    assert.equal(restored.identity.roleId, "admin");
+    workflow = createAccountManagementWorkflow(
+      createAccountManagementHttp(runtime.transport),
+      restored.identity,
+      runtime.session,
+      (() => {
+        let sequence = 0;
+        return () => `account-status-${++sequence}`;
+      })(),
+    );
+    const directory = await workflow.list({ page: 1, pageSize: 20, search: "" });
+    const viewer = directory.items.find((record) => record.id === "account-view");
+    assert.equal(viewer.status, "active");
+
+    const disabled = await workflow.setStatus(viewer, "disabled");
+    assert.equal(disabled.status, "completed");
+    assert.equal(disabled.account.status, "disabled");
+    assert.equal(workflow.getSnapshot().mutation.status, "success");
+    assert.equal(
+      workflow.getSnapshot().directory.data.items.find((record) => record.id === viewer.id).status,
+      "disabled",
+    );
+
+    const enabled = await workflow.setStatus(disabled.account, "active");
+    assert.equal(enabled.status, "completed");
+    assert.equal(enabled.account.status, "active");
+    assert.equal(
+      workflow.getSnapshot().directory.data.items.find((record) => record.id === viewer.id).status,
+      "active",
+    );
+  } finally {
+    workflow?.dispose();
+    runtime.dispose();
+    server.close();
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else delete globalThis.window;
+  }
+});
+
+test("ACCOUNT-MOCK-COMMAND: header/body idempotency mismatch is a 409 and has no side effect", async () => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: { localStorage: { getItem: (key) => (key === MOCK_ROLE_STORAGE_KEY ? "admin" : null) } },
+  });
+  const server = setupServer(...createAccountManagementMockHandlers(MOCK_IDENTITY_SCENARIO));
+  server.listen({ onUnhandledRequest: "error" });
+  try {
+    const body = JSON.stringify({
+      kind: "create",
+      requestKey: "account-original-key",
+      input: {
+        username: "must-not-be-created",
+        password: "PRIVATE-TEST-PASSWORD",
+        roleId: "view",
+      },
+    });
+    const send = (headers) =>
+      fetch("http://identity-mock.test/api/v1/accounts/commands", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body,
+      });
+    const missingKey = await send({
+      "x-request-id": "account-idempotency-missing",
+      "x-sentinel-csrf": "C".repeat(48),
+    });
+    assert.equal(missingKey.status, 400);
+    assert.deepEqual(await missingKey.json(), {
+      error: { code: "invalid_request", requestId: "account-idempotency-missing" },
+    });
+    const response = await send({
+      "x-request-id": "account-idempotency-mismatch",
+      "x-sentinel-csrf": "C".repeat(48),
+      "idempotency-key": "different-account-key",
+    });
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), {
+      error: { code: "idempotency_conflict", requestId: "account-idempotency-mismatch" },
+    });
+    const operation = await fetch(
+      "http://identity-mock.test/api/v1/accounts/operations/account-original-key",
+      { headers: { "x-request-id": "account-operation-not-found" } },
+    );
+    assert.deepEqual(await operation.json(), {
+      status: "not-found",
+      requestKey: "account-original-key",
+    });
+    const page = await fetch(
+      "http://identity-mock.test/api/v1/accounts?page=1&pageSize=20&search=must-not-be-created",
+      { headers: { "x-request-id": "account-no-side-effect" } },
+    );
+    assert.equal((await page.json()).total, 0);
+  } finally {
+    server.close();
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else delete globalThis.window;
+  }
+});
+
 test("IDENTITY-MOCK-SEED: login, session restoration, and account directory share canonical identities", async () => {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const values = new Map([
@@ -294,6 +478,80 @@ test("IDENTITY-MOCK-SEED: login, session restoration, and account directory shar
     assert.equal((await send("/api/v1/accounts?page=1&pageSize=20")).status, 403);
   } finally {
     server.close();
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else delete globalThis.window;
+  }
+});
+
+test("ACCOUNT-MOCK-BUILT-IN-RESET: the current built-in admin can rotate their own password", async () => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const values = new Map([
+    ["sentinel.mock.initialized", "true"],
+    [MOCK_ROLE_STORAGE_KEY, "admin"],
+  ]);
+  const administrator = MOCK_IDENTITY_SCENARIO.accounts.find((account) => account.builtIn);
+  assert.ok(administrator);
+  const password = "BuiltInReset-20261024";
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      localStorage: {
+        getItem: (key) => values.get(key) ?? null,
+        setItem: (key, value) => values.set(key, value),
+        removeItem: (key) => values.delete(key),
+      },
+    },
+  });
+  const server = setupServer(
+    ...createIdentityMockHandlers(MOCK_IDENTITY_SCENARIO),
+    ...createAccountManagementMockHandlers(MOCK_IDENTITY_SCENARIO),
+  );
+  server.listen({ onUnhandledRequest: "error" });
+  try {
+    const reset = await fetch("http://identity-mock.test/api/v1/accounts/commands", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-request-id": "built-in-self-reset",
+        "x-sentinel-csrf": "C".repeat(48),
+        "idempotency-key": "built-in-self-reset",
+      },
+      body: JSON.stringify({
+        kind: "reset_password",
+        requestKey: "built-in-self-reset",
+        accountId: administrator.id,
+        revision: "1",
+        password,
+      }),
+    });
+    const receipt = await reset.json();
+    assert.equal(reset.status, 200);
+    assert.equal(receipt.status, "completed");
+    assert.equal(receipt.account.id, administrator.id);
+    assert.equal(receipt.account.builtIn, true);
+    assert.equal(JSON.stringify(receipt).includes(password), false);
+    assert.equal(values.get(MOCK_ROLE_STORAGE_KEY), "anonymous");
+
+    const oldPasswordLogin = await fetch("http://identity-mock.test/api/v1/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-request-id": "old-password" },
+      body: JSON.stringify({
+        username: administrator.username,
+        password: MOCK_IDENTITY_SCENARIO.password,
+      }),
+    });
+    assert.equal(oldPasswordLogin.status, 401);
+
+    const newPasswordLogin = await fetch("http://identity-mock.test/api/v1/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-request-id": "new-password" },
+      body: JSON.stringify({ username: administrator.username, password }),
+    });
+    assert.equal(newPasswordLogin.status, 200);
+    assert.equal((await newPasswordLogin.json()).accountId, administrator.id);
+  } finally {
+    server.close();
+    writeMockPassword(administrator.username, MOCK_IDENTITY_SCENARIO.password);
     if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
     else delete globalThis.window;
   }

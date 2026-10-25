@@ -11,7 +11,10 @@ import type {
   RulePublication,
   PublicationReceiptPage,
 } from "../../../src/features/rules/model/ruleDeployment";
-import type { RuleActivationPlan } from "../../../src/features/rules/model/ruleActivation";
+import type {
+  ActivationSchedule,
+  RuleActivationPlan,
+} from "../../../src/features/rules/model/ruleActivation";
 import type {
   RuleMutation,
   RuleMutationResult,
@@ -61,6 +64,8 @@ export function createRuleDeploymentTopology() {
     lastKind: "",
     lastTarget: "",
     lastRestore: "",
+    lastReason: "",
+    lastPlan: null as ActivationSchedule | null,
   });
   const readAccess = { read: read.getSnapshot, subscribe: read.subscribe },
     writeAccess = { read: write.getSnapshot, subscribe: write.subscribe };
@@ -130,6 +135,9 @@ export function createRuleDeploymentTopology() {
                 ? mutation.schedule.versionId
                 : "",
           lastRestore: mutation.kind === "create_plan" ? mutation.schedule.restoreVersionId : "",
+          lastReason:
+            mutation.kind === "publish" || mutation.kind === "cancel_plan" ? mutation.reason : "",
+          lastPlan: mutation.kind === "create_plan" ? mutation.schedule : null,
         });
         latest = mutation;
         const value = complete(mutation);
@@ -293,7 +301,11 @@ export function RuleDeploymentProbe({
           Change owner
         </button>
       </div>
-      <RuleDeploymentPanel bindingId={ruleSet.binding.id} workflow={topology.workflow} />
+      <RuleDeploymentPanel
+        bindingId={ruleSet.binding.id}
+        workflow={topology.workflow}
+        view="publications"
+      />
       <output data-deploy-summary style={{ display: "block", overflowWrap: "anywhere" }}>
         {JSON.stringify({
           ...counts,

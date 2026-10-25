@@ -28,6 +28,34 @@ export function sourceViolations() {
   return violations;
 }
 
+/** Find production-source imports that bypass their feature's mock HTTP entry. */
+export function fixtureImportViolations() {
+  const violations = [];
+  function walk(directory) {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const current = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(current);
+      else if (/\.tsx?$/.test(entry.name)) {
+        const source = path.relative(root, current).split(path.sep).join("/");
+        for (const specifier of dependencySpecifiers(readFileSync(current, "utf8"))) {
+          const target = resolveDependency(source, specifier) ?? specifier;
+          const fixture = /^features\/([^/]+)\/fixtures(?:\/|$)/.exec(target);
+          if (!fixture) continue;
+
+          const feature = fixture[1];
+          const expectedMockEntry = `features/${feature}/mock.ts`;
+          const isOwnedFixtureModule = source.startsWith(`features/${feature}/fixtures/`);
+          if (source !== expectedMockEntry && !isOwnedFixtureModule) {
+            violations.push({ source, target });
+          }
+        }
+      }
+    }
+  }
+  walk(root);
+  return violations;
+}
+
 test("parses static, exported, type and lazy imports without losing multiline references", () => {
   assert.deepEqual(
     dependencySpecifiers(
@@ -97,7 +125,10 @@ test("F1.6 keeps rule form/editor ownership out of domain model and chart UI tok
 
 test("F1.7 keeps application imports on feature public entry points", () => {
   const actual = sourceViolations();
-  assert.deepEqual(actual.filter((edge) => edge.rule === "app-feature-private"), []);
+  assert.deepEqual(
+    actual.filter((edge) => edge.rule === "app-feature-private"),
+    [],
+  );
 });
 
 test("F2.2 scopes route page owners to the resolved server session epoch", () => {
@@ -121,7 +152,7 @@ test("F4.23 leaves login success and setup navigation to the login route owner",
 
   assert.match(app, /if \(currentRoute === ROUTE\.Login\) return;/);
   assert.doesNotMatch(app, /routeAfterAuthentication|facts\.setupAvailable/);
-  assert.match(loginRoute, /onAuthenticated=\{authenticated\} onSetupRequired=\{setupRequired\}/);
+  assert.match(loginRoute, /onAuthenticated=\{authenticated\}\s+onSetupRequired=\{setupRequired\}/);
   assert.match(loginPage, /onAuthenticated\(identity\)/);
   assert.match(loginPage, /onSetupRequired\(\)/);
 });
@@ -157,7 +188,10 @@ test("F5.2 changing display locale does not replace rule draft or URL owners", (
     rules,
     /key=\{`\$\{environmentId\}:\$\{page\.appId\}:\$\{page\.view\}:\$\{page\.bindingId \?\? "unselected"\}`\}/,
   );
-  assert.match(rules, /createRuleDraftWorkflow\(binding, port, readAccess, writeAccess, operation\)/);
+  assert.match(
+    rules,
+    /createRuleDraftWorkflow\(binding, port, readAccess, writeAccess, operation\)/,
+  );
   assert.doesNotMatch(rules, /locale/);
 });
 
@@ -273,4 +307,31 @@ test("F6.12 retires the synchronous fixture gateway instead of preserving a comp
     "RuleProviderAdapter",
   ])
     assert.equal(applicationSource.includes(marker), false, `application source retains ${marker}`);
+});
+
+test("F7.3 production code reaches feature fixtures only through its mock HTTP entry", () => {
+  assert.deepEqual(fixtureImportViolations(), []);
+});
+
+test("F7.3 retires prototype-only panels after their HTTP-backed page replacements", () => {
+  const retired = [
+    "features/faults/ui/IncidentEvidence.tsx",
+    "features/realtime/ui/RealtimeSummaryCards.tsx",
+    "features/rules/ui/RuleCatalogPanel.tsx",
+    "features/rules/ui/RuleInspectorPanel.tsx",
+    "features/rules/ui/VersionPlan.tsx",
+    "features/system/ui/ConnectionPanel.tsx",
+    "features/system/ui/PermissionsPanel.tsx",
+    "features/system/ui/ProtocolPanel.tsx",
+  ];
+  for (const sourcePath of retired)
+    assert.equal(existsSync(`${root}/${sourcePath}`), false, sourcePath);
+});
+
+test("F7.3 removes the unused demo role-switching API from the session surface", () => {
+  const sessionSource = readFileSync(`${root}/core/session/SessionProvider.tsx`, "utf8");
+  const sessionEntry = readFileSync(`${root}/core/session/index.ts`, "utf8");
+
+  assert.equal(sessionSource.includes("useSessionRoleSetter"), false);
+  assert.equal(sessionEntry.includes("useSessionRoleSetter"), false);
 });

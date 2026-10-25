@@ -16,12 +16,13 @@ export interface BootstrapAuthorizationWorkflow {
   readonly subscribe: (listener: () => void) => () => void;
   readonly restore: (forceRefresh?: boolean) => Promise<BootstrapOperatorGate>;
   readonly authorize: (code: string) => Promise<void>;
+  readonly authorizeLocal: () => Promise<void>;
   readonly inspect: () => Promise<BootstrapOperatorGate>;
   readonly cancel: () => void;
   readonly dispose: () => void;
 }
 
-/** Compose a safe gate read and a single-flight one-time authorization command. */
+/** Compose a safe gate read and single-flight local/remote bootstrap commands. */
 export function createBootstrapAuthorizationWorkflow(
   port: BootstrapAuthorizationPort,
 ): BootstrapAuthorizationWorkflow {
@@ -34,16 +35,31 @@ export function createBootstrapAuthorizationWorkflow(
     read: ({ forceRefresh }, signal) => port.readGate(signal, { forceRefresh }),
     classify: () => "ready",
   });
-  const command = createCommandResource<string, void>((code, signal) =>
-    port.authorize(code, signal),
+  const command = createCommandResource<
+    { readonly kind: "local" } | { readonly kind: "code"; readonly code: string },
+    void
+  >((input, signal) =>
+    input.kind === "local" ? port.authorizeLocal(signal) : port.authorize(input.code, signal),
   );
+  const confirmationError = new AppError(
+    AppErrorKind.PROTOCOL,
+    "Bootstrap authorization result requires authoritative inspection",
+    { status: 502, code: "bootstrap_grant_unconfirmed" },
+  );
+  let confirmationRequired = false;
+  const commandSnapshot = (): CommandSnapshot<void> => {
+    const current = command.getSnapshot();
+    return confirmationRequired && current.status === "success"
+      ? { status: "result-unknown", error: confirmationError }
+      : current;
+  };
   const state = new StateStore<BootstrapAuthorizationSnapshot>({
     gate: gate.getSnapshot(),
-    command: command.getSnapshot(),
+    command: commandSnapshot(),
   });
   let revision = 0;
   const publish = () => {
-    const next = { gate: gate.getSnapshot(), command: command.getSnapshot() };
+    const next = { gate: gate.getSnapshot(), command: commandSnapshot() };
     const previous = state.getSnapshot();
     if (previous.gate !== next.gate || previous.command !== next.command)
       state.set(Object.freeze(next));
@@ -51,50 +67,65 @@ export function createBootstrapAuthorizationWorkflow(
   const subscriptions = [gate.subscribe(publish), command.subscribe(publish)];
   const restore = (forceRefresh = false) => gate.load({ revision: ++revision, forceRefresh });
   let authorizationInProgress = false;
-  const assertAuthorizationIdle = () => {
+  const assertNotAuthorizing = () => {
     if (authorizationInProgress)
       throw new AppError(AppErrorKind.DUPLICATE, "Bootstrap authorization requires confirmation");
+  };
+
+  const exchangeAndConfirm = async (
+    input: { readonly kind: "local" } | { readonly kind: "code"; readonly code: string },
+  ) => {
+    assertNotAuthorizing();
+    if (confirmationRequired)
+      throw new AppError(AppErrorKind.DUPLICATE, "Inspect the original bootstrap authorization");
+    const current = gate.getSnapshot();
+    if (
+      current.status !== "ready" ||
+      current.data.kind !== "open" ||
+      current.data.authorized ||
+      (input.kind === "code" && !input.code.trim())
+    )
+      throw new AppError(AppErrorKind.FORBIDDEN, "Bootstrap authorization is not available", {
+        status: 403,
+        code: "bootstrap_unauthorized",
+      });
+    authorizationInProgress = true;
+    try {
+      await command.run(input);
+      const confirmed = await restore(true);
+      if (confirmed.kind !== "open" || !confirmed.authorized) throw confirmationError;
+    } catch (error) {
+      if (command.getSnapshot().status === "success") {
+        confirmationRequired = true;
+        publish();
+      }
+      throw error;
+    } finally {
+      authorizationInProgress = false;
+    }
   };
 
   return Object.freeze({
     getSnapshot: state.getSnapshot,
     subscribe: state.subscribe,
     restore(forceRefresh = false) {
-      assertAuthorizationIdle();
+      assertNotAuthorizing();
       return restore(forceRefresh);
     },
     async authorize(code: string) {
-      assertAuthorizationIdle();
-      const current = gate.getSnapshot();
-      if (
-        current.status !== "ready" ||
-        current.data.kind !== "open" ||
-        current.data.authorized ||
-        !code.trim()
-      )
-        throw new AppError(AppErrorKind.FORBIDDEN, "Bootstrap authorization is not available", {
-          status: 403,
-          code: "bootstrap_unauthorized",
-        });
-      authorizationInProgress = true;
-      try {
-        await command.run(code);
-        // Keep the use case single-flight through authoritative read-back. The command resource
-        // becomes successful as soon as POST completes, but the one-time grant is not yet known.
-        const confirmed = await restore(true);
-        if (confirmed.kind !== "open" || !confirmed.authorized)
-          throw new AppError(AppErrorKind.PROTOCOL, "Bootstrap grant was not confirmed", {
-            status: 502,
-            code: "bootstrap_grant_unconfirmed",
-          });
-      } finally {
-        authorizationInProgress = false;
-      }
+      return exchangeAndConfirm({ kind: "code", code });
+    },
+    async authorizeLocal() {
+      return exchangeAndConfirm({ kind: "local" });
     },
     async inspect() {
-      assertAuthorizationIdle();
+      assertNotAuthorizing();
       const confirmed = await restore(true);
-      if (confirmed.kind === "open" && confirmed.authorized) command.reset();
+      if (confirmed.kind === "open" && confirmed.authorized) {
+        confirmationRequired = false;
+        command.reset();
+        publish();
+      }
       return confirmed;
     },
     cancel() {

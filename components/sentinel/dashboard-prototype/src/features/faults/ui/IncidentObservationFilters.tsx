@@ -44,7 +44,11 @@ export function IncidentObservationFilters({
 }) {
   const { t } = useTranslation();
   return (
-    <section className={styles.filters} aria-label={t("faults.observed.filters")}>
+    <section
+      className={styles.filters}
+      aria-label={t("faults.observed.filters")}
+      data-observation-filters
+    >
       <ObservationFilters
         context={query.context}
         environments={environments}

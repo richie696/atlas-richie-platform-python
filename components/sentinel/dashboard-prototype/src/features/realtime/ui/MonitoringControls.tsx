@@ -41,7 +41,7 @@ export function MonitoringControls({
   const { t } = useTranslation();
   const metric = selection.metrics.length === 1 ? selection.metrics[0] : ALL_MONITOR_METRICS;
   return (
-    <div className={styles.filters}>
+    <div className={styles.filters} data-observation-filters>
       <ObservationFilters
         context={selection.context}
         onChange={(context) => onChange({ ...selection, context })}

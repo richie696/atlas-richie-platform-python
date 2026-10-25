@@ -17,7 +17,7 @@ const metricQueryParameters = {
   scope: "application",
   from: OBSERVATION_EXAMPLE_TIME.from,
   to: OBSERVATION_EXAMPLE_TIME.to,
-  metrics: METRIC_ID.HttpQps,
+  metrics: Object.values(METRIC_ID).join(","),
   stepMs: 60_000,
 };
 export const METRICS_HTTP_CONTRACT = Object.freeze([
@@ -36,15 +36,15 @@ export const METRICS_HTTP_CONTRACT = Object.freeze([
     })),
     examples: [
       {
-        name: "not-integrated-metric",
-        summary: "Collector 未接入时保留请求身份并以 null 表示指标不可用",
+        name: "registered-metrics-not-integrated",
+        summary: "Collector 未接入时保留全部已登记指标身份并以 null 表示不可用",
         kind: "positive",
         request: { queryParameters: metricQueryParameters },
         response: {
           status: 200,
           body: observationMetricBundle(
             APPLICATION_OBSERVATION_CONTEXT,
-            [METRIC_ID.HttpQps],
+            Object.values(METRIC_ID),
             60_000,
           ),
         },
