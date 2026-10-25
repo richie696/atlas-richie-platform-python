@@ -60,18 +60,18 @@ from atlas_richie.contracts.reporting.v1 import (
     encode_error_envelope,
 )
 from atlas_richie.contracts.reporting.v1.codec import ReportingErrorCode
-from atlas_richie.sentinel.reporting import (
-    AgentReporter,
-    AgentReporterConfig,
-    OverflowPolicy,
-    ReportingEvent,
-)
 from atlas_richie.sentinel.reporting.auth import X_ATLAS_REPORTING_TOKEN_HEADER
 from atlas_richie.sentinel.reporting.config import (
     BATCH_MAX_BYTES,
     BATCH_MAX_EVENTS,
+    AgentReporterConfig,
+    OverflowPolicy,
 )
-from atlas_richie.sentinel.reporting.reporter import _build_envelope_template
+from atlas_richie.sentinel.reporting.reporter import (
+    AgentReporter,
+    ReportingEvent,
+    _build_envelope_template,
+)
 from atlas_richie.sentinel.reporting.transport import ReportingTransport
 
 _REPORTING_REQUEST_TARGET = b"/reporting/v1/events"

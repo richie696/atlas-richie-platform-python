@@ -26,13 +26,11 @@ import dataclasses
 import unittest
 
 from atlas_richie.sentinel.errors import SentinelConfigurationError, SentinelError
-from atlas_richie.sentinel.reporting import (
-    AgentReporterConfig,
-    OverflowPolicy,
-)
 from atlas_richie.sentinel.reporting.config import (
     BATCH_MAX_BYTES,
     BATCH_MAX_EVENTS,
+    AgentReporterConfig,
+    OverflowPolicy,
     validate_config,
 )
 

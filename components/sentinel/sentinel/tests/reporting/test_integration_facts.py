@@ -29,14 +29,11 @@ import unittest
 
 from atlas_richie.sentinel.model.outcome import Outcome, OutcomeKind
 from atlas_richie.sentinel.model.resource import Resource
-from atlas_richie.sentinel.reporting import (
-    AgentReporter,
-    AgentReporterConfig,
-    OverflowPolicy,
-)
 from atlas_richie.sentinel.reporting.config import (
     BATCH_MAX_BYTES,
     BATCH_MAX_EVENTS,
+    AgentReporterConfig,
+    OverflowPolicy,
 )
 from atlas_richie.sentinel.reporting.integration.rule_source_activation import (
     activation_to_event,
@@ -48,6 +45,7 @@ from atlas_richie.sentinel.reporting.integration.source_health import (
     SourceHealthChange,
     health_change_to_event,
 )
+from atlas_richie.sentinel.reporting.reporter import AgentReporter
 from atlas_richie.sentinel.rules.snapshot import RuleSnapshot, RuleVersion
 from atlas_richie.sentinel.source._supervisor.activation import RuleSourceActivation
 

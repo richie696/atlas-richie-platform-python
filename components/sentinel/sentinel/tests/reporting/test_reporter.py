@@ -48,17 +48,17 @@ from atlas_richie.sentinel.errors import (
     SentinelError,
     SentinelLifecycleError,
 )
-from atlas_richie.sentinel.reporting import (
-    AgentReporter,
-    AgentReporterConfig,
-    OverflowPolicy,
-    ReporterError,
-    ReporterIdentity,
-    ReportingEvent,
-)
+from atlas_richie.sentinel.reporting._identity import ReporterIdentity
 from atlas_richie.sentinel.reporting.config import (
     BATCH_MAX_BYTES,
     BATCH_MAX_EVENTS,
+    AgentReporterConfig,
+    OverflowPolicy,
+)
+from atlas_richie.sentinel.reporting.errors import ReporterError
+from atlas_richie.sentinel.reporting.reporter import (
+    AgentReporter,
+    ReportingEvent,
 )
 
 
@@ -356,7 +356,7 @@ class OverflowTest(unittest.IsolatedAsyncioTestCase):
             reporter.emit(_make_event())  # 0
             reporter.emit(_make_event())  # 1
             # 第 3 个 → ReporterOverflowError
-            from atlas_richie.sentinel.reporting import ReporterOverflowError
+            from atlas_richie.sentinel.reporting.errors import ReporterOverflowError
             with self.assertRaises(ReporterOverflowError):
                 reporter.emit(_make_event())
         finally:
