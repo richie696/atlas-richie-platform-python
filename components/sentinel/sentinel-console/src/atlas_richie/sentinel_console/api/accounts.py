@@ -7,25 +7,26 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from ..application.account_directory_ports import (
-    AccountDirectoryAuthorityUnavailable,
-    AccountDirectoryContractViolation,
-    AccountDirectoryQuery,
     MAX_ACCOUNT_DIRECTORY_IDENTIFIER_UNITS,
     MAX_ACCOUNT_DIRECTORY_PAGE,
     MAX_ACCOUNT_DIRECTORY_PAGE_SIZE,
+    AccountDirectoryAuthorityUnavailable,
+    AccountDirectoryContractViolation,
+    AccountDirectoryQuery,
+    AccountDirectoryStatus,
 )
 from ..application.errors import SessionAuthorityUnavailable
 from ..application.read_account_directory import ReadAccountDirectory
 from ..application.read_session import ReadSession
 from ..domain.session import AccountRole, SessionIdentity
-from ..domain.wire_strings import is_bounded_wire_identifier, is_bounded_wire_text
+from ..domain.wire_strings import is_bounded_wire_identifier
 from .account_serialization import account_item_body
 from .browser_security import SESSION_COOKIE_NAME
 from .http_support import error_response, request_id
+from .query_parsing import MIN_QUERY_INTEGER, parse_integer, parse_query_values
 
 _PAGE_KEYS = frozenset({"page", "pageSize", "search", "status"})
-_STATUSES = frozenset({"active", "disabled"})
-_MAX_ACCOUNT_SEARCH_UNITS = 200
+_REQUIRED_QUERY_KEYS = frozenset({"page", "pageSize", "search"})
 
 
 def account_directory_routes(
@@ -96,9 +97,7 @@ async def _authorized_admin(
     request: Request, read_session: ReadSession
 ) -> tuple[SessionIdentity | None, tuple[str, int] | None]:
     try:
-        identity = await read_session.execute(
-                request.cookies.get(SESSION_COOKIE_NAME)
-        )
+        identity = await read_session.execute(request.cookies.get(SESSION_COOKIE_NAME))
     except SessionAuthorityUnavailable:
         return None, ("service_unavailable", 503)
     if identity is None:
@@ -109,35 +108,32 @@ async def _authorized_admin(
 
 
 def _parse_query(request: Request) -> AccountDirectoryQuery | None:
-    pairs = request.query_params.multi_items()
-    keys = [key for key, _ in pairs]
-    if set(keys) - _PAGE_KEYS or len(keys) != len(set(keys)):
-        return None
-    values = dict(pairs)
-    if not {"page", "pageSize", "search"}.issubset(values):
-        return None
-    if not is_bounded_wire_text(values["search"], _MAX_ACCOUNT_SEARCH_UNITS):
-        return None
-    if "status" in values and values["status"] not in _STATUSES:
-        return None
     try:
-        page = int(values["page"])
-        page_size = int(values["pageSize"])
+        values = parse_query_values(
+            request, _REQUIRED_QUERY_KEYS, _PAGE_KEYS - _REQUIRED_QUERY_KEYS
+        )
     except ValueError:
         return None
-    if not (
-        1 <= page <= MAX_ACCOUNT_DIRECTORY_PAGE
-        and 1 <= page_size <= MAX_ACCOUNT_DIRECTORY_PAGE_SIZE
-    ):
+    try:
+        page = parse_integer(
+            values["page"], MIN_QUERY_INTEGER, MAX_ACCOUNT_DIRECTORY_PAGE
+        )
+        page_size = parse_integer(
+            values["pageSize"], MIN_QUERY_INTEGER, MAX_ACCOUNT_DIRECTORY_PAGE_SIZE
+        )
+    except ValueError:
         return None
-    if str(page) != values["page"] or str(page_size) != values["pageSize"]:
+    try:
+        return AccountDirectoryQuery(
+            page=page,
+            page_size=page_size,
+            search=values["search"],
+            status=(
+                AccountDirectoryStatus(values["status"]) if "status" in values else None
+            ),
+        )
+    except ValueError:
         return None
-    return AccountDirectoryQuery(
-        page=page,
-        page_size=page_size,
-        search=values["search"],
-        status=values.get("status"),
-    )
 
 
 def _response_headers(request_id_value: str) -> dict[str, str]:

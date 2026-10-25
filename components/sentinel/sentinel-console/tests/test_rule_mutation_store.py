@@ -15,11 +15,6 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event, func, insert, select, update
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import create_async_engine
-
 from atlas_richie.sentinel_console.api.rule_candidate_parsing import (
     parse_rule_candidate,
 )
@@ -94,6 +89,13 @@ from atlas_richie.sentinel_console.domain.rule_validation import (
     RuleValidationIssue,
     RuleValidationIssueCode,
 )
+from atlas_richie.sentinel_console.domain.system_audit import AuditAction, AuditResult
+from atlas_richie.sentinel_console.infrastructure.consul_rule_source_reader import (
+    ConsulRuleSourceReader,
+)
+from atlas_richie.sentinel_console.infrastructure.nacos_rule_source_reader import (
+    NacosRuleSourceReader,
+)
 from atlas_richie.sentinel_console.infrastructure.persistence.account_directory_reader import (
     SqlAlchemyAccountDirectoryReader,
 )
@@ -134,6 +136,13 @@ from atlas_richie.sentinel_console.infrastructure.persistence.rule_mutation_stor
 from atlas_richie.sentinel_console.infrastructure.persistence.rule_publication_reader import (
     SqlAlchemyRulePublicationReader,
 )
+from atlas_richie.sentinel_console.infrastructure.persistence.rule_publication_store import (
+    SqlAlchemyRulePublicationStore,
+)
+from atlas_richie.sentinel_console.infrastructure.persistence.rule_publication_worker_composition import (
+    create_consul_rule_publication_worker,
+    create_nacos_rule_publication_worker,
+)
 from atlas_richie.sentinel_console.infrastructure.persistence.rule_publish_outbox import (
     RulePublishClaimConflict,
     SqlAlchemyRulePublishOutbox,
@@ -144,23 +153,20 @@ from atlas_richie.sentinel_console.infrastructure.persistence.rule_validation_re
 from atlas_richie.sentinel_console.infrastructure.persistence.rule_version_reader import (
     SqlAlchemyRuleVersionReader,
 )
-from atlas_richie.sentinel_console.infrastructure.sentinel_rule_version_encoder import (
-    SentinelRuleVersionJsonEncoder,
-)
-from atlas_richie.sentinel_console.infrastructure.persistence.rule_publication_worker_composition import (
-    create_consul_rule_publication_worker,
-    create_nacos_rule_publication_worker,
-)
-from atlas_richie.sentinel_console.infrastructure.consul_rule_source_reader import (
-    ConsulRuleSourceReader,
-)
-from atlas_richie.sentinel_console.infrastructure.nacos_rule_source_reader import (
-    NacosRuleSourceReader,
+from atlas_richie.sentinel_console.infrastructure.persistence.system_audit_reader import (
+    SqlAlchemySystemAuditReader,
 )
 from atlas_richie.sentinel_console.infrastructure.registered_source_checker import (
     RegisteredSourceTargetPolicy,
     RegisteredSourceTargetRule,
 )
+from atlas_richie.sentinel_console.infrastructure.sentinel_rule_version_encoder import (
+    SentinelRuleVersionJsonEncoder,
+)
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event, func, insert, select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import create_async_engine
 
 _NOW = datetime(2026, 10, 9, 8, 0, 0, 123000, tzinfo=UTC)
 _ADMIN_COOKIE = "synthetic-rule-admin-session-00000001"
@@ -184,6 +190,9 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             active_fingerprint_key_id="key-1",
             binding_reader=_TestBindingReader(),
             publication_target_reader=self.publication_target_reader,
+            publication_payload_encoder=SentinelRuleVersionJsonEncoder(
+                "sentinel-profile-v1"
+            ),
         )
         await self._seed_account("admin-1", "admin", _ADMIN_COOKIE, _ADMIN_CSRF)
         await self._seed_account("view-1", "view", _VIEW_COOKIE, _VIEW_CSRF)
@@ -221,8 +230,15 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
-    async def _mutate(self, command, *, actor="admin-1", cookie=_ADMIN_COOKIE,
-                      csrf=_ADMIN_CSRF, request_id="request-1"):
+    async def _mutate(
+        self,
+        command,
+        *,
+        actor="admin-1",
+        cookie=_ADMIN_COOKIE,
+        csrf=_ADMIN_CSRF,
+        request_id="request-1",
+    ):
         return await self.store.mutate(
             command,
             actor_id=actor,
@@ -236,36 +252,80 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         fixtures = (
-            ("flow", [{"resource": "/orders", "limitApp": "default", "grade": 1,
-                       "count": 5, "strategy": 0, "controlBehavior": 0,
-                       "clusterMode": False}]),
-            ("degrade", [{"resource": "/orders", "grade": 2, "count": 3,
-                          "timeWindow": 10, "minRequestAmount": 1,
-                          "statIntervalMs": 1000}]),
-            ("system", [{"highestSystemLoad": -1, "avgRt": 10, "maxThread": -1,
-                         "qps": -1, "highestCpuUsage": -1}]),
+            (
+                "flow",
+                [
+                    {
+                        "resource": "/orders",
+                        "limitApp": "default",
+                        "grade": 1,
+                        "count": 5,
+                        "strategy": 0,
+                        "controlBehavior": 0,
+                        "clusterMode": False,
+                    }
+                ],
+            ),
+            (
+                "degrade",
+                [
+                    {
+                        "resource": "/orders",
+                        "grade": 2,
+                        "count": 3,
+                        "timeWindow": 10,
+                        "minRequestAmount": 1,
+                        "statIntervalMs": 1000,
+                    }
+                ],
+            ),
+            (
+                "system",
+                [
+                    {
+                        "highestSystemLoad": -1,
+                        "avgRt": 10,
+                        "maxThread": -1,
+                        "qps": -1,
+                        "highestCpuUsage": -1,
+                    }
+                ],
+            ),
             ("authority", [{"resource": "/orders", "limitApp": "web", "strategy": 0}]),
-            ("param", [{"resource": "/orders", "grade": 1, "count": 10,
-                        "durationInSec": 1, "paramIdx": 0, "paramFlowItemList": []}]),
+            (
+                "param",
+                [
+                    {
+                        "resource": "/orders",
+                        "grade": 1,
+                        "count": 10,
+                        "durationInSec": 1,
+                        "paramIdx": 0,
+                        "paramFlowItemList": [],
+                    }
+                ],
+            ),
         )
         results = []
         for kind, values in fixtures:
             binding_id = f"binding-{kind}"
-            candidate = parse_rule_candidate({
-                "bindingId": binding_id,
-                "profile": "sentinel-profile-v1",
-                "kind": kind,
-                "baseVersionId": None,
-                "baseChecksum": "sha256:empty",
-                "sourceRevision": None,
-                "rules": [
-                    {
-                        "recordId": f"record-{kind}",
-                        "rule": {"kind": kind, "value": value},
-                    }
-                    for value in values
-                ],
-            })
+            candidate = parse_rule_candidate(
+                {
+                    "bindingId": binding_id,
+                    "profile": "sentinel-profile-v1",
+                    "kind": kind,
+                    "baseVersionId": None,
+                    "baseChecksum": "sha256:empty",
+                    "sourceRevision": None,
+                    "rules": [
+                        {
+                            "recordId": f"record-{kind}",
+                            "rule": {"kind": kind, "value": value},
+                        }
+                        for value in values
+                    ],
+                }
+            )
             command = RuleMutationCommand(
                 binding_id, f"save-{kind}", SaveRuleDraft(None, None, candidate)
             )
@@ -303,7 +363,8 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 await connection.scalar(
-                    select(func.count()).select_from(AuditEventRecord)
+                    select(func.count())
+                    .select_from(AuditEventRecord)
                     .where(AuditEventRecord.action == "rules.save_draft")
                 ),
                 5,
@@ -337,12 +398,16 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed.result.target, command.mutation.target)
         async with self.engine.connect() as connection:
             row = (
-                await connection.execute(
-                    select(RulePublicationTargetRecord.__table__).where(
-                        RulePublicationTargetRecord.binding_id == "binding-flow"
+                (
+                    await connection.execute(
+                        select(RulePublicationTargetRecord.__table__).where(
+                            RulePublicationTargetRecord.binding_id == "binding-flow"
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             audit_count = await connection.scalar(
                 select(func.count())
                 .select_from(AuditEventRecord)
@@ -415,7 +480,8 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         )
         updated = await self._mutate(
             RuleMutationCommand(
-                "binding-flow", "update-1",
+                "binding-flow",
+                "update-1",
                 SaveRuleDraft(draft.id, draft.revision, updated_candidate),
             )
         )
@@ -425,7 +491,8 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
 
         stale = await self._mutate(
             RuleMutationCommand(
-                "binding-flow", "stale-1",
+                "binding-flow",
+                "stale-1",
                 SaveRuleDraft(draft.id, draft.revision, candidate),
             )
         )
@@ -440,11 +507,13 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(deleted.result, draft.id)
         self.assertEqual(replay, deleted)
         async with self.engine.connect() as connection:
-            self.assertIsNone(await connection.scalar(
-                select(RuleDraftRecord.draft_id).where(
-                    RuleDraftRecord.draft_id == draft.id
+            self.assertIsNone(
+                await connection.scalar(
+                    select(RuleDraftRecord.draft_id).where(
+                        RuleDraftRecord.draft_id == draft.id
+                    )
                 )
-            ))
+            )
 
     async def test_reused_key_conflicts_and_viewer_or_wrong_csrf_cannot_write(
         self,
@@ -469,7 +538,9 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                     "viewer-key",
                     SaveRuleDraft(None, None, _flow_candidate("binding-view", 1)),
                 ),
-                actor="view-1", cookie=_VIEW_COOKIE, csrf=_VIEW_CSRF,
+                actor="view-1",
+                cookie=_VIEW_COOKIE,
+                csrf=_VIEW_CSRF,
             )
         with self.assertRaises(RuleMutationForbidden):
             await self._mutate(
@@ -508,13 +579,17 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(operation.reason, RuleOperationRejection.UNAVAILABLE)
         async with self.engine.connect() as connection:
             stored = (
-                await connection.execute(
-                    select(RuleMutationOperationRecord.__table__).where(
-                        RuleMutationOperationRecord.request_key
-                        == "publish-without-target"
+                (
+                    await connection.execute(
+                        select(RuleMutationOperationRecord.__table__).where(
+                            RuleMutationOperationRecord.request_key
+                            == "publish-without-target"
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             self.assertIsNone(stored["work_payload"])
 
     async def test_publish_is_atomically_queued_with_exact_original_baseline(
@@ -549,12 +624,16 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                 0,
             )
             work = (
-                await connection.execute(
-                    select(RuleMutationOperationRecord.__table__).where(
-                        RuleMutationOperationRecord.request_key == "publish-durable"
+                (
+                    await connection.execute(
+                        select(RuleMutationOperationRecord.__table__).where(
+                            RuleMutationOperationRecord.request_key == "publish-durable"
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             publication_id = work["work_payload"]["publicationId"]
             self.assertEqual(work["status"], "pending")
             self.assertIsNone(work["result"])
@@ -563,12 +642,8 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                 "provider-revision-42",
             )
             self.assertEqual(work["work_payload"]["schemaVersion"], 2)
-            self.assertEqual(
-                work["work_payload"]["targetRevision"], "mapping-rev-7"
-            )
-            self.assertEqual(
-                work["work_payload"]["sourceRevision"], "source-rev-3"
-            )
+            self.assertEqual(work["work_payload"]["targetRevision"], "mapping-rev-7")
+            self.assertEqual(work["work_payload"]["sourceRevision"], "source-rev-3")
             self.assertEqual(
                 work["work_payload"]["target"],
                 {
@@ -584,7 +659,9 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("operator reason", str(work["work_payload"]))
             self.assertEqual(
                 await connection.scalar(
-                    select(func.count()).select_from(RulePublicationRecord).where(
+                    select(func.count())
+                    .select_from(RulePublicationRecord)
+                    .where(
                         RulePublicationRecord.publication_id == publication_id,
                         RulePublicationRecord.binding_id == "binding-flow",
                         RulePublicationRecord.target_version_id == "version-promo",
@@ -654,9 +731,7 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             lease_expires_at=_NOW + timedelta(seconds=50),
         )
         self.assertEqual(renewed_claim.claim_token, first_claim[0].claim_token)
-        self.assertEqual(
-            renewed_claim.lease_expires_at, _NOW + timedelta(seconds=50)
-        )
+        self.assertEqual(renewed_claim.lease_expires_at, _NOW + timedelta(seconds=50))
         with self.assertRaises(RulePublishClaimConflict):
             await outbox.renew_claim(
                 first_claim[0],
@@ -719,6 +794,97 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                 supported_providers=frozenset({ConfigurationSourceProvider.NACOS}),
             )
 
+    async def test_publish_uses_provider_payload_checksum_not_version_model_checksum(
+        self,
+    ) -> None:
+        await self._seed_plan_versions("binding-flow")
+        target_checksum = candidate_checksum(
+            _flow_candidate("binding-flow", count=17, record_id="plan-record")
+        )
+        provider_payload_checksum = "sha256:" + "a" * 64
+        operation = await self._mutate(
+            RuleMutationCommand(
+                "binding-flow",
+                "publish-provider-checksum-baseline",
+                PublishRuleVersion(
+                    "version-promo",
+                    target_checksum,
+                    "version-daily",
+                    provider_payload_checksum,
+                    "provider-revision-42",
+                    "provider payload checksum is not candidate checksum",
+                ),
+            )
+        )
+
+        self.assertEqual(operation.status, RuleOperationStatus.PENDING)
+        async with self.engine.connect() as connection:
+            work = (
+                (
+                    await connection.execute(
+                        select(RuleMutationOperationRecord.__table__).where(
+                            RuleMutationOperationRecord.request_key
+                            == "publish-provider-checksum-baseline"
+                        )
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            self.assertEqual(
+                work["work_payload"]["expectedChecksum"],
+                provider_payload_checksum,
+            )
+            self.assertEqual(
+                work["work_payload"]["expectedVersionId"], "version-daily"
+            )
+
+    async def test_publication_sequence_increments_for_identical_republish(
+        self,
+    ) -> None:
+        await self._seed_plan_versions("binding-sequence")
+        checksum = candidate_checksum(
+            _flow_candidate("binding-sequence", count=17, record_id="plan-record")
+        )
+        publication_sequences = []
+        for request_key in ("sequence-first", "sequence-second"):
+            operation = await self._mutate(
+                RuleMutationCommand(
+                    "binding-sequence",
+                    request_key,
+                    PublishRuleVersion(
+                        "version-promo",
+                        checksum,
+                        None,
+                        "sha256:source-baseline",
+                        "provider-revision-42",
+                        "identical republish",
+                    ),
+                )
+            )
+            self.assertEqual(operation.status, RuleOperationStatus.PENDING)
+            async with self.engine.connect() as connection:
+                work = (
+                    (
+                        await connection.execute(
+                            select(RuleMutationOperationRecord.__table__).where(
+                                RuleMutationOperationRecord.request_key == request_key
+                            )
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                sequence = await connection.scalar(
+                    select(RulePublicationRecord.publication_sequence).where(
+                        RulePublicationRecord.publication_id
+                        == work["work_payload"]["publicationId"]
+                    )
+                )
+                publication_sequences.append(sequence)
+
+        self.assertEqual(publication_sequences, [1, 2])
+
     async def test_consul_worker_claims_consul_target(self) -> None:
         await self._seed_plan_versions("binding-consul")
         self.publication_target_reader.provider = ConfigurationSourceProvider.CONSUL
@@ -748,9 +914,7 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(len(claims), 1)
-        self.assertEqual(
-            claims[0].target.provider, ConfigurationSourceProvider.CONSUL
-        )
+        self.assertEqual(claims[0].target.provider, ConfigurationSourceProvider.CONSUL)
         self.assertEqual(claims[0].target.key, "sentinel/prod/rules")
 
     @unittest.skipUnless(
@@ -795,9 +959,7 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
 
             key = f"sentinel/acceptance/{uuid4().hex}/rules.json"
             await self._seed_plan_versions("binding-consul")
-            self.publication_target_reader.provider = (
-                ConfigurationSourceProvider.CONSUL
-            )
+            self.publication_target_reader.provider = ConfigurationSourceProvider.CONSUL
             self.publication_target_reader.consul_key = key
             candidate = _flow_candidate(
                 "binding-consul", count=17, record_id="plan-record"
@@ -841,7 +1003,9 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             outcomes = await worker.run_once()
 
             self.assertEqual(outcomes, (RulePublicationWorkerOutcome.COMPLETED,))
-            connection = await _LocalConsulCredentialResolver(endpoint).resolve_credentials(
+            connection = await _LocalConsulCredentialResolver(
+                endpoint
+            ).resolve_credentials(
                 "test-source",
                 "source-rev-3",
                 ConfigurationSourceProvider.CONSUL,
@@ -890,7 +1054,7 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         "set SENTINEL_CONSOLE_RUN_NACOS_ACCEPTANCE=1 to start disposable Nacos",
     )
     async def test_nacos_worker_publishes_sql_outbox_to_real_nacos(self) -> None:
-        """Prove SQL acceptance, Nacos gRPC CAS, read-back, and dedup together."""
+        """Prove SQL outbox update-CAS and create-only publication end to end."""
         token = uuid4().hex
         container_name = f"sentinel-nacos-worker-{token[:12]}"
         http_port, grpc_port = _free_loopback_port_pair()
@@ -900,6 +1064,7 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         namespace = "public"
         seeded = False
         started = False
+        create_data_id: str | None = None
         try:
             started = True
             subprocess.run(
@@ -955,15 +1120,15 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                 "source-rev-3",
                 ConfigurationSourceProvider.NACOS,
             )
-            baseline_checksum = await self._seed_nacos_baseline_version(
-                "binding-nacos"
-            )
+            baseline_checksum = await self._seed_nacos_baseline_version("binding-nacos")
             baseline_version = await ReadRuleVersion(
                 SqlAlchemyRuleVersionReader(self.engine)
             ).execute("binding-nacos", "version-nacos-baseline")
-            seed_value = SentinelRuleVersionJsonEncoder(
-                "sentinel-profile-v1"
-            ).encode_rule_version(baseline_version).decode("utf-8")
+            seed_value = (
+                SentinelRuleVersionJsonEncoder("sentinel-profile-v1")
+                .encode_rule_version(baseline_version)
+                .decode("utf-8")
+            )
             _nacos_admin_request(
                 endpoint,
                 "POST",
@@ -1078,18 +1243,96 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                 ),
             )
             self.assertEqual(unchanged.md5, stored.md5)
+
+            # Exercise the no-existing-config route through the same durable
+            # mutation/outbox/worker path. This must use Nacos Admin Import
+            # with ABORT semantics rather than a blind publish overwrite.
+            create_data_id = f"sentinel-create-acceptance-{token}.json"
+            self.publication_target_reader.current_data_id = create_data_id
+            create_version_id = "version-nacos-create"
+            create_checksum = await self._seed_named_rule_version(
+                "binding-nacos",
+                version_id=create_version_id,
+                validation_id="validation-nacos-create",
+                count=21,
+                record_id="nacos-create-record",
+            )
+            create_request_key = f"publish-nacos-create-worker-{token}"
+            create_operation = await self._mutate(
+                RuleMutationCommand(
+                    "binding-nacos",
+                    create_request_key,
+                    PublishRuleVersion(
+                        create_version_id,
+                        create_checksum,
+                        None,
+                        "missing",
+                        "source-rev-3",
+                        "synthetic Nacos create-only acceptance reason",
+                    ),
+                )
+            )
+            self.assertEqual(create_operation.status, RuleOperationStatus.PENDING)
+            create_outcomes = await worker.run_once()
+            if create_outcomes != (RulePublicationWorkerOutcome.COMPLETED,):
+                rejected = await self.store.read_operation(
+                    "binding-nacos",
+                    create_request_key,
+                    actor_id="admin-1",
+                    session_digest=_digest(_ADMIN_COOKIE),
+                )
+                self.fail(
+                    "Nacos create-only publication did not complete: "
+                    f"outcomes={create_outcomes!r}, operation={rejected!r}"
+                )
+
+            create_target = NacosRulePublicationTarget(
+                binding_id="binding-nacos",
+                source_id="test-source",
+                namespace=namespace,
+                group=group,
+                data_id=create_data_id,
+            )
+            created = await reader.read(connection, create_target)
+            create_version = await ReadRuleVersion(
+                SqlAlchemyRuleVersionReader(self.engine)
+            ).execute("binding-nacos", create_version_id)
+            expected_create_bytes = SentinelRuleVersionJsonEncoder(
+                "sentinel-profile-v1"
+            ).encode_rule_version(create_version)
+            self.assertEqual(created.value, expected_create_bytes)
+            completed_create = await self.store.read_operation(
+                "binding-nacos",
+                create_request_key,
+                actor_id="admin-1",
+                session_digest=_digest(_ADMIN_COOKIE),
+            )
+            self.assertEqual(completed_create.status, RuleOperationStatus.COMPLETED)
+            self.assertEqual(
+                completed_create.result.read_back.state,
+                PublicationStage.SUCCEEDED,
+            )
+            self.assertNotIn(
+                "synthetic Nacos create-only acceptance reason",
+                repr(completed_create),
+            )
+            self.assertEqual(await worker.run_once(), ())
         finally:
-            if seeded:
+            cleanup_data_ids = [data_id]
+            if create_data_id is not None:
+                cleanup_data_ids.append(create_data_id)
+            if seeded or create_data_id is not None:
                 try:
-                    _nacos_admin_request(
-                        endpoint,
-                        "DELETE",
-                        {
-                            "namespaceId": namespace,
-                            "groupName": group,
-                            "dataId": data_id,
-                        },
-                    )
+                    for cleanup_data_id in cleanup_data_ids:
+                        _nacos_admin_request(
+                            endpoint,
+                            "DELETE",
+                            {
+                                "namespaceId": namespace,
+                                "groupName": group,
+                                "dataId": cleanup_data_id,
+                            },
+                        )
                 except (OSError, ValueError, HTTPError):
                     pass
             if started:
@@ -1101,7 +1344,9 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                     timeout=30,
                 )
 
-    async def test_known_publish_failure_rejects_once_but_keeps_publication(self) -> None:
+    async def test_known_publish_failure_rejects_once_but_keeps_publication(
+        self,
+    ) -> None:
         await self._seed_plan_versions("binding-rejected")
         checksum = candidate_checksum(
             _flow_candidate("binding-rejected", count=17, record_id="plan-record")
@@ -1173,17 +1418,24 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             )
         async with self.engine.connect() as connection:
             operation = (
-                await connection.execute(
-                    select(RuleMutationOperationRecord.__table__).where(
-                        RuleMutationOperationRecord.request_key == "publish-rejected"
+                (
+                    await connection.execute(
+                        select(RuleMutationOperationRecord.__table__).where(
+                            RuleMutationOperationRecord.request_key
+                            == "publish-rejected"
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             self.assertEqual(operation["reason"], "validation")
             self.assertIsNone(operation["work_payload"])
             self.assertEqual(
                 await connection.scalar(
-                    select(func.count()).select_from(AuditEventRecord).where(
+                    select(func.count())
+                    .select_from(AuditEventRecord)
+                    .where(
                         AuditEventRecord.request_id == claim.operation_id,
                         AuditEventRecord.action == "rules.publish",
                         AuditEventRecord.outcome == "rejected",
@@ -1193,7 +1445,9 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 await connection.scalar(
-                    select(func.count()).select_from(RulePublicationRecord).where(
+                    select(func.count())
+                    .select_from(RulePublicationRecord)
+                    .where(
                         RulePublicationRecord.publication_id == claim.publication_id,
                         RulePublicationRecord.validation_state == "failed",
                     )
@@ -1277,18 +1531,25 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             )
         async with self.engine.connect() as connection:
             row = (
-                await connection.execute(
-                    select(RuleMutationOperationRecord.__table__).where(
-                        RuleMutationOperationRecord.request_key == "publish-complete"
+                (
+                    await connection.execute(
+                        select(RuleMutationOperationRecord.__table__).where(
+                            RuleMutationOperationRecord.request_key
+                            == "publish-complete"
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             self.assertEqual(row["status"], "completed")
             self.assertIsNone(row["work_payload"])
             self.assertIsNone(row["work_claim_token"])
             self.assertEqual(
                 await connection.scalar(
-                    select(func.count()).select_from(AuditEventRecord).where(
+                    select(func.count())
+                    .select_from(AuditEventRecord)
+                    .where(
                         AuditEventRecord.request_id == row["operation_id"],
                         AuditEventRecord.action == "rules.publish",
                         AuditEventRecord.outcome == "completed",
@@ -1309,18 +1570,21 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(missing.reason, RuleOperationRejection.NOT_FOUND)
 
-        candidate = parse_rule_candidate({
-            "bindingId": "binding-flow",
-            "profile": "sentinel-profile-v1",
-            "kind": "degrade",
-            "baseVersionId": None,
-            "baseChecksum": "sha256:empty",
-            "sourceRevision": None,
-            "rules": [],
-        })
+        candidate = parse_rule_candidate(
+            {
+                "bindingId": "binding-flow",
+                "profile": "sentinel-profile-v1",
+                "kind": "degrade",
+                "baseVersionId": None,
+                "baseChecksum": "sha256:empty",
+                "sourceRevision": None,
+                "rules": [],
+            }
+        )
         mismatch = await self._mutate(
             RuleMutationCommand(
-                "binding-flow", "binding-kind-mismatch",
+                "binding-flow",
+                "binding-kind-mismatch",
                 SaveRuleDraft(None, None, candidate),
             )
         )
@@ -1389,6 +1653,117 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                     select(func.count()).select_from(RuleMutationOperationRecord)
                 ),
                 0,
+            )
+
+    async def test_operation_is_visible_after_same_actor_reauthenticates(self):
+        command = RuleMutationCommand(
+            "binding-flow",
+            "save-before-reauthentication",
+            SaveRuleDraft(None, None, _flow_candidate("binding-flow", count=12)),
+        )
+        original = await self._mutate(command)
+        new_cookie = "rule-mutation-reauthenticated-session-token"
+        new_digest = _digest(new_cookie)
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                insert(AuthenticationSessionRecord).values(
+                    session_hash=new_digest,
+                    account_id="admin-1",
+                    session_epoch="epoch-admin-reauthenticated",
+                    csrf_hash=_digest("rule-mutation-reauthenticated-csrf"),
+                    created_at=_NOW,
+                    expires_at=datetime.now(UTC) + timedelta(days=1),
+                    revoked_at=None,
+                )
+            )
+
+        visible = await self.store.read_operation(
+            "binding-flow",
+            "save-before-reauthentication",
+            actor_id="admin-1",
+            session_digest=new_digest,
+        )
+
+        self.assertEqual(visible, original)
+
+    async def test_operation_is_not_visible_to_another_admin_actor(self):
+        command = RuleMutationCommand(
+            "binding-flow",
+            "save-before-other-admin-read",
+            SaveRuleDraft(None, None, _flow_candidate("binding-flow", count=14)),
+        )
+        await self._mutate(command)
+        other_cookie = "rule-mutation-other-admin-cookie"
+        other_csrf = "rule-mutation-other-admin-csrf"
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                insert(AccountRecord).values(
+                    account_id="admin-other",
+                    username="admin-other",
+                    username_key=hashlib.sha256(b"admin-other").hexdigest(),
+                    password_hash="$argon2id$synthetic-hash",
+                    role_id="admin",
+                    status="active",
+                    built_in=False,
+                    revision=1,
+                    created_at=_NOW,
+                    updated_at=_NOW,
+                )
+            )
+            await connection.execute(
+                insert(AuthenticationSessionRecord).values(
+                    session_hash=_digest(other_cookie),
+                    account_id="admin-other",
+                    session_epoch="epoch-admin-other",
+                    csrf_hash=_digest(other_csrf),
+                    created_at=_NOW,
+                    expires_at=datetime.now(UTC) + timedelta(days=1),
+                    revoked_at=None,
+                )
+            )
+
+        result = await self.store.read_operation(
+            "binding-flow",
+            "save-before-other-admin-read",
+            actor_id="admin-other",
+            session_digest=_digest(other_cookie),
+        )
+
+        self.assertIsNone(result)
+
+    async def test_downgraded_actor_cannot_read_rule_operation_after_reauth(self):
+        command = RuleMutationCommand(
+            "binding-flow",
+            "save-before-role-downgrade",
+            SaveRuleDraft(None, None, _flow_candidate("binding-flow", count=13)),
+        )
+        await self._mutate(command)
+        new_cookie = "rule-mutation-viewer-session-token"
+        new_digest = _digest(new_cookie)
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                update(AccountRecord)
+                .where(AccountRecord.account_id == "admin-1")
+                .values(role_id="view", built_in=False)
+            )
+            await connection.execute(
+                insert(AuthenticationSessionRecord).values(
+                    session_hash=new_digest,
+                    account_id="admin-1",
+                    session_epoch="epoch-admin-downgraded",
+                    csrf_hash=_digest("rule-mutation-viewer-csrf"),
+                    created_at=_NOW,
+                    expires_at=datetime.now(UTC) + timedelta(days=1),
+                    revoked_at=None,
+                )
+            )
+
+        with self.assertRaises(RuleMutationForbidden):
+            await self.store.read_operation(
+                "binding-flow",
+                "save-before-role-downgrade",
+                actor_id="admin-1",
+                session_digest=new_digest,
             )
 
     async def test_sql_draft_reader_returns_complete_exact_binding_views(self) -> None:
@@ -1676,7 +2051,9 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(blocked_cancel.result.state.value, "cancelled")
         self.assertNotEqual(blocked_cancel.result.revision, blocked_revision)
 
-    async def test_scheduled_publication_identity_does_not_require_browser_session(self) -> None:
+    async def test_scheduled_publication_identity_does_not_require_browser_session(
+        self,
+    ) -> None:
         await self._seed_plan_versions("binding-scheduled-origin")
         created = await self._mutate(
             RuleMutationCommand(
@@ -1714,13 +2091,17 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             )
         async with self.engine.connect() as connection:
             stored = (
-                await connection.execute(
-                    select(RuleMutationOperationRecord.__table__).where(
-                        RuleMutationOperationRecord.request_key
-                        == "system-plan-activation-test"
+                (
+                    await connection.execute(
+                        select(RuleMutationOperationRecord.__table__).where(
+                            RuleMutationOperationRecord.request_key
+                            == "system-plan-activation-test"
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
         self.assertIsNone(stored["actor_account_id"])
         self.assertIsNone(stored["session_hash"])
         self.assertEqual(stored["origin_plan_id"], plan.id)
@@ -1779,23 +2160,34 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
 
         async with self.engine.connect() as connection:
             operation = (
-                await connection.execute(
-                    select(RuleMutationOperationRecord.__table__).where(
-                        RuleMutationOperationRecord.origin_plan_id == created.result.id,
-                        RuleMutationOperationRecord.origin_phase == "activation",
+                (
+                    await connection.execute(
+                        select(RuleMutationOperationRecord.__table__).where(
+                            RuleMutationOperationRecord.origin_plan_id
+                            == created.result.id,
+                            RuleMutationOperationRecord.origin_phase == "activation",
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             publication = (
-                await connection.execute(
-                    select(RulePublicationRecord.__table__).where(
-                        RulePublicationRecord.publication_id
-                        == operation["work_payload"]["publicationId"]
+                (
+                    await connection.execute(
+                        select(RulePublicationRecord.__table__).where(
+                            RulePublicationRecord.publication_id
+                            == operation["work_payload"]["publicationId"]
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             audit_count = await connection.scalar(
-                select(func.count()).select_from(AuditEventRecord).where(
+                select(func.count())
+                .select_from(AuditEventRecord)
+                .where(
                     AuditEventRecord.action == "rules.activation_plan.activate",
                     AuditEventRecord.target_id == created.result.id,
                 )
@@ -1810,6 +2202,12 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(publication["target_version_id"], "version-promo")
         self.assertEqual(publication["base_version_id"], "version-daily")
         self.assertEqual(audit_count, 1)
+        audit = await self._read_scheduled_audit(
+            action=AuditAction.PLAN_ACTIVATE,
+            target_id=created.result.id,
+        )
+        self.assertEqual(audit["result"], AuditResult.UNKNOWN.value)
+        self.assertIsNone(audit["actorId"])
 
         replay_worker = RunRuleActivationPlanWorker(
             work_queue=SqlAlchemyRuleActivationPlanWorkQueue(self.engine),
@@ -1820,13 +2218,17 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replay, (RuleActivationPlanWorkerOutcome.ENQUEUED,))
         async with self.engine.connect() as connection:
             operation_count = await connection.scalar(
-                select(func.count()).select_from(RuleMutationOperationRecord).where(
+                select(func.count())
+                .select_from(RuleMutationOperationRecord)
+                .where(
                     RuleMutationOperationRecord.origin_plan_id == created.result.id,
                     RuleMutationOperationRecord.origin_phase == "activation",
                 )
             )
             audit_count_after_replay = await connection.scalar(
-                select(func.count()).select_from(AuditEventRecord).where(
+                select(func.count())
+                .select_from(AuditEventRecord)
+                .where(
                     AuditEventRecord.action == "rules.activation_plan.activate",
                     AuditEventRecord.target_id == created.result.id,
                 )
@@ -1867,15 +2269,22 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         )
         async with self.engine.connect() as connection:
             operation = (
-                await connection.execute(
-                    select(RuleMutationOperationRecord.__table__).where(
-                        RuleMutationOperationRecord.origin_plan_id == created.result.id,
-                        RuleMutationOperationRecord.origin_phase == "restoration",
+                (
+                    await connection.execute(
+                        select(RuleMutationOperationRecord.__table__).where(
+                            RuleMutationOperationRecord.origin_plan_id
+                            == created.result.id,
+                            RuleMutationOperationRecord.origin_phase == "restoration",
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             audit_count = await connection.scalar(
-                select(func.count()).select_from(AuditEventRecord).where(
+                select(func.count())
+                .select_from(AuditEventRecord)
+                .where(
                     AuditEventRecord.action == "rules.activation_plan.restore",
                     AuditEventRecord.target_id == created.result.id,
                 )
@@ -1886,8 +2295,53 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(operation["origin_phase"], "restoration")
         self.assertEqual(audit_count, 1)
+        audit = await self._read_scheduled_audit(
+            action=AuditAction.PLAN_RESTORE,
+            target_id=created.result.id,
+        )
+        self.assertEqual(audit["result"], AuditResult.UNKNOWN.value)
+        self.assertIsNone(audit["actorId"])
 
-    async def test_activation_unknown_provider_write_recovers_same_publication_without_rewrite(self):
+    async def _read_scheduled_audit(self, *, action: AuditAction, target_id: str):
+        app = build_app(
+            bootstrap_initialization_reader=_Initialized(),
+            setup_window_reader=_SetupWindow(),
+            bootstrap_operator_verifier=_OperatorVerifier(),
+            current_session_reader=SqlAlchemyCurrentSessionReader(self.engine),
+            current_session_revoker=SqlAlchemyCurrentSessionRevoker(self.engine),
+            account_directory_reader=SqlAlchemyAccountDirectoryReader(self.engine),
+            allowed_browser_origins=frozenset({"https://console.test"}),
+            system_audit_reader=SqlAlchemySystemAuditReader(
+                self.engine, clock=lambda: _NOW + timedelta(seconds=1)
+            ),
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="https://console.test"
+        ) as client:
+            client.cookies.set("sentinel_session", _ADMIN_COOKIE)
+            response = await client.get(
+                "/api/v1/system/audit",
+                params={
+                    "start": "2026-10-09T07:59:59.000Z",
+                    "end": "2026-10-09T08:00:01.000Z",
+                    "action": action.value,
+                    "page": "1",
+                    "pageSize": "20",
+                },
+                headers={"x-request-id": "scheduled-audit-read"},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["total"], 1)
+        self.assertNotIn("version-promo", response.text)
+        record = response.json()["items"][0]
+        self.assertEqual(record["action"], action.value)
+        self.assertEqual(record["targetId"], target_id)
+        self.assertTrue(record["requestId"].startswith("scheduled-rule-publish:"))
+        return record
+
+    async def test_activation_unknown_provider_write_recovers_same_publication_without_rewrite(
+        self,
+    ):
         binding_id = "binding-plan-unknown-write"
         await self._seed_plan_versions(binding_id)
         created = await self._mutate(
@@ -1931,6 +2385,7 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                 _TestCredentialResolver()
             ),
             payload_encoder=encoder,
+            payload_checksum_writer=SqlAlchemyRulePublicationStore(self.engine),
             provider=provider,
             clock=lambda: _NOW + timedelta(seconds=5),
         )
@@ -1948,13 +2403,17 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
 
         async with self.engine.connect() as connection:
             unknown_publication = (
-                await connection.execute(
-                    select(RulePublicationRecord.__table__).where(
-                        RulePublicationRecord.publication_id
-                        == activation_publication_id
+                (
+                    await connection.execute(
+                        select(RulePublicationRecord.__table__).where(
+                            RulePublicationRecord.publication_id
+                            == activation_publication_id
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
         self.assertEqual(unknown_publication["write_state"], "unknown")
         self.assertEqual(unknown_publication["read_back_state"], "awaiting")
 
@@ -1977,6 +2436,7 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                 _TestCredentialResolver()
             ),
             payload_encoder=encoder,
+            payload_checksum_writer=SqlAlchemyRulePublicationStore(self.engine),
             provider=provider,
             clock=lambda: _NOW + timedelta(minutes=2),
         )
@@ -2005,18 +2465,24 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         )
         async with self.engine.connect() as connection:
             operation_count = await connection.scalar(
-                select(func.count()).select_from(RuleMutationOperationRecord).where(
+                select(func.count())
+                .select_from(RuleMutationOperationRecord)
+                .where(
                     RuleMutationOperationRecord.origin_plan_id == created.result.id,
                     RuleMutationOperationRecord.origin_phase == "activation",
                 )
             )
             publication_count = await connection.scalar(
-                select(func.count()).select_from(RulePublicationRecord).where(
+                select(func.count())
+                .select_from(RulePublicationRecord)
+                .where(
                     RulePublicationRecord.publication_id == activation_publication_id
                 )
             )
             completed_audits = await connection.scalar(
-                select(func.count()).select_from(AuditEventRecord).where(
+                select(func.count())
+                .select_from(AuditEventRecord)
+                .where(
                     AuditEventRecord.action == "rules.activation_plan.activate",
                     AuditEventRecord.target_id == created.result.id,
                     AuditEventRecord.outcome == "completed",
@@ -2026,7 +2492,9 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(publication_count, 1)
         self.assertEqual(completed_audits, 1)
 
-    async def test_provider_cas_conflict_blocks_plan_without_restoration_publication(self):
+    async def test_provider_cas_conflict_blocks_plan_without_restoration_publication(
+        self,
+    ):
         binding_id = "binding-plan-provider-conflict"
         await self._seed_plan_versions(binding_id)
         created = await self._mutate(
@@ -2069,6 +2537,7 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                 _TestCredentialResolver()
             ),
             payload_encoder=encoder,
+            payload_checksum_writer=SqlAlchemyRulePublicationStore(self.engine),
             provider=provider,
             clock=lambda: _NOW + timedelta(seconds=5),
         )
@@ -2104,23 +2573,31 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await after_restore_window.run_once(), ())
         async with self.engine.connect() as connection:
             restoration_count = await connection.scalar(
-                select(func.count()).select_from(RuleMutationOperationRecord).where(
+                select(func.count())
+                .select_from(RuleMutationOperationRecord)
+                .where(
                     RuleMutationOperationRecord.origin_plan_id == created.result.id,
                     RuleMutationOperationRecord.origin_phase == "restoration",
                 )
             )
             publication = (
-                await connection.execute(
-                    select(RulePublicationRecord.__table__).where(
-                        RulePublicationRecord.binding_id == binding_id
+                (
+                    await connection.execute(
+                        select(RulePublicationRecord.__table__).where(
+                            RulePublicationRecord.binding_id == binding_id
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
         self.assertEqual(restoration_count, 0)
         self.assertEqual(publication["write_state"], "failed")
         self.assertEqual(publication["write_reason"], "conflict")
 
-    async def test_external_change_after_activation_blocks_restore_without_overwrite(self):
+    async def test_external_change_after_activation_blocks_restore_without_overwrite(
+        self,
+    ):
         binding_id = "binding-plan-external-before-restore"
         await self._seed_plan_versions(binding_id)
         created = await self._mutate(
@@ -2155,19 +2632,19 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                 supported_providers=frozenset({ConfigurationSourceProvider.NACOS}),
             )
         )[0]
-        for phase_index, phase_name in enumerate((
-            PublicationPhaseName.VALIDATION,
-            PublicationPhaseName.CONFIGURATION_WRITE,
-            PublicationPhaseName.READ_BACK,
-        )):
+        for phase_index, phase_name in enumerate(
+            (
+                PublicationPhaseName.VALIDATION,
+                PublicationPhaseName.CONFIGURATION_WRITE,
+                PublicationPhaseName.READ_BACK,
+            )
+        ):
             started_at = _NOW + timedelta(seconds=2 + phase_index * 2)
             await outbox.advance_claimed_phase(
                 activation_claim,
                 phase_name,
                 expected_state=PublicationStage.AWAITING,
-                next_phase=PublicationPhase(
-                    PublicationStage.RUNNING, started_at, None
-                ),
+                next_phase=PublicationPhase(PublicationStage.RUNNING, started_at, None),
             )
             await outbox.advance_claimed_phase(
                 activation_claim,
@@ -2222,6 +2699,7 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                 _TestCredentialResolver()
             ),
             payload_encoder=encoder,
+            payload_checksum_writer=SqlAlchemyRulePublicationStore(self.engine),
             provider=provider,
             clock=lambda: _NOW + timedelta(minutes=3, seconds=1),
         )
@@ -2255,20 +2733,26 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         )
         async with self.engine.connect() as connection:
             restoration_operations = await connection.scalar(
-                select(func.count()).select_from(RuleMutationOperationRecord).where(
+                select(func.count())
+                .select_from(RuleMutationOperationRecord)
+                .where(
                     RuleMutationOperationRecord.origin_plan_id == created.result.id,
                     RuleMutationOperationRecord.origin_phase == "restoration",
                 )
             )
             restoration = (
-                await connection.execute(
-                    select(RulePublicationRecord.__table__).where(
-                        RulePublicationRecord.binding_id == binding_id,
-                        RulePublicationRecord.publication_id
-                        == blocked.items[0].restore_publication_id,
+                (
+                    await connection.execute(
+                        select(RulePublicationRecord.__table__).where(
+                            RulePublicationRecord.binding_id == binding_id,
+                            RulePublicationRecord.publication_id
+                            == blocked.items[0].restore_publication_id,
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
         self.assertEqual(restoration_operations, 1)
         self.assertEqual(restoration["validation_reason"], "conflict")
         self.assertEqual(restoration["validation_state"], "failed")
@@ -2301,15 +2785,22 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         )
         async with self.engine.connect() as connection:
             operation = (
-                await connection.execute(
-                    select(RuleMutationOperationRecord.__table__).where(
-                        RuleMutationOperationRecord.origin_plan_id == created.result.id,
-                        RuleMutationOperationRecord.origin_phase == "activation",
+                (
+                    await connection.execute(
+                        select(RuleMutationOperationRecord.__table__).where(
+                            RuleMutationOperationRecord.origin_plan_id
+                            == created.result.id,
+                            RuleMutationOperationRecord.origin_phase == "activation",
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             audit_count = await connection.scalar(
-                select(func.count()).select_from(AuditEventRecord).where(
+                select(func.count())
+                .select_from(AuditEventRecord)
+                .where(
                     AuditEventRecord.action == "rules.activation_plan.activate",
                     AuditEventRecord.target_id == created.result.id,
                     AuditEventRecord.outcome == "rejected",
@@ -2356,11 +2847,13 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(len(claims), 1)
             claim = claims[0]
-            for index, name in enumerate((
-                PublicationPhaseName.VALIDATION,
-                PublicationPhaseName.CONFIGURATION_WRITE,
-                PublicationPhaseName.READ_BACK,
-            )):
+            for index, name in enumerate(
+                (
+                    PublicationPhaseName.VALIDATION,
+                    PublicationPhaseName.CONFIGURATION_WRITE,
+                    PublicationPhaseName.READ_BACK,
+                )
+            ):
                 phase_started_at = now + timedelta(seconds=index * 2)
                 phase_succeeded_at = phase_started_at + timedelta(seconds=1)
                 await outbox.advance_claimed_phase(
@@ -2421,7 +2914,9 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(final.items[0].activation_publication_id)
         self.assertIsNotNone(final.items[0].restore_publication_id)
 
-    async def test_activation_recovers_completed_publication_after_lost_plan_association(self):
+    async def test_activation_recovers_completed_publication_after_lost_plan_association(
+        self,
+    ):
         binding_id = "binding-plan-lost-association"
         await self._seed_plan_versions(binding_id)
         created = await self._mutate(
@@ -2459,9 +2954,7 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             await outbox.claim_ready(
                 now=_NOW + timedelta(seconds=1),
                 lease_expires_at=_NOW + timedelta(minutes=1),
-                supported_providers=frozenset(
-                    {ConfigurationSourceProvider.NACOS}
-                ),
+                supported_providers=frozenset({ConfigurationSourceProvider.NACOS}),
             )
         )[0]
         phase_names = (
@@ -2521,25 +3014,31 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         )
         async with self.engine.connect() as connection:
             operation_count = await connection.scalar(
-                select(func.count()).select_from(RuleMutationOperationRecord).where(
+                select(func.count())
+                .select_from(RuleMutationOperationRecord)
+                .where(
                     RuleMutationOperationRecord.origin_plan_id == created.result.id,
                     RuleMutationOperationRecord.origin_phase == "activation",
                 )
             )
             publication_count = await connection.scalar(
-                select(func.count()).select_from(RulePublicationRecord).where(
-                    RulePublicationRecord.publication_id == scheduled.publication_id
-                )
+                select(func.count())
+                .select_from(RulePublicationRecord)
+                .where(RulePublicationRecord.publication_id == scheduled.publication_id)
             )
             accepted_audit_count = await connection.scalar(
-                select(func.count()).select_from(AuditEventRecord).where(
+                select(func.count())
+                .select_from(AuditEventRecord)
+                .where(
                     AuditEventRecord.action == "rules.activation_plan.activate",
                     AuditEventRecord.target_id == created.result.id,
                     AuditEventRecord.outcome == "accepted",
                 )
             )
             completed_audit_count = await connection.scalar(
-                select(func.count()).select_from(AuditEventRecord).where(
+                select(func.count())
+                .select_from(AuditEventRecord)
+                .where(
                     AuditEventRecord.action == "rules.activation_plan.activate",
                     AuditEventRecord.target_id == created.result.id,
                     AuditEventRecord.outcome == "completed",
@@ -2550,7 +3049,9 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(accepted_audit_count, 1)
         self.assertEqual(completed_audit_count, 1)
 
-    async def test_activation_plan_work_queue_fences_claims_and_recovers_expired_lease(self) -> None:
+    async def test_activation_plan_work_queue_fences_claims_and_recovers_expired_lease(
+        self,
+    ) -> None:
         await self._seed_plan_versions("binding-plan-queue")
         created = await self._mutate(
             RuleMutationCommand(
@@ -2575,10 +3076,13 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         first_claim = first[0]
         self.assertEqual(first_claim.plan.state.value, "activating")
         self.assertEqual(first_claim.attempt, 1)
-        self.assertEqual(await queue.claim_due(
-            now=_NOW,
-            lease_expires_at=_NOW + timedelta(minutes=1),
-        ), ())
+        self.assertEqual(
+            await queue.claim_due(
+                now=_NOW,
+                lease_expires_at=_NOW + timedelta(minutes=1),
+            ),
+            (),
+        )
 
         renewed = await queue.renew_claim(
             first_claim,
@@ -2610,16 +3114,22 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(blocked.state.value, "blocked")
         async with self.engine.connect() as connection:
             row = (
-                await connection.execute(
-                    select(RuleActivationPlanRecord.__table__).where(
-                        RuleActivationPlanRecord.plan_id == created.result.id
+                (
+                    await connection.execute(
+                        select(RuleActivationPlanRecord.__table__).where(
+                            RuleActivationPlanRecord.plan_id == created.result.id
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
         self.assertIsNone(row["claim_token"])
         self.assertIsNone(row["claim_lease_expires_at"])
 
-    async def test_activation_plan_work_queue_claims_due_restoration_phase(self) -> None:
+    async def test_activation_plan_work_queue_claims_due_restoration_phase(
+        self,
+    ) -> None:
         await self._seed_plan_versions("binding-plan-restore")
         created = await self._mutate(
             RuleMutationCommand(
@@ -2641,16 +3151,16 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                 .where(RuleActivationPlanRecord.plan_id == plan.id)
                 .values(state="active")
             )
-        claimed = await SqlAlchemyRuleActivationPlanWorkQueue(
-            self.engine
-        ).claim_due(
+        claimed = await SqlAlchemyRuleActivationPlanWorkQueue(self.engine).claim_due(
             now=_NOW,
             lease_expires_at=_NOW + timedelta(minutes=1),
         )
         self.assertEqual(len(claimed), 1)
         self.assertEqual(claimed[0].plan.state.value, "restoring")
 
-    async def test_activation_plan_work_queue_requires_verified_publication_before_transition(self) -> None:
+    async def test_activation_plan_work_queue_requires_verified_publication_before_transition(
+        self,
+    ) -> None:
         await self._seed_plan_versions("binding-plan-verified")
         created = await self._mutate(
             RuleMutationCommand(
@@ -2679,6 +3189,7 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                     binding_id="binding-plan-verified",
                     target_version_id="version-promo",
                     target_checksum="sha256:plan",
+                    publication_sequence=1,
                     base_version_id=None,
                     created_at=_NOW,
                     validation_state="succeeded",
@@ -2719,7 +3230,9 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             )
         activated = await queue.complete_phase(associated, now=_NOW)
         self.assertEqual(activated.state.value, "active")
-        self.assertEqual(activated.activation_publication_id, "publication-plan-activation")
+        self.assertEqual(
+            activated.activation_publication_id, "publication-plan-activation"
+        )
 
         async with self.engine.begin() as connection:
             await connection.execute(
@@ -2741,6 +3254,7 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                     binding_id="binding-plan-verified",
                     target_version_id="version-daily",
                     target_checksum="sha256:plan",
+                    publication_sequence=2,
                     base_version_id="version-promo",
                     created_at=_NOW,
                     validation_state="succeeded",
@@ -2761,9 +3275,14 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
         )
         completed = await queue.complete_phase(restoration, now=_NOW)
         self.assertEqual(completed.state.value, "completed")
-        self.assertEqual(completed.restore_publication_id, "publication-plan-restoration")
+        self.assertEqual(
+            completed.restore_publication_id, "publication-plan-restoration"
+        )
 
     async def test_rule_command_http_route_uses_the_sql_authority(self) -> None:
+        await self._seed_plan_versions("binding-http")
+        draft_reader = SqlAlchemyRuleDraftReader(self.engine)
+        version_reader = SqlAlchemyRuleVersionReader(self.engine)
         app = build_app(
             bootstrap_initialization_reader=_Initialized(),
             setup_window_reader=_SetupWindow(),
@@ -2772,6 +3291,10 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             current_session_revoker=SqlAlchemyCurrentSessionRevoker(self.engine),
             account_directory_reader=SqlAlchemyAccountDirectoryReader(self.engine),
             allowed_browser_origins=frozenset({"https://console.test"}),
+            rule_draft_reader=draft_reader,
+            rule_draft_detail_reader=draft_reader,
+            rule_set_version_reader=version_reader,
+            rule_set_version_detail_reader=version_reader,
             rule_mutation_authority=self.store,
         )
         candidate = {
@@ -2781,11 +3304,23 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             "baseVersionId": None,
             "baseChecksum": "sha256:empty",
             "sourceRevision": None,
-            "rules": [{"recordId": None, "rule": {"kind": "flow", "value": {
-                "resource": "/orders", "limitApp": "default", "grade": 1,
-                "count": 3, "strategy": 0, "controlBehavior": 0,
-                "clusterMode": False,
-            }}}],
+            "rules": [
+                {
+                    "recordId": None,
+                    "rule": {
+                        "kind": "flow",
+                        "value": {
+                            "resource": "/orders",
+                            "limitApp": "default",
+                            "grade": 1,
+                            "count": 3,
+                            "strategy": 0,
+                            "controlBehavior": 0,
+                            "clusterMode": False,
+                        },
+                    },
+                }
+            ],
         }
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="https://console.test"
@@ -2800,26 +3335,57 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
                     "x-sentinel-csrf": _ADMIN_CSRF,
                     "idempotency-key": "http-rule-save",
                 },
-                json={"requestKey": "http-rule-save", "mutation": {
-                    "kind": "save_draft", "draftId": None,
-                    "expectedRevision": None, "candidate": candidate,
-                }},
+                json={
+                    "requestKey": "http-rule-save",
+                    "mutation": {
+                        "kind": "save_draft",
+                        "draftId": None,
+                        "expectedRevision": None,
+                        "candidate": candidate,
+                    },
+                },
             )
             receipt = await client.get(
                 "/api/v1/rulesets/binding-http/operations/http-rule-save",
                 headers={"x-request-id": "http-rule-read"},
             )
+            saved_draft_id = response.json()["result"]["draft"]["id"]
+            drafts = await client.get(
+                "/api/v1/rulesets/binding-http/drafts",
+                headers={"x-request-id": "http-drafts-read"},
+            )
+            draft_detail = await client.get(
+                f"/api/v1/rulesets/binding-http/drafts/{saved_draft_id}",
+                headers={"x-request-id": "http-draft-detail-read"},
+            )
+            versions = await client.get(
+                "/api/v1/rulesets/binding-http/versions",
+                headers={"x-request-id": "http-versions-read"},
+            )
+            version_detail = await client.get(
+                "/api/v1/rulesets/binding-http/versions/version-promo",
+                headers={"x-request-id": "http-version-detail-read"},
+            )
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["status"], "completed")
         self.assertEqual(response.json()["result"]["kind"], "save_draft")
         self.assertEqual(receipt.json(), response.json())
+        self.assertEqual(drafts.status_code, 200)
+        self.assertEqual(drafts.json()["items"][0]["id"], saved_draft_id)
+        self.assertEqual(draft_detail.status_code, 200)
+        self.assertEqual(draft_detail.json()["id"], saved_draft_id)
+        self.assertEqual(versions.status_code, 200)
+        self.assertEqual(
+            {item["id"] for item in versions.json()["items"]},
+            {"version-promo", "version-daily"},
+        )
+        self.assertEqual(version_detail.status_code, 200)
+        self.assertEqual(version_detail.json()["id"], "version-promo")
 
     async def _seed_plan_versions(self, binding_id: str) -> None:
         candidate = _flow_candidate(binding_id, count=17, record_id="plan-record")
         checksum = candidate_checksum(candidate)
-        records = [
-            rule_record_body(RuleRecord("plan-record", candidate.rules[0].rule))
-        ]
+        records = [rule_record_body(RuleRecord("plan-record", candidate.rules[0].rule))]
         async with self.engine.begin() as connection:
             for version_id in ("version-promo", "version-daily"):
                 validation_id = f"validation-{version_id}"
@@ -2901,24 +3467,82 @@ class RuleMutationStoreTests(unittest.IsolatedAsyncioTestCase):
             )
         return checksum
 
+    async def _seed_named_rule_version(
+        self,
+        binding_id: str,
+        *,
+        version_id: str,
+        validation_id: str,
+        count: int,
+        record_id: str,
+    ) -> str:
+        """Seed one uniquely named immutable version for live provider acceptance."""
+        candidate = _flow_candidate(binding_id, count=count, record_id=record_id)
+        checksum = candidate_checksum(candidate)
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                insert(RuleValidationReceiptRecord).values(
+                    validation_id=validation_id,
+                    binding_id=binding_id,
+                    profile=candidate.profile,
+                    base_checksum=candidate.base_checksum,
+                    candidate_checksum=checksum,
+                    is_publishable=True,
+                    issues=[],
+                    actor_account_id="admin-1",
+                    request_id=f"request-{validation_id}",
+                    created_at=_NOW,
+                )
+            )
+            await connection.execute(
+                insert(RuleSetVersionRecord).values(
+                    version_id=version_id,
+                    binding_id=binding_id,
+                    kind=candidate.kind.value,
+                    profile=candidate.profile,
+                    base_version_id=None,
+                    checksum=checksum,
+                    name=version_id,
+                    note="fixture for isolated Nacos create-only acceptance",
+                    validation_id=validation_id,
+                    records=[
+                        rule_record_body(RuleRecord(record_id, candidate.rules[0].rule))
+                    ],
+                    created_at=_NOW,
+                    created_by_account_id="admin-1",
+                )
+            )
+        return checksum
+
 
 def _flow_candidate(binding_id: str, count: int, record_id: str | None = None):
-    return parse_rule_candidate({
-        "bindingId": binding_id,
-        "profile": "sentinel-profile-v1",
-        "kind": "flow",
-        "baseVersionId": None,
-        "baseChecksum": "sha256:empty",
-        "sourceRevision": None,
-        "rules": [{
-            "recordId": record_id,
-            "rule": {"kind": "flow", "value": {
-                "resource": "/orders", "limitApp": "default", "grade": 1,
-                "count": count, "strategy": 0, "controlBehavior": 0,
-                "clusterMode": False,
-            }},
-        }],
-    })
+    return parse_rule_candidate(
+        {
+            "bindingId": binding_id,
+            "profile": "sentinel-profile-v1",
+            "kind": "flow",
+            "baseVersionId": None,
+            "baseChecksum": "sha256:empty",
+            "sourceRevision": None,
+            "rules": [
+                {
+                    "recordId": record_id,
+                    "rule": {
+                        "kind": "flow",
+                        "value": {
+                            "resource": "/orders",
+                            "limitApp": "default",
+                            "grade": 1,
+                            "count": count,
+                            "strategy": 0,
+                            "controlBehavior": 0,
+                            "clusterMode": False,
+                        },
+                    },
+                }
+            ],
+        }
+    )
 
 
 def _digest(value: str) -> str:
@@ -3091,7 +3715,9 @@ def _wait_for_nacos(endpoint: str) -> None:
         except OSError as error:
             last_error = error
         time.sleep(0.25)
-    raise AssertionError(f"disposable Nacos Admin API did not become ready: {last_error!r}")
+    raise AssertionError(
+        f"disposable Nacos Admin API did not become ready: {last_error!r}"
+    )
 
 
 def _nacos_admin_request(

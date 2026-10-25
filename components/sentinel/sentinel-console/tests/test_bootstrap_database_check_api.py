@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.bootstrap_database_check import (
@@ -26,7 +27,6 @@ from atlas_richie.sentinel_console.infrastructure.bootstrap_database_targets imp
     BootstrapDatabaseTargetPolicy,
     BootstrapDatabaseTargetRule,
 )
-from session_test_doubles import UnusedSessionRevoker
 
 
 class _InitializationReader:
@@ -157,6 +157,7 @@ class BootstrapDatabaseCheckApiTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("checkBootstrapDatabase", response)
         self.assertEqual(response.json(), {"status": "reachable"})
         self.assertEqual(response.headers["x-request-id"], "database-check-1")
         self.assertEqual(response.headers["cache-control"], "no-store")
@@ -203,6 +204,7 @@ class BootstrapDatabaseCheckApiTest(unittest.IsolatedAsyncioTestCase):
                         cookies=self._cookies(nonce),
                     )
                 self.assertEqual(response.status_code, 503)
+                assert_openapi_response("checkBootstrapDatabase", response)
                 error_code = response.json()["error"]["code"]
                 self.assertEqual(error_code, "service_unavailable")
                 self.assertNotIn("secret-that-must-not-leak", response.text)

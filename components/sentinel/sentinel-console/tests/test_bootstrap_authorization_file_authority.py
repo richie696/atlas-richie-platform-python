@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
+import tempfile
 from datetime import UTC, datetime, timedelta
 from http.cookies import SimpleCookie
-import os
 from pathlib import Path
-import tempfile
 from unittest import IsolatedAsyncioTestCase
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
 from starlette.applications import Starlette
 
 from atlas_richie.sentinel_console.api.bootstrap_authorize import (
     bootstrap_authorize_route,
+    bootstrap_local_authorize_route,
 )
 from atlas_richie.sentinel_console.application.authorize_bootstrap import (
     BootstrapAuthorizationStatus,
@@ -25,9 +27,10 @@ from atlas_richie.sentinel_console.application.errors import (
 )
 from atlas_richie.sentinel_console.infrastructure.persistence import (
     bootstrap_authorization_file_authority as auth_file,
+)
+from atlas_richie.sentinel_console.infrastructure.persistence import (
     setup_window_file_store as setup_store,
 )
-
 
 _OPERATOR_CODE = "operator-code-with-at-least-32-characters"
 _FINGERPRINT_KEY = b"k" * 32
@@ -60,6 +63,7 @@ class BootstrapAuthorizationFileAuthorityTests(IsolatedAsyncioTestCase):
         operator_code: str = _OPERATOR_CODE,
         grant_ttl_seconds: int = 60,
         failure_limit: int = 2,
+        allow_loopback_without_code: bool = False,
     ):
         return auth_file.BootstrapAuthorizationConfiguration(
             state_path=self.state_path,
@@ -67,6 +71,7 @@ class BootstrapAuthorizationFileAuthorityTests(IsolatedAsyncioTestCase):
             fingerprint_key=_FINGERPRINT_KEY,
             grant_ttl_seconds=grant_ttl_seconds,
             failure_limit=failure_limit,
+            allow_loopback_without_code=allow_loopback_without_code,
         ).create_authority(self.setup_window, clock=self.clock)
 
     async def test_closed_setup_rejects_exchange_without_state_file(self) -> None:
@@ -92,7 +97,9 @@ class BootstrapAuthorizationFileAuthorityTests(IsolatedAsyncioTestCase):
         self.assertNotIn(wrong_code, persisted)
         self.assertNotIn(_OPERATOR_CODE, persisted)
 
-    async def test_non_ascii_operator_input_is_rejected_without_encoding_failure(self) -> None:
+    async def test_non_ascii_operator_input_is_rejected_without_encoding_failure(
+        self,
+    ) -> None:
         result = await self._authority().exchange("\ud800" * 32, _CLIENT_ADDRESS)
 
         self.assertIs(result.status, BootstrapAuthorizationStatus.REJECTED)
@@ -112,6 +119,79 @@ class BootstrapAuthorizationFileAuthorityTests(IsolatedAsyncioTestCase):
             _OPERATOR_CODE, _CLIENT_ADDRESS
         )
         self.assertIs(rejected_reuse.status, BootstrapAuthorizationStatus.REJECTED)
+
+    async def test_code_free_local_grant_requires_loopback_and_open_setup(self) -> None:
+        authority = self._authority(allow_loopback_without_code=True)
+
+        granted = await authority.authorize_local("127.0.0.1")
+        remote = await authority.authorize_local("192.0.2.42")
+
+        self.assertIs(granted.status, BootstrapAuthorizationStatus.GRANTED)
+        self.assertIs(remote.status, BootstrapAuthorizationStatus.REJECTED)
+        assert granted.grant is not None
+        self.assertTrue(
+            await self._authority(allow_loopback_without_code=True).is_current_operator(
+                granted.grant.opaque_session
+            )
+        )
+        await self.setup_window.close_setup_window_if_open()
+        closed = await authority.authorize_local("::1")
+        self.assertIs(closed.status, BootstrapAuthorizationStatus.SETUP_CLOSED)
+
+    async def test_local_authorize_http_adapter_issues_grant_without_code(self) -> None:
+        authority = self._authority(allow_loopback_without_code=True)
+        app = Starlette(
+            routes=[
+                bootstrap_local_authorize_route(
+                    authority, frozenset({"https://console.example.test"})
+                )
+            ]
+        )
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app, client=("127.0.0.1", 8000)),
+            base_url="https://console.example.test",
+        ) as client:
+            client.cookies.set("__Host-sentinel_csrf", "c" * 43)
+            response = await client.post(
+                "/api/v1/system/bootstrap/authorize-local",
+                json={},
+                headers={
+                    "origin": "https://console.example.test",
+                    "x-request-id": "bootstrap-local-authority-1",
+                    "x-sentinel-csrf": "c" * 43,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        assert_openapi_response("authorizeLocalBootstrap", response)
+        self.assertEqual(response.json(), {"authorized": True})
+
+    async def test_local_authorize_http_adapter_rejects_remote_peer(self) -> None:
+        authority = self._authority(allow_loopback_without_code=True)
+        app = Starlette(
+            routes=[
+                bootstrap_local_authorize_route(
+                    authority, frozenset({"https://console.example.test"})
+                )
+            ]
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=app, client=("192.0.2.42", 8000)),
+            base_url="https://console.example.test",
+        ) as client:
+            client.cookies.set("__Host-sentinel_csrf", "c" * 43)
+            response = await client.post(
+                "/api/v1/system/bootstrap/authorize-local",
+                json={},
+                headers={
+                    "origin": "https://console.example.test",
+                    "x-request-id": "bootstrap-local-remote-denied",
+                    "x-sentinel-csrf": "c" * 43,
+                },
+            )
+
+        self.assertEqual(response.status_code, 403)
 
     async def test_two_workers_cannot_consume_the_same_code(self) -> None:
         first_worker = self._authority()
@@ -158,9 +238,7 @@ class BootstrapAuthorizationFileAuthorityTests(IsolatedAsyncioTestCase):
         replacement_code = "replacement-code-with-at-least-32-chars"
         rotated = self._authority(operator_code=replacement_code)
 
-        self.assertFalse(
-            await rotated.is_current_operator(issued.grant.opaque_session)
-        )
+        self.assertFalse(await rotated.is_current_operator(issued.grant.opaque_session))
         new_grant = await rotated.exchange(replacement_code, _CLIENT_ADDRESS)
         self.assertIs(new_grant.status, BootstrapAuthorizationStatus.GRANTED)
 
@@ -219,15 +297,52 @@ class BootstrapAuthorizationFileAuthorityTests(IsolatedAsyncioTestCase):
             ).decode("ascii"),
         }
 
-        config = (
-            auth_file.BootstrapAuthorizationConfiguration.from_environment(values)
-        )
+        config = auth_file.BootstrapAuthorizationConfiguration.from_environment(values)
 
         self.assertNotIn(_OPERATOR_CODE, repr(config))
         self.assertNotIn(base64.b64encode(_FINGERPRINT_KEY).decode(), repr(config))
-        with self.assertRaises(
-            auth_file.BootstrapAuthorizationConfigurationError
-        ):
+
+    def test_environment_allows_missing_code_only_with_loopback_policy(self) -> None:
+        values = {
+            "SENTINEL_CONSOLE_BOOTSTRAP_AUTHORITY_PATH": str(self.state_path),
+            "SENTINEL_CONSOLE_BOOTSTRAP_FINGERPRINT_KEY": base64.b64encode(
+                _FINGERPRINT_KEY
+            ).decode("ascii"),
+        }
+
+        with self.assertRaises(auth_file.BootstrapAuthorizationConfigurationError):
+            auth_file.BootstrapAuthorizationConfiguration.from_environment(values)
+        local = auth_file.BootstrapAuthorizationConfiguration.from_environment(
+            values, allow_loopback_without_code=True
+        )
+        self.assertTrue(local.allow_loopback_without_code)
+        self.assertNotIn(local.operator_code, repr(local))
+        self.assertTrue(
+            auth_file.loopback_bootstrap_without_code_allowed(
+                {
+                    "SENTINEL_CONSOLE_BIND_HOST": "127.0.0.1",
+                    "SENTINEL_CONSOLE_ALLOWED_BROWSER_ORIGINS": "http://127.0.0.1:8000,http://localhost:8000",
+                }
+            )
+        )
+        self.assertFalse(
+            auth_file.loopback_bootstrap_without_code_allowed(
+                {
+                    "SENTINEL_CONSOLE_BIND_HOST": "127.0.0.1",
+                    "SENTINEL_CONSOLE_ALLOWED_BROWSER_ORIGINS": "https://console.example.test",
+                }
+            )
+        )
+        self.assertFalse(
+            auth_file.loopback_bootstrap_without_code_allowed(
+                {
+                    "SENTINEL_CONSOLE_BIND_HOST": "127.0.0.1",
+                    "SENTINEL_CONSOLE_ALLOWED_BROWSER_ORIGINS": "http://localhost:8000",
+                    "SENTINEL_CONSOLE_TRUSTED_PROXY_CIDRS": "127.0.0.1/32",
+                }
+            )
+        )
+        with self.assertRaises(auth_file.BootstrapAuthorizationConfigurationError):
             auth_file.BootstrapAuthorizationConfiguration.from_environment({})
 
 

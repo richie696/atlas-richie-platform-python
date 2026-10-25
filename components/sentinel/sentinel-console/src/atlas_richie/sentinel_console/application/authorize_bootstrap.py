@@ -78,3 +78,8 @@ class BootstrapAuthorizationAuthority(Protocol):
         self, operator_code: str, client_address: str
     ) -> BootstrapAuthorizationDecision:
         """Exchange without logging or retaining the submitted code."""
+
+    async def authorize_local(
+        self, client_address: str
+    ) -> BootstrapAuthorizationDecision:
+        """Issue a grant only for a loopback client when local setup is enabled."""

@@ -225,7 +225,7 @@ class RuleMutationRateLimited(RuntimeError):
 
 
 class RuleMutationAuthority(Protocol):
-    """Persist rule commands and query receipts only for the original actor/session."""
+    """Persist same-session command retries and query actor-owned receipts."""
 
     async def mutate(
         self,
@@ -247,7 +247,7 @@ class RuleMutationAuthority(Protocol):
         actor_id: str,
         session_digest: str,
     ) -> RuleMutationOperation | None:
-        """Read only the original actor's operation for the exact binding and key."""
+        """Reauthorize the current session, then read its actor-owned binding/key receipt."""
 
 
 class RuleMutationBindingReader(Protocol):

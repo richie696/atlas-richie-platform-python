@@ -6,7 +6,7 @@ import hashlib
 from datetime import UTC, datetime, timedelta
 import unittest
 
-from sqlalchemy import func, insert, select
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from atlas_richie.sentinel_console.application.check_registered_source import (
@@ -14,12 +14,14 @@ from atlas_richie.sentinel_console.application.check_registered_source import (
     SourceConnectionInput,
 )
 from atlas_richie.sentinel_console.application.mutate_registered_source import (
+    RegisteredSourceDeletion,
     RegisteredSourceMutation,
     SourceMutationForbidden,
     SourceMutationIdempotencyConflict,
     SourceMutationKind,
     SourceMutationRejection,
     SourceMutationStatus,
+    SourceDeletionRejection,
     SourceMutationUnauthenticated,
 )
 from atlas_richie.sentinel_console.domain.configuration_source import (
@@ -34,7 +36,9 @@ from atlas_richie.sentinel_console.infrastructure.persistence.models import (
     AuthenticationSessionRecord,
     RegisteredConfigurationSourceRecord,
     RegisteredSourceOperationRecord,
+    RegisteredSourceDeletionOperationRecord,
     RegisteredSourceProbeRecord,
+    RuleBindingRecord,
 )
 from atlas_richie.sentinel_console.infrastructure.persistence import (
     registered_source_store,
@@ -141,6 +145,23 @@ class RegisteredSourceStoreTests(unittest.IsolatedAsyncioTestCase):
             now=_NOW,
         )
 
+    async def _delete(
+        self,
+        command,
+        *,
+        actor_id="account-1",
+        session_digest=_SESSION_DIGEST,
+        csrf_digest=_CSRF_DIGEST,
+    ):
+        return await self.store.delete(
+            command,
+            actor_id=actor_id,
+            session_digest=session_digest,
+            csrf_digest=csrf_digest,
+            request_id="source-delete-test-request",
+            now=_NOW,
+        )
+
     async def test_register_encrypts_secret_and_commits_receipt_and_audit(self) -> None:
         command = self._command()
         result = await self._mutate(command)
@@ -175,6 +196,114 @@ class RegisteredSourceStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(audit["target_id"], result.record.id)
         snapshot = await self.store.read_registered_sources()
         self.assertEqual(snapshot.items, (result.record,))
+
+    async def test_delete_erases_online_credential_and_is_idempotently_audited(self) -> None:
+        registered = await self._mutate(self._command())
+        assert registered.record is not None
+        command = RegisteredSourceDeletion(
+            "source-delete-request-1", registered.record.id, registered.record.revision
+        )
+
+        deleted = await self._delete(command)
+        replay = await self._delete(command)
+
+        self.assertEqual(deleted.status, SourceMutationStatus.COMPLETED)
+        self.assertEqual(deleted.deleted_source_id, registered.record.id)
+        self.assertEqual(replay, deleted)
+        self.assertIsNone(
+            await self.store.resolve_credentials(
+                registered.record.id,
+                registered.record.revision,
+                ConfigurationSourceProvider.NACOS,
+            )
+        )
+        self.assertEqual((await self.store.read_registered_sources()).items, ())
+        self.assertEqual(
+            await self.store.read_operation(
+                command.request_key,
+                actor_id="account-1",
+                session_digest=_SESSION_DIGEST,
+            ),
+            deleted,
+        )
+
+        async with self.engine.connect() as connection:
+            source_rows = (
+                await connection.execute(select(RegisteredConfigurationSourceRecord))
+            ).all()
+            receipt = (
+                await connection.execute(
+                    select(RegisteredSourceDeletionOperationRecord.__table__)
+                )
+            ).mappings().one()
+            audits = (
+                await connection.execute(
+                    select(AuditEventRecord.__table__).where(
+                        AuditEventRecord.action == "configuration.source.delete"
+                    )
+                )
+            ).mappings().all()
+        self.assertEqual(source_rows, [])
+        self.assertNotIn("https://nacos.internal:8848", repr(dict(receipt)))
+        self.assertNotIn("source-secret-do-not-store-plain", repr(dict(receipt)))
+        self.assertEqual(len(audits), 1)
+        self.assertEqual(audits[0]["target_id"], registered.record.id)
+
+    async def test_delete_rejects_references_and_preserves_source_credentials(self) -> None:
+        registered = await self._mutate(self._command())
+        assert registered.record is not None
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                insert(RuleBindingRecord).values(
+                    binding_id="binding-in-use",
+                    environment_id="test",
+                    app_id="app",
+                    kind="flow",
+                    profile="default",
+                    source_id=registered.record.id,
+                    location="sentinel",
+                    created_at=_NOW,
+                    updated_at=_NOW,
+                )
+            )
+        command = RegisteredSourceDeletion(
+            "source-delete-in-use", registered.record.id, registered.record.revision
+        )
+
+        rejected = await self._delete(command)
+
+        self.assertEqual(rejected.status, SourceMutationStatus.REJECTED)
+        self.assertEqual(rejected.reason, SourceDeletionRejection.SOURCE_IN_USE)
+        self.assertIsNotNone(
+            await self.store.resolve_credentials(
+                registered.record.id,
+                registered.record.revision,
+                ConfigurationSourceProvider.NACOS,
+            )
+        )
+        self.assertEqual(len((await self.store.read_registered_sources()).items), 1)
+
+    async def test_delete_revision_conflict_nonexistent_and_request_key_reuse(self) -> None:
+        registered = await self._mutate(self._command())
+        assert registered.record is not None
+        conflict = await self._delete(
+            RegisteredSourceDeletion(
+                "source-delete-conflict", registered.record.id, "stale-revision"
+            )
+        )
+        missing = await self._delete(
+            RegisteredSourceDeletion(
+                "source-delete-missing", "source-absent", "revision-absent"
+            )
+        )
+        self.assertEqual(conflict.reason, SourceDeletionRejection.CONFLICT)
+        self.assertEqual(missing.reason, SourceDeletionRejection.NOT_FOUND)
+        with self.assertRaises(SourceMutationIdempotencyConflict):
+            await self._delete(
+                RegisteredSourceDeletion(
+                    "source-delete-conflict", registered.record.id, registered.record.revision
+                )
+            )
 
     async def test_idempotent_replay_and_changed_payload_conflict(self) -> None:
         first = await self._mutate(self._command())
@@ -381,6 +510,58 @@ class RegisteredSourceStoreTests(unittest.IsolatedAsyncioTestCase):
             "source-request-1", actor_id="account-other", session_digest="4" * 64
         )
         self.assertIsNone(result)
+
+    async def test_operation_is_visible_after_same_actor_reauthenticates(self) -> None:
+        original = await self._mutate(self._command())
+        new_session_digest = "6" * 64
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                insert(AuthenticationSessionRecord).values(
+                    session_hash=new_session_digest,
+                    account_id="account-1",
+                    session_epoch="epoch-reauthenticated",
+                    csrf_hash="7" * 64,
+                    created_at=_NOW,
+                    expires_at=_NOW + timedelta(hours=1),
+                    revoked_at=None,
+                )
+            )
+
+        visible = await self.store.read_operation(
+            "source-request-1",
+            actor_id="account-1",
+            session_digest=new_session_digest,
+        )
+
+        self.assertEqual(visible, original)
+
+    async def test_reauthenticated_viewer_cannot_read_admin_operation(self) -> None:
+        await self._mutate(self._command())
+        viewer_session_digest = "8" * 64
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                update(AccountRecord)
+                .where(AccountRecord.account_id == "account-1")
+                .values(role_id="view", built_in=False)
+            )
+            await connection.execute(
+                insert(AuthenticationSessionRecord).values(
+                    session_hash=viewer_session_digest,
+                    account_id="account-1",
+                    session_epoch="epoch-downgraded",
+                    csrf_hash="9" * 64,
+                    created_at=_NOW,
+                    expires_at=_NOW + timedelta(hours=1),
+                    revoked_at=None,
+                )
+            )
+
+        with self.assertRaises(SourceMutationForbidden):
+            await self.store.read_operation(
+                "source-request-1",
+                actor_id="account-1",
+                session_digest=viewer_session_digest,
+            )
 
     async def test_secret_context_mismatch_cannot_decrypt_credential(self) -> None:
         result = await self._mutate(self._command())

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
+import threading
 import unittest
 
 from sqlalchemy import func, select, update
@@ -64,6 +66,17 @@ class _PasswordHasher:
     def hash_password(self, password: str) -> str:
         if self.fail:
             raise ValueError("synthetic hashing failure")
+        return f"test-hash:{len(password)}"
+
+
+class _BlockingPasswordHasher:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def hash_password(self, password: str) -> str:
+        self.started.set()
+        self.release.wait(timeout=2)
         return f"test-hash:{len(password)}"
 
 
@@ -175,6 +188,35 @@ class BootstrapInitializationTransactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(audit["action"], "system.bootstrap.initialize")
         self.assertEqual(audit["outcome"], "completed")
         self.assertTrue(initialized)
+
+    async def test_password_hash_does_not_block_the_event_loop(self) -> None:
+        hasher = _BlockingPasswordHasher()
+        transaction = self._transaction(hasher=hasher)
+        initialize = asyncio.create_task(
+            transaction.initialize(
+                operator_session=_OPERATOR,
+                request_key="bootstrap-event-loop-1",
+                input=self._input(),
+            )
+        )
+        self.assertTrue(await asyncio.to_thread(hasher.started.wait, 1))
+
+        heartbeat_count = 0
+
+        async def heartbeat() -> None:
+            nonlocal heartbeat_count
+            while not hasher.release.is_set():
+                heartbeat_count += 1
+                await asyncio.sleep(0)
+
+        heartbeat_task = asyncio.create_task(heartbeat())
+        await asyncio.sleep(0.01)
+        hasher.release.set()
+        receipt = await initialize
+        await heartbeat_task
+
+        self.assertGreater(heartbeat_count, 0)
+        self.assertEqual(receipt.status, BootstrapInitializationStatus.COMPLETED)
 
     async def test_same_operator_and_input_recover_the_same_receipt(self):
         first = await self.transaction.initialize(

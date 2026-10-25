@@ -14,9 +14,9 @@ from ..application.system_connections_ports import (
     SystemConnectionsReader,
 )
 from ..domain.system_connections import (
+    ConnectionCapability,
     ConnectionFailureReason,
     ConnectionKind,
-    ConnectionCapability,
     ConnectionObservation,
     ConnectionState,
     SystemConnectionsSnapshot,
@@ -97,7 +97,20 @@ class RegisteredSourceSystemConnectionsReader(SystemConnectionsReader):
                     reason=ConnectionFailureReason.NOT_CONFIGURED,
                 ),
             )
-        return SystemConnectionsSnapshot(as_of=snapshot.as_of, items=observations)
+        # Some SQL dialects round persisted timestamps to their column
+        # precision. Keep the enclosing snapshot at least as recent as every
+        # included observation rather than constructing an impossible ordering.
+        as_of = max(
+            (
+                snapshot.as_of,
+                *(
+                    observation.checked_at
+                    for observation in observations
+                    if observation.checked_at is not None
+                ),
+            )
+        )
+        return SystemConnectionsSnapshot(as_of=as_of, items=observations)
 
 
 def _observation(source, probe):
@@ -117,8 +130,7 @@ def _observation(source, probe):
         expires_at = result.expires_at
         latency_ms = result.latency_ms
         capabilities = tuple(
-            ConnectionCapability(capability.value)
-            for capability in result.capabilities
+            ConnectionCapability(capability.value) for capability in result.capabilities
         )
         reason = (
             ConnectionFailureReason(result.reason.value)

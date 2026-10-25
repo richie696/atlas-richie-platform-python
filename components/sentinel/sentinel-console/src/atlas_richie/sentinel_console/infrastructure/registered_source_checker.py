@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import ipaddress
 import json
+import math
 import re
 import socket
 import ssl
@@ -243,13 +244,22 @@ class PinnedAioHttpJsonClient:
         self,
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
         ssl_context: ssl.SSLContext | None = None,
+        request_timeout_seconds: float = _REQUEST_TIMEOUT_SECONDS,
     ) -> None:
         if (
             type(max_response_bytes) is not int
             or not 1 <= max_response_bytes <= _MAX_ALLOWED_RESPONSE_BYTES
         ):
             raise ValueError("source response bound is invalid")
+        if (
+            isinstance(request_timeout_seconds, bool)
+            or not isinstance(request_timeout_seconds, (int, float))
+            or not math.isfinite(request_timeout_seconds)
+            or not 0 < request_timeout_seconds <= 60
+        ):
+            raise ValueError("source request timeout is invalid")
         self._max_response_bytes = max_response_bytes
+        self._request_timeout_seconds = float(request_timeout_seconds)
         if ssl_context is not None:
             if not isinstance(ssl_context, ssl.SSLContext):
                 raise TypeError("source TLS context must be an SSLContext")
@@ -269,7 +279,7 @@ class PinnedAioHttpJsonClient:
         path: str,
         params: dict[str, str],
         headers: dict[str, str],
-        form: dict[str, str] | None = None,
+        form: dict[str, str] | aiohttp.FormData | None = None,
     ) -> tuple[int, dict[str, object], dict[str, str]]:
         status, body, response_headers = await self.request_raw(
             target=target,
@@ -299,7 +309,7 @@ class PinnedAioHttpJsonClient:
         path: str,
         params: dict[str, str],
         headers: dict[str, str],
-        form: dict[str, str] | None = None,
+        form: dict[str, str] | aiohttp.FormData | None = None,
         body: bytes | None = None,
     ) -> tuple[int, bytes, dict[str, str]]:
         """Request bounded raw bytes through the same pinned, no-redirect transport."""
@@ -312,7 +322,7 @@ class PinnedAioHttpJsonClient:
         request_url = urlunsplit(
             (base.scheme, base.netloc, request_path, urlencode(params), "")
         )
-        timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT_SECONDS)
+        timeout = aiohttp.ClientTimeout(total=self._request_timeout_seconds)
         connector = aiohttp.TCPConnector(
             resolver=resolver,
             use_dns_cache=False,
@@ -322,23 +332,36 @@ class PinnedAioHttpJsonClient:
                 self._ssl_context if self._ssl_context is not None else True
             ) if base.scheme == "https" else None,
         )
-        async with aiohttp.ClientSession(
+        session = aiohttp.ClientSession(
             connector=connector,
             timeout=timeout,
             trust_env=False,
             auto_decompress=False,
-        ) as session:
-            async with session.request(
+        )
+        if not hasattr(session, "_retry_connection"):
+            await session.close()
+            raise RuntimeError(
+                "aiohttp transport cannot guarantee single-attempt requests"
+            )
+        # aiohttp retries idempotent methods after a lost connection. A Consul
+        # CAS uses PUT but is not safe to repeat after an ambiguous commit. There
+        # is no public aiohttp switch for this behavior, so guard the supported
+        # internal control here; fail closed if an upgrade removes it.
+        session._retry_connection = False
+        async with (
+            session,
+            session.request(
                 method,
                 request_url,
                 headers=headers,
                 data=form if body is None else body,
                 allow_redirects=False,
-            ) as response:
-                response_body = await _read_bounded(
-                    response.content, self._max_response_bytes
-                )
-                return response.status, response_body, dict(response.headers)
+            ) as response,
+        ):
+            response_body = await _read_bounded(
+                response.content, self._max_response_bytes
+            )
+            return response.status, response_body, dict(response.headers)
 
 
 class NacosRegisteredSourceChecker:

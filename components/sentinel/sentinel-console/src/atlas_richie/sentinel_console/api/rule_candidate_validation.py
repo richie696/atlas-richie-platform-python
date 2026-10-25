@@ -9,16 +9,16 @@ from starlette.routing import Route
 from ..application.errors import SessionAuthorityUnavailable
 from ..application.read_session import ReadSession
 from ..application.rule_binding_errors import InvalidRuleIdentifier
-from ..application.rule_validation_ports import (
-    RuleCandidateConflict,
-    RuleValidationAuthorityUnavailable,
-)
-from ..application.validate_rule_candidate import ValidateRuleCandidate
 from ..application.rule_snapshot_ports import (
     RuleSetSnapshotAuthorityUnavailable,
     RuleSetSnapshotNotFound,
     RuleSetSnapshotRateLimited,
 )
+from ..application.rule_validation_ports import (
+    RuleCandidateConflict,
+    RuleValidationAuthorityUnavailable,
+)
+from ..application.validate_rule_candidate import ValidateRuleCandidate
 from ..domain.rule_bindings import is_rule_binding_identifier
 from ..domain.rule_validation import RuleCandidateValidationReceipt
 from ..domain.session import SessionCapability
@@ -42,10 +42,10 @@ def rule_candidate_validation_route(
     )
     if not allowed_origins:
         raise ValueError("at least one browser origin must be configured")
+
     async def validate(request: Request) -> Response:
-        request_ids = request.headers.getlist("x-request-id")
         request_id_value, valid_request_id = request_id(request)
-        if len(request_ids) != 1 or not valid_request_id:
+        if not valid_request_id:
             return error_response(request_id_value, "invalid_request", 400)
         proof, failure = browser_write_proof(request, allowed_origins)
         if failure is not None:

@@ -2,24 +2,27 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import unittest
-
-from sqlalchemy import event, insert, update
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import create_async_engine
+from datetime import UTC, datetime
 
 from atlas_richie.sentinel_console.application.account_directory_ports import (
     AccountDirectoryAuthorityUnavailable,
     AccountDirectoryQuery,
+    AccountDirectoryStatus,
 )
 from atlas_richie.sentinel_console.infrastructure.persistence.account_directory_reader import (
     SqlAlchemyAccountDirectoryReader,
+    _directory_item,
 )
 from atlas_richie.sentinel_console.infrastructure.persistence.migration_runner import (
     upgrade_database,
 )
-from atlas_richie.sentinel_console.infrastructure.persistence.models import AccountRecord
+from atlas_richie.sentinel_console.infrastructure.persistence.models import (
+    AccountRecord,
+)
+from sqlalchemy import event, insert, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import create_async_engine
 
 
 class AccountDirectoryPersistenceTest(unittest.IsolatedAsyncioTestCase):
@@ -33,24 +36,42 @@ class AccountDirectoryPersistenceTest(unittest.IsolatedAsyncioTestCase):
                 insert(AccountRecord),
                 [
                     {
-                        "account_id": "account-1", "username": "Admin One",
-                        "username_key": "1" * 64, "password_hash": "$argon2id$secret",
-                        "role_id": "admin", "status": "active", "built_in": True,
-                        "last_login_at": now, "revision": 1, "created_at": now,
+                        "account_id": "account-1",
+                        "username": "Admin One",
+                        "username_key": "1" * 64,
+                        "password_hash": "$argon2id$secret",
+                        "role_id": "admin",
+                        "status": "active",
+                        "built_in": True,
+                        "last_login_at": now,
+                        "revision": 1,
+                        "created_at": now,
                         "updated_at": now,
                     },
                     {
-                        "account_id": "account-2", "username": "View Two",
-                        "username_key": "2" * 64, "password_hash": "$argon2id$secret",
-                        "role_id": "view", "status": "disabled", "built_in": False,
-                        "last_login_at": None, "revision": 2, "created_at": now,
+                        "account_id": "account-2",
+                        "username": "View Two",
+                        "username_key": "2" * 64,
+                        "password_hash": "$argon2id$secret",
+                        "role_id": "view",
+                        "status": "disabled",
+                        "built_in": False,
+                        "last_login_at": None,
+                        "revision": 2,
+                        "created_at": now,
                         "updated_at": now,
                     },
                     {
-                        "account_id": "account-3", "username": "Admin Three",
-                        "username_key": "3" * 64, "password_hash": "$argon2id$secret",
-                        "role_id": "admin", "status": "active", "built_in": False,
-                        "last_login_at": None, "revision": 4, "created_at": now,
+                        "account_id": "account-3",
+                        "username": "Admin Three",
+                        "username_key": "3" * 64,
+                        "password_hash": "$argon2id$secret",
+                        "role_id": "admin",
+                        "status": "active",
+                        "built_in": False,
+                        "last_login_at": None,
+                        "revision": 4,
+                        "created_at": now,
                         "updated_at": now,
                     },
                 ],
@@ -59,11 +80,44 @@ class AccountDirectoryPersistenceTest(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await self.engine.dispose()
 
+    def test_database_projection_rejects_wrong_runtime_types_without_coercion(
+        self,
+    ) -> None:
+        row = {
+            "account_id": "account-1",
+            "username": "Admin One",
+            "role_id": "admin",
+            "status": "active",
+            "built_in": True,
+            "last_login_at": datetime(2026, 10, 8, tzinfo=UTC),
+            "revision": 1,
+        }
+        invalid_values = (
+            ("built_in", 2),
+            ("last_login_at", "not-a-timestamp"),
+            ("revision", "1"),
+        )
+
+        for field, value in invalid_values:
+            with self.subTest(field=field, value=value):
+                candidate = {**row, field: value}
+                with self.assertRaises((TypeError, ValueError)):
+                    _directory_item(candidate, active_admins=1)
+
+        item = _directory_item(row, active_admins=1)
+        self.assertEqual(item.account_id, "account-1")
+        self.assertEqual(item.revision, 1)
+        self.assertTrue(item.last_active_admin)
+
     async def test_pagination_status_and_search_are_applied(self) -> None:
-        first = await self.reader.list_accounts(AccountDirectoryQuery(1, 1, "Admin", None))
-        second = await self.reader.list_accounts(AccountDirectoryQuery(2, 1, "Admin", None))
+        first = await self.reader.list_accounts(
+            AccountDirectoryQuery(1, 1, "Admin", None)
+        )
+        second = await self.reader.list_accounts(
+            AccountDirectoryQuery(2, 1, "Admin", None)
+        )
         disabled = await self.reader.list_accounts(
-            AccountDirectoryQuery(1, 100, "", "disabled")
+            AccountDirectoryQuery(1, 100, "", AccountDirectoryStatus.DISABLED)
         )
         out_of_range = await self.reader.list_accounts(
             AccountDirectoryQuery(3, 1, "Admin", None)
@@ -78,7 +132,9 @@ class AccountDirectoryPersistenceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((out_of_range.total, out_of_range.items), (2, ()))
         self.assertEqual(wildcard.items, ())
 
-    async def test_pagination_total_rows_and_admin_facts_share_one_statement(self) -> None:
+    async def test_pagination_total_rows_and_admin_facts_share_one_statement(
+        self,
+    ) -> None:
         statements: list[str] = []
 
         def record_statement(
@@ -102,7 +158,9 @@ class AccountDirectoryPersistenceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(page.items), 1)
 
     async def test_last_active_admin_is_derived_and_detail_is_safe(self) -> None:
-        admin_page = await self.reader.list_accounts(AccountDirectoryQuery(1, 100, "", None))
+        admin_page = await self.reader.list_accounts(
+            AccountDirectoryQuery(1, 100, "", None)
+        )
         admin_facts = [item for item in admin_page.items if item.role_id == "admin"]
         self.assertTrue(all(not item.last_active_admin for item in admin_facts))
         item = await self.reader.read_account("account-1")

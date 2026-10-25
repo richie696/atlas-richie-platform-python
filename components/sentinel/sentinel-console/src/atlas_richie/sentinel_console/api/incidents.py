@@ -8,6 +8,7 @@ from starlette.routing import Route
 
 from ..application.incident_timeline_ports import (
     IncidentTimelineAuthorityUnavailable,
+    IncidentTimelineInvalidCursor,
     IncidentTimelineRateLimited,
     IncidentTimelineTargetNotFound,
 )
@@ -53,6 +54,8 @@ def incidents_route(
                 429,
                 retry_after_ms=exc.retry_after_ms,
             )
+        except IncidentTimelineInvalidCursor:
+            return error_response(request_id_value, "invalid_request", 400)
         except (IncidentTimelineAuthorityUnavailable, ValueError):
             return error_response(request_id_value, "service_unavailable", 503)
         return JSONResponse(

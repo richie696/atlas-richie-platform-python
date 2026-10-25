@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import unittest
+from datetime import datetime
+import hashlib
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
 from atlas_richie.sentinel_console.application.rule_binding_ports import (
+    RegisterRuleBinding,
     RuleBindingAuthorityUnavailable,
     RuleBindingRateLimited,
-    RegisterRuleBinding,
     RuleBindingTargetNotFound,
 )
 from atlas_richie.sentinel_console.domain.rule_bindings import (
@@ -21,11 +24,10 @@ from atlas_richie.sentinel_console.domain.rule_bindings import (
     RuleBindingQuery,
     RuleKind,
 )
-from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
 from atlas_richie.sentinel_console.domain.rule_publication_targets import (
     NacosRulePublicationTarget,
 )
-from session_test_doubles import UnusedSessionRevoker
+from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
 
 _HEADERS = {"x-request-id": "rule-bindings-read-1"}
 _COOKIE = "synthetic-session-token-for-rule-directory-0001"
@@ -126,6 +128,25 @@ class _BindingRegistrationAuthority:
         )
 
 
+class _BindingRegistrationReceiptReader:
+    def __init__(self, *, binding=None, error=None) -> None:
+        self.binding = binding
+        self.error = error
+        self.lookups = []
+
+    async def read_rule_binding_registration(self, binding_id, request_key, **context):
+        self.lookups.append((binding_id, request_key, context))
+        if self.error is not None:
+            raise self.error
+        if (
+            binding_id == "binding-new"
+            and request_key == "binding-create-1"
+            and context["actor_id"] == "account-1"
+        ):
+            return self.binding or _binding(binding_id=binding_id)
+        return None
+
+
 class _UnusedAccountCommandService:
     async def execute(self, command):
         raise AssertionError("rule binding reads must not mutate accounts")
@@ -136,6 +157,7 @@ def _app(
     *,
     reader=None,
     registration_authority=None,
+    registration_receipt_reader=None,
     session_reader=None,
 ):
     return build_app(
@@ -148,6 +170,7 @@ def _app(
         allowed_browser_origins=frozenset({"https://console.test"}),
         rule_binding_reader=reader,
         rule_binding_registration_authority=registration_authority,
+        rule_binding_registration_receipt_reader=registration_receipt_reader,
     )
 
 
@@ -160,6 +183,20 @@ class RuleBindingsApiTests(unittest.IsolatedAsyncioTestCase):
             cookies={"sentinel_session": _COOKIE},
         ) as client:
             return await client.get(path, headers=_HEADERS)
+
+    async def _get_registration_receipt(
+        self, role, binding_id="binding-new", request_key="binding-create-1", *, reader=None
+    ):
+        app = _app(role, registration_receipt_reader=reader)
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="https://console.test",
+            cookies={"sentinel_session": _COOKIE},
+        ) as client:
+            return await client.get(
+                f"/api/v1/rulesets/{binding_id}/registration-operations/{request_key}",
+                headers=_HEADERS,
+            )
 
     @staticmethod
     def _registration_body():
@@ -189,18 +226,19 @@ class RuleBindingsApiTests(unittest.IsolatedAsyncioTestCase):
         csrf=_CSRF,
         origin="https://console.test",
         session_reader=None,
+        idempotency_keys=("binding-create-1",),
     ):
         app = _app(
             role,
             registration_authority=authority,
             session_reader=session_reader,
         )
-        headers = {
-            "origin": origin,
-            "x-request-id": "binding-registration-1",
-            "x-sentinel-csrf": csrf,
-            "idempotency-key": "binding-create-1",
-        }
+        headers = [
+            ("origin", origin),
+            ("x-request-id", "binding-registration-1"),
+            ("x-sentinel-csrf", csrf),
+            *(("idempotency-key", key) for key in idempotency_keys),
+        ]
         cookies = {"sentinel_session": _COOKIE, "__Host-sentinel_csrf": _CSRF}
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -217,41 +255,106 @@ class RuleBindingsApiTests(unittest.IsolatedAsyncioTestCase):
         authority = _BindingRegistrationAuthority()
         response = await self._post_registration(authority=authority)
         self.assertEqual(response.status_code, 201)
+        assert_openapi_response("createRuleBinding", response)
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertEqual(response.json()["id"], "binding-new")
         self.assertEqual(response.json()["sourceLabel"], "Primary Nacos")
         command, context = authority.commands[0]
         self.assertIsInstance(command, RegisterRuleBinding)
-        self.assertEqual(command.target, NacosRulePublicationTarget(
-            "binding-new", "nacos-main", "prod-namespace", "DEFAULT_GROUP", "flow.json"
-        ))
+        self.assertEqual(
+            command.target,
+            NacosRulePublicationTarget(
+                "binding-new",
+                "nacos-main",
+                "prod-namespace",
+                "DEFAULT_GROUP",
+                "flow.json",
+            ),
+        )
         self.assertEqual(command.source_revision, "source-revision-1")
         self.assertEqual(context["request_id"], "binding-registration-1")
         self.assertEqual(context["actor_id"], "account-1")
         self.assertIsInstance(context["now"], datetime)
 
+    async def test_registration_receipt_read_is_read_only_correlated_and_admin_only(self):
+        reader = _BindingRegistrationReceiptReader()
+        response = await self._get_registration_receipt("admin", reader=reader)
+        self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readBindingRegistration", response)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertEqual(response.json()["status"], "completed")
+        self.assertEqual(response.json()["requestKey"], "binding-create-1")
+        self.assertEqual(response.json()["binding"]["id"], "binding-new")
+        self.assertEqual(len(reader.lookups), 1)
+        self.assertEqual(reader.lookups[0][2]["actor_id"], "account-1")
+        self.assertEqual(
+            reader.lookups[0][2]["session_digest"],
+            hashlib.sha256(_COOKIE.encode("ascii")).hexdigest(),
+        )
+
+        for binding_id, request_key in (
+            ("other-binding", "binding-create-1"),
+            ("binding-new", "other-request"),
+        ):
+            missing_reader = _BindingRegistrationReceiptReader()
+            missing = await self._get_registration_receipt(
+                "admin", binding_id, request_key, reader=missing_reader
+            )
+            self.assertEqual(missing.status_code, 200)
+            assert_openapi_response("readBindingRegistration", missing)
+            self.assertEqual(missing.json()["status"], "not_found")
+            self.assertIsNone(missing.json()["binding"])
+
+        forbidden_reader = _BindingRegistrationReceiptReader()
+        forbidden = await self._get_registration_receipt("view", reader=forbidden_reader)
+        self.assertEqual(forbidden.status_code, 403)
+        assert_openapi_response("readBindingRegistration", forbidden)
+        self.assertEqual(forbidden_reader.lookups, [])
+
+    async def test_invalid_idempotency_header_is_rejected_before_authority(self):
+        cases = (
+            ((), "missing"),
+            (("binding-create-1", "binding-create-1"), "duplicate"),
+            (("different-key",), "body mismatch"),
+        )
+        for idempotency_keys, label in cases:
+            with self.subTest(case=label):
+                authority = _BindingRegistrationAuthority()
+                response = await self._post_registration(
+                    authority=authority,
+                    idempotency_keys=idempotency_keys,
+                )
+                self.assertEqual(response.status_code, 409)
+                assert_openapi_response("createRuleBinding", response)
+                self.assertEqual(
+                    response.json()["error"]["code"], "idempotency_conflict"
+                )
+                self.assertEqual(authority.commands, [])
+
     async def test_viewer_csrf_and_invalid_provider_are_rejected_before_authority(self):
         for options, expected_status, expected_code in (
             ({"role": "view"}, 403, "forbidden"),
             ({"origin": "https://attacker.test"}, 403, "csrf_failed"),
-            ({"csrf": "mismatched-csrf-token-for-rule-registration-000"}, 403, "csrf_failed"),
+            (
+                {"csrf": "mismatched-csrf-token-for-rule-registration-000"},
+                403,
+                "csrf_failed",
+            ),
         ):
             with self.subTest(expected_code=expected_code):
                 authority = _BindingRegistrationAuthority()
-                response = await self._post_registration(
-                    authority=authority, **options
-                )
+                response = await self._post_registration(authority=authority, **options)
                 self.assertEqual(response.status_code, expected_status)
+                assert_openapi_response("createRuleBinding", response)
                 self.assertEqual(response.json()["error"]["code"], expected_code)
                 self.assertEqual(authority.commands, [])
 
         authority = _BindingRegistrationAuthority()
         invalid_body = self._registration_body()
         invalid_body["target"]["token"] = "must-not-be-accepted"
-        invalid = await self._post_registration(
-            authority=authority, body=invalid_body
-        )
+        invalid = await self._post_registration(authority=authority, body=invalid_body)
         self.assertEqual(invalid.status_code, 422)
+        assert_openapi_response("createRuleBinding", invalid)
         self.assertEqual(authority.commands, [])
 
     async def test_admin_and_view_read_query_bound_page_with_no_store(self):
@@ -260,6 +363,7 @@ class RuleBindingsApiTests(unittest.IsolatedAsyncioTestCase):
                 reader = _BindingReader()
                 response = await self._get(role, reader=reader)
                 self.assertEqual(response.status_code, 200)
+                assert_openapi_response("readRuleBindings", response)
                 self.assertEqual(response.headers["cache-control"], "no-store")
                 self.assertEqual(
                     response.headers["x-request-id"], _HEADERS["x-request-id"]
@@ -287,10 +391,9 @@ class RuleBindingsApiTests(unittest.IsolatedAsyncioTestCase):
             "/api/v1/rulesets?environmentId=prod&appId=checkout&kind=flow"
             "&search=flow&page=2&pageSize=25"
         )
-        response = await self._get(
-            "view", path, reader=reader
-        )
+        response = await self._get("view", path, reader=reader)
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readRuleBindings", response)
         self.assertEqual(
             reader.query,
             RuleBindingQuery("prod", "checkout", RuleKind.FLOW, "flow", 2, 25),
@@ -315,6 +418,7 @@ class RuleBindingsApiTests(unittest.IsolatedAsyncioTestCase):
                 reader = _BindingReader()
                 response = await self._get("admin", path, reader=reader)
                 self.assertEqual(response.status_code, 400)
+                assert_openapi_response("readRuleBindings", response)
                 self.assertEqual(response.json()["error"]["code"], "invalid_request")
                 self.assertEqual(reader.calls, 0)
 
@@ -322,6 +426,7 @@ class RuleBindingsApiTests(unittest.IsolatedAsyncioTestCase):
         anonymous_reader = _BindingReader()
         anonymous = await self._get(None, reader=anonymous_reader)
         self.assertEqual(anonymous.status_code, 401)
+        assert_openapi_response("readRuleBindings", anonymous)
         self.assertEqual(anonymous_reader.calls, 0)
         unavailable_reader = _BindingReader()
         unavailable = await self._get(
@@ -330,11 +435,13 @@ class RuleBindingsApiTests(unittest.IsolatedAsyncioTestCase):
             session_reader=_SessionReader("unavailable"),
         )
         self.assertEqual(unavailable.status_code, 503)
+        assert_openapi_response("readRuleBindings", unavailable)
         self.assertEqual(unavailable_reader.calls, 0)
 
     async def test_missing_reader_and_authority_failures_have_stable_codes(self):
         no_reader = await self._get("view")
         self.assertEqual(no_reader.status_code, 503)
+        assert_openapi_response("readRuleBindings", no_reader)
         cases = (
             (RuleBindingTargetNotFound(), 404, "not_found"),
             (RuleBindingRateLimited(25), 429, "rate_limited"),
@@ -344,6 +451,7 @@ class RuleBindingsApiTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(code=code):
                 response = await self._get("view", reader=_BindingReader(error=error))
                 self.assertEqual(response.status_code, status)
+                assert_openapi_response("readRuleBindings", response)
                 self.assertEqual(response.json()["error"]["code"], code)
                 self.assertNotIn("private", response.text)
 
@@ -355,10 +463,12 @@ class RuleBindingsApiTests(unittest.IsolatedAsyncioTestCase):
         )
         mismatch = await self._get("admin", reader=mismatched_reader)
         self.assertEqual(mismatch.status_code, 503)
+        assert_openapi_response("readRuleBindings", mismatch)
         unsafe = await self._get(
             "admin", reader=_BindingReader(error=ValueError("unsafe location"))
         )
         self.assertEqual(unsafe.status_code, 503)
+        assert_openapi_response("readRuleBindings", unsafe)
 
     def test_domain_rejects_duplicate_bindings_and_misfiltered_items(self):
         query = RuleBindingQuery("prod", "checkout", RuleKind.FLOW, "", 1, 10)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -160,8 +161,8 @@ class SqlAlchemyBootstrapInitializationTransaction(
 
                 account_id = str(uuid4())
                 source_id = str(uuid4())
-                account_password_hash = self._password_hasher.hash_password(
-                    input.admin_password.value
+                account_password_hash = await asyncio.to_thread(
+                    self._password_hasher.hash_password, input.admin_password.value
                 )
                 source_values = self._source_values(
                     input.source,

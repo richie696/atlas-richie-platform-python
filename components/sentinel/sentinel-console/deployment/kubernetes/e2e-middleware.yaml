@@ -1,0 +1,517 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sentinel-e2e-infra-20261018
+  labels:
+    app.kubernetes.io/part-of: atlas-richie-sentinel-e2e
+    purpose: disposable-acceptance-infrastructure
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: sentinel-e2e-infra-20261018
+  labels:
+    app.kubernetes.io/name: postgres
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: sentinel-e2e-infra-20261018
+  labels:
+    app.kubernetes.io/name: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: __SENTINEL_REGISTRY_HOST__/sentinel-e2e/postgres:16.10@sha256:2c72031ac25606bf94fd2fece7c35efdf263a48b08446950034f0725653f4efc
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_DB
+              value: sentinel_e2e
+            - name: POSTGRES_USER
+              value: sentinel_e2e
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: middleware-credentials
+                  key: postgres-password
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U sentinel_e2e -d sentinel_e2e"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: sentinel-e2e-infra-20261018
+  labels:
+    app.kubernetes.io/name: mysql
+spec:
+  selector:
+    app.kubernetes.io/name: mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  namespace: sentinel-e2e-infra-20261018
+  labels:
+    app.kubernetes.io/name: mysql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mysql
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mysql
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mysql
+          image: __SENTINEL_REGISTRY_HOST__/sentinel-e2e/mysql:8.4.11@sha256:1f8411cc085d2f2f92060fca926746cbf97f87b76c3008e9741ad62e604c4ffa
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MYSQL_DATABASE
+              value: sentinel_e2e
+            - name: MYSQL_USER
+              value: sentinel_e2e
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: middleware-credentials
+                  key: mysql-password
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: middleware-credentials
+                  key: mysql-root-password
+          ports:
+            - name: mysql
+              containerPort: 3306
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$MYSQL_ROOT_PASSWORD\" --silent"]
+            failureThreshold: 36
+            periodSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$MYSQL_ROOT_PASSWORD\" --silent"]
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nacos
+  namespace: sentinel-e2e-infra-20261018
+  labels:
+    app.kubernetes.io/name: nacos
+spec:
+  selector:
+    app.kubernetes.io/name: nacos
+  ports:
+    - name: client-http
+      port: 8848
+      targetPort: 8848
+    - name: client-grpc
+      port: 9848
+      targetPort: 9848
+    - name: server-grpc
+      port: 9849
+      targetPort: 9849
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nacos
+  namespace: sentinel-e2e-infra-20261018
+  labels:
+    app.kubernetes.io/name: nacos
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nacos
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nacos
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nacos
+          image: __SENTINEL_REGISTRY_HOST__/sentinel-e2e/nacos-server:v3.2.3@sha256:f1aeb4713ac965dd053f0e936c2ca855af6ccf2a77199d40580b9ba583962c8f
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MODE
+              value: standalone
+            - name: NACOS_AUTH_ENABLE
+              value: "true"
+            - name: NACOS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: middleware-credentials
+                  key: nacos-auth-token
+            - name: NACOS_AUTH_IDENTITY_KEY
+              value: sentinel-e2e
+            - name: NACOS_AUTH_IDENTITY_VALUE
+              value: isolated-acceptance
+          ports:
+            - name: client-http
+              containerPort: 8848
+            - name: client-grpc
+              containerPort: 9848
+            - name: server-grpc
+              containerPort: 9849
+          startupProbe:
+            tcpSocket:
+              port: client-http
+            failureThreshold: 60
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: client-http
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: data
+              mountPath: /home/nacos/data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: consul
+  namespace: sentinel-e2e-infra-20261018
+  labels:
+    app.kubernetes.io/name: consul
+spec:
+  selector:
+    app.kubernetes.io/name: consul
+  ports:
+    - name: http
+      port: 8500
+      targetPort: 8500
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consul
+  namespace: sentinel-e2e-infra-20261018
+  labels:
+    app.kubernetes.io/name: consul
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: consul
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: consul
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: consul
+          image: __SENTINEL_REGISTRY_HOST__/sentinel-e2e/consul:1.21.1@sha256:915fd7a88acf338b1fddcd0f96559537c4e8d84e64561344d319bb114c01b200
+          imagePullPolicy: IfNotPresent
+          args: ["agent", "-dev", "-client=0.0.0.0", "-bind=0.0.0.0", "-ui"]
+          ports:
+            - name: http
+              containerPort: 8500
+          readinessProbe:
+            httpGet:
+              path: /v1/status/leader
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: sentinel-e2e-infra-20261018
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus-pod-discovery
+  namespace: sentinel-e2e-infra-20261018
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prometheus-pod-discovery
+  namespace: sentinel-e2e-infra-20261018
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: sentinel-e2e-infra-20261018
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prometheus-pod-discovery
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: sentinel-e2e-infra-20261018
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    scrape_configs:
+      - job_name: prometheus
+        static_configs:
+          - targets: ["127.0.0.1:9090"]
+            labels:
+              environment: sentinel-e2e
+      - job_name: sentinel-e2e-node-exporter
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [sentinel-e2e-infra-20261018]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            action: keep
+            regex: sentinel-node-exporter
+          - source_labels: [__meta_kubernetes_pod_container_port_number]
+            action: keep
+            regex: "9100"
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: host_id
+          - target_label: environment
+            replacement: sentinel-e2e
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: sentinel-e2e-infra-20261018
+  labels:
+    app.kubernetes.io/name: prometheus
+spec:
+  selector:
+    app.kubernetes.io/name: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: sentinel-e2e-infra-20261018
+  labels:
+    app.kubernetes.io/name: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prometheus
+    spec:
+      serviceAccountName: prometheus
+      securityContext:
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: __SENTINEL_REGISTRY_HOST__/sentinel-e2e/prometheus:v3.5.0@sha256:8672a850efe2f9874702406c8318704edb363587f8c2ca88586b4c8fdb5cea24
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --web.enable-lifecycle
+          ports:
+            - name: http
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  namespace: sentinel-e2e-infra-20261018
+  labels:
+    app.kubernetes.io/name: sentinel-node-exporter
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-node-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sentinel-node-exporter
+    spec:
+      automountServiceAccountToken: false
+      tolerations:
+        - operator: Exists
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: node-exporter
+          image: __SENTINEL_REGISTRY_HOST__/sentinel-e2e/node-exporter:v1.9.1@sha256:863b62ff9f392b6f472e22b4b670ad1cabb66b3042502ebd4b2cd192733e1bce
+          imagePullPolicy: IfNotPresent
+          args:
+            - --path.procfs=/host/proc
+            - --path.sysfs=/host/sys
+            - --path.rootfs=/host
+            - --web.listen-address=:9100
+          ports:
+            - name: metrics
+              containerPort: 9100
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: sys
+              mountPath: /host/sys
+              readOnly: true
+            - name: root
+              mountPath: /host
+              readOnly: true
+              mountPropagation: HostToContainer
+      volumes:
+        - name: proc
+          hostPath:
+            path: /proc
+            type: Directory
+        - name: sys
+          hostPath:
+            path: /sys
+            type: Directory
+        - name: root
+          hostPath:
+            path: /
+            type: Directory

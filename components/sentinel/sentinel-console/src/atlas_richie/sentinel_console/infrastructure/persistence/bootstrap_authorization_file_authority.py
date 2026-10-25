@@ -8,12 +8,14 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
 from secrets import token_urlsafe
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from ...application.authorize_bootstrap import (
     BootstrapAuthorizationAuthority,
@@ -47,6 +49,39 @@ _DEFAULT_FAILURE_WINDOW_SECONDS = 300
 _DEFAULT_FAILURE_LIMIT = 5
 _DEFAULT_BLOCK_SECONDS = 300
 _DIGEST_PURPOSES = frozenset({"operator-code", "client-address", "operator-grant"})
+_BIND_HOST_ENV = "SENTINEL_CONSOLE_BIND_HOST"
+_BROWSER_ORIGINS_ENV = "SENTINEL_CONSOLE_ALLOWED_BROWSER_ORIGINS"
+_TRUSTED_PROXY_CIDRS_ENV = "SENTINEL_CONSOLE_TRUSTED_PROXY_CIDRS"
+
+
+def loopback_bootstrap_without_code_allowed(
+    values: Mapping[str, str],
+) -> bool:
+    """Require loopback bind/origins and no proxy trust before removing the code gate."""
+    host = values.get(_BIND_HOST_ENV, "127.0.0.1")
+    try:
+        if not ipaddress.ip_address(host).is_loopback:
+            return False
+    except (ValueError, TypeError):
+        return False
+    if values.get(_TRUSTED_PROXY_CIDRS_ENV, "").strip():
+        return False
+    raw_origins = values.get(_BROWSER_ORIGINS_ENV, "")
+    origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+    if not origins:
+        return False
+    for origin in origins:
+        try:
+            parsed = urlsplit(origin)
+            hostname = parsed.hostname
+            if parsed.scheme not in {"http", "https"} or hostname is None:
+                return False
+            if hostname.lower() != "localhost":
+                if not ipaddress.ip_address(hostname).is_loopback:
+                    return False
+        except (ValueError, TypeError):
+            return False
+    return True
 
 
 class BootstrapAuthorizationConfigurationError(ValueError):
@@ -60,6 +95,7 @@ class BootstrapAuthorizationConfiguration:
     state_path: Path
     operator_code: str = field(repr=False)
     fingerprint_key: bytes = field(repr=False)
+    allow_loopback_without_code: bool = False
     grant_ttl_seconds: int = _DEFAULT_GRANT_TTL_SECONDS
     failure_window_seconds: int = _DEFAULT_FAILURE_WINDOW_SECONDS
     failure_limit: int = _DEFAULT_FAILURE_LIMIT
@@ -104,23 +140,35 @@ class BootstrapAuthorizationConfiguration:
 
     @classmethod
     def from_environment(
-        cls, environment: Mapping[str, str] | None = None
+        cls,
+        environment: Mapping[str, str] | None = None,
+        *,
+        allow_loopback_without_code: bool = False,
     ) -> BootstrapAuthorizationConfiguration:
         """Read required secrets without echoing values through errors."""
         values = os.environ if environment is None else environment
         try:
             path_text = values[_AUTHORITY_PATH_ENV]
-            operator_code = values[_OPERATOR_CODE_ENV]
+            operator_code = values.get(_OPERATOR_CODE_ENV)
             key_text = values[_FINGERPRINT_KEY_ENV]
             if not isinstance(path_text, str) or not path_text:
                 raise ValueError("path")
             if not isinstance(key_text, str):
                 raise ValueError("key")
             key_bytes = base64.b64decode(key_text, validate=True)
+            if operator_code is None and allow_loopback_without_code:
+                # Stable across worker restarts, never exposed to the browser, and
+                # used only to preserve the existing durable grant fingerprint format.
+                operator_code = hmac.new(
+                    key_bytes,
+                    b"sentinel-bootstrap-local-operator-code:v1",
+                    hashlib.sha256,
+                ).hexdigest()
             return cls(
                 state_path=Path(path_text),
                 operator_code=operator_code,
                 fingerprint_key=key_bytes,
+                allow_loopback_without_code=allow_loopback_without_code,
             )
         except (KeyError, TypeError, ValueError):
             raise BootstrapAuthorizationConfigurationError(
@@ -148,6 +196,7 @@ class BootstrapAuthorizationConfiguration:
             failure_window_seconds=self.failure_window_seconds,
             failure_limit=self.failure_limit,
             block_seconds=self.block_seconds,
+            allow_loopback_without_code=self.allow_loopback_without_code,
             clock=clock,
         )
 
@@ -199,6 +248,7 @@ class LocalBootstrapAuthorizationAuthority(
         failure_window_seconds: int = _DEFAULT_FAILURE_WINDOW_SECONDS,
         failure_limit: int = _DEFAULT_FAILURE_LIMIT,
         block_seconds: int = _DEFAULT_BLOCK_SECONDS,
+        allow_loopback_without_code: bool = False,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._files = LocalAtomicFileStore(
@@ -212,6 +262,7 @@ class LocalBootstrapAuthorizationAuthority(
         self._failure_window_seconds = failure_window_seconds
         self._failure_limit = failure_limit
         self._block_seconds = block_seconds
+        self._allow_loopback_without_code = allow_loopback_without_code
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def exchange(
@@ -301,6 +352,49 @@ class LocalBootstrapAuthorizationAuthority(
                 (grant_state,),
             )
             await self._write_state(raw, granted_state)
+            return BootstrapAuthorizationDecision(
+                BootstrapAuthorizationStatus.GRANTED,
+                grant=BootstrapOperatorGrant(
+                    opaque_session=opaque_session,
+                    expires_in_seconds=self._grant_ttl_seconds,
+                ),
+            )
+
+    async def authorize_local(
+        self, client_address: str
+    ) -> BootstrapAuthorizationDecision:
+        """Issue a repeatable, short-lived grant only to a loopback peer."""
+        try:
+            loopback = ipaddress.ip_address(client_address).is_loopback
+        except (ValueError, TypeError):
+            loopback = False
+        if not self._allow_loopback_without_code or not loopback:
+            return BootstrapAuthorizationDecision(
+                BootstrapAuthorizationStatus.REJECTED
+            )
+        async with self._workflow_lock.acquire():
+            if not await self._setup_is_open():
+                return BootstrapAuthorizationDecision(
+                    BootstrapAuthorizationStatus.SETUP_CLOSED
+                )
+            raw = await self._read_state()
+            now = self._now_seconds()
+            code_fingerprint = self._fingerprint("operator-code", self._operator_code)
+            state = self._state_for_current_code(raw, code_fingerprint, now)
+            opaque_session = token_urlsafe(32)
+            grant_state = _GrantState(
+                self._fingerprint("operator-grant", opaque_session),
+                now + self._grant_ttl_seconds,
+            )
+            await self._write_state(
+                raw,
+                _AuthorityState(
+                    code_fingerprint,
+                    True,
+                    state.clients,
+                    (grant_state,),
+                ),
+            )
             return BootstrapAuthorizationDecision(
                 BootstrapAuthorizationStatus.GRANTED,
                 grant=BootstrapOperatorGrant(

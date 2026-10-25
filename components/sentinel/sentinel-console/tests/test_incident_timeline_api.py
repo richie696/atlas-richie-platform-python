@@ -2,22 +2,24 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import unittest
+from datetime import UTC, datetime
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
-from atlas_richie.sentinel_console.application.incident_timeline_ports import (
-    IncidentTimelineAuthorityUnavailable,
-    IncidentTimelineRateLimited,
-    IncidentTimelineTargetNotFound,
-)
 from atlas_richie.sentinel_console.application.incident_evidence_ports import (
     IncidentEvidenceAuthorityUnavailable,
     IncidentEvidenceNotFound,
     IncidentEvidenceRateLimited,
+)
+from atlas_richie.sentinel_console.application.incident_timeline_ports import (
+    IncidentTimelineAuthorityUnavailable,
+    IncidentTimelineRateLimited,
+    IncidentTimelineTargetNotFound,
 )
 from atlas_richie.sentinel_console.domain.incidents import (
     IncidentCategory,
@@ -41,7 +43,6 @@ from atlas_richie.sentinel_console.domain.instance_catalog import (
 )
 from atlas_richie.sentinel_console.domain.instance_observation import ObservationContext
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from session_test_doubles import UnusedSessionRevoker
 
 _REQUEST_HEADERS = {"x-request-id": "incident-timeline-read-1"}
 _OPAQUE_SESSION = "synthetic-session-token-00000001"
@@ -351,7 +352,9 @@ def _evidence_params(**overrides: str) -> dict[str, str]:
 
 
 class IncidentTimelineApiTests(unittest.IsolatedAsyncioTestCase):
-    def test_incident_fact_rejects_python_integer_outside_json_finite_range(self) -> None:
+    def test_incident_fact_rejects_python_integer_outside_json_finite_range(
+        self,
+    ) -> None:
         with self.assertRaisesRegex(ValueError, "resource pressure fact is invalid"):
             IncidentFact(
                 IncidentFactCode.RESOURCE_PRESSURE,
@@ -368,9 +371,11 @@ class IncidentTimelineApiTests(unittest.IsolatedAsyncioTestCase):
 
     def test_cursor_blank_characters_match_console_wire_policy(self) -> None:
         for blank in ("\x1c", "\x85", "\ufeff", "\u3000"):
-            with self.subTest(blank=hex(ord(blank))):
-                with self.assertRaisesRegex(ValueError, "incident cursor is invalid"):
-                    _query(cursor=blank)
+            with (
+                self.subTest(blank=hex(ord(blank))),
+                self.assertRaisesRegex(ValueError, "incident cursor is invalid"),
+            ):
+                _query(cursor=blank)
 
         with self.assertRaisesRegex(ValueError, "incident cursor is invalid"):
             _query(cursor="\ud800")
@@ -393,6 +398,7 @@ class IncidentTimelineApiTests(unittest.IsolatedAsyncioTestCase):
                     )
 
                 self.assertEqual(response.status_code, 200)
+                assert_openapi_response("readIncidentTimeline", response)
                 self.assertEqual(
                     response.headers["x-request-id"], _REQUEST_HEADERS["x-request-id"]
                 )
@@ -411,19 +417,20 @@ class IncidentTimelineApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     [item["id"] for item in body["items"]], ["event-b", "event-a"]
                 )
-                self.assertEqual(body["items"][0]["caption"], {
-                    "code": "resource_pressure",
-                    "metric": "cpu_ratio",
-                    "value": 0.91,
-                    "threshold": 0.85,
-                })
+                self.assertEqual(
+                    body["items"][0]["caption"],
+                    {
+                        "code": "resource_pressure",
+                        "metric": "cpu_ratio",
+                        "value": 0.91,
+                        "threshold": 0.85,
+                    },
+                )
                 self.assertNotIn("message", body["items"][0]["caption"])
 
     async def test_process_scope_and_opaque_cursor_are_forwarded_exactly(self) -> None:
         cursor = "cursor-" + "x" * 300
-        query = _query(
-            app_id="checkout", instance_id="checkout-1", cursor=cursor
-        )
+        query = _query(app_id="checkout", instance_id="checkout-1", cursor=cursor)
         reader = _IncidentReader(_page(query))
         async with AsyncClient(
             transport=ASGITransport(app=_app("view", reader=reader)),
@@ -441,6 +448,7 @@ class IncidentTimelineApiTests(unittest.IsolatedAsyncioTestCase):
                 headers=_REQUEST_HEADERS,
             )
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readIncidentTimeline", response)
         self.assertEqual(reader.query, query)
         self.assertEqual(response.json()["query"]["context"]["scope"], "process")
         self.assertEqual(response.json()["query"]["cursor"], cursor)
@@ -488,6 +496,10 @@ class IncidentTimelineApiTests(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(response.status_code, status)
                 self.assertEqual(response.json()["error"]["code"], code)
+                if status == 429:
+                    self.assertEqual(response.json()["error"]["retryAfterMs"], 850)
+                else:
+                    self.assertNotIn("retryAfterMs", response.json()["error"])
                 self.assertNotIn("private", response.text)
 
     async def test_session_authority_failure_is_unavailable(self) -> None:
@@ -510,7 +522,13 @@ class IncidentTimelineApiTests(unittest.IsolatedAsyncioTestCase):
             ({"scope": "fleet", "appId": "checkout"},),
             ({"scope": "application"},),
             ({"scope": "process", "appId": "checkout"},),
-            ({"scope": "application", "appId": "checkout", "instanceId": "checkout-1"},),
+            (
+                {
+                    "scope": "application",
+                    "appId": "checkout",
+                    "instanceId": "checkout-1",
+                },
+            ),
             ({"scope": "host"},),
             ({"scope": "container"},),
             ({"scope": "fleet", "resource": "cpu"},),
@@ -571,6 +589,7 @@ class IncidentTimelineApiTests(unittest.IsolatedAsyncioTestCase):
                 headers=_REQUEST_HEADERS,
             )
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readIncidentEvidence", response)
         self.assertEqual(reader.query, query)
         body = response.json()
         self.assertEqual(body["event"]["id"], "event-rule")
@@ -622,9 +641,7 @@ class IncidentTimelineApiTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(code=code):
                 current = _IncidentEvidenceReader(error=error)
                 async with AsyncClient(
-                    transport=ASGITransport(
-                        app=_app("view", evidence_reader=current)
-                    ),
+                    transport=ASGITransport(app=_app("view", evidence_reader=current)),
                     base_url="http://console.test",
                     cookies={"sentinel_session": _OPAQUE_SESSION},
                 ) as client:
@@ -636,6 +653,10 @@ class IncidentTimelineApiTests(unittest.IsolatedAsyncioTestCase):
                 expected_status = 404 if code == "not_found" else 429
                 self.assertEqual(response.status_code, expected_status)
                 self.assertEqual(response.json()["error"]["code"], code)
+                if expected_status == 429:
+                    self.assertEqual(response.json()["error"]["retryAfterMs"], 500)
+                else:
+                    self.assertNotIn("retryAfterMs", response.json()["error"])
 
     async def test_evidence_rejects_query_errors_and_mismatched_authority(self) -> None:
         reader = _IncidentEvidenceReader(_evidence(_detail_query("event-b")))
@@ -707,9 +728,7 @@ class IncidentTimelineApiTests(unittest.IsolatedAsyncioTestCase):
                 headers=_REQUEST_HEADERS,
             )
         self.assertEqual(missing_reader.status_code, 503)
-        self.assertEqual(
-            missing_reader.json()["error"]["code"], "service_unavailable"
-        )
+        self.assertEqual(missing_reader.json()["error"]["code"], "service_unavailable")
 
 
 if __name__ == "__main__":

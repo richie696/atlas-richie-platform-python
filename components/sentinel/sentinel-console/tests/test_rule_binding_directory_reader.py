@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import unittest
+from datetime import UTC, datetime
 
 from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from atlas_richie.sentinel_console.application.rule_binding_ports import (
     RuleBindingAuthorityUnavailable,
+    RuleBindingScopeAuthorityUnavailable,
 )
 from atlas_richie.sentinel_console.domain.configuration_source import (
     ConfigurationSourceProvider,
@@ -65,9 +66,9 @@ class RuleBindingDirectoryReaderTests(unittest.IsolatedAsyncioTestCase):
             page=2,
             page_size=1,
         )
-        page = await SqlAlchemyRuleBindingDirectoryReader(self.engine).read_rule_bindings(
-            query
-        )
+        page = await SqlAlchemyRuleBindingDirectoryReader(
+            self.engine
+        ).read_rule_bindings(query)
 
         self.assertEqual(page.query, query)
         self.assertEqual(page.total, 3)
@@ -77,6 +78,45 @@ class RuleBindingDirectoryReaderTests(unittest.IsolatedAsyncioTestCase):
             page.items[0].location,
             "nacos://prod-namespace/DEFAULT_GROUP/flow-b.json",
         )
+
+    async def test_scope_catalog_is_derived_from_complete_bindings_and_deduplicated(
+        self,
+    ) -> None:
+        await self._seed_binding("binding-a", "app-a", "flow-a.json")
+        await self._seed_binding(
+            "binding-b", "app-a", "flow-b.json", kind=RuleKind.DEGRADE
+        )
+        await self._seed_binding(
+            "binding-d", "app-a", "flow-d.json", environment_id="stage"
+        )
+
+        snapshot = await SqlAlchemyRuleBindingDirectoryReader(
+            self.engine
+        ).read_rule_binding_scopes()
+
+        self.assertEqual(
+            [(item.id, item.name) for item in snapshot.environments],
+            [("prod", "prod"), ("stage", "stage")],
+        )
+        self.assertEqual(
+            [
+                (item.environment_id, item.id, item.name)
+                for item in snapshot.applications
+            ],
+            [("prod", "app-a", "app-a"), ("stage", "app-a", "app-a")],
+        )
+
+    async def test_scope_catalog_accepts_empty_authority_but_rejects_incomplete_binding(
+        self,
+    ) -> None:
+        reader = SqlAlchemyRuleBindingDirectoryReader(self.engine)
+        empty = await reader.read_rule_binding_scopes()
+        self.assertEqual(empty.environments, ())
+        self.assertEqual(empty.applications, ())
+
+        await self._seed_binding_metadata("binding-orphan", "app-a", "nacos://x")
+        with self.assertRaises(RuleBindingScopeAuthorityUnavailable):
+            await reader.read_rule_binding_scopes()
 
     async def test_metadata_without_exact_target_fails_closed(self) -> None:
         await self._seed_binding_metadata("binding-orphan", "app-a", "nacos://x")
@@ -127,7 +167,9 @@ class RuleBindingDirectoryReaderTests(unittest.IsolatedAsyncioTestCase):
             "DEFAULT_GROUP",
             "new.json",
         )
-        await SqlAlchemyRulePublicationTargetWriter(self.engine).write_rule_publication_target(
+        await SqlAlchemyRulePublicationTargetWriter(
+            self.engine
+        ).write_rule_publication_target(
             target,
             source_revision="source-revision",
             expected_revision=None,
@@ -180,15 +222,20 @@ class RuleBindingDirectoryReaderTests(unittest.IsolatedAsyncioTestCase):
             )
 
     async def _seed_binding_metadata(
-        self, binding_id: str, app_id: str, location: str
+        self,
+        binding_id: str,
+        app_id: str,
+        location: str,
+        kind: RuleKind = RuleKind.FLOW,
+        environment_id: str = "prod",
     ) -> None:
         async with self.engine.begin() as connection:
             await connection.execute(
                 insert(RuleBindingRecord).values(
                     binding_id=binding_id,
-                    environment_id="prod",
+                    environment_id=environment_id,
                     app_id=app_id,
-                    kind=RuleKind.FLOW.value,
+                    kind=kind.value,
                     profile="sentinel-flow-v1",
                     source_id="source-a",
                     location=location,
@@ -198,7 +245,12 @@ class RuleBindingDirectoryReaderTests(unittest.IsolatedAsyncioTestCase):
             )
 
     async def _seed_binding(
-        self, binding_id: str, app_id: str, data_id: str
+        self,
+        binding_id: str,
+        app_id: str,
+        data_id: str,
+        kind: RuleKind = RuleKind.FLOW,
+        environment_id: str = "prod",
     ) -> None:
         target = NacosRulePublicationTarget(
             binding_id,
@@ -208,7 +260,9 @@ class RuleBindingDirectoryReaderTests(unittest.IsolatedAsyncioTestCase):
             data_id,
         )
         location = f"nacos://{target.namespace}/{target.group}/{target.data_id}"
-        await self._seed_binding_metadata(binding_id, app_id, location)
+        await self._seed_binding_metadata(
+            binding_id, app_id, location, kind, environment_id
+        )
         async with self.engine.begin() as connection:
             await connection.execute(
                 insert(RulePublicationTargetRecord).values(

@@ -9,29 +9,6 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from bootstrap_database_acceptance_support import (
-    assert_bootstrap_retries_are_deduplicated_and_actor_bound,
-    assert_competing_bootstrap_initializations_are_serialized,
-    assert_first_run_http_persists_on_real_database,
-    assert_sql_identity_http_persists_credentials_and_sessions,
-)
-from rule_activation_plan_database_acceptance import (
-    assert_cancel_racing_activation_claim_preserves_started_publication,
-    assert_independent_plan_workers_fence_and_recover,
-)
-from rule_binding_registration_database_acceptance import (
-    assert_competing_same_key_registrations_are_idempotent,
-)
-from rule_publication_receipt_database_acceptance import (
-    assert_runtime_publication_receipt_persistence,
-)
-from rule_publication_consul_database_acceptance import (
-    assert_sql_outbox_publishes_to_disposable_consul,
-)
-from sqlalchemy import func, insert, select, update
-from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import create_async_engine
-
 from atlas_richie.sentinel_console.application.account_commands import (
     AccountCommandActor,
     AccountCommandKind,
@@ -44,7 +21,9 @@ from atlas_richie.sentinel_console.domain.session import AccountRole
 from atlas_richie.sentinel_console.infrastructure.persistence import (
     account_command_store,
 )
+from atlas_richie.sentinel_console.infrastructure.persistence.base import ConsoleBase
 from atlas_richie.sentinel_console.infrastructure.persistence.migration_runner import (
+    _migration_lock_identity,
     upgrade_database,
 )
 from atlas_richie.sentinel_console.infrastructure.persistence.models import (
@@ -57,6 +36,49 @@ from atlas_richie.sentinel_console.infrastructure.persistence.models import (
 from atlas_richie.sentinel_console.infrastructure.security.password_hash import (
     PasswordHashService,
 )
+from bootstrap_database_acceptance_support import (
+    assert_bootstrap_retries_are_deduplicated_and_actor_bound,
+    assert_competing_bootstrap_initializations_are_serialized,
+    assert_first_run_http_persists_on_real_database,
+    assert_sql_identity_http_persists_credentials_and_sessions,
+    assert_sql_login_cooldown_serializes_across_processes,
+    assert_sql_login_cooldown_shared_across_app_instances,
+    assert_two_uvicorn_workers_serve_sql_login_cooldown,
+)
+from rule_activation_plan_consul_database_acceptance import (
+    assert_real_consul_publication_completes_before_plan_association,
+)
+from rule_activation_plan_consul_preflight_acceptance import (
+    assert_consul_restore_preflight_blocks_external_change,
+)
+from rule_activation_plan_database_acceptance import (
+    assert_activation_recovers_completed_publication_after_lost_association,
+    assert_cancel_racing_activation_claim_preserves_started_publication,
+    assert_independent_plan_workers_fence_and_recover,
+)
+from rule_activation_plan_nacos_database_acceptance import (
+    assert_real_nacos_publication_completes_before_plan_association,
+)
+from rule_binding_registration_database_acceptance import (
+    assert_competing_same_key_registrations_are_idempotent,
+)
+from rule_publication_consul_database_acceptance import (
+    assert_consul_process_termination_recovers_after_real_write,
+    assert_sql_activation_plan_publishes_and_restores_to_disposable_consul,
+    assert_sql_outbox_publishes_to_disposable_consul,
+)
+from rule_publication_nacos_database_acceptance import (
+    assert_sql_outbox_publishes_create_only_to_disposable_nacos,
+)
+from rule_publication_receipt_database_acceptance import (
+    assert_runtime_publication_receipt_persistence,
+)
+from rule_publication_receipt_outbox_database_acceptance import (
+    assert_rule_publication_receipt_outbox_round_trip,
+)
+from sqlalchemy import func, insert, select, text, update
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import create_async_engine
 
 _DATABASE_URL_ENV = "SENTINEL_CONSOLE_TEST_POSTGRES_URL"
 _DATABASE_URL = os.environ.get(_DATABASE_URL_ENV)
@@ -82,6 +104,23 @@ def _validated_test_database_url(value: str | None) -> str | None:
 _DATABASE_URL = _validated_test_database_url(_DATABASE_URL)
 
 
+class _RedactedDatabaseUrl(str):
+    """Keep disposable database credentials out of failure tracebacks."""
+
+    def __repr__(self) -> str:
+        return "<redacted database URL>"
+
+
+class AcceptanceDatabaseUrlRedactionTests(unittest.TestCase):
+    def test_database_url_repr_is_redacted(self) -> None:
+        value = _RedactedDatabaseUrl(
+            "postgresql+psycopg://user:synthetic-password@127.0.0.1/"
+            "sentinel_console_test_redaction"
+        )
+
+        self.assertEqual(repr(value), "<redacted database URL>")
+
+
 @unittest.skipUnless(
     _DATABASE_URL, f"set {_DATABASE_URL_ENV} to run PostgreSQL acceptance"
 )
@@ -91,10 +130,42 @@ class PostgreSQLConsoleAcceptanceTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         assert _DATABASE_URL is not None
         self.engine = create_async_engine(_DATABASE_URL, pool_size=5)
+        # All acceptance cases share one disposable database; reset it before
+        # each case so the first-run scenario cannot inherit a prior guard row.
+        async with self.engine.begin() as connection:
+            await connection.run_sync(ConsoleBase.metadata.drop_all)
+            await connection.exec_driver_sql("DROP TABLE IF EXISTS alembic_version")
         await upgrade_database(self.engine)
 
     async def asyncTearDown(self) -> None:
         await self.engine.dispose()
+
+    async def test_runtime_migrations_are_serialized_across_worker_engines(
+        self,
+    ) -> None:
+        """Concurrent fresh workers must not race PostgreSQL Alembic DDL."""
+        assert _DATABASE_URL is not None
+        async with self.engine.begin() as connection:
+            await connection.run_sync(ConsoleBase.metadata.drop_all)
+            await connection.exec_driver_sql("DROP TABLE IF EXISTS alembic_version")
+        second_worker_engine = create_async_engine(_DATABASE_URL, pool_size=1)
+        try:
+            self.assertEqual(
+                _migration_lock_identity(self.engine),
+                _migration_lock_identity(second_worker_engine),
+            )
+            await asyncio.gather(
+                upgrade_database(self.engine),
+                upgrade_database(second_worker_engine),
+            )
+            async with self.engine.connect() as connection:
+                revision = await connection.scalar(
+                    text("SELECT version_num FROM alembic_version")
+                )
+            self.assertIsInstance(revision, str)
+            self.assertTrue(revision)
+        finally:
+            await second_worker_engine.dispose()
 
     async def test_competing_bootstrap_initializations_are_serialized(self) -> None:
         await assert_competing_bootstrap_initializations_are_serialized(
@@ -111,10 +182,28 @@ class PostgreSQLConsoleAcceptanceTest(unittest.IsolatedAsyncioTestCase):
             self.engine, "postgresql"
         )
 
-    async def test_z_full_first_run_http_path_persists_setup(self) -> None:
-        await assert_first_run_http_persists_on_real_database(
-            self.engine, "postgresql"
+    async def test_sql_login_cooldown_is_shared_across_app_instances(self) -> None:
+        assert _DATABASE_URL is not None
+        await assert_sql_login_cooldown_shared_across_app_instances(
+            self.engine, _DATABASE_URL
         )
+
+    async def test_sql_login_cooldown_serializes_across_processes(self) -> None:
+        assert _DATABASE_URL is not None
+        await assert_sql_login_cooldown_serializes_across_processes(
+            self.engine, _DATABASE_URL
+        )
+
+    async def test_two_uvicorn_workers_serve_postgresql_login_cooldown_over_http(
+        self,
+    ) -> None:
+        assert _DATABASE_URL is not None
+        await assert_two_uvicorn_workers_serve_sql_login_cooldown(
+            self, self.engine, _DATABASE_URL, "postgresql"
+        )
+
+    async def test_z_full_first_run_http_path_persists_setup(self) -> None:
+        await assert_first_run_http_persists_on_real_database(self.engine, "postgresql")
 
     async def test_concurrent_rule_binding_retries_are_idempotent(self) -> None:
         await assert_competing_same_key_registrations_are_idempotent(
@@ -127,7 +216,17 @@ class PostgreSQLConsoleAcceptanceTest(unittest.IsolatedAsyncioTestCase):
             self, self.engine, _DATABASE_URL
         )
 
-    async def test_cancel_racing_activation_claim_preserves_started_publication(self) -> None:
+    async def test_activation_recovers_completed_publication_after_lost_association(
+        self,
+    ) -> None:
+        assert _DATABASE_URL is not None
+        await assert_activation_recovers_completed_publication_after_lost_association(
+            self, self.engine, _DATABASE_URL
+        )
+
+    async def test_cancel_racing_activation_claim_preserves_started_publication(
+        self,
+    ) -> None:
         assert _DATABASE_URL is not None
         await assert_cancel_racing_activation_claim_preserves_started_publication(
             self, self.engine, _DATABASE_URL
@@ -138,12 +237,82 @@ class PostgreSQLConsoleAcceptanceTest(unittest.IsolatedAsyncioTestCase):
             self, self.engine, "postgresql"
         )
 
+    async def test_rule_publication_receipt_durable_outbox_round_trip(self) -> None:
+        await assert_rule_publication_receipt_outbox_round_trip(
+            self, self.engine, "postgresql"
+        )
+
     @unittest.skipUnless(
         os.environ.get("SENTINEL_CONSOLE_RUN_CONSUL_ACCEPTANCE") == "1",
         "set SENTINEL_CONSOLE_RUN_CONSUL_ACCEPTANCE=1 to start disposable Consul",
     )
     async def test_sql_rule_outbox_publishes_to_disposable_consul(self) -> None:
         await assert_sql_outbox_publishes_to_disposable_consul(self.engine)
+
+    @unittest.skipUnless(
+        os.environ.get("SENTINEL_CONSOLE_RUN_CONSUL_ACCEPTANCE") == "1",
+        "set SENTINEL_CONSOLE_RUN_CONSUL_ACCEPTANCE=1 to start disposable Consul",
+    )
+    async def test_consul_process_termination_recovers_after_real_write(self) -> None:
+        assert _DATABASE_URL is not None
+        await assert_consul_process_termination_recovers_after_real_write(
+            self.engine, _DATABASE_URL
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("SENTINEL_CONSOLE_RUN_CONSUL_ACCEPTANCE") == "1",
+        "set SENTINEL_CONSOLE_RUN_CONSUL_ACCEPTANCE=1 to start disposable Consul",
+    )
+    async def test_sql_activation_plan_publishes_and_restores_to_disposable_consul(
+        self,
+    ) -> None:
+        await assert_sql_activation_plan_publishes_and_restores_to_disposable_consul(
+            self.engine
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("SENTINEL_CONSOLE_RUN_CONSUL_ACCEPTANCE") == "1",
+        "set SENTINEL_CONSOLE_RUN_CONSUL_ACCEPTANCE=1 to start disposable Consul",
+    )
+    async def test_consul_restore_preflight_blocks_prior_external_change(self) -> None:
+        await assert_consul_restore_preflight_blocks_external_change(self.engine)
+
+    @unittest.skipUnless(
+        os.environ.get("SENTINEL_CONSOLE_RUN_CONSUL_ACCEPTANCE") == "1",
+        "set SENTINEL_CONSOLE_RUN_CONSUL_ACCEPTANCE=1 to start disposable Consul",
+    )
+    async def test_real_consul_publication_completes_before_plan_association(
+        self,
+    ) -> None:
+        assert _DATABASE_URL is not None
+        await asyncio.wait_for(
+            assert_real_consul_publication_completes_before_plan_association(
+                self.engine, _DATABASE_URL
+            ),
+            timeout=150,
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("SENTINEL_CONSOLE_RUN_NACOS_ACCEPTANCE") == "1",
+        "set SENTINEL_CONSOLE_RUN_NACOS_ACCEPTANCE=1 to start disposable Nacos",
+    )
+    async def test_real_nacos_publication_completes_before_plan_association(
+        self,
+    ) -> None:
+        assert _DATABASE_URL is not None
+        await asyncio.wait_for(
+            assert_real_nacos_publication_completes_before_plan_association(
+                self.engine, _RedactedDatabaseUrl(_DATABASE_URL)
+            ),
+            timeout=180,
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("SENTINEL_CONSOLE_RUN_NACOS_ACCEPTANCE") == "1",
+        "set SENTINEL_CONSOLE_RUN_NACOS_ACCEPTANCE=1 to start disposable Nacos",
+    )
+    async def test_sql_rule_outbox_creates_config_in_disposable_nacos(self) -> None:
+        await assert_sql_outbox_publishes_create_only_to_disposable_nacos(self.engine)
 
     async def test_migration_and_last_admin_mutations_serialize(self) -> None:
         async with self.engine.begin() as connection:
@@ -238,9 +407,7 @@ class PostgreSQLConsoleAcceptanceTest(unittest.IsolatedAsyncioTestCase):
 
         try:
             service = MutateAccount(
-                store=account_command_store.SqlAlchemyAccountCommandStore(
-                    self.engine
-                ),
+                store=account_command_store.SqlAlchemyAccountCommandStore(self.engine),
                 password_hasher=hasher,
                 fingerprint_keys={"test-key": b"p" * 32},
                 active_fingerprint_key_id="test-key",
@@ -263,8 +430,7 @@ class PostgreSQLConsoleAcceptanceTest(unittest.IsolatedAsyncioTestCase):
                 )
 
             tasks = [
-                asyncio.create_task(demote_own_admin_role(index))
-                for index in range(2)
+                asyncio.create_task(demote_own_admin_role(index)) for index in range(2)
             ]
             start.set()
             results = await asyncio.gather(*tasks)

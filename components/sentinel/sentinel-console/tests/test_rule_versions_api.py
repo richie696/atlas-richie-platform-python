@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
-import unittest
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
@@ -28,7 +30,6 @@ from atlas_richie.sentinel_console.domain.rule_versions import (
     RuleSetVersionCollection,
 )
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from session_test_doubles import UnusedSessionRevoker
 
 _HEADERS = {"x-request-id": "rule-versions-read-1"}
 _COOKIE = "synthetic-session-token-for-rule-versions-0001"
@@ -202,6 +203,7 @@ class RuleVersionApiTests(unittest.IsolatedAsyncioTestCase):
         reader = _VersionReader()
         response = await self._get("view", reader=reader)
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readRuleVersions", response)
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertEqual(reader.binding_id, "binding-1")
         body = response.json()
@@ -217,15 +219,18 @@ class RuleVersionApiTests(unittest.IsolatedAsyncioTestCase):
                 reader = _VersionReader()
                 response = await self._get(role, reader=reader)
                 self.assertEqual(response.status_code, status)
+                assert_openapi_response("readRuleVersions", response)
                 self.assertEqual(reader.calls, 0)
         reader = _VersionReader()
         invalid = await self._get("admin", reader=reader, binding_id=" ")
         self.assertEqual(invalid.status_code, 400)
+        assert_openapi_response("readRuleVersions", invalid)
         self.assertEqual(reader.calls, 0)
 
     async def test_list_maps_missing_and_authority_failures_without_details(self):
         missing = await self._get("admin")
         self.assertEqual(missing.status_code, 503)
+        assert_openapi_response("readRuleVersions", missing)
         cases = (
             (RuleSetVersionNotFound("private binding"), 404, "not_found"),
             (RuleSetVersionRateLimited(30), 429, "rate_limited"),
@@ -239,6 +244,7 @@ class RuleVersionApiTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(code=code):
                 response = await self._get("admin", reader=_VersionReader(error=error))
                 self.assertEqual(response.status_code, status)
+                assert_openapi_response("readRuleVersions", response)
                 self.assertEqual(response.json()["error"]["code"], code)
                 self.assertNotIn("private", response.text)
 
@@ -247,17 +253,20 @@ class RuleVersionApiTests(unittest.IsolatedAsyncioTestCase):
             "admin", reader=_VersionReader(collection=_collection(binding_id="other"))
         )
         self.assertEqual(wrong_binding.status_code, 503)
+        assert_openapi_response("readRuleVersions", wrong_binding)
         reader = _VersionReader()
         unavailable_session = await self._get(
             "admin", reader=reader, session_reader=_SessionReader("unavailable")
         )
         self.assertEqual(unavailable_session.status_code, 503)
+        assert_openapi_response("readRuleVersions", unavailable_session)
         self.assertEqual(reader.calls, 0)
 
     async def test_session_reads_one_exact_version(self):
         reader = _VersionDetailReader()
         response = await self._get_detail("admin", reader=reader)
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readRuleVersion", response)
         self.assertEqual(reader.binding_id, "binding-1")
         self.assertEqual(reader.version_id, "version-1")
         self.assertEqual(response.json()["id"], "version-1")
@@ -268,15 +277,18 @@ class RuleVersionApiTests(unittest.IsolatedAsyncioTestCase):
         anonymous_reader = _VersionDetailReader()
         anonymous = await self._get_detail(None, reader=anonymous_reader)
         self.assertEqual(anonymous.status_code, 401)
+        assert_openapi_response("readRuleVersion", anonymous)
         self.assertEqual(anonymous_reader.calls, 0)
         invalid_reader = _VersionDetailReader()
         invalid = await self._get_detail("view", reader=invalid_reader, version_id=" ")
         self.assertEqual(invalid.status_code, 400)
+        assert_openapi_response("readRuleVersion", invalid)
         self.assertEqual(invalid_reader.calls, 0)
         wrong_id = await self._get_detail(
             "view", reader=_VersionDetailReader(version=_version(version_id="other"))
         )
         self.assertEqual(wrong_id.status_code, 503)
+        assert_openapi_response("readRuleVersion", wrong_id)
         wrong_binding = await self._get_detail(
             "view",
             reader=_VersionDetailReader(
@@ -284,10 +296,12 @@ class RuleVersionApiTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertEqual(wrong_binding.status_code, 503)
+        assert_openapi_response("readRuleVersion", wrong_binding)
 
     async def test_detail_maps_not_found_and_authority_failures(self):
         missing = await self._get_detail("view")
         self.assertEqual(missing.status_code, 503)
+        assert_openapi_response("readRuleVersion", missing)
         cases = (
             (RuleSetVersionNotFound("private"), 404, "not_found"),
             (RuleSetVersionRateLimited(30), 429, "rate_limited"),
@@ -303,6 +317,7 @@ class RuleVersionApiTests(unittest.IsolatedAsyncioTestCase):
                     "view", reader=_VersionDetailReader(error=error)
                 )
                 self.assertEqual(response.status_code, status)
+                assert_openapi_response("readRuleVersion", response)
                 self.assertEqual(response.json()["error"]["code"], code)
                 self.assertNotIn("private", response.text)
 
@@ -330,9 +345,8 @@ class RuleVersionDomainTests(unittest.TestCase):
     def test_version_name_uses_the_cross_runtime_nonblank_contract(self):
         version = _version()
         for blank in (" ", "\u0085", "\u001c", "\ufeff"):
-            with self.subTest(blank=repr(blank)):
-                with self.assertRaises(ValueError):
-                    replace(version, name=blank)
+            with self.subTest(blank=repr(blank)), self.assertRaises(ValueError):
+                replace(version, name=blank)
 
 
 if __name__ == "__main__":

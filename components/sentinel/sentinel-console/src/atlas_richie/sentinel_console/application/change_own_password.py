@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -161,7 +162,9 @@ class ChangeOwnPassword:
                     "attempt limiter returned an invalid delay"
                 )
             raise OwnPasswordRateLimited(min(retry_after_ms, 300_000))
-        if not self._password_hasher.verify_password(encoded_hash, current_password):
+        if not await asyncio.to_thread(
+            self._password_hasher.verify_password, encoded_hash, current_password
+        ):
             await self._limiter_call(
                 self._attempt_limiter.record_failure(attempt_subject_digest)
             )
@@ -174,7 +177,9 @@ class ChangeOwnPassword:
             self._attempt_limiter.record_success(attempt_subject_digest)
         )
 
-        replacement_hash = self._password_hasher.hash_password(new_password.value)
+        replacement_hash = await asyncio.to_thread(
+            self._password_hasher.hash_password, new_password.value
+        )
         changed = await self._writer.change_password(
             actor=actor,
             expected_password_hash=encoded_hash,

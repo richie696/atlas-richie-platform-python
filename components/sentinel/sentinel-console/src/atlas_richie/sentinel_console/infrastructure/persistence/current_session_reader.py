@@ -42,6 +42,7 @@ class SqlAlchemyCurrentSessionReader:
                         AuthenticationSessionRecord.revoked_at.is_(None),
                         AuthenticationSessionRecord.expires_at > datetime.now(UTC),
                         AccountRecord.status == "active",
+                        AccountRecord.deleted_at.is_(None),
                     )
                 )
                 row = result.one_or_none()

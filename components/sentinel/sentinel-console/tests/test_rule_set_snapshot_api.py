@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import unittest
+from datetime import UTC, datetime
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
+from atlas_richie.sentinel_console.api.rule_snapshot_serializers import (
+    rule_set_snapshot_body,
+)
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
 from atlas_richie.sentinel_console.application.rule_snapshot_ports import (
@@ -32,12 +37,8 @@ from atlas_richie.sentinel_console.domain.rule_snapshots import (
     RuleSetSnapshot,
     SystemRuleValue,
 )
-from atlas_richie.sentinel_console.domain.wire_numbers import MAX_SAFE_JSON_INTEGER
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from atlas_richie.sentinel_console.api.rule_snapshot_serializers import (
-    rule_set_snapshot_body,
-)
-from session_test_doubles import UnusedSessionRevoker
+from atlas_richie.sentinel_console.domain.wire_numbers import MAX_SAFE_JSON_INTEGER
 
 _HEADERS = {"x-request-id": "rule-snapshot-read-1"}
 _COOKIE = "synthetic-session-token-for-rule-snapshot-0001"
@@ -195,6 +196,7 @@ class RuleSetSnapshotApiTests(unittest.IsolatedAsyncioTestCase):
                 reader = _RuleSnapshotReader()
                 response = await self._get(role, reader=reader)
                 self.assertEqual(response.status_code, 200)
+                assert_openapi_response("readRuleSetSnapshot", response)
                 self.assertEqual(response.headers["cache-control"], "no-store")
                 self.assertEqual(reader.binding_id, "binding-1")
                 body = response.json()
@@ -223,6 +225,7 @@ class RuleSetSnapshotApiTests(unittest.IsolatedAsyncioTestCase):
         anonymous_reader = _RuleSnapshotReader()
         anonymous = await self._get(None, reader=anonymous_reader)
         self.assertEqual(anonymous.status_code, 401)
+        assert_openapi_response("readRuleSetSnapshot", anonymous)
         self.assertEqual(anonymous_reader.calls, 0)
         unavailable_reader = _RuleSnapshotReader()
         unavailable = await self._get(
@@ -231,9 +234,11 @@ class RuleSetSnapshotApiTests(unittest.IsolatedAsyncioTestCase):
             session_reader=_SessionReader("unavailable"),
         )
         self.assertEqual(unavailable.status_code, 503)
+        assert_openapi_response("readRuleSetSnapshot", unavailable)
         self.assertEqual(unavailable_reader.calls, 0)
         missing = await self._get("view")
         self.assertEqual(missing.status_code, 503)
+        assert_openapi_response("readRuleSetSnapshot", missing)
 
     async def test_authority_error_mapping_does_not_leak_private_detail(self):
         cases = (
@@ -251,6 +256,7 @@ class RuleSetSnapshotApiTests(unittest.IsolatedAsyncioTestCase):
                     "view", reader=_RuleSnapshotReader(error=error)
                 )
                 self.assertEqual(response.status_code, status)
+                assert_openapi_response("readRuleSetSnapshot", response)
                 self.assertEqual(response.json()["error"]["code"], code)
                 self.assertNotIn("private", response.text)
 
@@ -259,9 +265,11 @@ class RuleSetSnapshotApiTests(unittest.IsolatedAsyncioTestCase):
             "admin", reader=_RuleSnapshotReader(snapshot=_snapshot(binding_id="other"))
         )
         self.assertEqual(wrong.status_code, 503)
+        assert_openapi_response("readRuleSetSnapshot", wrong)
         invalid_reader = _RuleSnapshotReader()
         invalid = await self._get("admin", " ", reader=invalid_reader)
         self.assertEqual(invalid.status_code, 400)
+        assert_openapi_response("readRuleSetSnapshot", invalid)
         self.assertEqual(invalid_reader.calls, 0)
 
 

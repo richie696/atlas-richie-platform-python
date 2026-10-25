@@ -19,8 +19,8 @@ from ..application.rule_snapshot_ports import (
     RuleSetSnapshotRateLimited,
 )
 from ..domain.rule_bindings import is_rule_binding_identifier
-from ..domain.session import SessionCapability
 from ..domain.rule_candidates import RuleChange, RuleSetDiff
+from ..domain.session import SessionCapability
 from .browser_origin import normalize_browser_origin
 from .browser_security import SESSION_COOKIE_NAME, browser_write_proof
 from .http_support import error_response, read_json_object, request_id
@@ -44,9 +44,8 @@ def rule_candidate_diff_route(
         raise ValueError("at least one browser origin must be configured")
 
     async def compare(request: Request) -> Response:
-        request_ids = request.headers.getlist("x-request-id")
         request_id_value, valid_request_id = request_id(request)
-        if len(request_ids) != 1 or not valid_request_id:
+        if not valid_request_id:
             return error_response(request_id_value, "invalid_request", 400)
         proof, failure = browser_write_proof(request, allowed_origins)
         if failure is not None:

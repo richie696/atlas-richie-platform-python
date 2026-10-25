@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import re
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from ..application.read_rule_bindings import ReadRuleBindings
+from ..application.read_rule_binding_registration import ReadRuleBindingRegistration
 from ..application.read_session import ReadSession
 from ..application.rule_binding_ports import (
     RuleBindingAuthorityUnavailable,
@@ -19,26 +21,36 @@ from ..application.rule_binding_ports import (
     RuleBindingRegistrationIdempotencyConflict,
     RuleBindingRegistrationUnauthenticated,
     RuleBindingRegistrationAuthority,
+    RuleBindingRegistrationReceiptReader,
     RuleBindingTargetNotFound,
 )
 from ..application.register_rule_binding import RegisterRuleBindingUseCase
+from ..domain.rule_bindings import is_rule_binding_identifier
+from ..domain.session import AccountRole
+from .browser_security import browser_session_digest
 from .http_support import error_response, read_json_object
 from .rule_binding_parsing import parse_rule_binding_query
 from .rule_binding_registration_parsing import parse_rule_binding_registration
-from .rule_binding_serializers import rule_binding_body, rule_binding_page_body
+from .rule_binding_serializers import (
+    rule_binding_body,
+    rule_binding_page_body,
+    rule_binding_registration_receipt_body,
+)
 from .admin_write_access import authorize_admin_write
 from .system_observation_access import authorize_system_read, system_read_headers
 
 _MAX_BODY_BYTES = 8192
+_REQUEST_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
 def rule_bindings_routes(
     read_session: ReadSession,
     read_bindings: ReadRuleBindings | None,
     registration_authority: RuleBindingRegistrationAuthority | None,
+    registration_receipt_reader: RuleBindingRegistrationReceiptReader | None,
     allowed_browser_origins: frozenset[str],
-) -> tuple[Route, Route]:
-    """Create the read directory and admin-only atomic registration endpoints."""
+) -> tuple[Route, Route, Route]:
+    """Create directory, registration, and original-receipt read endpoints."""
 
     async def read_page(request: Request) -> Response:
         request_id_value, _identity, rejection = await authorize_system_read(
@@ -123,8 +135,55 @@ def rule_bindings_routes(
             },
         )
 
+    async def read_registration_receipt(request: Request) -> Response:
+        request_id_value, identity, rejection = await authorize_system_read(
+            request, read_session, invalid_request_code="invalid_request"
+        )
+        if rejection is not None:
+            return rejection
+        assert identity is not None
+        if identity.role_id is not AccountRole.ADMIN:
+            return error_response(request_id_value, "forbidden", 403)
+        binding_id = request.path_params.get("bindingId", "")
+        request_key = request.path_params.get("requestKey", "")
+        if (
+            not is_rule_binding_identifier(binding_id)
+            or _REQUEST_KEY_PATTERN.fullmatch(request_key) is None
+        ):
+            return error_response(request_id_value, "not_found", 404)
+        session_digest, failure = browser_session_digest(request)
+        if failure is not None:
+            return error_response(request_id_value, failure[0], failure[1])
+        assert session_digest is not None
+        if registration_receipt_reader is None:
+            return error_response(request_id_value, "service_unavailable", 503)
+        now = datetime.now(UTC)
+        try:
+            receipt = await ReadRuleBindingRegistration(
+                registration_receipt_reader
+            ).execute(
+                binding_id,
+                request_key,
+                actor_id=identity.account_id,
+                session_digest=session_digest,
+                now=now.replace(microsecond=(now.microsecond // 1_000) * 1_000),
+            )
+            body = rule_binding_registration_receipt_body(receipt)
+        except RuleBindingRegistrationUnauthenticated:
+            return error_response(request_id_value, "unauthenticated", 401)
+        except RuleBindingRegistrationForbidden:
+            return error_response(request_id_value, "forbidden", 403)
+        except (RuleBindingRegistrationAuthorityUnavailable, ValueError):
+            return error_response(request_id_value, "service_unavailable", 503)
+        return JSONResponse(body, headers=system_read_headers(request_id_value))
+
     return (
         Route("/api/v1/rulesets", read_page, methods=["GET"]),
         Route("/api/v1/rulesets", register, methods=["POST"]),
+        Route(
+            "/api/v1/rulesets/{bindingId:str}/registration-operations/{requestKey:str}",
+            read_registration_receipt,
+            methods=["GET"],
+        ),
     )
 

@@ -2,25 +2,26 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Collection
 from datetime import UTC, datetime
-import re
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from ..application.errors import SessionAuthorityUnavailable
-from ..application.check_registered_source import SourceConnectionInput
 from ..application.mutate_registered_source import (
+    RegisteredSourceDeletion,
+    RegisteredSourceDeletionOperation,
     RegisteredSourceMutation,
+    RegisteredSourceOperation,
     RegisteredSourceMutationAuthority,
     SourceMutationAuthorityUnavailable,
     SourceMutationForbidden,
     SourceMutationIdempotencyConflict,
     SourceMutationKind,
     SourceMutationRateLimited,
-    SourceMutationRejection,
     SourceMutationStatus,
     SourceMutationUnauthenticated,
 )
@@ -32,7 +33,7 @@ from ..domain.wire_strings import is_bounded_wire_identifier
 from .admin_write_access import authorize_admin_write
 from .browser_origin import normalize_browser_origin
 from .browser_security import SESSION_COOKIE_NAME, browser_session_digest
-from .http_support import error_response, read_json_object, strict_request_id
+from .http_support import error_response, read_json_object, request_id
 from .source_connection_parsing import parse_source_connection
 from .system_observation_access import system_read_headers
 
@@ -70,14 +71,17 @@ def registered_source_command_routes(
         if authority is None:
             return error_response(access.request_id, "service_unavailable", 503)
         try:
-            operation = await authority.mutate(
-                command,
-                actor_id=access.identity.account_id,
-                session_digest=access.session_digest,
-                csrf_digest=access.csrf_digest,
-                request_id=access.request_id,
-                now=datetime.now(UTC),
-            )
+            mutation_context = {
+                "actor_id": access.identity.account_id,
+                "session_digest": access.session_digest,
+                "csrf_digest": access.csrf_digest,
+                "request_id": access.request_id,
+                "now": datetime.now(UTC),
+            }
+            if isinstance(command, RegisteredSourceDeletion):
+                operation = await authority.delete(command, **mutation_context)
+            else:
+                operation = await authority.mutate(command, **mutation_context)
         except SourceMutationForbidden:
             return error_response(access.request_id, "forbidden", 403)
         except SourceMutationUnauthenticated:
@@ -102,7 +106,7 @@ def registered_source_command_routes(
         )
 
     async def read_operation(request: Request) -> Response:
-        request_id_value, valid_request_id = strict_request_id(request)
+        request_id_value, valid_request_id = request_id(request)
         if not valid_request_id:
             return error_response(request_id_value, "invalid_request", 400)
         session_digest, failure = browser_session_digest(request)
@@ -160,11 +164,29 @@ def registered_source_command_routes(
     )
 
 
-def _parse_mutation(body: dict[str, object] | None) -> RegisteredSourceMutation | None:
+def _parse_mutation(
+    body: dict[str, object] | None,
+) -> RegisteredSourceMutation | RegisteredSourceDeletion | None:
     if body is None:
         return None
     kind_value = body.get("kind")
     request_key = body.get("requestKey")
+    if (
+        kind_value == "delete"
+        and isinstance(request_key, str)
+        and _REQUEST_KEY_PATTERN.fullmatch(request_key) is not None
+        and set(body) == {"kind", "requestKey", "sourceId", "expectedRevision"}
+        and is_bounded_wire_identifier(body.get("sourceId"), 200)
+        and is_bounded_wire_identifier(body.get("expectedRevision"), 200)
+    ):
+        try:
+            return RegisteredSourceDeletion(
+                request_key,
+                str(body["sourceId"]),
+                str(body["expectedRevision"]),
+            )
+        except ValueError:
+            return None
     name = body.get("name")
     if (
         not isinstance(kind_value, str)
@@ -197,10 +219,9 @@ def _parse_mutation(body: dict[str, object] | None) -> RegisteredSourceMutation 
             return None
         source_id = body.get("sourceId")
         revision = body.get("expectedRevision")
-        if (
-            not is_bounded_wire_identifier(source_id, 200)
-            or not is_bounded_wire_identifier(revision, 200)
-        ):
+        if not is_bounded_wire_identifier(
+            source_id, 200
+        ) or not is_bounded_wire_identifier(revision, 200):
             return None
         source = parse_source_connection(
             body.get("source") if isinstance(body.get("source"), dict) else None,
@@ -215,12 +236,17 @@ def _parse_mutation(body: dict[str, object] | None) -> RegisteredSourceMutation 
         return None
 
 
-def _operation_body(operation) -> dict[str, object]:
+def _operation_body(
+    operation: RegisteredSourceOperation | RegisteredSourceDeletionOperation,
+) -> dict[str, object]:
     body: dict[str, object] = {
         "status": operation.status.value,
         "requestKey": operation.request_key,
     }
-    if operation.record is not None:
+    if isinstance(operation, RegisteredSourceDeletionOperation):
+        if operation.deleted_source_id is not None:
+            body["deletedSourceId"] = operation.deleted_source_id
+    elif operation.record is not None:
         body["record"] = _source_record_body(operation.record)
     if operation.status is SourceMutationStatus.NOT_FOUND:
         body["status"] = "not_found"
@@ -252,5 +278,3 @@ def _write_headers(request_id_value: str) -> dict[str, str]:
         **system_read_headers(request_id_value),
         "vary": "Cookie, Origin",
     }
-
-

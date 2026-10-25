@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
+from typing import cast
 
-from sqlalchemy import func, select, true
+from sqlalchemy import func, literal, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -17,6 +18,8 @@ from ...application.account_directory_ports import (
 )
 from .models import AccountRecord
 
+_SINGLETON_JOIN_KEY = 1
+
 
 class SqlAlchemyAccountDirectoryReader:
     """Read only allow-listed projections; credential columns never enter queries."""
@@ -26,7 +29,7 @@ class SqlAlchemyAccountDirectoryReader:
 
     async def list_accounts(self, query: AccountDirectoryQuery) -> AccountDirectoryPage:
         """Read a deterministic page and directory facts in one connection scope."""
-        conditions = []
+        conditions = [AccountRecord.deleted_at.is_(None)]
         if query.status is not None:
             conditions.append(AccountRecord.status == query.status)
         if query.search:
@@ -47,6 +50,7 @@ class SqlAlchemyAccountDirectoryReader:
                         AccountRecord.built_in,
                         AccountRecord.last_login_at,
                         AccountRecord.revision,
+                        literal(_SINGLETON_JOIN_KEY).label("join_key"),
                     )
                     .where(*conditions)
                     .cte("matching_accounts")
@@ -62,12 +66,18 @@ class SqlAlchemyAccountDirectoryReader:
                     .cte("account_page")
                 )
                 total = (
-                    select(func.count().label("total"))
+                    select(
+                        func.count().label("total"),
+                        literal(_SINGLETON_JOIN_KEY).label("join_key"),
+                    )
                     .select_from(matching_accounts)
                     .cte("account_total")
                 )
                 active_admins = (
-                    select(func.count().label("active_admins"))
+                    select(
+                        func.count().label("active_admins"),
+                        literal(_SINGLETON_JOIN_KEY).label("join_key"),
+                    )
                     .select_from(AccountRecord)
                     .where(
                         AccountRecord.role_id == "admin",
@@ -86,9 +96,14 @@ class SqlAlchemyAccountDirectoryReader:
                         page.c.built_in,
                         page.c.last_login_at,
                         page.c.revision,
-                    ).select_from(
-                        total.join(active_admins, true()).outerjoin(page, true())
-                    ).order_by(page.c.username, page.c.account_id)
+                    )
+                    .select_from(
+                        total.join(
+                            active_admins,
+                            total.c.join_key == active_admins.c.join_key,
+                        ).outerjoin(page, total.c.join_key == page.c.join_key)
+                    )
+                    .order_by(page.c.username, page.c.account_id)
                 )
                 rows = result.mappings().all()
                 total_count = int(rows[0]["total"])
@@ -129,7 +144,7 @@ class SqlAlchemyAccountDirectoryReader:
                         AccountRecord.built_in,
                         AccountRecord.last_login_at,
                         AccountRecord.revision,
-                    ).where(AccountRecord.account_id == account_id)
+                    ).where(AccountRecord.account_id == account_id, AccountRecord.deleted_at.is_(None))
                 )
                 row = result.mappings().one_or_none()
         except SQLAlchemyError:
@@ -145,16 +160,12 @@ def _directory_item(
 ) -> AccountDirectoryItem:
     is_active_admin = row["role_id"] == "admin" and row["status"] == "active"
     return AccountDirectoryItem(
-        account_id=str(row["account_id"]),
-        username=str(row["username"]),
-        role_id=str(row["role_id"]),
-        status=str(row["status"]),
-        built_in=bool(row["built_in"]),
-        last_login_at=(
-            row["last_login_at"]
-            if isinstance(row["last_login_at"], datetime)
-            else None
-        ),
-        revision=int(row["revision"]),
+        account_id=cast(str, row["account_id"]),
+        username=cast(str, row["username"]),
+        role_id=cast(str, row["role_id"]),
+        status=cast(str, row["status"]),
+        built_in=cast(bool, row["built_in"]),
+        last_login_at=cast(datetime | None, row["last_login_at"]),
+        revision=cast(int, row["revision"]),
         last_active_admin=is_active_admin and active_admins == 1,
     )

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from starlette.applications import Starlette
 
 from .bootstrap_initialization_reader import SqlAlchemyBootstrapInitializationReader
+from .migration_dialect_adapters import MigrationDialectAdapter
 from .migration_runner import upgrade_database
 
 
@@ -19,6 +20,8 @@ class ConsoleDatabaseNotInitialized(RuntimeError):
 def install_preprovisioned_database_lifecycle(
     app: Starlette,
     engine: AsyncEngine,
+    *,
+    migration_dialect_adapters: tuple[MigrationDialectAdapter, ...] = (),
 ) -> None:
     """Attach migration, readiness, and disposal to an existing ASGI app.
 
@@ -34,7 +37,10 @@ def install_preprovisioned_database_lifecycle(
     @asynccontextmanager
     async def lifespan(application: Starlette) -> AsyncIterator[None]:
         try:
-            await upgrade_database(engine)
+            await upgrade_database(
+                engine,
+                additional_dialect_adapters=migration_dialect_adapters,
+            )
             if not await initialization_reader.is_initialized():
                 raise ConsoleDatabaseNotInitialized(
                     "Console runtime database initialization is required"

@@ -1,0 +1,28 @@
+global:
+  # Keep the synthetic Docker target reliable on resource-constrained desktop
+  # engines; the former 750ms timeout caused intermittent BrokenPipeError and
+  # false stale HOST samples during the browser acceptance flow.
+  scrape_interval: 5s
+  scrape_timeout: 4s
+
+scrape_configs:
+  - job_name: t053-complete
+    metrics_path: /complete
+    static_configs:
+      - targets: ["sentinel-t053-exporter:9100"]
+        labels:
+          host: synthetic-node-a
+  - job_name: t053-missing
+    metrics_path: /missing
+    static_configs:
+      - targets: ["sentinel-t053-exporter:9100"]
+  - job_name: t053-conflicting
+    metrics_path: /conflicting
+    static_configs:
+      - targets: ["sentinel-t053-exporter:9100"]
+  - job_name: t07-controlled
+    metrics_path: /controlled
+    static_configs:
+      - targets: ["sentinel-t053-exporter:9100"]
+        labels:
+          host: t07-controlled-node

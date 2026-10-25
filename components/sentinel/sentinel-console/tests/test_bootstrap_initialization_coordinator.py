@@ -11,8 +11,13 @@ from atlas_richie.sentinel_console.application.bootstrap_initialization import (
     BootstrapInitializationReceipt,
     BootstrapInitializationStatus,
 )
+from atlas_richie.sentinel_console.application.errors import (
+    BootstrapAuthorityUnavailable,
+)
 from atlas_richie.sentinel_console.application.runtime_database_locator import (
     RuntimeDatabaseLocator,
+    RuntimeDatabaseLocatorConflict,
+    RuntimeDatabaseLocatorError,
     RuntimeDatabaseTarget,
 )
 from atlas_richie.sentinel_console.infrastructure.persistence import (
@@ -92,16 +97,18 @@ class BootstrapInitializationCoordinatorTests(IsolatedAsyncioTestCase):
 
         with (
             patch.object(
-                coordinator_module.ConsoleDatabaseConfiguration,
-                "from_bootstrap_candidate",
+                self.database_factory,
+                "configuration_for",
                 return_value=SimpleNamespace(
                     secret_url_for_storage=lambda: prepared.locator_database_url
                 ),
             ),
             patch.object(
-                coordinator_module, "upgrade_database", new=AsyncMock(
-                    side_effect=lambda _engine: self.events.append("migrate")
-                )
+                coordinator_module,
+                "upgrade_database",
+                new=AsyncMock(
+                    side_effect=lambda _engine, **_kwargs: self.events.append("migrate")
+                ),
             ),
             patch.object(
                 coordinator_module,
@@ -140,8 +147,8 @@ class BootstrapInitializationCoordinatorTests(IsolatedAsyncioTestCase):
 
         with (
             patch.object(
-                coordinator_module.ConsoleDatabaseConfiguration,
-                "from_bootstrap_candidate",
+                self.database_factory,
+                "configuration_for",
                 return_value=SimpleNamespace(
                     secret_url_for_storage=lambda: prepared.locator_database_url
                 ),
@@ -151,17 +158,92 @@ class BootstrapInitializationCoordinatorTests(IsolatedAsyncioTestCase):
                 "upgrade_database",
                 new=AsyncMock(side_effect=RuntimeError("migration failed")),
             ),
+            self.assertRaisesRegex(RuntimeError, "migration failed"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "migration failed"):
-                await self.coordinator.initialize(
-                    operator_session="operator-session",
-                    request_key="request-01",
-                    input=self.input,
-                )
+            await self.coordinator.initialize(
+                operator_session="operator-session",
+                request_key="request-01",
+                input=self.input,
+            )
 
         self.locator_store.write.assert_not_awaited()
         self.setup_controller.close_setup_window_if_open.assert_not_awaited()
         self.engine.dispose.assert_awaited_once()
+
+    async def test_locator_compare_and_swap_loser_disposes_engine_before_admin_commit(
+        self,
+    ) -> None:
+        prepared = SimpleNamespace(
+            engine=self.engine,
+            locator_database_url="postgresql+psycopg://user:secret@db/console",
+            locator_target=RuntimeDatabaseTarget("db", ("192.0.2.10",)),
+        )
+        self.locator_store.read = AsyncMock(return_value=None)
+        self.locator_store.write = AsyncMock(
+            side_effect=RuntimeDatabaseLocatorConflict(
+                "runtime database locator revision changed"
+            )
+        )
+        self.database_factory.create = AsyncMock(return_value=prepared)
+
+        with (
+            patch.object(
+                self.database_factory,
+                "configuration_for",
+                return_value=SimpleNamespace(
+                    secret_url_for_storage=lambda: prepared.locator_database_url
+                ),
+            ),
+            patch.object(
+                coordinator_module,
+                "upgrade_database",
+                new=AsyncMock(
+                    side_effect=lambda _engine, **_kwargs: self.events.append("migrate")
+                ),
+            ),
+            patch.object(
+                coordinator_module,
+                "SqlAlchemyBootstrapInitializationTransaction",
+            ) as transaction,
+            self.assertRaises(BootstrapAuthorityUnavailable),
+        ):
+            await self.coordinator.initialize(
+                operator_session="operator-session",
+                request_key="request-01",
+                input=self.input,
+            )
+
+        transaction.assert_not_called()
+        self.setup_controller.close_setup_window_if_open.assert_not_awaited()
+        self.assertEqual(self.events, ["migrate", "dispose"])
+        self.engine.dispose.assert_awaited_once()
+
+    async def test_locator_store_failures_map_to_the_bootstrap_authority_boundary(
+        self,
+    ) -> None:
+        operations = (
+            lambda: self.coordinator.initialize(
+                operator_session="operator-session",
+                request_key="request-01",
+                input=self.input,
+            ),
+            self.coordinator.is_initialized,
+            lambda: self.coordinator.read("operator-session", "request-01"),
+        )
+
+        for operation in operations:
+            with self.subTest(operation=operation):
+                self.locator_store.read = AsyncMock(
+                    side_effect=RuntimeDatabaseLocatorError("private locator failure")
+                )
+                with self.assertRaisesRegex(
+                    BootstrapAuthorityUnavailable,
+                    "runtime database locator is unavailable",
+                ) as raised:
+                    await operation()
+                self.assertNotIn("private locator failure", str(raised.exception))
+
+        self.database_factory.create.assert_not_awaited()
 
     async def test_completed_database_guard_closes_window_during_recovery_read(
         self,
@@ -192,6 +274,40 @@ class BootstrapInitializationCoordinatorTests(IsolatedAsyncioTestCase):
         self.setup_controller.close_setup_window_if_open.assert_awaited_once()
         self.engine.dispose.assert_awaited_once()
 
+    async def test_recovery_uses_the_composed_runtime_database_engine_factory(
+        self,
+    ) -> None:
+        locator = RuntimeDatabaseLocator(
+            "postgresql+psycopg://user:secret@db/console",
+            "00000000-0000-4000-8000-000000000001",
+            RuntimeDatabaseTarget("db", ("192.0.2.10",)),
+        )
+        self.locator_store.read = AsyncMock(return_value=locator)
+        runtime_engine_factory = MagicMock(return_value=self.engine)
+        coordinator = coordinator_module.SqlAlchemyBootstrapInitializationCoordinator(
+            database_engine_factory=self.database_factory,
+            runtime_database_locator_store=self.locator_store,
+            setup_window_reader=self.setup_reader,
+            setup_window_controller=self.setup_controller,
+            operator_verifier=self.operator_verifier,
+            initialization_lock=_InitializationLock(),
+            source_secret_cipher=self.cipher,
+            idempotency_key=b"i" * 32,
+            runtime_database_engine_factory=runtime_engine_factory,
+        )
+        guard = MagicMock()
+        guard.is_initialized = AsyncMock(return_value=False)
+
+        with patch.object(
+            coordinator_module,
+            "SqlAlchemyBootstrapInitializationReader",
+            return_value=guard,
+        ):
+            self.assertFalse(await coordinator.is_initialized())
+
+        runtime_engine_factory.assert_called_once_with(locator)
+        self.engine.dispose.assert_awaited_once()
+
     async def test_retry_reuses_pinned_target_without_rewriting_locator(self) -> None:
         locator = RuntimeDatabaseLocator(
             "postgresql+psycopg://user:secret@db/console",
@@ -205,8 +321,8 @@ class BootstrapInitializationCoordinatorTests(IsolatedAsyncioTestCase):
 
         with (
             patch.object(
-                coordinator_module.ConsoleDatabaseConfiguration,
-                "from_bootstrap_candidate",
+                self.database_factory,
+                "configuration_for",
                 return_value=SimpleNamespace(
                     secret_url_for_storage=lambda: locator.database_url
                 ),
@@ -220,7 +336,7 @@ class BootstrapInitializationCoordinatorTests(IsolatedAsyncioTestCase):
                 coordinator_module,
                 "upgrade_database",
                 new=AsyncMock(
-                    side_effect=lambda _engine: self.events.append("migrate")
+                    side_effect=lambda _engine, **_kwargs: self.events.append("migrate")
                 ),
             ),
             patch.object(
@@ -228,13 +344,13 @@ class BootstrapInitializationCoordinatorTests(IsolatedAsyncioTestCase):
                 "SqlAlchemyBootstrapInitializationTransaction",
                 return_value=transaction,
             ),
+            self.assertRaisesRegex(RuntimeError, "db unavailable"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "db unavailable"):
-                await self.coordinator.initialize(
-                    operator_session="operator-session",
-                    request_key="request-01",
-                    input=self.input,
-                )
+            await self.coordinator.initialize(
+                operator_session="operator-session",
+                request_key="request-01",
+                input=self.input,
+            )
 
         create_runtime_engine.assert_called_once_with(locator)
         self.database_factory.create.assert_not_awaited()

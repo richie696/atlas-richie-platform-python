@@ -18,6 +18,7 @@ MAX_ACCOUNT_DIRECTORY_PAGE = 1_000_000
 MAX_ACCOUNT_DIRECTORY_PAGE_SIZE = 100
 MAX_ACCOUNT_DIRECTORY_TOTAL = 2**53 - 1
 MAX_ACCOUNT_DIRECTORY_IDENTIFIER_UNITS = 200
+MAX_ACCOUNT_DIRECTORY_SEARCH_UNITS = 200
 MAX_ACCOUNT_DIRECTORY_USERNAME_UNITS = 200
 MAX_ACCOUNT_DIRECTORY_REVISION = 2**63 - 1
 
@@ -36,7 +37,26 @@ class AccountDirectoryQuery:
     page: int
     page_size: int
     search: str
-    status: str | None
+    status: AccountDirectoryStatus | None
+
+    def __post_init__(self) -> None:
+        """Enforce the same bounded query contract for every application caller."""
+        if type(self.page) is not int:
+            raise TypeError("account directory page must be an integer")
+        if not 1 <= self.page <= MAX_ACCOUNT_DIRECTORY_PAGE:
+            raise ValueError("account directory page is out of range")
+        if type(self.page_size) is not int:
+            raise TypeError("account directory page size must be an integer")
+        if not 1 <= self.page_size <= MAX_ACCOUNT_DIRECTORY_PAGE_SIZE:
+            raise ValueError("account directory page size is out of range")
+        if not isinstance(self.search, str):
+            raise TypeError("account directory search must be a string")
+        if not is_bounded_wire_text(self.search, MAX_ACCOUNT_DIRECTORY_SEARCH_UNITS):
+            raise ValueError("account directory search is invalid")
+        if self.status is not None and not isinstance(
+            self.status, AccountDirectoryStatus
+        ):
+            raise TypeError("account directory status must use AccountDirectoryStatus")
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,15 +78,12 @@ class AccountDirectoryItem:
             self.account_id, MAX_ACCOUNT_DIRECTORY_IDENTIFIER_UNITS
         ):
             raise ValueError("account directory identifier is invalid")
-        if (
-            not is_bounded_wire_text(
-                self.username, MAX_ACCOUNT_DIRECTORY_USERNAME_UNITS
-            )
-            or not has_non_blank_wire_content(self.username)
-        ):
+        if not is_bounded_wire_text(
+            self.username, MAX_ACCOUNT_DIRECTORY_USERNAME_UNITS
+        ) or not has_non_blank_wire_content(self.username):
             raise ValueError("account directory username is invalid")
         if not isinstance(self.role_id, str) or not isinstance(self.status, str):
-            raise ValueError("account directory role or status is invalid")
+            raise TypeError("account directory role and status must be strings")
         try:
             role = AccountRole(self.role_id)
             status = AccountDirectoryStatus(self.status)
@@ -101,7 +118,10 @@ class AccountDirectoryPage:
 
     def __post_init__(self) -> None:
         """Keep the authority projection within the exact browser paging contract."""
-        if type(self.page) is not int or not 1 <= self.page <= MAX_ACCOUNT_DIRECTORY_PAGE:
+        if (
+            type(self.page) is not int
+            or not 1 <= self.page <= MAX_ACCOUNT_DIRECTORY_PAGE
+        ):
             raise ValueError("account directory page is out of range")
         if (
             type(self.page_size) is not int

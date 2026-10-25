@@ -26,19 +26,21 @@ block duration must be supplied explicitly. The route also requires a deployment
 defaults to the ASGI peer and ignores forwarding headers. Deployments behind a
 reverse proxy may inject `ClientAddressResolver.from_cidrs(...)`; only peers in
 those strict, non-global CIDRs may supply an `X-Forwarded-For` chain. Proxies
-must append each observed peer to the right side of the chain. Invalid chains
-fall back to the immediate peer. The package CLI and environment-backed
-first-run composition are implemented, but trusted-proxy wiring has not yet been
-accepted behind a real ingress. Local limiter integration evidence uses
-isolated SQLite only; PostgreSQL/MySQL runtime and multi-worker behavior remain
-unverified.
+must not forward an untrusted caller-supplied chain unchanged: the first trusted
+edge must replace `X-Forwarded-For` with the observed client address, and each
+subsequent trusted proxy may append its observed peer to the right. Invalid
+chains fall back to the immediate peer. A loopback Apache 2.4.67 + installed
+wheel/CLI + disposable MySQL acceptance verifies this policy and the shared SQL
+throttle bucket; see `docs/process/acceptance/R-SENTINEL-CONSOLE-B0.1-installed-cli-acceptance.md`.
+This does not accept a user's production ingress/TLS configuration.
 
 This is not yet a complete Console or production deployment. Explicit first-run
 ASGI composition, the `serve`/`setup-window` CLI commands, environment parsing,
 and local durable authorities are implemented. Operator secret delivery and
 setup-window operation in the deployment, real Nacos/Consul acceptance, rule
-write/read-back, PostgreSQL/MySQL concurrency, trusted-proxy ingress acceptance,
-and React-to-Python browser E2E remain tracked in the Sentinel Dashboard plan.
+write/read-back, PostgreSQL/MySQL concurrency, production trusted-proxy ingress
+configuration, and React-to-Python browser E2E remain tracked in the Sentinel
+Dashboard plan.
 
 ## Registered-source key provisioning
 
@@ -112,6 +114,14 @@ construction does not open setup or create the state files. The packaged CLI
 loads this explicit configuration from the environment for `sentinel-console
 serve`; the composition function remains directly available to deployments
 that own their application server lifecycle.
+
+Prometheus egress is a separate deployment-owned allowlist. The optional
+`SENTINEL_CONSOLE_MONITORING_TARGETS` variable accepts
+`hostname|cidr,cidr|port,port|https-only/private-http/loopback-http` grants,
+separated by `;`. `private-http` is limited to explicitly listed private CIDRs
+and permits only unauthenticated requests; `loopback-http` is reserved for
+local development/acceptance and requires loopback CIDRs. Omit the variable to
+disable Prometheus probing. The Console UI cannot expand these grants.
 
 Rule-command SQL wiring in first-run mode remains opt-in through the dedicated
 rule-command HMAC key ring. The standard first-run composition binds
@@ -199,6 +209,12 @@ does not by itself constitute production database or deployment acceptance.
 
 ## First-run service entry point
 
+Installed operators can print the bundled first-run guide with
+`sentinel-console docs quickstart`; `sentinel-console docs reference` prints
+this complete deployment reference from the installed distribution metadata.
+Run `sentinel-console docs` to list the available documents. These commands do
+not read deployment secrets or contact external services.
+
 The package now provides `sentinel-console serve` and `python -m
 atlas_richie.sentinel_console serve`. Install the `server` extra for Uvicorn.
 The default bind address is loopback (`127.0.0.1:8000`); set
@@ -206,6 +222,98 @@ The default bind address is loopback (`127.0.0.1:8000`); set
 intentionally exposes another interface. Uvicorn's implicit proxy-header
 rewriting is disabled; `X-Forwarded-For` is interpreted by the app only when the
 immediate peer matches `SENTINEL_CONSOLE_TRUSTED_PROXY_CIDRS`.
+
+The first trusted reverse proxy must sanitize the request before forwarding.
+For Apache, the tested pattern is `RequestHeader unset X-Forwarded-For early`
+with `ProxyAddHeaders On`; this removes a client-provided chain and lets Apache
+send the address it actually observed. Configure the application's trusted
+CIDR to the proxy's immediate-peer range, never to a broad/public network.
+
+`SENTINEL_CONSOLE_WORKERS` selects the number of Uvicorn worker processes and
+defaults to `1`. Values must be positive decimal integers. Workers each build
+their own ASGI app from the same environment. More than one worker is supported
+only on one host when all workers share the same local POSIX deployment-state
+paths and SQL database. NFS, multi-host replicas, or independently mounted
+per-replica state are not covered by this contract; do not scale replicas until
+the setup-window/runtime-locator authority has a distributed coordination
+design and deployment acceptance.
+
+Metrics V2 ingest runs as a separate, mTLS-only process:
+
+```text
+pip install 'atlas-richie-sentinel-console[collector,postgres]'
+sentinel-console serve-metrics
+```
+
+Use the database extra selected by the encrypted runtime locator (`sqlite-local`,
+`postgres`, or `mysql`) instead of `postgres` where appropriate. The Collector
+uses the same `SENTINEL_CONSOLE_RUNTIME_LOCATOR_*` settings and selected SQL
+database as the Console, but mounts only these reporting routes:
+`POST /api/reporting/v2/snapshots` and `POST /api/reporting/v1/incidents`. It
+does not expose browser, setup,
+identity, rule-management, or history-query routes. The optional PostgreSQL/MySQL root-certificate settings above are also
+honored. This listener is separate from the multi-worker Uvicorn Console so a
+Reporter certificate can never substitute for a Console browser session.
+
+Configure these additional values for `serve-metrics`:
+
+| Variable | Meaning |
+| --- | --- |
+| `SENTINEL_CONSOLE_METRICS_BIND_HOST` | Optional listener address; defaults to loopback `127.0.0.1` |
+| `SENTINEL_CONSOLE_METRICS_PORT` | Optional HTTPS port; defaults to `8443` |
+| `SENTINEL_CONSOLE_METRICS_SERVER_CERTIFICATE` | Required absolute PEM server certificate-chain path |
+| `SENTINEL_CONSOLE_METRICS_SERVER_PRIVATE_KEY` | Required absolute PEM server private-key path |
+| `SENTINEL_CONSOLE_METRICS_CLIENT_CA_CERTIFICATE` | Required absolute PEM trust bundle used to verify Reporter client certificates |
+
+The listener requests and verifies client certificates at TLS negotiation
+(`CERT_REQUIRED`); the application then resolves the certificate fingerprint
+against an enrolled, non-revoked SQL binding. The `collector` extra uses Anycorn,
+whose ASGI server implementation exposes the standard TLS certificate-chain
+extension required by the ingest route; the ASGI implementation catalogue
+currently marks Anycorn beta, so production deployment remains an explicit
+acceptance gate. Do not terminate this mTLS hop at a
+proxy that forwards certificate identity in request headers. Run one Collector
+process per deployment instance initially; use a controlled, one-at-a-time
+rollout for multiple instances because each process validates/applies database
+migrations during startup. The current command is single-process by design;
+horizontal-scale and enrollment/revocation administration still require their
+own acceptance evidence.
+
+### Incident history retention
+
+Incident records carry a durable 30-day expiry. Timeline reads exclude expired
+records even if physical cleanup is delayed. Run one idempotent cleanup pass
+with:
+
+```text
+sentinel-console incident-events expire
+```
+
+The command reads the same encrypted runtime database locator and TLS CA
+settings as the Console, deletes only rows whose stored expiry has passed,
+prints only `expired-incidents=<count>`, and exits non-zero if the database is
+unconfigured or unavailable. It does not run schema migrations; deploy the
+normal Console migration step before scheduling it. It is intentionally a
+one-shot command rather than an in-process loop, so multi-worker ASGI startup
+does not create duplicate schedulers. Configure a deployment-owned CronJob or
+systemd timer (daily is sufficient for the 30-day retention window) to invoke
+it with the same secret-injected locator/key-ring/database TLS environment as
+the Console. Do not put database URLs or keys in the schedule definition or
+command arguments.
+
+`deployment/kubernetes/incident-retention-cronjob.yaml` is a Kubernetes
+CronJob template for that external schedule. Before applying it, replace its
+image with the Console deployment's immutable image (including the selected
+PostgreSQL/MySQL driver extra), provision the referenced runtime-state PVC and
+database-CA Secret, and create `sentinel-console-runtime-secrets` with only
+`locator-active-key-id` and `locator-key-ring`. The mounted locator must be the
+same encrypted runtime locator used by the Console; its directory must allow
+the configured non-root UID to create the advisory lock file. Validate that
+the target cluster supports `.spec.timeZone` (Kubernetes 1.27+) and that the
+volume can be mounted by the CronJob where the Console runs. This template is
+not active deployment evidence: the operator must still apply it in the target
+environment and verify a completed Job, exit status, cleanup count, and
+secret-safe logs. Cross-node/shared-volume lock behavior remains part of T00.3.
 
 The first-run command requires all existing runtime-locator, setup-window,
 operator-authority, account/source key rings, client-identity key, and login
@@ -218,33 +326,70 @@ throttle settings documented above, plus:
 | `SENTINEL_CONSOLE_BOOTSTRAP_DATABASE_TARGETS` | Required allowlist, e.g. `postgresql|10.20.0.0/16|5432;mysql|10.21.0.0/16|3306`; wildcard networks and SQLite are rejected |
 | `SENTINEL_CONSOLE_REGISTERED_SOURCE_TARGETS` | Required provider/hostname/CIDR/port allowlist, e.g. `nacos|nacos.internal|10.30.0.0/16|8848;consul|consul.internal|10.31.0.0/16|8500` |
 | `SENTINEL_CONSOLE_REGISTERED_SOURCE_ROOT_CERTIFICATE` | Optional absolute PEM CA bundle path for private Nacos/Consul HTTP API trust; peer-certificate and hostname verification remain required |
+| `SENTINEL_CONSOLE_NACOS_GRPC_ROOT_CERTIFICATE` | Optional absolute PEM CA bundle path for Nacos gRPC trust roots; only used when `nacos` is in the publication provider set |
+| `SENTINEL_CONSOLE_NACOS_GRPC_CLIENT_CERTIFICATE` | Optional absolute PEM client certificate-chain path for Nacos gRPC mTLS; must be supplied together with the private-key path |
+| `SENTINEL_CONSOLE_NACOS_GRPC_CLIENT_PRIVATE_KEY` | Optional absolute PEM client private-key path for Nacos gRPC mTLS; must be supplied together with the client certificate-chain path |
 | `SENTINEL_CONSOLE_ALLOWED_BROWSER_ORIGINS` | Comma-separated exact HTTP(S) origins; paths and wildcard origins are rejected |
 | `SENTINEL_CONSOLE_TRUSTED_PROXY_CIDRS` | Optional comma-separated private proxy CIDRs; absent means forwarded headers are ignored |
 | `SENTINEL_CONSOLE_SESSION_TTL_SECONDS` | Optional positive session duration in seconds; defaults to 28,800 |
 | `SENTINEL_CONSOLE_POSTGRESQL_ROOT_CERTIFICATE` | Optional absolute CA bundle path for private PostgreSQL trust roots |
 | `SENTINEL_CONSOLE_MYSQL_ROOT_CERTIFICATE` | Optional absolute CA bundle path for private MySQL trust roots; hostname verification remains enabled |
+| `SENTINEL_CONSOLE_DATABASE_CONNECT_TIMEOUT_SECONDS` | Database connection timeout in seconds for MySQL/PostgreSQL adapters; defaults to `10`, valid range `1`–`60` |
 | `SENTINEL_CONSOLE_DASHBOARD_BASE_PATH` | Optional canonical path prefix (for example `/ops/sentinel/`) matching the frontend build; defaults to `/` |
 
-Rule publication remains disabled unless the deployment explicitly selects one
-provider and the matching rule profile. To opt in, configure
-`SENTINEL_CONSOLE_RULE_PUBLICATION_PROVIDER` as `nacos` or `consul` and set
-`SENTINEL_CONSOLE_RULE_PUBLICATION_PROFILE_ID` to the exact immutable rule
-profile used by the Console. This also requires the independent
+Rule publication remains disabled unless the deployment explicitly selects
+provider(s) and the matching rule profile(s). To opt in, configure
+`SENTINEL_CONSOLE_RULE_PUBLICATION_PROVIDERS` as a comma-separated list such as
+`nacos,consul` (or one provider) and set
+`SENTINEL_CONSOLE_RULE_PUBLICATION_PROFILE_ID` to one or more comma-separated,
+exact immutable rule profiles, for example
+`sentinel-java-v1,sentinel-go-v1`. The worker chooses the encoder by each
+version's exact profile; it never guesses or falls back to another runtime's
+wire format. This allows one Console to publish to Java and Go bindings while
+keeping each profile's supported rule subset isolated. The previous singleton environment
+variable `SENTINEL_CONSOLE_RULE_PUBLICATION_PROVIDER` remains accepted for one
+provider; setting both variables is rejected. This also requires the independent
 `SENTINEL_CONSOLE_RULE_COMMAND_FINGERPRINT_ACTIVE_KEY_ID` and
 `SENTINEL_CONSOLE_RULE_COMMAND_FINGERPRINT_KEY_RING` settings; the selected
-provider must have an explicit grant in
+each provider must have an explicit grant in
 `SENTINEL_CONSOLE_REGISTERED_SOURCE_TARGETS`. The worker reuses the SQL
 registered-source store and durable publication outbox. Credential references
 are still resolved only through an explicitly injected host resolver; this
 environment option does not infer a KMS, provider endpoint, TLS policy, or
-credentials. A deployment may run separate Console worker instances for
-different providers, but one `serve` process selects at most one provider.
-For private HTTPS trust roots used by the Nacos/Consul HTTP APIs, the optional
+credentials. One `serve` process can route to both configured providers, while
+each outbox claim is still filtered by its frozen target provider. Managed
+envelope publication remains disabled by default. To opt in only selected
+bindings for writes, set `SENTINEL_CONSOLE_MANAGED_RULE_BINDING_IDS` to a
+comma-separated list of exact binding IDs. This allowlist is used by the
+publication worker; it does not itself enable or start a publisher. The
+read-only catalog reader independently recognizes an object-shaped managed
+envelope and validates its binding ID, rule kind, profile, checksum, and payload
+against the exact registered binding before projecting it. Native rule arrays
+continue through the binding's native profile adapter. A read-only deployment
+does not need the publication allowlist merely to inspect valid managed
+snapshots. The configured publication IDs are matched literally; unknown or
+malformed IDs reject startup. Before enabling a binding for writes, deploy its
+metadata-aware Runtime source adapter to every consumer and preserve the
+explicit rollback procedure in the managed publication protocol; legacy
+consumers cannot parse an envelope.
+For private
+HTTPS trust roots used by the Nacos/Consul HTTP APIs, the optional
 `SENTINEL_CONSOLE_REGISTERED_SOURCE_ROOT_CERTIFICATE` must name an absolute,
 readable PEM CA bundle. The Console keeps certificate and hostname validation
 enabled and applies this context to registered-source probes and publication
 HTTP read/write adapters. It does not configure Nacos gRPC TLS; that transport
-has a separate trust/configuration boundary.
+has a separate trust/configuration boundary. For Nacos gRPC, deployments may
+provide a private CA bundle using
+`SENTINEL_CONSOLE_NACOS_GRPC_ROOT_CERTIFICATE`; the channel then verifies the
+server certificate against that bundle while preserving the registered target
+hostname as TLS authority/SNI. Optional mTLS requires both
+`SENTINEL_CONSOLE_NACOS_GRPC_CLIENT_CERTIFICATE` and
+`SENTINEL_CONSOLE_NACOS_GRPC_CLIENT_PRIVATE_KEY`. These paths are read at
+startup, their contents are omitted from configuration representations, and
+rotating these files requires restarting the Console worker. Configuring gRPC
+TLS material while selecting Consul is rejected. TLS material never falls
+back to a plaintext channel. This does not enable a TLS listener on Nacos
+itself; server-side gRPC TLS must be configured independently.
 When selecting Nacos, install the `nacos-grpc` extra. Omitting the provider
 keeps publishing off. These settings only compose the worker; they do not prove
 deployed Nacos/Consul acceptance or per-instance rule activation.
@@ -259,14 +404,19 @@ sentinel-console setup-window open
 sentinel-console setup-window close
 ```
 
-`open` requires the deployment operator code and fingerprint key to be present;
-the command never prints them. It uses revision compare-and-set, so a
-concurrent change fails instead of silently overwriting it. `close` is
-idempotent. These commands manage setup availability only; they do not create a
-database or account, and local POSIX file locking is not an NFS/multi-host
-guarantee. Secret provisioning, operator code delivery to the installer, real
-reverse-proxy ingress acceptance, and PostgreSQL/MySQL deployment acceptance
-remain separate operational requirements.
+`open` requires the operator-authority state path and fingerprint key. An
+operator code is additionally required unless the process is strictly
+loopback-bound, every allowed browser origin is loopback, and no trusted
+reverse-proxy CIDR is configured. In that local-only topology, first-run UI
+obtains a short-lived setup grant without an operator code; the grant does not
+authenticate an administrator. Any remote/non-loopback topology continues to
+require the deployment-issued operator code, which the command never prints.
+The command uses revision compare-and-set, so a concurrent change fails
+instead of silently overwriting it. `close` is idempotent. These commands
+manage setup availability only; they do not create a database or account, and
+local POSIX file locking is not an NFS/multi-host guarantee. Key provisioning,
+remote code delivery, reverse-proxy ingress acceptance, and PostgreSQL/MySQL
+deployment acceptance remain separate operational requirements.
 
 ## Dashboard assets
 
@@ -284,7 +434,19 @@ The default artifact targets an origin root. Set
 emit prefixed static asset URLs. When the ASGI app serves that prefix directly,
 pass the same value as `build_app(dashboard_base_path=...)`; alternatively, a
 reverse proxy may strip the prefix before forwarding UI and asset requests to
-the root-mounted Console. In either topology, route `/api/*` to the Console API
-and never to the SPA fallback. Runtime launcher/proxy behavior is not yet
-accepted. Building or installing this wheel does not mean the Console's
-database-backed workflows are complete.
+the root-mounted Console. A controlled loopback Apache 2.4.67 prefix-strip
+check against the Python static ASGI routes is recorded in the F7.6 acceptance
+record; production-specific proxy, TLS, trusted-header, cache and deployment
+behavior remain unverified. In either topology, route `/api/*` to the Console
+API and never to the SPA fallback. Building or installing this wheel does not
+mean the Console's database-backed workflows are complete.
+
+## Database dialect adapters
+
+SQLite, PostgreSQL, and MySQL engine/check behavior is isolated behind the
+Console's explicit Adapter/Registry/Facade boundary. The supported-provider
+matrix and required steps for adding a built-in dialect are documented in
+[`DATABASE_ADAPTERS.md`](DATABASE_ADAPTERS.md). Synthetic adapter tests verify
+the extension seam only; a new dialect is not production-supported until its
+driver, migrations, security policy, and disposable real-provider acceptance
+are verified.

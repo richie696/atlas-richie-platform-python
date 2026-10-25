@@ -22,6 +22,10 @@ class IncidentTimelineTargetNotFound(LookupError):
     """The environment or application named by the query is not registered."""
 
 
+class IncidentTimelineInvalidCursor(ValueError):
+    """A timeline page cursor is malformed or bound to another query."""
+
+
 class IncidentTimelineRateLimited(RuntimeError):
     """The event authority cannot serve the query within its rate budget."""
 

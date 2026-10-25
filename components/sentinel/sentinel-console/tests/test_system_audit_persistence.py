@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import unittest
+from datetime import UTC, datetime
 
 from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -16,15 +16,15 @@ from atlas_richie.sentinel_console.domain.system_audit import (
     AuditQuery,
     AuditResult,
 )
+from atlas_richie.sentinel_console.infrastructure.persistence import (
+    system_audit_reader,
+)
 from atlas_richie.sentinel_console.infrastructure.persistence.migration_runner import (
     upgrade_database,
 )
 from atlas_richie.sentinel_console.infrastructure.persistence.models import (
     AccountRecord,
     AuditEventRecord,
-)
-from atlas_richie.sentinel_console.infrastructure.persistence import (
-    system_audit_reader,
 )
 
 _START = datetime(2026, 10, 8, 0, 0, tzinfo=UTC)
@@ -147,10 +147,13 @@ class SystemAuditPersistenceTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(SystemAuditAuthorityUnavailable):
             await self.reader.read_system_audit(_query())
 
-    async def test_projects_every_supported_writer_action_and_system_actor(self) -> None:
+    async def test_projects_every_supported_writer_action_and_system_actor(
+        self,
+    ) -> None:
         events = (
             ("system-init", None, "system.bootstrap.initialize"),
             ("rule-validate", "admin-1", "rules.validate"),
+            ("rule-binding", "admin-1", "rule-binding-create"),
             ("source-register", "admin-1", "configuration.source.register"),
             ("source-update", "admin-1", "configuration.source.update"),
             ("draft-save", "admin-1", "rules.save_draft"),
@@ -181,7 +184,7 @@ class SystemAuditPersistenceTest(unittest.IsolatedAsyncioTestCase):
         page = await self.reader.read_system_audit(_query(page_size=100))
 
         records_by_id = {record.id: record for record in page.items}
-        self.assertEqual(page.total, 15)
+        self.assertEqual(page.total, 16)
         self.assertIsNone(records_by_id["system-init"].actor_id)
         self.assertEqual(
             records_by_id["system-init"].action,
@@ -190,6 +193,10 @@ class SystemAuditPersistenceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             records_by_id["rule-validate"].action,
             AuditAction.RULE_VALIDATE,
+        )
+        self.assertEqual(
+            records_by_id["rule-binding"].action,
+            AuditAction.RULE_BINDING_CREATE,
         )
         self.assertEqual(
             records_by_id["source-register"].action,
@@ -209,6 +216,11 @@ class SystemAuditPersistenceTest(unittest.IsolatedAsyncioTestCase):
             records_by_id["plan-restore"].action,
             AuditAction.PLAN_RESTORE,
         )
+        binding_page = await self.reader.read_system_audit(
+            _query(action=AuditAction.RULE_BINDING_CREATE)
+        )
+        self.assertEqual(binding_page.total, 1)
+        self.assertEqual([item.id for item in binding_page.items], ["rule-binding"])
 
     async def test_filters_system_plan_actions_without_fabricating_actor(self) -> None:
         async with self.engine.begin() as connection:

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import unittest
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -23,6 +23,10 @@ from atlas_richie.sentinel_console.domain.rule_publication_targets import (
     ConsulRulePublicationTarget,
     NacosRulePublicationTarget,
 )
+from atlas_richie.sentinel_console.domain.system_audit import (
+    AuditAction,
+    AuditQuery,
+)
 from atlas_richie.sentinel_console.infrastructure.persistence.migration_runner import (
     upgrade_database,
 )
@@ -37,6 +41,9 @@ from atlas_richie.sentinel_console.infrastructure.persistence.models import (
 )
 from atlas_richie.sentinel_console.infrastructure.persistence.rule_binding_registration_store import (
     SqlAlchemyRuleBindingRegistrationStore,
+)
+from atlas_richie.sentinel_console.infrastructure.persistence.system_audit_reader import (
+    SqlAlchemySystemAuditReader,
 )
 
 _NOW = datetime(2026, 10, 10, 12, 30, 0, 123000, tzinfo=UTC)
@@ -57,7 +64,9 @@ class RuleBindingRegistrationStoreTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await self.engine.dispose()
 
-    async def test_registration_atomically_persists_binding_target_receipt_and_audit(self):
+    async def test_registration_atomically_persists_binding_target_receipt_and_audit(
+        self,
+    ):
         binding = await self._register()
 
         self.assertEqual(binding.id, "binding-1")
@@ -68,17 +77,33 @@ class RuleBindingRegistrationStoreTests(unittest.IsolatedAsyncioTestCase):
         )
         async with self.engine.connect() as connection:
             metadata = (
-                await connection.execute(select(RuleBindingRecord.__table__))
-            ).mappings().one()
+                (await connection.execute(select(RuleBindingRecord.__table__)))
+                .mappings()
+                .one()
+            )
             target = (
-                await connection.execute(select(RulePublicationTargetRecord.__table__))
-            ).mappings().one()
-            receipt = (
-                await connection.execute(
-                    select(RuleBindingRegistrationOperationRecord.__table__)
+                (
+                    await connection.execute(
+                        select(RulePublicationTargetRecord.__table__)
+                    )
                 )
-            ).mappings().one()
-            audit = (await connection.execute(select(AuditEventRecord.__table__))).mappings().one()
+                .mappings()
+                .one()
+            )
+            receipt = (
+                (
+                    await connection.execute(
+                        select(RuleBindingRegistrationOperationRecord.__table__)
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            audit = (
+                (await connection.execute(select(AuditEventRecord.__table__)))
+                .mappings()
+                .one()
+            )
 
         self.assertEqual(metadata["binding_id"], "binding-1")
         self.assertEqual(target["source_revision"], _SOURCE_REVISION)
@@ -89,7 +114,26 @@ class RuleBindingRegistrationStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(audit["action"], "rule-binding-create")
         self.assertEqual(audit["target_id"], "binding-1")
 
-    async def test_same_key_and_payload_recovers_one_binding_without_duplicate_audit(self):
+        audit_page = await SqlAlchemySystemAuditReader(
+            self.engine, clock=lambda: _NOW + timedelta(seconds=1)
+        ).read_system_audit(
+            AuditQuery(
+                start=_NOW - timedelta(minutes=1),
+                end=_NOW + timedelta(minutes=1),
+                actor_id=_ACTOR,
+                action=AuditAction.RULE_BINDING_CREATE,
+                result=None,
+                page=1,
+                page_size=10,
+            )
+        )
+        self.assertEqual(audit_page.total, 1)
+        self.assertEqual(audit_page.items[0].action, AuditAction.RULE_BINDING_CREATE)
+        self.assertEqual(audit_page.items[0].target_id, "binding-1")
+
+    async def test_same_key_and_payload_recovers_one_binding_without_duplicate_audit(
+        self,
+    ):
         first = await self._register()
         retried = await self._register()
 
@@ -116,6 +160,153 @@ class RuleBindingRegistrationStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self._count(RuleBindingRecord), 1)
         self.assertEqual(await self._count(AuditEventRecord), 1)
 
+    async def test_read_receipt_allows_same_actor_fresh_session_but_not_other_scope(self):
+        created = await self._register()
+        fresh_session = "d" * 64
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                insert(AuthenticationSessionRecord).values(
+                    session_hash=fresh_session,
+                    account_id=_ACTOR,
+                    session_epoch="epoch-2",
+                    csrf_hash="e" * 64,
+                    created_at=_NOW,
+                    expires_at=_NOW + timedelta(days=1),
+                    revoked_at=None,
+                )
+            )
+            await connection.execute(
+                insert(AccountRecord).values(
+                    account_id="another-admin",
+                    username="another-admin",
+                    username_key="9" * 64,
+                    password_hash="$argon2id$synthetic-other-hash",
+                    role_id="admin",
+                    status="active",
+                    built_in=False,
+                    revision=1,
+                    created_at=_NOW,
+                    updated_at=_NOW,
+                )
+            )
+            await connection.execute(
+                insert(AuthenticationSessionRecord).values(
+                    session_hash="8" * 64,
+                    account_id="another-admin",
+                    session_epoch="epoch-other",
+                    csrf_hash="7" * 64,
+                    created_at=_NOW,
+                    expires_at=_NOW + timedelta(days=1),
+                    revoked_at=None,
+                )
+            )
+
+        found = await self.store.read_rule_binding_registration(
+            "binding-1",
+            "binding-request-1",
+            actor_id=_ACTOR,
+            session_digest=fresh_session,
+            now=_NOW,
+        )
+        self.assertEqual(found, created)
+        self.assertIsNone(
+            await self.store.read_rule_binding_registration(
+                "binding-1",
+                "binding-request-1",
+                actor_id="another-admin",
+                session_digest="8" * 64,
+                now=_NOW,
+            )
+        )
+        self.assertIsNone(
+            await self.store.read_rule_binding_registration(
+                "different-binding",
+                "binding-request-1",
+                actor_id=_ACTOR,
+                session_digest=fresh_session,
+                now=_NOW,
+            )
+        )
+        self.assertIsNone(
+            await self.store.read_rule_binding_registration(
+                "binding-1",
+                "different-request",
+                actor_id=_ACTOR,
+                session_digest=fresh_session,
+                now=_NOW,
+            )
+        )
+
+    async def test_receipt_read_rechecks_current_role_and_write_replay_keeps_original_session(self):
+        await self._register()
+        fresh_session = "f" * 64
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                insert(AuthenticationSessionRecord).values(
+                    session_hash=fresh_session,
+                    account_id=_ACTOR,
+                    session_epoch="epoch-2",
+                    csrf_hash="1" * 64,
+                    created_at=_NOW,
+                    expires_at=_NOW + timedelta(days=1),
+                    revoked_at=None,
+                )
+            )
+        with self.assertRaises(RuleBindingRegistrationUnauthenticated):
+            await self.store.read_rule_binding_registration(
+                "binding-1",
+                "binding-request-1",
+                actor_id=_ACTOR,
+                session_digest="missing-session",
+                now=_NOW,
+            )
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                AccountRecord.__table__
+                .update()
+                .where(AccountRecord.account_id == _ACTOR)
+                .values(role_id="view")
+            )
+        with self.assertRaises(RuleBindingRegistrationForbidden):
+            await self.store.read_rule_binding_registration(
+                "binding-1",
+                "binding-request-1",
+                actor_id=_ACTOR,
+                session_digest=fresh_session,
+                now=_NOW,
+            )
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                AccountRecord.__table__
+                .update()
+                .where(AccountRecord.account_id == _ACTOR)
+                .values(role_id="admin")
+            )
+        with self.assertRaises(RuleBindingRegistrationForbidden):
+            await self.store.register_rule_binding(
+                self._command(),
+                actor_id=_ACTOR,
+                session_digest=fresh_session,
+                csrf_digest="1" * 64,
+                request_id="retry-with-fresh-session",
+                now=_NOW,
+            )
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                AccountRecord.__table__
+                .update()
+                .where(AccountRecord.account_id == _ACTOR)
+                .values(role_id="view")
+            )
+        with self.assertRaises(RuleBindingRegistrationForbidden):
+            await self.store.read_rule_binding_registration(
+                "binding-1",
+                "binding-request-1",
+                actor_id=_ACTOR,
+                session_digest=fresh_session,
+                now=_NOW,
+            )
+
     async def test_source_revision_and_provider_must_match_registered_source(self):
         stale = self._command(source_revision="stale-revision")
         with self.assertRaises(RuleBindingRegistrationConflict):
@@ -133,9 +324,7 @@ class RuleBindingRegistrationStoreTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_duplicate_scope_is_rejected_and_does_not_write_partial_target(self):
         await self._register()
-        command = self._command(
-            request_key="binding-request-2", binding_id="binding-2"
-        )
+        command = self._command(request_key="binding-request-2", binding_id="binding-2")
         with self.assertRaises(RuleBindingRegistrationConflict):
             await self._invoke(command)
         self.assertEqual(await self._count(RuleBindingRecord), 1)

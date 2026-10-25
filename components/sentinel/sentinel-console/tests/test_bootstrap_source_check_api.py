@@ -5,7 +5,12 @@ from __future__ import annotations
 import unittest
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
+from atlas_richie.sentinel_console.api.bootstrap_source_check import (
+    parse_source_candidate,
+)
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.bootstrap_source_check import (
     BootstrapSourceCandidate,
@@ -15,17 +20,13 @@ from atlas_richie.sentinel_console.application.bootstrap_source_check import (
     ConsulDirectCredentials,
     NacosDirectCredentials,
 )
+from atlas_richie.sentinel_console.application.issue_csrf_nonce import IssueCsrfNonce
 from atlas_richie.sentinel_console.application.source_credential_references import (
     ResolvedSourceCredentials,
 )
 from atlas_richie.sentinel_console.domain.configuration_source import (
     ConfigurationSourceProvider,
 )
-from atlas_richie.sentinel_console.application.issue_csrf_nonce import IssueCsrfNonce
-from atlas_richie.sentinel_console.api.bootstrap_source_check import (
-    parse_source_candidate,
-)
-from session_test_doubles import UnusedSessionRevoker
 
 
 class _InitializationReader:
@@ -146,6 +147,7 @@ class BootstrapSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
                 cookies=self._cookies(nonce),
             )
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("checkBootstrapSource", response)
         self.assertEqual(response.json(), {"status": "reachable"})
         candidate = checker.candidates[0]
         self.assertEqual(candidate.location, "sentinel")
@@ -175,6 +177,7 @@ class BootstrapSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
                 cookies=self._cookies(nonce),
             )
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("checkBootstrapSource", response)
         self.assertEqual(
             response.json(), {"status": "unreachable", "reason": "authentication"}
         )
@@ -208,9 +211,7 @@ class BootstrapSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
             },
         )
         async with await self._client(
-            self._build_app(
-                checker=checker, credential_resolver=_ReferenceResolver()
-            )
+            self._build_app(checker=checker, credential_resolver=_ReferenceResolver())
         ) as client:
             responses = [
                 await client.post(
@@ -223,11 +224,21 @@ class BootstrapSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
             ]
 
         self.assertEqual([response.status_code for response in responses], [200, 200])
-        self.assertIsInstance(checker.candidates[0].authentication, NacosDirectCredentials)
-        self.assertEqual(checker.candidates[0].authentication.password, "resolved-secret")
-        self.assertIsInstance(checker.candidates[1].authentication, ConsulDirectCredentials)
-        self.assertEqual(checker.candidates[1].authentication.acl_token, "resolved-secret")
-        self.assertNotIn("resolved-secret", "".join(response.text for response in responses))
+        self.assertIsInstance(
+            checker.candidates[0].authentication, NacosDirectCredentials
+        )
+        self.assertEqual(
+            checker.candidates[0].authentication.password, "resolved-secret"
+        )
+        self.assertIsInstance(
+            checker.candidates[1].authentication, ConsulDirectCredentials
+        )
+        self.assertEqual(
+            checker.candidates[1].authentication.acl_token, "resolved-secret"
+        )
+        self.assertNotIn(
+            "resolved-secret", "".join(response.text for response in responses)
+        )
         self.assertNotIn("resolved-secret", repr(checker.candidates))
 
     async def test_external_reference_without_resolver_fails_before_probe(self) -> None:
@@ -295,6 +306,7 @@ class BootstrapSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
                 cookies=self._cookies(nonce, authorized=False),
             )
         self.assertEqual(response.status_code, 403)
+        assert_openapi_response("checkBootstrapSource", response)
         self.assertEqual(checker.candidates, [])
 
     async def test_invalid_provider_payloads_never_reach_checker(self) -> None:
@@ -336,7 +348,9 @@ class BootstrapSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status_code, 400)
         self.assertEqual(checker.candidates, [])
 
-    async def test_source_check_uses_utf16_bounds_and_nonblank_identifiers(self) -> None:
+    async def test_source_check_uses_utf16_bounds_and_nonblank_identifiers(
+        self,
+    ) -> None:
         nonce = IssueCsrfNonce().execute(None).value
         checker = _Checker(BootstrapSourceCheckResult(reachable=True))
         nacos = {
@@ -409,7 +423,10 @@ class BootstrapSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
                 for body in invalid_bodies
             ]
 
-        self.assertEqual([response.status_code for response in responses], [400] * len(invalid_bodies))
+        self.assertEqual(
+            [response.status_code for response in responses],
+            [400] * len(invalid_bodies),
+        )
         self.assertEqual(checker.candidates, [])
 
     def test_source_candidate_rejects_lone_surrogates(self) -> None:

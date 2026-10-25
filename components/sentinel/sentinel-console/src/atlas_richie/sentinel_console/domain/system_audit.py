@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 
-from .wire_strings import is_bounded_wire_identifier
 from .wire_numbers import MAX_SAFE_JSON_INTEGER
+from .wire_strings import is_bounded_wire_identifier
 
 _MAX_IDENTIFIER_UNITS = 200
 _MAX_PAGE = 1_000_000
@@ -22,12 +22,25 @@ class AuditAction(StrEnum):
     ACCOUNT_CREATE = "account-create"
     ACCOUNT_ROLE = "account-role"
     ACCOUNT_STATUS = "account-status"
+    ACCOUNT_PASSWORD_RESET = "account-password-reset"
+    LOCAL_ADMIN_PASSWORD_RECOVERY = "local-admin-password-recovery"
+    ACCOUNT_DELETE = "account-delete"
     PASSWORD_CHANGE = "password-change"
     SYSTEM_INITIALIZE = "system-initialize"
     RULE_VALIDATE = "rule-validate"
     RULE_BINDING_CREATE = "rule-binding-create"
     SOURCE_REGISTER = "source-register"
     SOURCE_UPDATE = "source-update"
+    SOURCE_DELETE = "source-delete"
+    DEPLOYMENT_DEPENDENCIES_MIGRATED = "deployment-dependencies-migrated"
+    REPORTER_CERTIFICATE_ROTATED = "reporter-certificate-rotated"
+    MONITORING_SOURCE_CREATE = "monitoring-source-create"
+    MONITORING_SOURCE_UPDATE = "monitoring-source-update"
+    MONITORING_SOURCE_DELETE = "monitoring-source-delete"
+    MONITORING_SOURCE_ENABLE = "monitoring-source-enable"
+    MONITORING_SOURCE_DISABLE = "monitoring-source-disable"
+    HOST_ASSOCIATION_CREATE = "host-association-create"
+    HOST_ASSOCIATION_DELETE = "host-association-delete"
     DRAFT_SAVE = "draft-save"
     DRAFT_DELETE = "draft-delete"
     VERSION_FREEZE = "version-freeze"
@@ -36,6 +49,7 @@ class AuditAction(StrEnum):
     PLAN_CANCEL = "plan-cancel"
     PLAN_ACTIVATE = "plan-activate"
     PLAN_RESTORE = "plan-restore"
+    TARGET_CONFIGURE = "target-configure"
 
 
 class AuditResult(StrEnum):
@@ -79,7 +93,9 @@ class AuditQuery:
             or self.end <= self.start
             or self.end - self.start > _MAX_QUERY_WINDOW
         ):
-            raise ValueError("audit range must be increasing and no longer than 31 days")
+            raise ValueError(
+                "audit range must be increasing and no longer than 31 days"
+            )
         if not isinstance(self.actor_id, str) or (
             self.actor_id != "" and not _valid_identifier(self.actor_id)
         ):
@@ -128,6 +144,7 @@ class AuditRecord:
             raise ValueError("audit actor identity is invalid")
         if self.actor_id is None and self.action not in {
             AuditAction.SYSTEM_INITIALIZE,
+            AuditAction.LOCAL_ADMIN_PASSWORD_RECOVERY,
             AuditAction.PLAN_ACTIVATE,
             AuditAction.PLAN_RESTORE,
         }:
@@ -192,8 +209,14 @@ class SystemAuditPage:
                 or item.occurred_at >= self.query.end
                 or item.occurred_at > self.as_of
                 or (self.query.actor_id and item.actor_id != self.query.actor_id)
-                or (self.query.action is not None and item.action is not self.query.action)
-                or (self.query.result is not None and item.result is not self.query.result)
+                or (
+                    self.query.action is not None
+                    and item.action is not self.query.action
+                )
+                or (
+                    self.query.result is not None
+                    and item.result is not self.query.result
+                )
             ):
                 raise ValueError("audit record contradicts query or read time")
             if index and not _comes_before(self.items[index - 1], item):

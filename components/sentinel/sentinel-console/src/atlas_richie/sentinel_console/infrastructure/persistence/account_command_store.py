@@ -72,6 +72,7 @@ class SqlAlchemyAccountCommandStore(AccountCommandStore):
 
                 operation = await self._apply(
                     connection,
+                    actor_account_id=actor.account_id,
                     command=command,
                     password_hash=password_hash,
                     account_id=account_id,
@@ -174,6 +175,7 @@ class SqlAlchemyAccountCommandStore(AccountCommandStore):
             .where(
                 AccountRecord.account_id == actor.account_id,
                 AccountRecord.status == "active",
+                AccountRecord.deleted_at.is_(None),
                 AuthenticationSessionRecord.session_hash == actor.session_digest,
                 AuthenticationSessionRecord.revoked_at.is_(None),
                 AuthenticationSessionRecord.expires_at > datetime.now(UTC),
@@ -230,6 +232,7 @@ class SqlAlchemyAccountCommandStore(AccountCommandStore):
         connection,
         *,
         command: AccountMutation,
+        actor_account_id: str,
         password_hash: str | None,
         account_id: str,
         now: datetime,
@@ -284,7 +287,7 @@ class SqlAlchemyAccountCommandStore(AccountCommandStore):
                 AccountRecord.built_in,
                 AccountRecord.revision,
             )
-            .where(AccountRecord.account_id == command.account_id)
+            .where(AccountRecord.account_id == command.account_id, AccountRecord.deleted_at.is_(None))
             .with_for_update()
         )
         account = result.mappings().one_or_none()
@@ -292,10 +295,18 @@ class SqlAlchemyAccountCommandStore(AccountCommandStore):
             return _rejected(command.request_key, AccountCommandReason.NOT_FOUND)
         if account["revision"] != command.expected_revision:
             return _rejected(command.request_key, AccountCommandReason.CONFLICT)
-        if account["built_in"]:
+        self_reset = (
+            command.kind is AccountCommandKind.RESET_PASSWORD
+            and command.account_id == actor_account_id
+        )
+        if account["built_in"] and not self_reset:
             return _rejected(command.request_key, AccountCommandReason.BUILT_IN)
+        if command.kind is AccountCommandKind.DELETE and command.account_id == actor_account_id:
+            return _rejected(command.request_key, AccountCommandReason.SELF_OPERATION)
 
         removes_active_admin = account["role_id"] == AccountRole.ADMIN.value and (
+            command.kind is AccountCommandKind.DELETE
+            or
             (command.kind is AccountCommandKind.STATUS and command.status == "disabled")
             or (
                 command.kind is AccountCommandKind.ROLE
@@ -315,12 +326,19 @@ class SqlAlchemyAccountCommandStore(AccountCommandStore):
                 values = {}
             else:
                 values["status"] = command.status
-        else:
+        elif command.kind is AccountCommandKind.ROLE:
             assert command.role_id is not None
             if command.role_id.value == account["role_id"]:
                 values = {}
             else:
                 values["role_id"] = command.role_id.value
+        elif command.kind is AccountCommandKind.RESET_PASSWORD:
+            if password_hash is None:
+                raise AccountCommandUnavailable("validated password reset hash is missing")
+            values["password_hash"] = password_hash
+        elif command.kind is AccountCommandKind.DELETE:
+            values["status"] = "disabled"
+            values["deleted_at"] = now
         if values:
             await connection.execute(
                 update(AccountRecord)
@@ -330,6 +348,19 @@ class SqlAlchemyAccountCommandStore(AccountCommandStore):
                 )
                 .values(**values)
             )
+            if (
+                (command.kind is AccountCommandKind.STATUS and command.status == "disabled")
+                or command.kind in {AccountCommandKind.RESET_PASSWORD, AccountCommandKind.DELETE}
+            ):
+                await connection.execute(
+                    update(AuthenticationSessionRecord)
+                    .where(
+                        AuthenticationSessionRecord.account_id
+                        == account["account_id"],
+                        AuthenticationSessionRecord.revoked_at.is_(None),
+                    )
+                    .values(revoked_at=now)
+                )
         row = await self._account_row(connection, account["account_id"])
         return AccountOperation(
             command.request_key,

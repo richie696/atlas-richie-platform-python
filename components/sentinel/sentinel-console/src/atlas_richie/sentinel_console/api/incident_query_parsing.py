@@ -13,18 +13,19 @@ from ..domain.incidents import (
 )
 from ..domain.instance_catalog import ObservationScope, ObservationWindow
 from ..domain.instance_observation import ObservationContext
-from .query_parsing import parse_utc_timestamp
-
-_TIMELINE_REQUIRED = frozenset(
-    {"environmentId", "scope", "from", "to", "pageSize"}
+from .query_parsing import (
+    MIN_QUERY_INTEGER,
+    parse_integer,
+    parse_query_values,
+    parse_utc_timestamp,
 )
+
+_TIMELINE_REQUIRED = frozenset({"environmentId", "scope", "from", "to", "pageSize"})
 _TIMELINE_OPTIONAL = frozenset(
     {"appId", "instanceId", "severity", "category", "cursor"}
 )
 _EVIDENCE_REQUIRED = frozenset({"environmentId", "scope", "from", "to"})
-_EVIDENCE_OPTIONAL = frozenset(
-    {"appId", "instanceId", "severity", "category"}
-)
+_EVIDENCE_OPTIONAL = frozenset({"appId", "instanceId", "severity", "category"})
 
 
 def parse_incident_timeline_query(request: Request) -> IncidentQuery:
@@ -36,13 +37,13 @@ def parse_incident_timeline_query(request: Request) -> IncidentQuery:
         severity=_severity(supplied),
         category=_category(supplied),
         cursor=cursor,
-        page_size=_page_size(supplied["pageSize"]),
+        page_size=parse_integer(
+            supplied["pageSize"], MIN_QUERY_INTEGER, MAX_INCIDENT_PAGE_SIZE
+        ),
     )
 
 
-def parse_incident_detail_query(
-    request: Request, event_id: str
-) -> IncidentDetailQuery:
+def parse_incident_detail_query(request: Request, event_id: str) -> IncidentDetailQuery:
     """Parse the selected event's exact observation identity and filters."""
     supplied = _query_values(request, _EVIDENCE_REQUIRED, _EVIDENCE_OPTIONAL)
     return IncidentDetailQuery(
@@ -58,14 +59,7 @@ def _query_values(
     required: frozenset[str],
     optional: frozenset[str],
 ) -> dict[str, str]:
-    supplied: dict[str, str] = {}
-    for name, value in request.query_params.multi_items():
-        if name not in required | optional or name in supplied:
-            raise ValueError("incident query parameters must be known and unique")
-        supplied[name] = value
-    if not required.issubset(supplied):
-        raise ValueError("required incident query field is missing")
-    return supplied
+    return parse_query_values(request, required, optional)
 
 
 def _context(supplied: dict[str, str]) -> ObservationContext:
@@ -88,12 +82,3 @@ def _severity(supplied: dict[str, str]) -> IncidentSeverity | None:
 
 def _category(supplied: dict[str, str]) -> IncidentCategory | None:
     return IncidentCategory(supplied["category"]) if "category" in supplied else None
-
-
-def _page_size(value: str) -> int:
-    if not value.isascii() or not value.isdecimal():
-        raise ValueError("incident page size must be an unsigned decimal integer")
-    parsed = int(value)
-    if not 1 <= parsed <= MAX_INCIDENT_PAGE_SIZE:
-        raise ValueError("incident page size is out of range")
-    return parsed

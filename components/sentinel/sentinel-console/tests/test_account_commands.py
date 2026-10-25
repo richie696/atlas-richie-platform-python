@@ -24,6 +24,7 @@ from atlas_richie.sentinel_console.infrastructure.persistence.current_session_re
 from atlas_richie.sentinel_console.infrastructure.persistence.current_session_revoker import (
     SqlAlchemyCurrentSessionRevoker,
 )
+from atlas_richie.sentinel_console.infrastructure.persistence.login_session_writer import SqlAlchemyLoginSessionWriter
 from atlas_richie.sentinel_console.infrastructure.persistence.migration_runner import (
     upgrade_database,
 )
@@ -183,6 +184,136 @@ class AccountCommandApiTest(unittest.IsolatedAsyncioTestCase):
             },
             json=command,
         )
+
+    async def test_reset_password_revokes_sessions_preserves_status_and_safe_idempotent_receipt(self) -> None:
+        password = "ResetPass-20261024"
+        body = {"kind": "reset_password", "requestKey": "reset-view-1", "accountId": "view-1", "revision": "1", "password": password}
+        async with self._client(_ADMIN_COOKIE, _ADMIN_CSRF) as client:
+            reset = await self._command(client, body, body["requestKey"], "reset-1", _ADMIN_CSRF)
+            self.assertEqual(reset.status_code, 200, reset.text)
+            self.assertEqual(reset.json()["account"]["revision"], "2")
+            self.assertIsNone(await SqlAlchemyCurrentSessionReader(self.engine).read_active_session(hashlib.sha256(_VIEW_COOKIE.encode()).hexdigest()))
+            replay = await self._command(client, body, body["requestKey"], "reset-2", _ADMIN_CSRF)
+            self.assertEqual(replay.json(), reset.json())
+            changed = await self._command(client, {**body, "password": password + "-changed"}, body["requestKey"], "reset-3", _ADMIN_CSRF)
+            self.assertEqual(changed.status_code, 409)
+            disabled = await self._command(client, {"kind": "status", "requestKey": "disable-reset-view", "accountId": "view-1", "revision": "2", "status": "disabled"}, "disable-reset-view", "reset-4", _ADMIN_CSRF)
+            self.assertEqual(disabled.json()["status"], "completed")
+            reset_disabled = await self._command(client, {**body, "requestKey": "reset-disabled-view", "revision": "3"}, "reset-disabled-view", "reset-5", _ADMIN_CSRF)
+            self.assertEqual(reset_disabled.json()["account"]["status"], "disabled")
+        async with self._client(_VIEW_COOKIE, _VIEW_CSRF) as viewer:
+            me = await viewer.get("/api/v1/auth/me", headers={"x-request-id": "reset-session-check"})
+            self.assertEqual(me.status_code, 200)
+            self.assertIsNone(me.json())
+        async with self.engine.connect() as connection:
+            account = (await connection.execute(select(AccountRecord).where(AccountRecord.account_id == "view-1"))).mappings().one()
+            self.assertTrue(self.hasher.verify_password(account["password_hash"], password))
+            self.assertFalse(self.hasher.verify_password(account["password_hash"], "synthetic-seed-password"))
+            operations = (await connection.execute(select(AccountOperationRecord))).mappings().all()
+            audit = (await connection.execute(select(AuditEventRecord))).mappings().all()
+        self.assertNotIn(password, repr(operations) + repr(audit) + reset.text)
+
+    async def test_built_in_admin_can_reset_own_password_but_session_is_revoked(self) -> None:
+        password = "BuiltInReset-20261024"
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                update(AccountRecord)
+                .where(AccountRecord.account_id == "admin-1")
+                .values(built_in=True)
+            )
+        body = {
+            "kind": "reset_password",
+            "requestKey": "reset-built-in-admin-self",
+            "accountId": "admin-1",
+            "revision": "1",
+            "password": password,
+        }
+        async with self._client(_ADMIN_COOKIE, _ADMIN_CSRF) as client:
+            reset = await self._command(
+                client, body, body["requestKey"], "reset-built-in-admin-self", _ADMIN_CSRF
+            )
+        self.assertEqual(reset.status_code, 200, reset.text)
+        self.assertEqual(reset.json()["status"], "completed")
+        self.assertTrue(reset.json()["account"]["builtIn"])
+        self.assertEqual(reset.json()["account"]["revision"], "2")
+        self.assertIsNone(
+            await SqlAlchemyCurrentSessionReader(self.engine).read_active_session(
+                hashlib.sha256(_ADMIN_COOKIE.encode()).hexdigest()
+            )
+        )
+        async with self.engine.connect() as connection:
+            account = (
+                await connection.execute(
+                    select(AccountRecord).where(AccountRecord.account_id == "admin-1")
+                )
+            ).mappings().one()
+        self.assertTrue(self.hasher.verify_password(account["password_hash"], password))
+        self.assertFalse(
+            self.hasher.verify_password(account["password_hash"], "synthetic-seed-password")
+        )
+
+    async def test_reset_prevents_inflight_login_using_pre_rotation_credential(self) -> None:
+        async with self.engine.connect() as connection:
+            old_hash = await connection.scalar(select(AccountRecord.password_hash).where(AccountRecord.account_id == "view-1"))
+        body = {"kind": "reset_password", "requestKey": "reset-racing-login", "accountId": "view-1", "revision": "1", "password": "synthetic-rotated-password-123"}
+        async with self._client(_ADMIN_COOKIE, _ADMIN_CSRF) as client:
+            result = await self._command(client, body, body["requestKey"], "racing-login-1", _ADMIN_CSRF)
+            self.assertEqual(result.json()["status"], "completed")
+        issued = await SqlAlchemyLoginSessionWriter(self.engine).issue_login_session(
+            account_id="view-1", expected_password_hash=old_hash,
+            session_digest="synthetic-racing-session-digest", csrf_digest="synthetic-racing-csrf-digest",
+            session_epoch="synthetic-racing-epoch", created_at=_NOW,
+            expires_at=_NOW + timedelta(hours=1), previous_session_digest=None,
+        )
+        self.assertFalse(issued)
+
+    async def test_delete_hides_identity_revokes_sessions_reserves_username_and_retains_receipts(self) -> None:
+        body = {"kind": "delete", "requestKey": "delete-view-1", "accountId": "view-1", "revision": "1"}
+        async with self._client(_ADMIN_COOKIE, _ADMIN_CSRF) as client:
+            deleted = await self._command(client, body, body["requestKey"], "delete-1", _ADMIN_CSRF)
+            self.assertEqual(deleted.status_code, 200, deleted.text)
+            self.assertEqual(deleted.json()["account"]["status"], "disabled")
+            replay = await self._command(client, body, body["requestKey"], "delete-2", _ADMIN_CSRF)
+            self.assertEqual(replay.json(), deleted.json())
+            detail = await client.get("/api/v1/accounts/view-1", headers={"x-request-id": "deleted-detail"})
+            self.assertIsNone(detail.json())
+            listing = await client.get("/api/v1/accounts?page=1&pageSize=20&search=", headers={"x-request-id": "deleted-list"})
+            self.assertNotIn("view-1", [record["id"] for record in listing.json()["items"]])
+            missing = await self._command(client, {**body, "requestKey": "delete-already-deleted", "revision": "2"}, "delete-already-deleted", "delete-3", _ADMIN_CSRF)
+            self.assertEqual(missing.json()["reason"], "not_found")
+            duplicate = await self._command(client, {"kind": "create", "requestKey": "recreate-deleted", "input": {"username": "view-one", "password": "synthetic-new-password-123", "roleId": "view"}}, "recreate-deleted", "delete-4", _ADMIN_CSRF)
+            self.assertEqual(duplicate.json()["reason"], "username_taken")
+        async with self.engine.connect() as connection:
+            tombstone = await connection.scalar(select(AccountRecord.deleted_at).where(AccountRecord.account_id == "view-1"))
+            revoked = await connection.scalar(select(AuthenticationSessionRecord.revoked_at).where(AuthenticationSessionRecord.account_id == "view-1"))
+            audit_count = await connection.scalar(select(func.count()).select_from(AuditEventRecord).where(AuditEventRecord.action == "accounts.delete", AuditEventRecord.outcome == "completed"))
+        self.assertIsNotNone(tombstone)
+        self.assertIsNotNone(revoked)
+        self.assertEqual(audit_count, 1)
+
+    async def test_lifecycle_allows_self_reset_and_rejects_protected_foreign_or_stale_operations(self) -> None:
+        await self._seed_identity("builtin-1", "builtin-admin", "admin", True, None, None)
+        async with self._client(_ADMIN_COOKIE, _ADMIN_CSRF) as client:
+            for kind in ("reset_password", "delete"):
+                targets = [("builtin-1", "1", "built_in"), ("view-1", "9", "conflict")]
+                if kind == "delete":
+                    targets.insert(0, ("admin-1", "1", "self_operation"))
+                for target, revision, reason in targets:
+                    key = f"protected-{kind}-{target}"
+                    body = {"kind": kind, "requestKey": key, "accountId": target, "revision": revision}
+                    if kind == "reset_password": body["password"] = "synthetic-reset-password-123"
+                    result = await self._command(client, body, key, key, _ADMIN_CSRF)
+                    self.assertEqual(result.json().get("reason"), reason, result.text)
+            invalid = {"kind": "reset_password", "requestKey": "short-reset", "accountId": "view-1", "revision": "1", "password": "short"}
+            result = await self._command(client, invalid, "short-reset", "short-reset", _ADMIN_CSRF)
+            self.assertEqual(result.status_code, 400)
+        async with self._client(_VIEW_COOKIE, _VIEW_CSRF) as viewer:
+            for kind in ("delete", "reset_password"):
+                key = "viewer-" + kind
+                body = {"kind": kind, "requestKey": key, "accountId": "admin-2", "revision": "1"}
+                if kind == "reset_password": body["password"] = "synthetic-reset-password-123"
+                result = await self._command(viewer, body, key, key, _VIEW_CSRF)
+                self.assertEqual(result.status_code, 403)
 
     async def test_create_is_idempotent_and_receipt_never_contains_password(
         self,
@@ -479,6 +610,93 @@ class AccountCommandApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(builtin.json()["reason"], "built_in")
         self.assertEqual(stale.json()["reason"], "conflict")
         self.assertEqual(promote.json()["account"]["roleId"], "admin")
+
+    async def test_role_demotion_refreshes_existing_session_authority_immediately(
+        self,
+    ) -> None:
+        async with self._client(_ADMIN_COOKIE, _ADMIN_CSRF) as administrator:
+            demoted = await self._command(
+                administrator,
+                {
+                    "kind": "role",
+                    "requestKey": "demote-second-admin",
+                    "accountId": "admin-2",
+                    "revision": "1",
+                    "roleId": "view",
+                },
+                "demote-second-admin",
+                "role-demotion-request-1",
+                _ADMIN_CSRF,
+            )
+
+        async with self._client(
+            _SECOND_ADMIN_COOKIE, _SECOND_ADMIN_CSRF
+        ) as formerly_administrator:
+            session = await formerly_administrator.get(
+                "/api/v1/auth/me",
+                headers={"x-request-id": "role-demotion-session-read"},
+            )
+            protected_directory = await formerly_administrator.get(
+                "/api/v1/accounts?page=1&pageSize=20&search=",
+                headers={"x-request-id": "role-demotion-directory-read"},
+            )
+
+        self.assertEqual(demoted.status_code, 200, demoted.text)
+        self.assertEqual(demoted.json()["status"], "completed")
+        self.assertEqual(demoted.json()["account"]["roleId"], "view")
+        self.assertEqual(session.status_code, 200, session.text)
+        self.assertEqual(session.json()["roleId"], "view")
+        self.assertEqual(session.json()["capabilities"], ["metrics:view"])
+        self.assertEqual(protected_directory.status_code, 403)
+        self.assertEqual(protected_directory.json()["error"]["code"], "forbidden")
+
+    async def test_disabling_account_revokes_existing_sessions_even_after_reenable(
+        self,
+    ) -> None:
+        async with self._client(_ADMIN_COOKIE, _ADMIN_CSRF) as admin:
+            disabled = await self._command(
+                admin,
+                {
+                    "kind": "status",
+                    "requestKey": "disable-viewer-session",
+                    "accountId": "view-1",
+                    "revision": "1",
+                    "status": "disabled",
+                },
+                "disable-viewer-session",
+                "disable-viewer-request",
+                _ADMIN_CSRF,
+            )
+            enabled = await self._command(
+                admin,
+                {
+                    "kind": "status",
+                    "requestKey": "reenable-viewer-session",
+                    "accountId": "view-1",
+                    "revision": "2",
+                    "status": "active",
+                },
+                "reenable-viewer-session",
+                "reenable-viewer-request",
+                _ADMIN_CSRF,
+            )
+
+        async with self.engine.connect() as connection:
+            revoked_at = await connection.scalar(
+                select(AuthenticationSessionRecord.revoked_at).where(
+                    AuthenticationSessionRecord.account_id == "view-1"
+                )
+            )
+        async with self._client(_VIEW_COOKIE, _VIEW_CSRF) as viewer:
+            session = await viewer.get(
+                "/api/v1/auth/me", headers={"x-request-id": "viewer-session-after-reenable"}
+            )
+
+        self.assertEqual(disabled.json()["account"]["status"], "disabled")
+        self.assertEqual(enabled.json()["account"]["status"], "active")
+        self.assertIsNotNone(revoked_at)
+        self.assertEqual(session.status_code, 200)
+        self.assertIsNone(session.json())
 
     async def test_origin_csrf_and_duplicate_json_key_reject_before_write(self) -> None:
         async with self._client(_ADMIN_COOKIE, _ADMIN_CSRF) as client:

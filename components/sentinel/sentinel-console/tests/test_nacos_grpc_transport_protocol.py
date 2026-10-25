@@ -16,8 +16,9 @@ except ImportError:  # The protobuf package is intentionally an optional extra.
     GetMessageClass = None
 
 from atlas_richie.sentinel_console.infrastructure.nacos_grpc_transport import (
-    NacosGrpcUnavailable,
+    NacosGrpcTlsCredentials,
     NacosGrpcTransport,
+    NacosGrpcUnavailable,
     _decode_payload,
     _payload,
     _payload_message_class,
@@ -168,8 +169,21 @@ class NacosGrpcConnectionSetupTests(unittest.IsolatedAsyncioTestCase):
             addresses=(ipaddress.ip_address("192.0.2.17"),),
             secure=True,
         )
-        with patch.object(grpc.aio, "secure_channel", return_value=channel):
-            response_type, response_body = await NacosGrpcTransport().request(
+        tls_credentials = NacosGrpcTlsCredentials(
+            root_certificates=b"private-ca-bundle",
+            private_key=b"client-private-key",
+            certificate_chain=b"client-certificate-chain",
+        )
+        grpc_credentials = object()
+        with (
+            patch.object(grpc.aio, "secure_channel", return_value=channel),
+            patch.object(
+                grpc, "ssl_channel_credentials", return_value=grpc_credentials
+            ) as create_credentials,
+        ):
+            response_type, response_body = await NacosGrpcTransport(
+                tls_credentials
+            ).request(
                 target,
                 request_type="ConfigPublishRequest",
                 body={"tenant": "tenant-a", "casMd5": "old-md5"},
@@ -178,6 +192,11 @@ class NacosGrpcConnectionSetupTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response_type, "ConfigPublishResponse")
         self.assertEqual(response_body["resultCode"], 200)
+        create_credentials.assert_called_once_with(
+            root_certificates=b"private-ca-bundle",
+            private_key=b"client-private-key",
+            certificate_chain=b"client-certificate-chain",
+        )
         self.assertEqual(
             timeline,
             [
@@ -203,6 +222,37 @@ class NacosGrpcConnectionSetupTests(unittest.IsolatedAsyncioTestCase):
                 "requestId": "setup-ack-1",
             },
         )
+
+    async def test_client_identity_requires_certificate_and_private_key_pair(self):
+        with self.assertRaisesRegex(ValueError, "configured together"):
+            NacosGrpcTlsCredentials(private_key=b"key")
+
+        with self.assertRaisesRegex(ValueError, "configured together"):
+            NacosGrpcTlsCredentials(certificate_chain=b"certificate")
+
+    async def test_tls_material_never_falls_back_to_plaintext_target(self):
+        import grpc
+
+        target = PinnedSourceTarget(
+            hostname="nacos.example.test",
+            port=9848,
+            addresses=(ipaddress.ip_address("192.0.2.17"),),
+            secure=False,
+        )
+        with (
+            patch.object(grpc.aio, "insecure_channel") as create_insecure_channel,
+            self.assertRaises(NacosGrpcUnavailable),
+        ):
+            await NacosGrpcTransport(
+                NacosGrpcTlsCredentials(root_certificates=b"private-ca")
+            ).request(
+                target,
+                request_type="ConfigPublishRequest",
+                body={"tenant": "tenant-a"},
+                headers={},
+            )
+
+        create_insecure_channel.assert_not_called()
 
     async def test_setup_registration_failure_prevents_config_dispatch(self):
         import grpc

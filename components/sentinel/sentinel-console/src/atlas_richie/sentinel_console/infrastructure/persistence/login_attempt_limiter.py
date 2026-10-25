@@ -9,13 +9,14 @@ import re
 from typing import Callable, Mapping
 
 from sqlalchemy import delete, select, update
-from sqlalchemy.dialects.mysql import insert as mysql_insert
-from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from ...application.login_ports import LoginAuthorityUnavailable
+from .login_attempt_dialect_adapters import (
+    LoginAttemptDialectAdapter,
+    default_login_attempt_dialect_adapters,
+)
 from .models import LoginAttemptRecord
 
 _CLIENT_DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -68,17 +69,21 @@ class SqlAlchemyLoginAttemptLimiter:
         *,
         policy: LoginAttemptLimitPolicy,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        additional_dialect_adapters: tuple[LoginAttemptDialectAdapter, ...] = (),
     ) -> None:
-        supported_dialects = {"mysql", "postgresql", "sqlite"}
+        self._dialect_adapters = default_login_attempt_dialect_adapters(
+            additional_adapters=additional_dialect_adapters
+        )
         engine_dialect = getattr(engine, "dialect", None)
         if engine_dialect is not None:
-            is_supported = engine_dialect.name in supported_dialects
+            configured_dialects = {engine_dialect.name}
         else:
-            is_supported = supported_dialects - {"sqlite"} <= set(
-                getattr(engine, "supported_dialects", ())
-            )
-        if not is_supported:
-            raise ValueError("login limiter requires PostgreSQL, MySQL, or SQLite")
+            configured_dialects = set(getattr(engine, "supported_dialects", ()))
+        if (
+            not configured_dialects
+            or not configured_dialects <= self._dialect_adapters.supported_dialects
+        ):
+            raise ValueError("login limiter has no adapter for a configured SQL dialect")
         self._engine = engine
         self._policy = policy
         self._clock = clock
@@ -203,7 +208,7 @@ class SqlAlchemyLoginAttemptLimiter:
         }
 
     async def _insert_if_absent(self, connection, digest: str, now_ms: int) -> None:
-        """Use native unique-key no-op semantics to serialize first failures."""
+        """Use a dialect adapter's unique-key no-op for concurrent first failures."""
         values = {
             "client_identity_digest": digest,
             "window_started_at_ms": now_ms,
@@ -211,21 +216,13 @@ class SqlAlchemyLoginAttemptLimiter:
             "blocked_until_ms": None,
             "expires_at_ms": now_ms + self._policy.window_ms,
         }
-        if connection.dialect.name == "postgresql":
-            statement = postgresql_insert(LoginAttemptRecord).values(**values)
-            statement = statement.on_conflict_do_nothing(
-                index_elements=[LoginAttemptRecord.client_identity_digest]
-            )
-        elif connection.dialect.name == "sqlite":
-            statement = sqlite_insert(LoginAttemptRecord).values(**values)
-            statement = statement.on_conflict_do_nothing(
-                index_elements=[LoginAttemptRecord.client_identity_digest]
-            )
-        else:
-            statement = mysql_insert(LoginAttemptRecord).values(**values)
-            statement = statement.on_duplicate_key_update(
-                client_identity_digest=statement.inserted.client_identity_digest
-            )
+        try:
+            adapter = self._dialect_adapters.resolve(connection.dialect.name)
+        except ValueError:
+            raise SQLAlchemyError(
+                "login attempt authority has no adapter for the active SQL dialect"
+            ) from None
+        statement = adapter.insert_if_absent(values)
         await connection.execute(statement)
 
     async def _prune_expired(self, connection, now_ms: int) -> None:

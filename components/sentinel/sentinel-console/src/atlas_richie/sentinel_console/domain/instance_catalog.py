@@ -123,6 +123,19 @@ OPERATIONAL_METRIC_NAMES = tuple(
 _OPERATIONAL_METRICS = frozenset(OPERATIONAL_METRIC_NAMES)
 METRIC_UNITS = MappingProxyType(_METRIC_UNITS)
 OPERATIONAL_METRICS = _OPERATIONAL_METRICS
+_METRIC_DENOMINATORS = {
+    metric: denominator
+    for metric, _unit, denominator in OPERATIONAL_METRIC_DEFINITIONS
+}
+_METRIC_DENOMINATORS.update(
+    {
+        "resource_entry_rate": MetricDenominator.ATTEMPTED_ENTRIES,
+        "memory_bytes": MetricDenominator.REPORTING_PROCESSES,
+    }
+)
+if _METRIC_DENOMINATORS.keys() != _METRIC_UNITS.keys():
+    raise RuntimeError("every registered metric must define an aggregation denominator")
+METRIC_DENOMINATORS = MappingProxyType(_METRIC_DENOMINATORS)
 
 
 def _is_aware_instant(value: datetime | None) -> bool:
@@ -263,8 +276,12 @@ class MetricReading:
             raise ValueError("metric coverage is invalid")
         if not isinstance(self.quality, MetricQuality):
             raise ValueError("metric quality is unsupported")
-        if self.metric not in _METRIC_UNITS or self.unit != _METRIC_UNITS[self.metric]:
-            raise ValueError("metric unit does not match the metric")
+        if (
+            self.metric not in _METRIC_UNITS
+            or self.unit != _METRIC_UNITS[self.metric]
+            or self.denominator != _METRIC_DENOMINATORS[self.metric]
+        ):
+            raise ValueError("metric unit or denominator does not match the metric")
         if self.value is not None:
             if (
                 not is_finite_json_number(self.value)

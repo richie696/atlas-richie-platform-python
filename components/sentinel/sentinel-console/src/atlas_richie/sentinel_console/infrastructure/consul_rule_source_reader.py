@@ -99,7 +99,10 @@ class ConsulRuleSourceReader:
                 endpoint=connection.endpoint,
                 method="GET",
                 path=f"/v1/kv/{encode_consul_key(key)}",
-                params=datacenter_params(connection.location),
+                params={
+                    **datacenter_params(connection.location),
+                    "consistent": "true",
+                },
                 headers=headers,
             )
         except CONSUL_TRANSPORT_ERRORS:

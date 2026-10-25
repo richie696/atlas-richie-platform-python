@@ -18,6 +18,18 @@ class RuleSetSnapshotAuthorityUnavailable(RuntimeError):
     """The selected rule source cannot provide a trustworthy snapshot."""
 
 
+class RuleSetSnapshotInvalid(RuleSetSnapshotAuthorityUnavailable):
+    """A source value exists but is not a supported complete rule snapshot."""
+
+
+class RuleSetSnapshotTargetMissing(RuleSetSnapshotAuthorityUnavailable):
+    """The exact registered provider target was authoritatively absent."""
+
+
+class RuleSetSnapshotUnsupportedProfile(RuleSetSnapshotAuthorityUnavailable):
+    """The binding profile is not present in the explicit capability registry."""
+
+
 class RuleSetSnapshotNotFound(LookupError):
     """The binding is missing or inaccessible to the current session."""
 

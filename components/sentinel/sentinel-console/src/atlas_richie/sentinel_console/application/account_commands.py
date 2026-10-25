@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -28,6 +29,8 @@ class AccountCommandKind(StrEnum):
     CREATE = "create"
     STATUS = "status"
     ROLE = "role"
+    RESET_PASSWORD = "reset_password"
+    DELETE = "delete"
 
 
 class AccountOperationStatus(StrEnum):
@@ -45,6 +48,7 @@ class AccountCommandReason(StrEnum):
     BUILT_IN = "built_in"
     CONFLICT = "conflict"
     NOT_FOUND = "not_found"
+    SELF_OPERATION = "self_operation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +100,7 @@ class AccountMutation:
                 and self.password is None
                 and self.role_id is None
             )
-        else:
+        elif self.kind is AccountCommandKind.ROLE:
             valid = (
                 self.account_id is not None
                 and self.expected_revision is not None
@@ -105,6 +109,17 @@ class AccountMutation:
                 and self.password is None
                 and self.status is None
             )
+        elif self.kind in {AccountCommandKind.RESET_PASSWORD, AccountCommandKind.DELETE}:
+            valid = (
+                self.account_id is not None
+                and self.expected_revision is not None
+                and self.username is None
+                and self.role_id is None
+                and self.status is None
+                and ((self.password is not None) == (self.kind is AccountCommandKind.RESET_PASSWORD))
+            )
+        else:
+            valid = False
         if not valid:
             raise ValueError("account command fields do not match its kind")
 
@@ -126,12 +141,19 @@ class AccountMutation:
             payload["accountId"] = self.account_id
             payload["revision"] = str(self.expected_revision)
             payload["status"] = self.status
-        else:
+        elif self.kind is AccountCommandKind.ROLE:
             assert self.account_id is not None and self.expected_revision is not None
             assert self.role_id is not None
             payload["accountId"] = self.account_id
             payload["revision"] = str(self.expected_revision)
             payload["roleId"] = self.role_id.value
+        else:
+            assert self.account_id is not None and self.expected_revision is not None
+            payload["accountId"] = self.account_id
+            payload["revision"] = str(self.expected_revision)
+            if self.kind is AccountCommandKind.RESET_PASSWORD:
+                assert self.password is not None
+                payload["password"] = self.password.value
         return json.dumps(
             payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
@@ -273,7 +295,9 @@ class MutateAccount:
             for key_id in ordered_key_ids
         )
         password_hash = (
-            self._password_hasher.hash_password(command.password.value)
+            await asyncio.to_thread(
+                self._password_hasher.hash_password, command.password.value
+            )
             if command.password is not None
             else None
         )

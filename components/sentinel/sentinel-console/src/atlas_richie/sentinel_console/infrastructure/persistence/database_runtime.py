@@ -3,34 +3,35 @@
 from __future__ import annotations
 
 import os
+import ssl
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-import ssl
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine
 
+from ...application.bootstrap_database_check import (
+    BootstrapDatabaseCandidate,
+)
 from ...application.runtime_database_locator import (
     RuntimeDatabaseLocator,
     RuntimeDatabaseLocatorStore,
-)
-from ...application.bootstrap_database_check import (
-    BootstrapDatabaseCandidate,
-    BootstrapDatabaseKind,
-)
-from ...application.runtime_database_locator import (
-    RuntimeDatabaseLocator,
     RuntimeDatabaseTarget,
 )
-from ..pinned_mysql_connection import (
-    create_pinned_mysql_async_creator,
-    verified_mysql_ssl_context,
+from ..bootstrap_database_targets import ResolvedBootstrapDatabaseTarget
+from .database_engine_adapters import (
+    DatabaseEngineAdapter,
+    DatabaseEngineAdapterRegistry,
+    DatabaseEngineOptions,
+    default_database_engine_adapters,
 )
 
 _DATABASE_URL_ENV = "SENTINEL_CONSOLE_DATABASE_URL"
-_SUPPORTED_DRIVERS = frozenset({"postgresql+psycopg", "mysql+asyncmy"})
+_DATABASE_ENGINE_ADAPTERS = default_database_engine_adapters()
+SUPPORTED_RUNTIME_DATABASE_DIALECTS = _DATABASE_ENGINE_ADAPTERS.supported_dialects
 
 
 class ConsoleDatabaseConfigurationError(ValueError):
@@ -41,18 +42,38 @@ class ConsoleDatabaseDriverUnavailable(RuntimeError):
     """The configured optional async database driver is not installed."""
 
 
+def _has_remote_bootstrap_fields(candidate: BootstrapDatabaseCandidate) -> bool:
+    return bool(
+        isinstance(candidate.host, str)
+        and candidate.host
+        and isinstance(candidate.port, int)
+        and not isinstance(candidate.port, bool)
+        and 1 <= candidate.port <= 65535
+        and isinstance(candidate.database, str)
+        and candidate.database
+        and isinstance(candidate.username, str)
+        and candidate.username
+        and isinstance(candidate.password, str)
+        and candidate.password
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ConsoleDatabaseConfiguration:
     """Validated runtime database URL; credentials are suppressed from repr."""
 
     _url: URL = field(repr=False)
+    _adapter: DatabaseEngineAdapter = field(repr=False, compare=False)
     _pinned_target: RuntimeDatabaseTarget | None = field(
         default=None, repr=False, compare=False
     )
 
     @classmethod
     def from_environment(
-        cls, environment: Mapping[str, str] | None = None
+        cls,
+        environment: Mapping[str, str] | None = None,
+        *,
+        adapter_registry: DatabaseEngineAdapterRegistry | None = None,
     ) -> ConsoleDatabaseConfiguration:
         """Parse a deployment environment URL without connecting."""
         values = os.environ if environment is None else environment
@@ -61,35 +82,46 @@ class ConsoleDatabaseConfiguration:
             raise ConsoleDatabaseConfigurationError(
                 "Console runtime database URL is required"
             )
-        return cls.from_url(raw_url)
+        return cls.from_url(raw_url, adapter_registry=adapter_registry)
 
     @classmethod
     def from_locator(
-        cls, locator: RuntimeDatabaseLocator
+        cls,
+        locator: RuntimeDatabaseLocator,
+        *,
+        adapter_registry: DatabaseEngineAdapterRegistry | None = None,
     ) -> ConsoleDatabaseConfiguration:
         """Validate a decrypted first-run locator as a supported runtime URL."""
         if not isinstance(locator, RuntimeDatabaseLocator):
             raise ConsoleDatabaseConfigurationError(
                 "Console runtime database locator is unavailable"
             )
-        configuration = cls.from_url(locator.database_url)
+        configuration = cls.from_url(
+            locator.database_url, adapter_registry=adapter_registry
+        )
         if locator.target is None:
             return configuration
-        if (
-            configuration._url.host is None
-            or configuration._url.host.casefold().rstrip(".")
-            != locator.target.hostname.casefold().rstrip(".")
-        ):
+        if configuration._url.host is None or configuration._url.host.casefold().rstrip(
+            "."
+        ) != locator.target.hostname.casefold().rstrip("."):
             raise ConsoleDatabaseConfigurationError(
                 "runtime database locator target does not match its URL"
             )
-        return cls(configuration._url, locator.target)
+        return cls(
+            configuration._url,
+            configuration._adapter,
+            _pinned_target=locator.target,
+        )
 
     @classmethod
     def from_bootstrap_candidate(
-        cls, candidate: BootstrapDatabaseCandidate
+        cls,
+        candidate: BootstrapDatabaseCandidate,
+        *,
+        sqlite_database_path: Path | None = None,
+        adapter_registry: DatabaseEngineAdapterRegistry | None = None,
     ) -> ConsoleDatabaseConfiguration:
-        """Map validated PostgreSQL/MySQL setup fields to an async URL.
+        """Map validated remote setup fields through the selected Adapter.
 
         This method does not resolve DNS or connect. A deployment connector must
         apply its approved address pinning and TLS policy before opening sockets.
@@ -98,48 +130,87 @@ class ConsoleDatabaseConfiguration:
             raise ConsoleDatabaseConfigurationError(
                 "Console bootstrap database candidate is invalid"
             )
-        if (
-            candidate.kind not in {
-                BootstrapDatabaseKind.POSTGRESQL,
-                BootstrapDatabaseKind.MYSQL,
-            }
-            or not isinstance(candidate.host, str)
-            or not candidate.host
-            or not isinstance(candidate.port, int)
-            or isinstance(candidate.port, bool)
-            or not 1 <= candidate.port <= 65535
-            or not isinstance(candidate.database, str)
-            or not candidate.database
-            or not isinstance(candidate.username, str)
-            or not candidate.username
-            or not isinstance(candidate.password, str)
-            or not candidate.password
-        ):
+        try:
+            adapters = adapter_registry or _DATABASE_ENGINE_ADAPTERS
+            adapter = adapters.resolve_kind(candidate.kind)
+        except (TypeError, ValueError):
+            raise ConsoleDatabaseConfigurationError(
+                "Console bootstrap database credentials are incomplete"
+            ) from None
+        if not adapter.supports_bootstrap:
             raise ConsoleDatabaseConfigurationError(
                 "Console bootstrap database credentials are incomplete"
             )
-        drivername = (
-            "postgresql+psycopg"
-            if candidate.kind is BootstrapDatabaseKind.POSTGRESQL
-            else "mysql+asyncmy"
-        )
-        return cls(
-            URL.create(
-                drivername=drivername,
-                username=candidate.username,
-                password=candidate.password,
-                host=candidate.host,
-                port=candidate.port,
-                database=candidate.database,
+        if adapter.requires_remote_target and not _has_remote_bootstrap_fields(candidate):
+            raise ConsoleDatabaseConfigurationError(
+                "Console bootstrap database credentials are incomplete"
             )
+        if not adapter.requires_remote_target and any(
+            value is not None
+            for value in (
+                candidate.host,
+                candidate.port,
+                candidate.database,
+                candidate.username,
+                candidate.password,
+            )
+        ):
+            raise ConsoleDatabaseConfigurationError(
+                "local database bootstrap does not accept network credentials"
+            )
+        try:
+            url = adapter.create_bootstrap_url(
+                candidate, sqlite_database_path=sqlite_database_path
+            )
+        except (OSError, TypeError, ValueError):
+            raise ConsoleDatabaseConfigurationError(
+                "Console bootstrap database configuration is invalid"
+            ) from None
+        return cls(
+            url,
+            adapter,
         )
+
+    def create_pinned_bootstrap_engine(
+        self,
+        candidate: BootstrapDatabaseCandidate,
+        target: ResolvedBootstrapDatabaseTarget | None,
+        *,
+        postgresql_root_certificate: str | None,
+        mysql_ssl_context: ssl.SSLContext | None,
+    ) -> tuple[AsyncEngine, RuntimeDatabaseTarget]:
+        """Delegate vendor-specific bootstrap TLS and address pinning."""
+        if (
+            not self._adapter.supports_bootstrap
+            or self._adapter.bootstrap_kind is not candidate.kind
+        ):
+            raise ConsoleDatabaseConfigurationError(
+                "database adapter does not match the bootstrap candidate"
+            )
+        try:
+            return self._adapter.create_pinned_bootstrap_engine(
+                candidate,
+                self._url,
+                target,
+                postgresql_root_certificate=postgresql_root_certificate,
+                mysql_ssl_context=mysql_ssl_context,
+            )
+        except ImportError:
+            raise ConsoleDatabaseDriverUnavailable(
+                f"async driver for {self.dialect} is not installed"
+            ) from None
 
     def secret_url_for_storage(self) -> str:
         """Render the complete URL for immediate encrypted locator persistence."""
         return self._url.render_as_string(hide_password=False)
 
     @classmethod
-    def from_url(cls, raw_url: str) -> ConsoleDatabaseConfiguration:
+    def from_url(
+        cls,
+        raw_url: str,
+        *,
+        adapter_registry: DatabaseEngineAdapterRegistry | None = None,
+    ) -> ConsoleDatabaseConfiguration:
         """Validate a supported production URL without connecting."""
         try:
             url = make_url(raw_url)
@@ -147,70 +218,64 @@ class ConsoleDatabaseConfiguration:
             raise ConsoleDatabaseConfigurationError(
                 "Console runtime database URL is invalid"
             ) from None
-        if (
-            url.drivername not in _SUPPORTED_DRIVERS
-            or not url.username
-            or not url.password
-            or not url.host
-            or not url.database
-        ):
+        try:
+            adapters = adapter_registry or _DATABASE_ENGINE_ADAPTERS
+            adapter = adapters.resolve(url.drivername)
+        except ValueError:
+            raise ConsoleDatabaseConfigurationError(
+                "Console runtime database driver is unsupported"
+            ) from None
+        if not adapter.requires_remote_target:
+            if (
+                url.username is not None
+                or url.password is not None
+                or url.host is not None
+                or not url.database
+                or not url.database.startswith("/")
+                or url.database == ":memory:"
+            ):
+                raise ConsoleDatabaseConfigurationError(
+                    "SQLite runtime database URL must use an absolute file path"
+                )
+        elif not url.username or not url.password or not url.host or not url.database:
             raise ConsoleDatabaseConfigurationError(
                 "Console runtime database URL must use configured "
                 "PostgreSQL or MySQL credentials"
             )
-        return cls(url)
+        return cls(url, adapter)
 
     @property
     def dialect(self) -> str:
         """Return the supported SQL dialect name without connection details."""
-        return (
-            "postgresql"
-            if self._url.drivername.startswith("postgresql+")
-            else "mysql"
-        )
+        return self._adapter.dialect
+
+    @property
+    def requires_remote_target(self) -> bool:
+        """Report whether deployment DNS policy must pin this database."""
+        return self._adapter.requires_remote_target
 
     def create_engine(
         self,
         *,
         connect_args: Mapping[str, Any] | None = None,
         async_creator: Any | None = None,
+        mysql_ssl_context: ssl.SSLContext | None = None,
+        postgresql_root_certificate: str | None = None,
     ) -> AsyncEngine:
         """Create a pooled async engine without opening a network connection."""
-        options: dict[str, Any] = {
-            "pool_pre_ping": True,
-            "hide_parameters": True,
-        }
-        if connect_args is not None:
-            options["connect_args"] = dict(connect_args)
-        if async_creator is not None:
-            options["async_creator"] = async_creator
-        if self._pinned_target is not None:
-            target = self._pinned_target
-            if self.dialect == "postgresql":
-                pinned_args = options.setdefault("connect_args", {})
-                pinned_args["hostaddr"] = target.addresses[0]
-                pinned_args["sslmode"] = "verify-full"
-            else:
-                try:
-                    async_creator = create_pinned_mysql_async_creator(
-                        hostname=target.hostname,
-                        addresses=target.addresses,
-                        port=self._url.port or 3306,
-                        username=self._url.username or "",
-                        password=self._url.password or "",
-                        database=self._url.database or "",
-                        ssl_context=verified_mysql_ssl_context(
-                            ssl.create_default_context()
-                        ),
-                        connect_timeout_seconds=3,
-                    )
-                except ImportError:
-                    raise ConsoleDatabaseDriverUnavailable(
-                        "async driver for mysql is not installed"
-                    ) from None
-                options["async_creator"] = async_creator
         try:
-            return create_async_engine(self._url, **options)
+            return self._adapter.create_engine(
+                self._url,
+                DatabaseEngineOptions(
+                    pinned_target=self._pinned_target,
+                    connect_args=(
+                        dict(connect_args) if connect_args is not None else None
+                    ),
+                    async_creator=async_creator,
+                    mysql_ssl_context=mysql_ssl_context,
+                    postgresql_root_certificate=postgresql_root_certificate,
+                ),
+            )
         except ImportError:
             raise ConsoleDatabaseDriverUnavailable(
                 f"async driver for {self.dialect} is not installed"
@@ -219,6 +284,10 @@ class ConsoleDatabaseConfiguration:
 
 async def create_runtime_database_engine(
     locator_store: RuntimeDatabaseLocatorStore,
+    *,
+    postgresql_root_certificate: str | None = None,
+    mysql_ssl_context: ssl.SSLContext | None = None,
+    adapter_registry: DatabaseEngineAdapterRegistry | None = None,
 ) -> AsyncEngine | None:
     """Resolve the durable locator into a lazy engine; absent means setup mode.
 
@@ -228,12 +297,26 @@ async def create_runtime_database_engine(
     locator = await locator_store.read()
     if locator is None:
         return None
-    return create_database_engine_from_locator(locator)
+    return create_database_engine_from_locator(
+        locator,
+        postgresql_root_certificate=postgresql_root_certificate,
+        mysql_ssl_context=mysql_ssl_context,
+        adapter_registry=adapter_registry,
+    )
 
 
 def create_database_engine_from_locator(
     locator: RuntimeDatabaseLocator,
+    *,
+    postgresql_root_certificate: str | None = None,
+    mysql_ssl_context: ssl.SSLContext | None = None,
+    adapter_registry: DatabaseEngineAdapterRegistry | None = None,
 ) -> AsyncEngine:
     """Build an engine from one already-read, validated durable locator."""
-    configuration = ConsoleDatabaseConfiguration.from_locator(locator)
-    return configuration.create_engine()
+    configuration = ConsoleDatabaseConfiguration.from_locator(
+        locator, adapter_registry=adapter_registry
+    )
+    return configuration.create_engine(
+        postgresql_root_certificate=postgresql_root_certificate,
+        mysql_ssl_context=mysql_ssl_context,
+    )

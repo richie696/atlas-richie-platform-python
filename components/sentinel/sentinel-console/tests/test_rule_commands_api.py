@@ -6,19 +6,20 @@ import hashlib
 import unittest
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
-from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.api.rule_mutation_parsing import (
     InvalidRuleMutation,
     parse_rule_mutation,
 )
+from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.mutate_rule_set import (
     ConfigureRulePublicationTarget,
     RuleMutationOperation,
     RuleOperationStatus,
 )
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from session_test_doubles import UnusedSessionRevoker
 
 _SESSION = "rule-command-session-token-0000000000000000001"
 _CSRF = "rule-command-csrf-token-000000000000000000001"
@@ -183,6 +184,7 @@ class RuleCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 headers=self._headers(),
             )
         self.assertEqual(response.status_code, 202)
+        assert_openapi_response("mutateRuleSet", response)
         self.assertEqual(
             response.json(),
             {
@@ -210,6 +212,7 @@ class RuleCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 headers=self._headers(request_key="different-request"),
             )
         self.assertEqual(response.status_code, 409)
+        assert_openapi_response("mutateRuleSet", response)
         self.assertEqual(response.json()["error"]["code"], "idempotency_conflict")
         self.assertEqual(authority.commands, [])
 
@@ -223,6 +226,7 @@ class RuleCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 headers=self._headers(),
             )
         self.assertEqual(response.status_code, 403)
+        assert_openapi_response("mutateRuleSet", response)
         self.assertEqual(authority.commands, [])
 
     async def test_operation_read_is_admin_and_scoped_to_binding_and_session(
@@ -236,6 +240,7 @@ class RuleCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 headers={"x-request-id": "rule-operation-read-1"},
             )
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readRuleOperation", response)
         self.assertEqual(response.json()["status"], "pending")
         binding_id, request_key, context = authority.lookups[0]
         self.assertEqual((binding_id, request_key), (_BINDING_ID, _REQUEST_KEY))
@@ -254,6 +259,7 @@ class RuleCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 headers=self._headers(),
             )
         self.assertEqual(response.status_code, 503)
+        assert_openapi_response("mutateRuleSet", response)
         self.assertEqual(response.json()["error"]["code"], "service_unavailable")
 
     async def test_non_admin_cannot_read_rule_operation(self) -> None:
@@ -265,4 +271,5 @@ class RuleCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 headers={"x-request-id": "rule-operation-viewer-1"},
             )
         self.assertEqual(response.status_code, 403)
+        assert_openapi_response("readRuleOperation", response)
         self.assertEqual(authority.lookups, [])

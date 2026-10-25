@@ -2,65 +2,119 @@
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import json
-from pathlib import Path
 import re
+from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
-from atlas_richie.sentinel_console.app import build_app
-from atlas_richie.sentinel_console.api.http_support import (
-    ERROR_STATUS_BY_CODE,
-    error_response,
-)
-from atlas_richie.sentinel_console.api.fleet_overview import (
-    _OPTIONAL_QUERY_FIELDS as _FLEET_OPTIONAL_QUERY_FIELDS,
-    _REQUIRED_QUERY_FIELDS as _FLEET_REQUIRED_QUERY_FIELDS,
-)
-from atlas_richie.sentinel_console.api.incident_query_parsing import (
-    _EVIDENCE_OPTIONAL as _INCIDENT_EVIDENCE_OPTIONAL,
-    _EVIDENCE_REQUIRED as _INCIDENT_EVIDENCE_REQUIRED,
-    _TIMELINE_OPTIONAL as _INCIDENT_TIMELINE_OPTIONAL,
-    _TIMELINE_REQUIRED as _INCIDENT_TIMELINE_REQUIRED,
-)
-from atlas_richie.sentinel_console.api.instance_catalog import (
-    _OPTIONAL_QUERY_FIELDS as _INSTANCE_CATALOG_OPTIONAL_QUERY_FIELDS,
-    _REQUIRED_QUERY_FIELDS as _INSTANCE_CATALOG_REQUIRED_QUERY_FIELDS,
-)
-from atlas_richie.sentinel_console.api.instance_observation import (
-    _OPTIONAL_QUERY_FIELDS as _INSTANCE_OBSERVATION_OPTIONAL_QUERY_FIELDS,
-    _REQUIRED_QUERY_FIELDS as _INSTANCE_OBSERVATION_REQUIRED_QUERY_FIELDS,
-)
-from atlas_richie.sentinel_console.api.metrics import (
-    _OPTIONAL_QUERY_FIELDS as _METRICS_OPTIONAL_QUERY_FIELDS,
-    _REQUIRED_QUERY_FIELDS as _METRICS_REQUIRED_QUERY_FIELDS,
-)
-from atlas_richie.sentinel_console.api.rule_binding_parsing import (
-    _OPTIONAL as _RULE_BINDING_OPTIONAL,
-    _REQUIRED as _RULE_BINDING_REQUIRED,
-)
-from atlas_richie.sentinel_console.api.system_audit import (
-    _ALLOWED_QUERY_KEYS as _SYSTEM_AUDIT_ALLOWED_QUERY_KEYS,
-)
 from atlas_richie.sentinel_console.api.account_commands import (
     _REQUEST_KEY_PATTERN as _ACCOUNT_REQUEST_KEY_PATTERN,
+)
+from atlas_richie.sentinel_console.api.accounts import (
+    _PAGE_KEYS as _ACCOUNT_QUERY_FIELDS,
 )
 from atlas_richie.sentinel_console.api.bootstrap_initialization import (
     _REQUEST_KEY_PATTERN as _BOOTSTRAP_REQUEST_KEY_PATTERN,
 )
+from atlas_richie.sentinel_console.api.fleet_overview import (
+    _OPTIONAL_QUERY_FIELDS as _FLEET_OPTIONAL_QUERY_FIELDS,
+)
+from atlas_richie.sentinel_console.api.fleet_overview import (
+    _REQUIRED_QUERY_FIELDS as _FLEET_REQUIRED_QUERY_FIELDS,
+)
+from atlas_richie.sentinel_console.api.http_support import (
+    ERROR_STATUS_BY_CODE,
+    error_response,
+)
+from atlas_richie.sentinel_console.api.incident_query_parsing import (
+    _EVIDENCE_OPTIONAL as _INCIDENT_EVIDENCE_OPTIONAL,
+)
+from atlas_richie.sentinel_console.api.incident_query_parsing import (
+    _EVIDENCE_REQUIRED as _INCIDENT_EVIDENCE_REQUIRED,
+)
+from atlas_richie.sentinel_console.api.incident_query_parsing import (
+    _TIMELINE_OPTIONAL as _INCIDENT_TIMELINE_OPTIONAL,
+)
+from atlas_richie.sentinel_console.api.incident_query_parsing import (
+    _TIMELINE_REQUIRED as _INCIDENT_TIMELINE_REQUIRED,
+)
+from atlas_richie.sentinel_console.api.instance_catalog import (
+    _OPTIONAL_QUERY_FIELDS as _INSTANCE_CATALOG_OPTIONAL_QUERY_FIELDS,
+)
+from atlas_richie.sentinel_console.api.instance_catalog import (
+    _REQUIRED_QUERY_FIELDS as _INSTANCE_CATALOG_REQUIRED_QUERY_FIELDS,
+)
+from atlas_richie.sentinel_console.api.instance_observation import (
+    _OPTIONAL_QUERY_FIELDS as _INSTANCE_OBSERVATION_OPTIONAL_QUERY_FIELDS,
+)
+from atlas_richie.sentinel_console.api.instance_observation import (
+    _REQUIRED_QUERY_FIELDS as _INSTANCE_OBSERVATION_REQUIRED_QUERY_FIELDS,
+)
+from atlas_richie.sentinel_console.api.metrics import (
+    _OPTIONAL_QUERY_FIELDS as _METRICS_OPTIONAL_QUERY_FIELDS,
+)
+from atlas_richie.sentinel_console.api.metrics import (
+    _REQUIRED_QUERY_FIELDS as _METRICS_REQUIRED_QUERY_FIELDS,
+)
+from atlas_richie.sentinel_console.api.query_parsing import (
+    MAX_QUERY_PAGE_NUMBER,
+    MAX_QUERY_PAGE_SIZE,
+    MAX_QUERY_STEP_MS,
+    MIN_QUERY_INTEGER,
+)
 from atlas_richie.sentinel_console.api.registered_source_commands import (
     _REQUEST_KEY_PATTERN as _SOURCE_REQUEST_KEY_PATTERN,
 )
+from atlas_richie.sentinel_console.api.rule_binding_parsing import (
+    _OPTIONAL as _RULE_BINDING_OPTIONAL,
+)
+from atlas_richie.sentinel_console.api.rule_binding_parsing import (
+    _REQUIRED as _RULE_BINDING_REQUIRED,
+)
 from atlas_richie.sentinel_console.api.rule_commands import (
     _REQUEST_KEY as _RULE_REQUEST_KEY_PATTERN,
+)
+from atlas_richie.sentinel_console.api.rule_binding_states import (
+    _QUERY_KEYS as _RULE_BINDING_STATES_QUERY_FIELDS,
+)
+from atlas_richie.sentinel_console.api.rule_load_observations import (
+    _QUERY_KEYS as _RULE_LOAD_OBSERVATIONS_QUERY_FIELDS,
+)
+from atlas_richie.sentinel_console.api.system_audit import (
+    _ALLOWED_QUERY_KEYS as _SYSTEM_AUDIT_ALLOWED_QUERY_KEYS,
+)
+from atlas_richie.sentinel_console.app import build_app
+from atlas_richie.sentinel_console.application.account_directory_ports import (
+    MAX_ACCOUNT_DIRECTORY_PAGE,
+    MAX_ACCOUNT_DIRECTORY_PAGE_SIZE,
+)
+from atlas_richie.sentinel_console.domain.configuration_source import (
+    ConfigurationSourceProvider,
 )
 from atlas_richie.sentinel_console.domain.incidents import (
     MAX_INCIDENT_CURSOR_LENGTH,
     MAX_INCIDENT_PAGE_SIZE,
 )
-from atlas_richie.sentinel_console.domain.rule_bindings import is_rule_binding_identifier
-from atlas_richie.sentinel_console.domain.configuration_source import (
-    ConfigurationSourceProvider,
+from atlas_richie.sentinel_console.domain.instance_catalog import (
+    METRIC_DENOMINATORS,
+    METRIC_UNITS,
+)
+from atlas_richie.sentinel_console.domain.protocol_negotiations import (
+    MAX_PROTOCOL_OBSERVATIONS_PAGE,
+)
+from atlas_richie.sentinel_console.domain.rule_bindings import (
+    is_rule_binding_identifier,
+)
+from atlas_richie.sentinel_console.domain.rule_publications import (
+    MAX_PUBLICATION_RECEIPT_PAGE,
+    MAX_PUBLICATION_RECEIPT_PAGE_SIZE,
+    PublicationReason,
+    PublicationStage,
 )
 from atlas_richie.sentinel_console.domain.system_connections import (
     ConnectionCapability,
@@ -77,6 +131,97 @@ from atlas_richie.sentinel_console.domain.system_protocols import (
 _HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 _OPENAPI_PATH = Path(__file__).resolve().parents[2] / "docs" / "protocol"
 _OPENAPI_PATH /= "console-api.openapi.json"
+_OPENAPI_08_PATH = _OPENAPI_PATH.with_name("console-api-0.8.0.openapi.json")
+_OPENAPI_12_PATH = _OPENAPI_PATH.with_name("console-api-0.12.0.openapi.json")
+_OPENAPI_11_PATH = _OPENAPI_PATH.with_name("console-api-0.11.0.openapi.json")
+_OPENAPI_10_PATH = _OPENAPI_PATH.with_name("console-api-0.10.0.openapi.json")
+_CONTRACT_DOC_PATH = _OPENAPI_PATH.parents[1] / "CONSOLE_API_CONTRACT.md"
+
+
+def test_openapi_freeze_metadata_matches_console_contract_approval() -> None:
+    document = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
+    contract = _CONTRACT_DOC_PATH.read_text(encoding="utf-8")
+
+    assert document["info"]["version"] == "0.18.0"
+    assert document["x-contract-status"] == "frozen"
+    assert "0.18.0 baseline (2026-10-17)" in document["info"]["description"]
+    assert "冻结版本 0.18.0" in contract
+    assert "0.18.0" in contract
+    assert "authorize-local" in contract
+
+
+def test_console_api_10_operations_remain_wire_identical() -> None:
+    previous = json.loads(_OPENAPI_10_PATH.read_text(encoding="utf-8"))
+    current = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
+    assert previous["info"]["version"] == "0.10.0"
+    assert set(previous["paths"]).issubset(current["paths"])
+    for path, operations in previous["paths"].items():
+        for method, operation in operations.items():
+            _assert_historical_operation_compatible(
+                operation, current["paths"][path][method], path, method
+            )
+
+
+def test_console_api_11_snapshot_remains_the_candidate_check_only_release() -> None:
+    frozen_11 = json.loads(_OPENAPI_11_PATH.read_text(encoding="utf-8"))
+    assert frozen_11["info"]["version"] == "0.11.0"
+    assert "/api/v2/monitoring/sources/check" in frozen_11["paths"]
+    assert "/api/v2/monitoring/sources/checks/{checkId}" in frozen_11["paths"]
+    assert "/api/v2/monitoring/sources" not in frozen_11["paths"]
+
+
+def test_console_api_12_snapshot_remains_safe_reads_only() -> None:
+    frozen_12 = json.loads(_OPENAPI_12_PATH.read_text(encoding="utf-8"))
+    assert frozen_12["info"]["version"] == "0.12.0"
+    assert "/api/v2/monitoring/sources" in frozen_12["paths"]
+    assert "/api/v2/monitoring/sources/commands" not in frozen_12["paths"]
+    current = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
+    for path, operations in frozen_12["paths"].items():
+        for method, operation in operations.items():
+            _assert_historical_operation_compatible(
+                operation, current["paths"][path][method], path, method
+            )
+
+
+def test_console_api_08_operations_remain_wire_identical() -> None:
+    previous = json.loads(_OPENAPI_08_PATH.read_text(encoding="utf-8"))
+    current = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
+    assert previous["info"]["version"] == "0.8.0"
+    assert set(previous["paths"]).issubset(current["paths"])
+    for path, operations in previous["paths"].items():
+        for method, operation in operations.items():
+            _assert_historical_operation_compatible(
+                operation, current["paths"][path][method], path, method
+            )
+
+
+def _assert_historical_operation_compatible(
+    previous: dict[str, object],
+    current: dict[str, object],
+    path: str,
+    method: str,
+) -> None:
+    """Permit only documented additive audit-action enum values in old reads."""
+    comparable = copy.deepcopy(current)
+    if previous.get("operationId") == "readSystemAudit":
+        previous_parameters = previous["parameters"]
+        current_parameters = comparable["parameters"]
+        old_action = next(item for item in previous_parameters if item["name"] == "action")
+        new_action = next(item for item in current_parameters if item["name"] == "action")
+        assert set(old_action["schema"]["enum"]).issubset(new_action["schema"]["enum"])
+        new_action["schema"]["enum"] = old_action["schema"]["enum"]
+
+        old_response_schema = previous["responses"]["200"]["content"]["application/json"]["schema"]
+        new_response_schema = comparable["responses"]["200"]["content"]["application/json"]["schema"]
+        old_query_actions = old_response_schema["properties"]["query"]["properties"]["action"]["anyOf"][0]["enum"]
+        new_query_actions = new_response_schema["properties"]["query"]["properties"]["action"]["anyOf"][0]["enum"]
+        assert set(old_query_actions).issubset(new_query_actions)
+        new_response_schema["properties"]["query"]["properties"]["action"]["anyOf"][0]["enum"] = old_query_actions
+        old_record_actions = old_response_schema["properties"]["items"]["items"]["properties"]["action"]["enum"]
+        new_record_actions = new_response_schema["properties"]["items"]["items"]["properties"]["action"]["enum"]
+        assert set(old_record_actions).issubset(new_record_actions)
+        new_response_schema["properties"]["items"]["items"]["properties"]["action"]["enum"] = old_record_actions
+    assert comparable == previous, (path, method)
 
 
 def test_registered_console_routes_match_openapi_paths_and_methods() -> None:
@@ -98,7 +243,10 @@ def test_registered_console_routes_match_openapi_paths_and_methods() -> None:
     actual = {
         (_normalize_path(route.path), method)
         for route in app.routes
-        if (route.path.startswith("/api/v1/") and route.methods is not None)
+        if (
+            route.path.startswith(("/api/v1/", "/api/v2/"))
+            and route.methods is not None
+        )
         for method in route.methods
         if method in _HTTP_METHODS
     }
@@ -113,6 +261,81 @@ def test_registered_console_routes_match_openapi_paths_and_methods() -> None:
     assert actual == expected, _route_diff(actual, expected)
 
 
+def test_publication_receipt_api_remains_read_only_until_trusted_write_contract() -> (
+    None
+):
+    """Option A approval does not authorize an unauthenticated runtime ingress."""
+    document = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
+    receipt_path = "/api/v1/rulesets/{bindingId}/publications/{publicationId}/receipts"
+
+    assert set(document["paths"][receipt_path]) == {"get"}
+
+
+def test_openapi_metric_examples_cover_backend_metric_registry() -> None:
+    """Examples cover every metric and match its backend unit and aggregation basis."""
+    document = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
+    definitions = frozenset(_metric_definitions(document))
+    expected = frozenset(
+        (metric, unit, METRIC_DENOMINATORS[metric].value)
+        for metric, unit in METRIC_UNITS.items()
+    )
+
+    assert definitions == expected
+    operation = document["paths"]["/api/v1/metrics/query"]["get"]
+    metrics_parameter = next(
+        parameter
+        for parameter in operation["parameters"]
+        if parameter["name"] == "metrics"
+    )
+    metric_alternation = "|".join(re.escape(metric) for metric in sorted(METRIC_UNITS))
+    expected_pattern = f"^(?:{metric_alternation})(?:,(?:{metric_alternation}))*$"
+    assert expected_pattern in {
+        constraint["pattern"]
+        for constraint in metrics_parameter["schema"]["allOf"]
+        if "pattern" in constraint
+    }
+
+
+def test_openapi_publication_stage_and_reason_match_backend_enums() -> None:
+    """Read-back mismatch is a failure reason, not a publication lifecycle state."""
+    document = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
+    operation = document["paths"]["/api/v1/rulesets/{bindingId}/publications"]["get"]
+    response = operation["responses"]["200"]["content"]["application/json"]["schema"]
+    phase = response["properties"]["items"]["items"]["properties"]["validation"][
+        "properties"
+    ]
+    reason_schema = phase["reason"]
+    reason_values = next(
+        branch["enum"]
+        for branch in reason_schema["anyOf"]
+        if branch.get("type") == "string" and isinstance(branch.get("enum"), list)
+    )
+
+    assert phase["state"]["enum"] == [state.value for state in PublicationStage]
+    assert reason_values == [reason.value for reason in PublicationReason]
+    assert "readback_mismatch" not in phase["state"]["enum"]
+    assert "readback_mismatch" in reason_values
+
+
+def _metric_definitions(value: object) -> Iterator[tuple[str, str, str]]:
+    if isinstance(value, dict):
+        metric = value.get("metric")
+        unit = value.get("unit")
+        denominator = value.get("denominator")
+        if (
+            isinstance(metric, str)
+            and metric in METRIC_UNITS
+            and isinstance(unit, str)
+            and isinstance(denominator, str)
+        ):
+            yield metric, unit, denominator
+        for nested in value.values():
+            yield from _metric_definitions(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _metric_definitions(nested)
+
+
 def test_openapi_operations_have_complete_wire_contract_metadata() -> None:
     """Every documented operation exposes its stable request/response boundary."""
     document = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
@@ -122,22 +345,36 @@ def test_openapi_operations_have_complete_wire_contract_metadata() -> None:
     for path, path_item in document["paths"].items():
         for method, operation in path_item.items():
             operation_id = operation["operationId"]
-            assert isinstance(operation_id, str) and operation_id.strip(), (path, method)
+            assert isinstance(operation_id, str) and operation_id.strip(), (
+                path,
+                method,
+            )
             assert operation_id not in operation_ids, operation_id
             operation_ids.add(operation_id)
 
-            assert isinstance(operation.get("summary"), str) and operation["summary"].strip()
+            assert (
+                isinstance(operation.get("summary"), str)
+                and operation["summary"].strip()
+            )
             assert len(operation.get("tags", [])) == 1
             semantic_rules = operation.get("x-semantic-rules")
             assert isinstance(semantic_rules, list) and semantic_rules
-            assert all(isinstance(rule, str) and rule.strip() for rule in semantic_rules)
+            assert all(
+                isinstance(rule, str) and rule.strip() for rule in semantic_rules
+            )
             assert isinstance(operation.get("x-unknown-outcome"), bool)
 
             security = operation.get("security")
-            assert isinstance(security, list), (operation_id, "security must be explicit")
+            assert isinstance(security, list), (
+                operation_id,
+                "security must be explicit",
+            )
             for requirement in security:
                 assert isinstance(requirement, dict)
-                assert set(requirement).issubset(security_schemes), (operation_id, requirement)
+                assert set(requirement).issubset(security_schemes), (
+                    operation_id,
+                    requirement,
+                )
             csrf_header_required = any(
                 parameter.get("name") == "x-sentinel-csrf"
                 and parameter.get("in") == "header"
@@ -150,6 +387,32 @@ def test_openapi_operations_have_complete_wire_contract_metadata() -> None:
                 ), operation_id
 
             parameters = operation.get("parameters", [])
+            query_parameters = [
+                parameter for parameter in parameters if parameter.get("in") == "query"
+            ]
+            if query_parameters:
+                assert operation.get("x-query-policy") == {
+                    "unknownParameters": "reject",
+                    "duplicateParameters": "reject",
+                    "rejection": {
+                        "status": ERROR_STATUS_BY_CODE["invalid_request"],
+                        "code": "invalid_request",
+                    },
+                }, operation_id
+                for parameter in query_parameters:
+                    expected_encoding = (
+                        "canonical-decimal"
+                        if parameter.get("schema", {}).get("type") == "integer"
+                        else None
+                    )
+                    assert (
+                        parameter.get("x-query-integer-encoding") == expected_encoding
+                    ), (
+                        operation_id,
+                        parameter.get("name"),
+                    )
+            else:
+                assert "x-query-policy" not in operation, operation_id
             request_id = next(
                 (
                     parameter
@@ -159,7 +422,9 @@ def test_openapi_operations_have_complete_wire_contract_metadata() -> None:
                 ),
                 None,
             )
-            assert request_id is not None and request_id["required"] is True, operation_id
+            assert request_id is not None and request_id["required"] is True, (
+                operation_id
+            )
 
             responses = operation["responses"]
             success_responses = [
@@ -172,7 +437,9 @@ def test_openapi_operations_have_complete_wire_contract_metadata() -> None:
                 if status == "204":
                     assert "content" not in response, operation_id
                 else:
-                    assert "application/json" in response.get("content", {}), operation_id
+                    assert "application/json" in response.get("content", {}), (
+                        operation_id
+                    )
 
             error_responses = [
                 (status, response)
@@ -182,15 +449,49 @@ def test_openapi_operations_have_complete_wire_contract_metadata() -> None:
             assert error_responses, operation_id
             for status, response in error_responses:
                 allowed_codes = response.get("x-allowed-error-codes")
-                assert isinstance(allowed_codes, list) and allowed_codes, (operation_id, status)
+                assert isinstance(allowed_codes, list) and allowed_codes, (
+                    operation_id,
+                    status,
+                )
                 error_schema = response["content"]["application/json"]["schema"]
                 error_property = error_schema["properties"]["error"]
                 assert "code" in error_property["required"], (operation_id, status)
+                if status == "429":
+                    assert "rate_limited" in allowed_codes, (operation_id, status)
+                    assert "retryAfterMs" in error_property["required"], (
+                        operation_id,
+                        status,
+                    )
+                    retry_after_schema = error_property["properties"]["retryAfterMs"]
+                    assert retry_after_schema["type"] == "integer", (
+                        operation_id,
+                        status,
+                    )
+                    assert retry_after_schema["minimum"] == 0, (operation_id, status)
+                    assert retry_after_schema["maximum"] == 300_000, (
+                        operation_id,
+                        status,
+                    )
 
             if method in {"post", "put", "patch"} and operation_id != "logout":
                 body = operation.get("requestBody")
                 assert body is not None and body["required"] is True, operation_id
                 assert "application/json" in body.get("content", {}), operation_id
+                _assert_closed_request_objects(
+                    body["content"]["application/json"]["schema"], operation_id
+                )
+
+
+def _assert_closed_request_objects(schema: object, operation_id: str) -> None:
+    """Keep generated request DTOs closed so unknown fields are never silently ignored."""
+    if isinstance(schema, dict):
+        if schema.get("type") == "object":
+            assert schema.get("additionalProperties") is False, operation_id
+        for nested in schema.values():
+            _assert_closed_request_objects(nested, operation_id)
+    elif isinstance(schema, list):
+        for nested in schema:
+            _assert_closed_request_objects(nested, operation_id)
 
 
 def test_openapi_declares_the_complete_operation_permission_matrix() -> None:
@@ -207,12 +508,27 @@ def test_openapi_declares_the_complete_operation_permission_matrix() -> None:
         "readInstanceObservation": (None, ("metrics:view",)),
         "readIncidentTimeline": (None, ("metrics:view",)),
         "readIncidentEvidence": (None, ("metrics:view",)),
+        "readAgentReportingProtocolObservations": (None, ()),
+        "readIncidentEventProtocolObservations": (None, ()),
         "readSystemAudit": ("admin", ()),
+        "readSystemDeploymentGuides": (None, ()),
+        "readHostMetrics": (None, ("metrics:view",)),
+        "readHostAssociations": (None, ()),
+        "putHostAssociation": ("admin", ()),
+        "deleteHostAssociation": ("admin", ()),
+        "readHostAssociationOperation": ("admin", ()),
+        "readRuleLoadObservationHistory": (None, ()),
         "readRegisteredSources": ("admin", ()),
         "checkRegisteredSource": ("admin", ()),
         "mutateRegisteredSource": ("admin", ()),
         "readRegisteredSourceOperation": ("admin", ()),
+        "checkMonitoringSource": ("admin", ()),
+            "mutateMonitoringSource": ("admin", ()),
+            "readMonitoringSourceOperation": ("admin", ()),
+        "readMonitoringSources": (None, ()),
+        "readMonitoringSource": ("admin", ()),
         "createRuleBinding": ("admin", ("rules:write",)),
+        "readBindingRegistration": ("admin", ("rules:write",)),
         "readRuleDrafts": (None, ("rules:write",)),
         "readRuleDraft": (None, ("rules:write",)),
         "validateRuleCandidate": (None, ("rules:write",)),
@@ -231,7 +547,9 @@ def test_openapi_declares_the_complete_operation_permission_matrix() -> None:
             capabilities = access["capabilities"]
             assert role is None or role == "admin", (operation_id, role)
             assert isinstance(capabilities, list), (operation_id, capabilities)
-            assert set(capabilities).issubset({"metrics:view", "rules:write"}), operation_id
+            assert set(capabilities).issubset({"metrics:view", "rules:write"}), (
+                operation_id
+            )
             actual[operation_id] = (role, tuple(capabilities))
 
     complete_expected = {
@@ -240,6 +558,35 @@ def test_openapi_declares_the_complete_operation_permission_matrix() -> None:
         for operation in item.values()
     }
     assert actual == complete_expected
+
+
+def test_console_contract_document_matches_current_access_and_error_summary() -> None:
+    """Keep human contract summaries aligned with current role and error facts."""
+    contract = _CONTRACT_DOC_PATH.read_text(encoding="utf-8")
+    access_summary = contract.split("## 1. 最小权限", maxsplit=1)[1].split(
+        "## 2. 配置键映射", maxsplit=1
+    )[0]
+    error_summary = contract.split("## 7. 错误约定", maxsplit=1)[1].split(
+        "## 8. 五项决策", maxsplit=1
+    )[0]
+
+    assert "capability_denied" not in contract
+    assert "不提供独立授予 capability" in access_summary
+    assert "version_conflict" not in error_summary
+    assert "readback_mismatch" not in error_summary
+
+    documented_statuses: dict[str, int] = {}
+    for status_text, codes_text in re.findall(
+        r"\|\s*(\d{3})\s*\|\s*([^|]+)\|", error_summary
+    ):
+        status = int(status_text)
+        codes = re.findall(r"`([^`]+)`", codes_text)
+        assert codes, (status, codes_text)
+        for code in codes:
+            assert code not in documented_statuses, code
+            documented_statuses[code] = status
+
+    assert documented_statuses == dict(ERROR_STATUS_BY_CODE)
 
 
 def test_openapi_declares_request_id_rejection_for_every_operation() -> None:
@@ -257,11 +604,103 @@ def test_openapi_declares_request_id_rejection_for_every_operation() -> None:
                 ),
                 None,
             )
-            assert request_id is not None and request_id["required"] is True, operation_id
-            bad_request_codes = operation["responses"].get("400", {}).get(
-                "x-allowed-error-codes", []
+            assert request_id is not None and request_id["required"] is True, (
+                operation_id
+            )
+            assert "duplicate" in request_id.get("description", "").lower(), (
+                operation_id,
+                "request ID multiplicity must be explicit in OpenAPI",
+            )
+            bad_request_codes = (
+                operation["responses"].get("400", {}).get("x-allowed-error-codes", [])
             )
             assert "invalid_request" in bad_request_codes, operation_id
+
+
+def test_every_runtime_operation_rejects_missing_invalid_or_duplicate_request_id() -> (
+    None
+):
+    """The executable routes reject malformed correlation IDs consistently."""
+
+    async def verify_runtime_contract() -> None:
+        app = build_app(
+            bootstrap_initialization_reader=object(),
+            setup_window_reader=object(),
+            bootstrap_operator_verifier=object(),
+            current_session_reader=object(),
+            current_session_revoker=object(),
+            account_directory_reader=object(),
+            allowed_browser_origins=frozenset({"https://console.example.test"}),
+            login_service=object(),
+            client_identity_hmac_key=b"contract-test-key" * 2,
+            account_command_service=object(),
+            own_password_service=object(),
+        )
+        document = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
+        invalid_request_id = "not a valid request id"
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="https://console.example.test"
+        ) as client:
+            for path, path_item in document["paths"].items():
+                runtime_path = re.sub(r"\{[^}]+\}", "contract-probe", path)
+                for method, operation in path_item.items():
+                    if method.upper() not in _HTTP_METHODS:
+                        continue
+                    response = await client.request(
+                        method.upper(),
+                        runtime_path,
+                        headers={"x-request-id": invalid_request_id},
+                    )
+                    operation_id = operation["operationId"]
+                    assert response.status_code == 400, operation_id
+                    assert response.json()["error"]["code"] == "invalid_request", (
+                        operation_id,
+                        response.text,
+                    )
+                    assert response.headers["x-request-id"] != invalid_request_id
+                    assert (
+                        response.json()["error"]["requestId"]
+                        == response.headers["x-request-id"]
+                    )
+
+                    missing_response = await client.request(
+                        method.upper(),
+                        runtime_path,
+                    )
+                    assert missing_response.status_code == 400, operation_id
+                    assert missing_response.json()["error"]["code"] == (
+                        "invalid_request"
+                    ), (operation_id, missing_response.text)
+                    assert missing_response.headers.get("x-request-id")
+                    assert (
+                        missing_response.json()["error"]["requestId"]
+                        == (missing_response.headers["x-request-id"])
+                    )
+
+                    duplicate_request_ids = [
+                        ("x-request-id", "contract-first"),
+                        ("x-request-id", "contract-second"),
+                    ]
+                    duplicate_response = await client.request(
+                        method.upper(),
+                        runtime_path,
+                        headers=duplicate_request_ids,
+                    )
+                    assert duplicate_response.status_code == 400, operation_id
+                    assert duplicate_response.json()["error"]["code"] == (
+                        "invalid_request"
+                    ), (operation_id, duplicate_response.text)
+                    assert duplicate_response.headers["x-request-id"] not in {
+                        "contract-first",
+                        "contract-second",
+                    }
+                    assert (
+                        duplicate_response.json()["error"]["requestId"]
+                        == (duplicate_response.headers["x-request-id"])
+                    )
+
+    asyncio.run(verify_runtime_contract())
 
 
 def test_openapi_candidate_validation_errors_match_non_idempotent_routes() -> None:
@@ -317,10 +756,7 @@ def test_openapi_bootstrap_authorization_errors_match_exchange_route() -> None:
         "rate_limited",
         "service_unavailable",
     }
-    assert any(
-        "CsrfCookie" in requirement
-        for requirement in operation["security"]
-    )
+    assert any("CsrfCookie" in requirement for requirement in operation["security"])
     assert any(
         parameter.get("name") == "x-sentinel-csrf"
         and parameter.get("in") == "header"
@@ -349,6 +785,16 @@ def test_openapi_read_observation_errors_match_route_capabilities() -> None:
             "service_unavailable",
         },
         "readSystemProtocols": {
+            "invalid_request",
+            "unauthenticated",
+            "service_unavailable",
+        },
+        "readAgentReportingProtocolObservations": {
+            "invalid_request",
+            "unauthenticated",
+            "service_unavailable",
+        },
+        "readIncidentEventProtocolObservations": {
             "invalid_request",
             "unauthenticated",
             "service_unavailable",
@@ -449,7 +895,9 @@ def test_openapi_own_password_errors_match_current_account_route() -> None:
     success_schema = operation["responses"]["200"]["content"]["application/json"][
         "schema"
     ]
-    assert success_schema["properties"]["sessionDisposition"]["const"] == "reauthenticate"
+    assert (
+        success_schema["properties"]["sessionDisposition"]["const"] == "reauthenticate"
+    )
 
 
 def test_openapi_bootstrap_and_session_access_errors_match_routes() -> None:
@@ -462,7 +910,7 @@ def test_openapi_bootstrap_and_session_access_errors_match_routes() -> None:
     }
     expected = {
         "readBootstrap": {"invalid_request", "service_unavailable"},
-        "readSession": {"invalid_request", "unauthenticated", "service_unavailable"},
+        "readSession": {"invalid_request", "service_unavailable"},
         "login": {
             "invalid_request",
             "unauthenticated",
@@ -704,7 +1152,8 @@ def test_openapi_models_optional_session_and_csrf_cookie_proofs() -> None:
         operation = operations[operation_id]
         assert any(
             "CsrfCookie" in requirement
-            and "x-sentinel-csrf" in {parameter["name"] for parameter in operation["parameters"]}
+            and "x-sentinel-csrf"
+            in {parameter["name"] for parameter in operation["parameters"]}
             for requirement in operation["security"]
         ), operation_id
 
@@ -752,7 +1201,12 @@ def test_openapi_pagination_bounds_match_console_wire_contract() -> None:
                 if parameter.get("name") == "page":
                     page_parameters += 1
                     assert schema["minimum"] == 1, path
-                    assert schema["maximum"] == 1_000_000, path
+                    expected_maximum = (
+                        10_000
+                        if path == "/api/v2/monitoring/host-associations"
+                        else MAX_PROTOCOL_OBSERVATIONS_PAGE
+                    )
+                    assert schema["maximum"] == expected_maximum, path
                 elif parameter.get("name") == "pageSize":
                     page_size_parameters += 1
                     assert schema["minimum"] == 1, path
@@ -784,9 +1238,9 @@ def test_openapi_pagination_bounds_match_console_wire_contract() -> None:
 def test_openapi_system_protocol_snapshot_limit_matches_known_boundaries() -> None:
     """A snapshot cannot document more protocol facts than the domain can represent."""
     document = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
-    schema = document["paths"]["/api/v1/system/protocols"]["get"]["responses"][
-        "200"
-    ]["content"]["application/json"]["schema"]
+    schema = document["paths"]["/api/v1/system/protocols"]["get"]["responses"]["200"][
+        "content"
+    ]["application/json"]["schema"]
     protocol_schema = schema["properties"]["items"]["items"]
 
     assert schema["properties"]["items"]["maxItems"] == len(ProtocolBoundary)
@@ -805,17 +1259,17 @@ def test_openapi_system_protocol_snapshot_limit_matches_known_boundaries() -> No
 def test_openapi_system_connection_enums_match_domain_facts() -> None:
     """Connection labels and provider facts stay aligned across both runtimes."""
     document = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
-    item_schema = document["paths"]["/api/v1/system/connections"]["get"][
-        "responses"
-    ]["200"]["content"]["application/json"]["schema"]["properties"]["items"][
-        "items"
-    ]
+    item_schema = document["paths"]["/api/v1/system/connections"]["get"]["responses"][
+        "200"
+    ]["content"]["application/json"]["schema"]["properties"]["items"]["items"]
     properties = item_schema["properties"]
     provider_enum = properties["provider"]["anyOf"][0]["enum"]
     reason_enum = properties["reason"]["anyOf"][0]["enum"]
 
     assert set(properties["kind"]["enum"]) == {value.value for value in ConnectionKind}
-    assert set(properties["state"]["enum"]) == {value.value for value in ConnectionState}
+    assert set(properties["state"]["enum"]) == {
+        value.value for value in ConnectionState
+    }
     assert set(provider_enum) == {value.value for value in ConfigurationSourceProvider}
     assert set(properties["capabilities"]["items"]["enum"]) == {
         value.value for value in ConnectionCapability
@@ -844,10 +1298,13 @@ def test_fleet_openapi_query_parameters_match_runtime_allowlist() -> None:
     assert scope["schema"]["enum"] == ["fleet", "application"]
 
 
-def test_observation_and_rule_openapi_query_parameters_match_runtime_allowlists() -> None:
+def test_observation_and_rule_openapi_query_parameters_match_runtime_allowlists() -> (
+    None
+):
     """Query fields advertised to clients must be accepted by their Python route."""
     document = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
     runtime_fields = {
+        "listAccounts": _ACCOUNT_QUERY_FIELDS,
         "readMetrics": _METRICS_REQUIRED_QUERY_FIELDS | _METRICS_OPTIONAL_QUERY_FIELDS,
         "readFleet": _FLEET_REQUIRED_QUERY_FIELDS | _FLEET_OPTIONAL_QUERY_FIELDS,
         "readInstanceCatalog": (
@@ -865,8 +1322,20 @@ def test_observation_and_rule_openapi_query_parameters_match_runtime_allowlists(
             _INCIDENT_EVIDENCE_REQUIRED | _INCIDENT_EVIDENCE_OPTIONAL
         ),
         "readSystemAudit": _SYSTEM_AUDIT_ALLOWED_QUERY_KEYS,
+        "readAgentReportingProtocolObservations": {"page", "pageSize"},
+        "readIncidentEventProtocolObservations": {"page", "pageSize"},
         "readRuleBindings": _RULE_BINDING_REQUIRED | _RULE_BINDING_OPTIONAL,
+        "readRuleCatalog": {"environmentId", "appId", "kind", "search", "page", "pageSize"},
+        "readRuleBindingObservedStates": _RULE_BINDING_STATES_QUERY_FIELDS,
+        "readRuleLoadObservations": _RULE_LOAD_OBSERVATIONS_QUERY_FIELDS,
         "readRulePublicationReceipts": {"page", "pageSize"},
+        "readHostMetrics": {"from", "to", "stepMs"},
+        "readHostAssociations": {
+            "environmentId", "sourceId", "appId", "instanceId", "page", "pageSize"
+        },
+        "readRuleLoadObservationHistory": {
+            "environmentId", "appId", "bindingId", "instanceId", "page", "pageSize"
+        },
     }
     operations = {
         operation["operationId"]: operation
@@ -874,7 +1343,15 @@ def test_observation_and_rule_openapi_query_parameters_match_runtime_allowlists(
         for operation in path_item.values()
     }
 
-    assert set(runtime_fields).issubset(operations)
+    query_operation_ids = {
+        operation["operationId"]
+        for operation in operations.values()
+        if any(
+            parameter.get("in") == "query"
+            for parameter in operation.get("parameters", [])
+        )
+    }
+    assert set(runtime_fields) == query_operation_ids
     for operation_id, expected_fields in runtime_fields.items():
         documented_fields = {
             parameter["name"]
@@ -904,9 +1381,9 @@ def test_observation_and_rule_openapi_query_parameters_match_runtime_allowlists(
     instance_response = instance_detail["responses"]["200"]["content"][
         "application/json"
     ]["schema"]
-    metric_scope = instance_response["properties"]["metrics"]["anyOf"][0][
-        "properties"
-    ]["query"]["properties"]["context"]["properties"]["scope"]
+    metric_scope = instance_response["properties"]["metrics"]["anyOf"][0]["properties"][
+        "query"
+    ]["properties"]["context"]["properties"]["scope"]
     assert metric_scope["enum"] == ["host", "container", "process"]
 
     instance_catalog = operations["readInstanceCatalog"]
@@ -921,10 +1398,76 @@ def test_observation_and_rule_openapi_query_parameters_match_runtime_allowlists(
     catalog_response = instance_catalog["responses"]["200"]["content"][
         "application/json"
     ]["schema"]
-    catalog_scope = catalog_response["properties"]["query"]["properties"][
-        "context"
-    ]["properties"]["scope"]
+    catalog_scope = catalog_response["properties"]["query"]["properties"]["context"][
+        "properties"
+    ]["scope"]
     assert catalog_scope["enum"] == ["fleet", "application"]
+
+
+def test_openapi_integer_query_bounds_match_runtime_parser_limits() -> None:
+    """Integer wire bounds stay aligned with the Python parser's source values."""
+    document = json.loads(_OPENAPI_PATH.read_text(encoding="utf-8"))
+    operations = {
+        operation["operationId"]: operation
+        for path_item in document["paths"].values()
+        for operation in path_item.values()
+    }
+    expected = {
+        "listAccounts": {
+            "page": (MIN_QUERY_INTEGER, MAX_ACCOUNT_DIRECTORY_PAGE),
+            "pageSize": (MIN_QUERY_INTEGER, MAX_ACCOUNT_DIRECTORY_PAGE_SIZE),
+        },
+        "readMetrics": {
+            "stepMs": (MIN_QUERY_INTEGER, MAX_QUERY_STEP_MS),
+        },
+        "readFleet": {
+            "page": (MIN_QUERY_INTEGER, MAX_QUERY_PAGE_NUMBER),
+            "pageSize": (MIN_QUERY_INTEGER, MAX_QUERY_PAGE_SIZE),
+            "stepMs": (MIN_QUERY_INTEGER, MAX_QUERY_STEP_MS),
+        },
+        "readInstanceCatalog": {
+            "page": (MIN_QUERY_INTEGER, MAX_QUERY_PAGE_NUMBER),
+            "pageSize": (MIN_QUERY_INTEGER, MAX_QUERY_PAGE_SIZE),
+        },
+        "readInstanceObservation": {
+            "stepMs": (MIN_QUERY_INTEGER, MAX_QUERY_STEP_MS),
+        },
+        "readIncidentTimeline": {
+            "pageSize": (MIN_QUERY_INTEGER, MAX_INCIDENT_PAGE_SIZE),
+        },
+        "readIncidentEvidence": {},
+        "readSystemAudit": {
+            "page": (MIN_QUERY_INTEGER, MAX_QUERY_PAGE_NUMBER),
+            "pageSize": (MIN_QUERY_INTEGER, MAX_QUERY_PAGE_SIZE),
+        },
+        "readRuleBindings": {
+            "page": (MIN_QUERY_INTEGER, MAX_QUERY_PAGE_NUMBER),
+            "pageSize": (MIN_QUERY_INTEGER, MAX_QUERY_PAGE_SIZE),
+        },
+        "readRulePublicationReceipts": {
+            "page": (MIN_QUERY_INTEGER, MAX_PUBLICATION_RECEIPT_PAGE),
+            "pageSize": (MIN_QUERY_INTEGER, MAX_PUBLICATION_RECEIPT_PAGE_SIZE),
+        },
+    }
+
+    for operation_id, expected_parameters in expected.items():
+        operation = operations[operation_id]
+        integer_parameters = {
+            parameter["name"]: parameter["schema"]
+            for parameter in operation.get("parameters", [])
+            if parameter.get("in") == "query"
+            and parameter.get("schema", {}).get("type") == "integer"
+        }
+        assert set(integer_parameters) == set(expected_parameters), operation_id
+        for name, (minimum, maximum) in expected_parameters.items():
+            assert integer_parameters[name]["minimum"] == minimum, (
+                operation_id,
+                name,
+            )
+            assert integer_parameters[name]["maximum"] == maximum, (
+                operation_id,
+                name,
+            )
 
 
 def test_openapi_bounded_strings_declare_utf16_wire_limits() -> None:
@@ -989,9 +1532,7 @@ def test_idempotent_commands_align_header_body_and_operation_lookup() -> None:
             if not status.startswith("2"):
                 continue
             schema = (
-                response.get("content", {})
-                .get("application/json", {})
-                .get("schema")
+                response.get("content", {}).get("application/json", {}).get("schema")
             )
             if schema is not None:
                 for request_key_schema in _schemas_named(schema, "requestKey"):
@@ -1021,7 +1562,9 @@ def _assert_request_key_schema(schema: dict[str, object], owner: object) -> None
 
 def _schema_patterns(value: object) -> set[str]:
     if isinstance(value, dict):
-        patterns = {value["pattern"]} if isinstance(value.get("pattern"), str) else set()
+        patterns = (
+            {value["pattern"]} if isinstance(value.get("pattern"), str) else set()
+        )
         for nested in value.values():
             patterns.update(_schema_patterns(nested))
         return patterns
@@ -1070,6 +1613,30 @@ def test_error_response_rejects_unknown_or_mismatched_code_status_pairs() -> Non
         error_response("request-1", "invalid_request", 422)
     with pytest.raises(ValueError, match="error code/status contract mismatch"):
         error_response("request-1", "unregistered_error", 500)
+
+
+def test_rate_limited_error_response_requires_bounded_retry_delay() -> None:
+    with pytest.raises(ValueError, match="require an integer retry delay"):
+        error_response("request-1", "rate_limited", 429)
+    for invalid_retry_after_ms in (True, 1.5):
+        with pytest.raises(ValueError, match="require an integer retry delay"):
+            error_response(
+                "request-1",
+                "rate_limited",
+                429,
+                retry_after_ms=invalid_retry_after_ms,
+            )
+
+    response = error_response("request-1", "rate_limited", 429, retry_after_ms=300_001)
+
+    assert response.status_code == 429
+    assert json.loads(response.body) == {
+        "error": {
+            "code": "rate_limited",
+            "requestId": "request-1",
+            "retryAfterMs": 300_000,
+        }
+    }
 
 
 def _normalize_path(path: str) -> str:

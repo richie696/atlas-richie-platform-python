@@ -12,6 +12,9 @@ from atlas_richie.sentinel_console.infrastructure.rule_activation_plan_worker_li
     RuleActivationPlanWorkerLoop,
     install_rule_activation_plan_worker_lifecycle,
 )
+from atlas_richie.sentinel_console.infrastructure.persistence.runtime_database_engine_provider import (
+    RuntimeDatabaseNotConfigured,
+)
 
 
 class _Worker:
@@ -28,6 +31,19 @@ class _Worker:
         except asyncio.CancelledError:
             self.cancelled = True
             raise
+
+
+class _SetupModeWorker:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.entered = asyncio.Event()
+
+    async def run_once(self, *, limit: int):
+        self.calls += 1
+        self.entered.set()
+        if self.calls == 1:
+            raise RuntimeDatabaseNotConfigured("database is not configured")
+        await asyncio.Event().wait()
 
 
 class RuleActivationPlanWorkerLifecycleTests(unittest.IsolatedAsyncioTestCase):
@@ -64,6 +80,29 @@ class RuleActivationPlanWorkerLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(worker.calls, 1)
 
         self.assertTrue(worker.cancelled)
+
+    async def test_missing_database_is_quiet_and_scheduler_keeps_retrying(self) -> None:
+        worker = _SetupModeWorker()
+        stop = asyncio.Event()
+        loop = RuleActivationPlanWorkerLoop(
+            worker, poll_interval_seconds=0.01, batch_size=2
+        )
+        task = asyncio.create_task(loop.run(stop))
+        try:
+            with self.assertNoLogs(
+                "atlas_richie.sentinel_console.infrastructure.rule_activation_plan_worker_lifecycle",
+                level="WARNING",
+            ):
+                await asyncio.wait_for(worker.entered.wait(), timeout=0.5)
+                await asyncio.sleep(0.03)
+            self.assertGreaterEqual(worker.calls, 2)
+        finally:
+            stop.set()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     def test_invalid_scheduler_bounds_are_rejected(self) -> None:
         worker = _Worker()

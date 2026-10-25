@@ -5,27 +5,27 @@ from __future__ import annotations
 import unittest
 
 from httpx import ASGITransport, AsyncClient
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
+from atlas_richie.sentinel_console.application.bootstrap_database_check import (
+    BootstrapDatabaseCandidate,
+    BootstrapDatabaseKind,
+)
 from atlas_richie.sentinel_console.application.bootstrap_initialization import (
     BootstrapInitializationIdempotencyConflict,
     BootstrapInitializationInput,
     BootstrapInitializationReceipt,
     BootstrapInitializationStatus,
 )
-from atlas_richie.sentinel_console.application.issue_csrf_nonce import IssueCsrfNonce
-from atlas_richie.sentinel_console.application.bootstrap_database_check import (
-    BootstrapDatabaseCandidate,
-    BootstrapDatabaseKind,
-)
 from atlas_richie.sentinel_console.application.bootstrap_source_check import (
     BootstrapSourceCandidate,
     BootstrapSourceProvider,
     NoSourceAuthentication,
 )
+from atlas_richie.sentinel_console.application.issue_csrf_nonce import IssueCsrfNonce
 from atlas_richie.sentinel_console.domain.account_password import AccountPassword
 from atlas_richie.sentinel_console.domain.account_username import AccountUsername
-from session_test_doubles import UnusedSessionRevoker
 
 
 class _InitializationReader:
@@ -36,6 +36,11 @@ class _InitializationReader:
 class _SetupWindowReader:
     async def is_setup_window_open(self) -> bool:
         return True
+
+
+class _ClosedSetupWindowReader:
+    async def is_setup_window_open(self) -> bool:
+        return False
 
 
 class _OperatorVerifier:
@@ -88,10 +93,12 @@ class _OperationReader:
 
 
 class BootstrapInitializationApiTest(unittest.IsolatedAsyncioTestCase):
-    def _build_app(self, *, initializer=None, operation_reader=None):
+    def _build_app(
+        self, *, initializer=None, operation_reader=None, setup_window_reader=None
+    ):
         return build_app(
             bootstrap_initialization_reader=_InitializationReader(),
-            setup_window_reader=_SetupWindowReader(),
+            setup_window_reader=setup_window_reader or _SetupWindowReader(),
             bootstrap_operator_verifier=_OperatorVerifier(),
             current_session_reader=_SessionReader(),
             current_session_revoker=UnusedSessionRevoker(),
@@ -142,6 +149,12 @@ class BootstrapInitializationApiTest(unittest.IsolatedAsyncioTestCase):
             "sentinel_bootstrap": operator_session,
         }
 
+    def _set_client_cookies(
+        self, client: AsyncClient, nonce: str, operator_session="operator-session"
+    ) -> None:
+        client.cookies.clear()
+        client.cookies.update(self._cookies(nonce, operator_session))
+
     def test_initialization_input_rejects_untyped_authority_values(self):
         valid = {
             "database": BootstrapDatabaseCandidate(BootstrapDatabaseKind.SQLITE),
@@ -160,20 +173,22 @@ class BootstrapInitializationApiTest(unittest.IsolatedAsyncioTestCase):
             ("admin_password", "secret-password-123"),
             ("source", {"provider": "nacos"}),
         ):
-            with self.subTest(field=field_name):
-                with self.assertRaises(TypeError):
-                    BootstrapInitializationInput(**{**valid, field_name: invalid_value})
+            with (
+                self.subTest(field=field_name),
+                self.assertRaises(TypeError),
+            ):
+                BootstrapInitializationInput(**{**valid, field_name: invalid_value})
 
     async def test_command_maps_typed_input_and_returns_secret_free_receipt(self):
         nonce = self._nonce()
         initializer = _Initializer()
         app = self._build_app(initializer=initializer)
         async with await self._client(app) as client:
+            self._set_client_cookies(client, nonce)
             response = await client.post(
                 "/api/v1/system/bootstrap/initialize",
                 json=self._payload(),
                 headers=self._headers(nonce),
-                cookies=self._cookies(nonce),
             )
 
         self.assertEqual(response.status_code, 200)
@@ -200,14 +215,35 @@ class BootstrapInitializationApiTest(unittest.IsolatedAsyncioTestCase):
         nonce = self._nonce()
         app = self._build_app(initializer=_ConflictingInitializer())
         async with await self._client(app) as client:
+            self._set_client_cookies(client, nonce)
             response = await client.post(
                 "/api/v1/system/bootstrap/initialize",
                 json=self._payload(),
                 headers=self._headers(nonce),
-                cookies=self._cookies(nonce),
             )
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["error"]["code"], "idempotency_conflict")
+
+    async def test_closed_setup_rejects_later_initialization_as_bootstrap_unauthorized(
+        self,
+    ):
+        nonce = self._nonce()
+        initializer = _Initializer()
+        app = self._build_app(
+            initializer=initializer,
+            setup_window_reader=_ClosedSetupWindowReader(),
+        )
+        async with await self._client(app) as client:
+            self._set_client_cookies(client, nonce)
+            response = await client.post(
+                "/api/v1/system/bootstrap/initialize",
+                json=self._payload(),
+                headers=self._headers(nonce),
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["error"]["code"], "bootstrap_unauthorized")
+        self.assertEqual(initializer.calls, [])
 
     async def test_database_and_source_credentials_never_escape_command_repr(self):
         nonce = self._nonce()
@@ -237,11 +273,11 @@ class BootstrapInitializationApiTest(unittest.IsolatedAsyncioTestCase):
         }
         app = self._build_app(initializer=initializer)
         async with await self._client(app) as client:
+            self._set_client_cookies(client, nonce)
             response = await client.post(
                 "/api/v1/system/bootstrap/initialize",
                 json=payload,
                 headers=self._headers(nonce),
-                cookies=self._cookies(nonce),
             )
 
         self.assertEqual(response.status_code, 200)
@@ -272,11 +308,11 @@ class BootstrapInitializationApiTest(unittest.IsolatedAsyncioTestCase):
                 async with await self._client(
                     self._build_app(initializer=initializer)
                 ) as client:
+                    self._set_client_cookies(client, nonce)
                     response = await client.post(
                         "/api/v1/system/bootstrap/initialize",
                         json=self._payload(),
                         headers=headers,
-                        cookies=self._cookies(nonce),
                     )
                 self.assertEqual(response.status_code, expected_status)
         self.assertEqual(initializer.calls, [])
@@ -291,11 +327,11 @@ class BootstrapInitializationApiTest(unittest.IsolatedAsyncioTestCase):
             async with await self._client(
                 self._build_app(initializer=initializer)
             ) as client:
+                self._set_client_cookies(client, nonce)
                 response = await client.post(
                     "/api/v1/system/bootstrap/initialize",
                     json=payload,
                     headers=self._headers(nonce),
-                    cookies=self._cookies(nonce),
                 )
             self.assertEqual(response.status_code, 400)
         self.assertEqual(initializer.calls, [])
@@ -303,6 +339,7 @@ class BootstrapInitializationApiTest(unittest.IsolatedAsyncioTestCase):
     async def test_database_wire_boundaries_are_rejected_before_initializer(self):
         initializer = _Initializer()
         invalid_databases = (
+            {"kind": "sqlite", "path": "/tmp/browser-selected.db"},
             {
                 "kind": "postgresql",
                 "host": "🌋" * 127,
@@ -343,11 +380,11 @@ class BootstrapInitializationApiTest(unittest.IsolatedAsyncioTestCase):
             async with await self._client(
                 self._build_app(initializer=initializer)
             ) as client:
+                self._set_client_cookies(client, nonce)
                 response = await client.post(
                     "/api/v1/system/bootstrap/initialize",
                     json=payload,
                     headers=self._headers(nonce),
-                    cookies=self._cookies(nonce),
                 )
             self.assertEqual(response.status_code, 400)
         self.assertEqual(initializer.calls, [])
@@ -356,15 +393,15 @@ class BootstrapInitializationApiTest(unittest.IsolatedAsyncioTestCase):
         reader = _OperationReader()
         app = self._build_app(operation_reader=reader)
         async with await self._client(app) as client:
+            self._set_client_cookies(client, self._nonce())
             accepted = await client.get(
                 "/api/v1/system/bootstrap/operations/setup-request-001",
                 headers={"x-request-id": "bootstrap-read-1"},
-                cookies=self._cookies(self._nonce()),
             )
+            self._set_client_cookies(client, self._nonce(), "other-session")
             denied = await client.get(
                 "/api/v1/system/bootstrap/operations/setup-request-001",
                 headers={"x-request-id": "bootstrap-read-2"},
-                cookies=self._cookies(self._nonce(), "other-session"),
             )
 
         self.assertEqual(accepted.status_code, 200)
@@ -375,11 +412,11 @@ class BootstrapInitializationApiTest(unittest.IsolatedAsyncioTestCase):
     async def test_missing_persistence_authorities_fail_closed(self):
         nonce = self._nonce()
         async with await self._client(self._build_app()) as client:
+            self._set_client_cookies(client, nonce)
             response = await client.post(
                 "/api/v1/system/bootstrap/initialize",
                 json=self._payload(),
                 headers=self._headers(nonce),
-                cookies=self._cookies(nonce),
             )
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["error"]["code"], "service_unavailable")

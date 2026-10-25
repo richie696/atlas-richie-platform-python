@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import re
+from datetime import UTC, datetime
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -17,9 +17,9 @@ from ..application.account_commands import (
     AccountCommandKind,
     AccountCommandUnauthenticated,
     AccountCommandUnavailable,
+    AccountMutation,
     AccountOperationActor,
     AccountOperationUnavailable,
-    AccountMutation,
     MutateAccount,
 )
 from ..application.errors import SessionAuthorityUnavailable
@@ -37,7 +37,7 @@ from .browser_security import (
 from .http_support import (
     error_response,
     read_json_object,
-    strict_request_id,
+    request_id,
 )
 
 _MAX_BODY_BYTES = 8192
@@ -57,7 +57,7 @@ def account_command_routes(
         raise ValueError("at least one browser origin must be configured")
 
     async def mutate(request: Request) -> Response:
-        request_id_value, valid_request_id = _strict_request_id(request)
+        request_id_value, valid_request_id = request_id(request)
         if not valid_request_id:
             return error_response(request_id_value, "invalid_request", 400)
         proof, failure = browser_write_proof(request, allowed_origins)
@@ -107,7 +107,7 @@ def account_command_routes(
         )
 
     async def read_operation(request: Request) -> Response:
-        request_id_value, valid_request_id = _strict_request_id(request)
+        request_id_value, valid_request_id = request_id(request)
         if not valid_request_id:
             return error_response(request_id_value, "invalid_request", 400)
         session_digest, failure = browser_session_digest(request)
@@ -155,10 +155,6 @@ def account_command_routes(
     )
 
 
-def _strict_request_id(request: Request) -> tuple[str, bool]:
-    return strict_request_id(request)
-
-
 def _parse_command(body: dict[str, object] | None) -> AccountMutation | None:
     if body is None:
         return None
@@ -177,7 +173,9 @@ def _parse_command(body: dict[str, object] | None) -> AccountMutation | None:
                 return None
             payload = body["input"]
             if not isinstance(payload, dict) or set(payload) != {
-                "username", "password", "roleId"
+                "username",
+                "password",
+                "roleId",
             }:
                 return None
             username = AccountUsername(payload["username"])
@@ -187,8 +185,12 @@ def _parse_command(body: dict[str, object] | None) -> AccountMutation | None:
 
         if kind is AccountCommandKind.STATUS:
             expected_keys = {"kind", "requestKey", "accountId", "revision", "status"}
-        else:
+        elif kind is AccountCommandKind.ROLE:
             expected_keys = {"kind", "requestKey", "accountId", "revision", "roleId"}
+        elif kind is AccountCommandKind.RESET_PASSWORD:
+            expected_keys = {"kind", "requestKey", "accountId", "revision", "password"}
+        else:
+            expected_keys = {"kind", "requestKey", "accountId", "revision"}
         if set(body) != expected_keys:
             return None
         account_id = body.get("accountId")
@@ -214,6 +216,14 @@ def _parse_command(body: dict[str, object] | None) -> AccountMutation | None:
                 account_id=account_id,
                 expected_revision=int(revision_value),
                 status=status,
+            )
+        if kind in {AccountCommandKind.RESET_PASSWORD, AccountCommandKind.DELETE}:
+            return AccountMutation(
+                request_key,
+                kind,
+                account_id=account_id,
+                expected_revision=int(revision_value),
+                password=AccountPassword(body["password"]) if kind is AccountCommandKind.RESET_PASSWORD else None,
             )
         return AccountMutation(
             request_key,

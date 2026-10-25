@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import multiprocessing
 import os
 from pathlib import Path
 
@@ -33,6 +34,93 @@ def _store(
         path,
         AesGcmSecretCipher("active", {"active": key or bytes(range(32))}),
     )
+
+
+_ROTATION_DATABASE_URL = (
+    "postgresql+psycopg://operator:synthetic-secret@db.local/console"
+)
+
+
+def _read_runtime_locator_in_new_process(
+    path: str,
+    active_key_id: str,
+    encoded_key_ring: str,
+    results: multiprocessing.queues.Queue,
+) -> None:
+    """Read a locator using deployment configuration in a fresh process."""
+    configuration = (
+        locator_configuration.RuntimeDatabaseLocatorConfiguration.from_environment(
+            {
+                "SENTINEL_CONSOLE_RUNTIME_LOCATOR_PATH": path,
+                "SENTINEL_CONSOLE_RUNTIME_LOCATOR_SECRET_ACTIVE_KEY_ID": active_key_id,
+                "SENTINEL_CONSOLE_RUNTIME_LOCATOR_SECRET_KEY_RING": encoded_key_ring,
+            }
+        )
+    )
+    try:
+        locator = asyncio.run(configuration.create_store().read())
+    except RuntimeDatabaseLocatorError:
+        results.put(("failed-closed",))
+        return
+    if locator is None:
+        results.put(("missing",))
+        return
+    results.put(
+        (
+            "read",
+            locator.revision,
+            locator.database_url == _ROTATION_DATABASE_URL,
+        )
+    )
+
+
+def _run_rotation_reader(
+    context: multiprocessing.context.BaseContext,
+    path: Path,
+    *,
+    active_key_id: str,
+    encoded_key_ring: str,
+) -> tuple[object, ...]:
+    results = context.Queue()
+    worker = context.Process(
+        target=_read_runtime_locator_in_new_process,
+        args=(str(path), active_key_id, encoded_key_ring, results),
+    )
+    try:
+        worker.start()
+        outcome = results.get(timeout=15)
+        worker.join(timeout=15)
+        assert not worker.is_alive(), "locator reader process did not exit"
+        assert worker.exitcode == 0
+        return outcome
+    finally:
+        if worker.is_alive():
+            worker.terminate()
+            worker.join(timeout=5)
+        results.close()
+        results.join_thread()
+
+
+def _attempt_runtime_locator_write(
+    path: str,
+    database_url: str,
+    gate: multiprocessing.synchronize.Event,
+    ready: multiprocessing.queues.Queue,
+    results: multiprocessing.queues.Queue,
+) -> None:
+    """Compete for the initial locator revision from an independent process."""
+    ready.put("ready")
+    if not gate.wait(timeout=10):
+        results.put("gate-timeout")
+        return
+    try:
+        written = asyncio.run(
+            _store(Path(path)).write(database_url, expected_revision=None)
+        )
+    except RuntimeDatabaseLocatorConflict:
+        results.put("conflict")
+    else:
+        results.put(("created", written.revision))
 
 
 def test_locator_is_encrypted_and_compare_and_swap_is_enforced(
@@ -150,6 +238,58 @@ def test_concurrent_first_writes_have_one_winner(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_independent_worker_processes_compare_and_swap_first_locator_write(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "runtime.json"
+    context = multiprocessing.get_context("spawn")
+    gate = context.Event()
+    ready = context.Queue()
+    results = context.Queue()
+    database_urls = (
+        "postgresql+psycopg://first:synthetic-secret@db.local/console",
+        "mysql+asyncmy://second:synthetic-secret@db.local/console",
+    )
+    workers = [
+        context.Process(
+            target=_attempt_runtime_locator_write,
+            args=(str(path), database_url, gate, ready, results),
+        )
+        for database_url in database_urls
+    ]
+    try:
+        for worker in workers:
+            worker.start()
+        assert [ready.get(timeout=15) for _worker in workers] == ["ready", "ready"]
+        gate.set()
+
+        outcomes = [results.get(timeout=15) for _worker in workers]
+        for worker in workers:
+            worker.join(timeout=15)
+            assert worker.exitcode == 0
+
+        assert sum(isinstance(outcome, tuple) for outcome in outcomes) == 1
+        assert outcomes.count("conflict") == 1
+        winner_revision = next(
+            outcome[1] for outcome in outcomes if isinstance(outcome, tuple)
+        )
+        persisted = asyncio.run(_store(path).read())
+        assert persisted is not None
+        assert persisted.revision == winner_revision
+        assert persisted.database_url in database_urls
+        raw = path.read_bytes()
+        assert all(url.encode() not in raw for url in database_urls)
+    finally:
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(timeout=5)
+        ready.close()
+        ready.join_thread()
+        results.close()
+        results.join_thread()
+
+
 def test_wrong_key_and_tampered_payload_fail_closed(tmp_path: Path) -> None:
     path = tmp_path / "runtime.json"
     asyncio.run(
@@ -210,6 +350,54 @@ def test_deployment_configuration_keeps_key_material_hidden_and_builds_store(
         )
     )
     assert locator.database_url.endswith("@db/console")
+
+
+def test_runtime_locator_key_rotation_survives_process_restart_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "runtime.json"
+    key_v1 = bytes(range(32))
+    key_v2 = bytes(reversed(range(32)))
+    encoded_v1 = base64.b64encode(key_v1).decode("ascii")
+    encoded_v2 = base64.b64encode(key_v2).decode("ascii")
+    initial_configuration = (
+        locator_configuration.RuntimeDatabaseLocatorConfiguration.from_environment(
+            {
+                "SENTINEL_CONSOLE_RUNTIME_LOCATOR_PATH": str(path),
+                "SENTINEL_CONSOLE_RUNTIME_LOCATOR_SECRET_ACTIVE_KEY_ID": "locator-v1",
+                "SENTINEL_CONSOLE_RUNTIME_LOCATOR_SECRET_KEY_RING": (
+                    f"locator-v1={encoded_v1}"
+                ),
+            }
+        )
+    )
+    written = asyncio.run(
+        initial_configuration.create_store().write(
+            _ROTATION_DATABASE_URL,
+            expected_revision=None,
+        )
+    )
+    assert json.loads(path.read_text())["key_id"] == "locator-v1"
+    assert _ROTATION_DATABASE_URL.encode() not in path.read_bytes()
+
+    context = multiprocessing.get_context("spawn")
+    rotated = _run_rotation_reader(
+        context,
+        path,
+        active_key_id="locator-v2",
+        encoded_key_ring=(
+            f"locator-v2={encoded_v2};locator-v1={encoded_v1}"
+        ),
+    )
+    assert rotated == ("read", written.revision, True)
+
+    without_previous_key = _run_rotation_reader(
+        context,
+        path,
+        active_key_id="locator-v2",
+        encoded_key_ring=f"locator-v2={encoded_v2}",
+    )
+    assert without_previous_key == ("failed-closed",)
 
 
 def test_deployment_configuration_rejects_missing_or_invalid_key_material() -> None:

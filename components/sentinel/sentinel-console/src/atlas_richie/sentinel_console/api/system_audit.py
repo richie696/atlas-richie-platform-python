@@ -16,6 +16,13 @@ from ..domain.session import AccountRole
 from ..domain.system_audit import AuditAction, AuditQuery, AuditResult, SystemAuditPage
 from ..domain.wire_strings import is_bounded_wire_identifier
 from .http_support import error_response
+from .query_parsing import (
+    MAX_QUERY_PAGE_NUMBER,
+    MAX_QUERY_PAGE_SIZE,
+    MIN_QUERY_INTEGER,
+    parse_integer,
+    parse_query_values,
+)
 from .system_observation_access import (
     authorize_system_read,
     system_read_headers,
@@ -67,15 +74,12 @@ def system_audit_route(
 
 
 def _parse_query(request: Request) -> AuditQuery | None:
-    pairs = request.query_params.multi_items()
-    keys = [key for key, _value in pairs]
-    if (
-        len(keys) != len(set(keys))
-        or set(keys) - _ALLOWED_QUERY_KEYS
-        or not _REQUIRED_QUERY_KEYS.issubset(keys)
-    ):
+    try:
+        values = parse_query_values(
+            request, _REQUIRED_QUERY_KEYS, _ALLOWED_QUERY_KEYS - _REQUIRED_QUERY_KEYS
+        )
+    except ValueError:
         return None
-    values = dict(pairs)
     actor_id = values.get("actorId", "")
     if actor_id and not is_bounded_wire_identifier(actor_id, 200):
         return None
@@ -84,10 +88,10 @@ def _parse_query(request: Request) -> AuditQuery | None:
     if start is None or end is None:
         return None
     try:
-        page = int(values["page"])
-        page_size = int(values["pageSize"])
-        if str(page) != values["page"] or str(page_size) != values["pageSize"]:
-            return None
+        page = parse_integer(values["page"], MIN_QUERY_INTEGER, MAX_QUERY_PAGE_NUMBER)
+        page_size = parse_integer(
+            values["pageSize"], MIN_QUERY_INTEGER, MAX_QUERY_PAGE_SIZE
+        )
         action = AuditAction(values["action"]) if "action" in values else None
         result = AuditResult(values["result"]) if "result" in values else None
         return AuditQuery(start, end, actor_id, action, result, page, page_size)

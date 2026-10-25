@@ -2,24 +2,25 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import unittest
+from datetime import UTC, datetime
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.api.rule_candidate_parsing import (
     InvalidCandidateShape,
     parse_rule_candidate,
 )
-from atlas_richie.sentinel_console.domain.rule_candidates import candidate_checksum
 from atlas_richie.sentinel_console.app import build_app
-from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
 from atlas_richie.sentinel_console.application.rule_snapshot_ports import (
     RuleSetSnapshotAuthorityUnavailable,
     RuleSetSnapshotNotFound,
     RuleSetSnapshotRateLimited,
 )
 from atlas_richie.sentinel_console.domain.rule_bindings import RuleBinding, RuleKind
+from atlas_richie.sentinel_console.domain.rule_candidates import candidate_checksum
 from atlas_richie.sentinel_console.domain.rule_snapshots import (
     FlowControlBehavior,
     FlowGrade,
@@ -29,7 +30,6 @@ from atlas_richie.sentinel_console.domain.rule_snapshots import (
     RuleSetSnapshot,
 )
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from session_test_doubles import UnusedSessionRevoker
 
 _REQUEST_ID = "rule-candidate-diff-1"
 _SESSION = "synthetic-session-token-for-candidate-diff-0001"
@@ -202,6 +202,7 @@ class RuleCandidateDiffApiTests(unittest.IsolatedAsyncioTestCase):
         reader = _SnapshotReader()
         response = await self._post("admin", _candidate(), reader=reader)
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("compareRuleCandidate", response)
         body = response.json()
         self.assertEqual(body["bindingId"], "binding-1")
         self.assertEqual(body["baseChecksum"], "sha256:baseline")
@@ -235,17 +236,19 @@ class RuleCandidateDiffApiTests(unittest.IsolatedAsyncioTestCase):
                     "admin", stale_candidate, reader=_SnapshotReader()
                 )
                 self.assertEqual(stale.status_code, 409)
+                assert_openapi_response("compareRuleCandidate", stale)
         candidate = _candidate()
         candidate["rules"][0]["recordId"] = "foreign-record"
         unknown = await self._post("admin", candidate, reader=_SnapshotReader())
         self.assertEqual(unknown.status_code, 409)
+        assert_openapi_response("compareRuleCandidate", unknown)
 
     async def test_path_binding_mismatch_is_conflict_without_rebinding(self):
         app = _app("admin", reader=_SnapshotReader())
         async with AsyncClient(
-            transport=ASGITransport(app=app), base_url=_ORIGIN,
-            cookies={"sentinel_session": _SESSION,
-                     "__Host-sentinel_csrf": _CSRF},
+            transport=ASGITransport(app=app),
+            base_url=_ORIGIN,
+            cookies={"sentinel_session": _SESSION, "__Host-sentinel_csrf": _CSRF},
         ) as client:
             response = await client.post(
                 "/api/v1/rulesets/another-binding/diff",
@@ -257,13 +260,16 @@ class RuleCandidateDiffApiTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
         self.assertEqual(response.status_code, 409)
+        assert_openapi_response("compareRuleCandidate", response)
 
     async def test_view_and_anonymous_sessions_cannot_compare_candidates(self):
         reader = _SnapshotReader()
         viewer = await self._post("view", _candidate(), reader=reader)
         anonymous = await self._post(None, _candidate(), reader=reader)
         self.assertEqual(viewer.status_code, 403)
+        assert_openapi_response("compareRuleCandidate", viewer)
         self.assertEqual(anonymous.status_code, 401)
+        assert_openapi_response("compareRuleCandidate", anonymous)
         self.assertEqual(reader.calls, [])
 
     async def test_invalid_browser_proof_is_rejected_before_authority_read(self):
@@ -278,7 +284,9 @@ class RuleCandidateDiffApiTests(unittest.IsolatedAsyncioTestCase):
             headers={"origin": "https://evil.test"},
         )
         self.assertEqual(missing.status_code, 403)
+        assert_openapi_response("compareRuleCandidate", missing)
         self.assertEqual(wrong_origin.status_code, 403)
+        assert_openapi_response("compareRuleCandidate", wrong_origin)
         self.assertEqual(reader.calls, [])
 
     async def test_invalid_shape_and_semantics_have_distinct_status(self):
@@ -289,7 +297,9 @@ class RuleCandidateDiffApiTests(unittest.IsolatedAsyncioTestCase):
         invalid["rules"][0]["rule"]["value"]["count"] = 0
         semantic = await self._post("admin", invalid, reader=_SnapshotReader())
         self.assertEqual(shape.status_code, 400)
+        assert_openapi_response("compareRuleCandidate", shape)
         self.assertEqual(semantic.status_code, 422)
+        assert_openapi_response("compareRuleCandidate", semantic)
 
     async def test_authority_failures_never_become_empty_success(self):
         for error, expected in (
@@ -302,6 +312,7 @@ class RuleCandidateDiffApiTests(unittest.IsolatedAsyncioTestCase):
                     "admin", _candidate(), reader=_SnapshotReader(error)
                 )
                 self.assertEqual(response.status_code, expected)
+                assert_openapi_response("compareRuleCandidate", response)
 
     def test_all_supported_rule_families_parse_as_typed_values(self):
         values = (

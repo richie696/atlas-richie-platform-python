@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import unittest
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
-import unittest
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 from starlette.requests import Request
 
+from atlas_richie.sentinel_console.api.metrics import (
+    _parse_query as parse_metrics_query,
+)
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
 from atlas_richie.sentinel_console.application.instance_catalog_ports import (
@@ -18,6 +24,7 @@ from atlas_richie.sentinel_console.application.instance_catalog_ports import (
     InstanceIncarnationRetired,
 )
 from atlas_richie.sentinel_console.domain.instance_catalog import (
+    METRIC_DENOMINATORS,
     METRIC_UNITS,
     OPERATIONAL_METRIC_DEFINITIONS,
     InstanceCatalogQuery,
@@ -25,6 +32,7 @@ from atlas_richie.sentinel_console.domain.instance_catalog import (
     InstanceHealth,
     InstanceLayer,
     InstanceRuleReceipt,
+    MetricDenominator,
     MetricQuality,
     MetricReading,
     ObservationCoverage,
@@ -36,15 +44,16 @@ from atlas_richie.sentinel_console.domain.instance_catalog import (
 from atlas_richie.sentinel_console.domain.instance_observation import (
     InstanceDetailQuery,
     InstanceObservation,
-    MetricSample,
     MetricBundle,
     MetricQuery,
+    MetricSample,
     MetricSeries,
     ObservationContext,
 )
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from atlas_richie.sentinel_console.api.metrics import _parse_query as parse_metrics_query
-from session_test_doubles import UnusedSessionRevoker
+from atlas_richie.sentinel_console.infrastructure.unavailable_metrics_reader import (
+    UnavailableMetricsReader,
+)
 
 _REQUEST_HEADERS = {"x-request-id": "instance-catalog-read-1"}
 _OPAQUE_COOKIE = "synthetic-session-token-for-console-read-0001"
@@ -390,7 +399,9 @@ def _metrics_params(query: MetricQuery) -> dict[str, str]:
 
 
 class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
-    def test_metrics_query_bound_is_derived_from_all_registered_metric_ids(self) -> None:
+    def test_metrics_query_bound_is_derived_from_all_registered_metric_ids(
+        self,
+    ) -> None:
         def request_for(metrics: str) -> Request:
             params = {
                 "environmentId": "prod",
@@ -416,7 +427,9 @@ class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "selection length is out of range"):
             parse_metrics_query(request_for(f"{registered_metrics}x"))
 
-    def test_metrics_reject_python_integers_outside_json_finite_number_range(self) -> None:
+    def test_metrics_reject_python_integers_outside_json_finite_number_range(
+        self,
+    ) -> None:
         metric, unit, denominator = _OPERATIONAL_METRIC_FACTS[0]
         with self.assertRaisesRegex(ValueError, "finite and non-negative"):
             MetricReading(
@@ -432,6 +445,78 @@ class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "finite and non-negative"):
             MetricSample(at=_FROM, value=10**1000)
 
+    def test_metric_denominator_is_bound_to_metric_identity(self) -> None:
+        metric, unit, denominator = _OPERATIONAL_METRIC_FACTS[0]
+        other_denominator = next(
+            item for item in MetricDenominator if item != denominator
+        )
+        coverage = ObservationCoverage(None, None, 0)
+        with self.assertRaisesRegex(ValueError, "denominator does not match"):
+            MetricReading(
+                source="reporter-v1",
+                denominator=other_denominator,
+                coverage=coverage,
+                quality=MetricQuality.NOT_INTEGRATED,
+                metric=metric,
+                unit=unit,
+                value=None,
+                sampled_at=None,
+            )
+        with self.assertRaisesRegex(ValueError, "denominator does not match"):
+            MetricSeries(
+                source="reporter-v1",
+                denominator=other_denominator,
+                coverage=coverage,
+                quality=MetricQuality.NOT_INTEGRATED,
+                metric=metric,
+                unit=unit,
+                samples=(),
+            )
+
+    def test_metric_denominator_registry_has_explicit_wire_semantics(self) -> None:
+        self.assertEqual(
+            METRIC_DENOMINATORS,
+            {
+                "http_qps": MetricDenominator.COMPLETED_HTTP_REQUESTS,
+                "resource_entry_rate": MetricDenominator.ATTEMPTED_ENTRIES,
+                "tps": MetricDenominator.BUSINESS_TRANSACTIONS,
+                "rt_p95": MetricDenominator.COMPLETED_HTTP_REQUESTS,
+                "blocked_ratio": MetricDenominator.ATTEMPTED_ENTRIES,
+                "cpu_ratio": MetricDenominator.CPU_CORES,
+                "memory_ratio": MetricDenominator.MEMORY_LIMIT_BYTES,
+                "memory_bytes": MetricDenominator.REPORTING_PROCESSES,
+            },
+        )
+
+    def test_raw_memory_bytes_is_available_without_a_memory_limit(self) -> None:
+        reading = MetricReading(
+            source="reporter-v1",
+            denominator=MetricDenominator.REPORTING_PROCESSES,
+            coverage=ObservationCoverage(1, "inventory-v1", 1),
+            quality=MetricQuality.AVAILABLE,
+            metric="memory_bytes",
+            unit=METRIC_UNITS["memory_bytes"],
+            value=1024,
+            sampled_at=_FROM,
+        )
+        self.assertEqual(reading.denominator, MetricDenominator.REPORTING_PROCESSES)
+
+    def test_metric_bundle_requires_summary_and_series_metadata_to_match(self) -> None:
+        bundle = _metrics_bundle()
+        first_series = bundle.series[0]
+        changed_cover = replace(
+            first_series,
+            coverage=ObservationCoverage(1, "inventory-v2", 0),
+        )
+        changed_quality = replace(first_series, quality=MetricQuality.PARTIAL)
+        changed_source = replace(first_series, source="other-reporter")
+        for mismatched in (changed_cover, changed_quality, changed_source):
+            with (
+                self.subTest(source=mismatched.source, quality=mismatched.quality),
+                self.assertRaisesRegex(ValueError, "summary and series metadata"),
+            ):
+                replace(bundle, series=(mismatched, *bundle.series[1:]))
+
     def test_catalog_search_limit_matches_utf16_wire_units(self) -> None:
         self.assertEqual(_query(search="😀" * 100).search, "😀" * 100)
         with self.assertRaisesRegex(ValueError, "search is out of range"):
@@ -442,9 +527,11 @@ class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "query identity is invalid"):
             _query(environment_id="😀" * 101)
         for blank in ("\x1c", "\x85", "\ufeff", "\u3000", "\ud800"):
-            with self.subTest(blank=hex(ord(blank))):
-                with self.assertRaisesRegex(ValueError, "query identity is invalid"):
-                    _query(environment_id=blank)
+            with (
+                self.subTest(blank=hex(ord(blank))),
+                self.assertRaisesRegex(ValueError, "query identity is invalid"),
+            ):
+                _query(environment_id=blank)
         self.assertEqual(_query(environment_id="id\ufeff").environment_id, "id\ufeff")
 
     async def test_admin_and_view_receive_query_bound_authoritative_page(self) -> None:
@@ -462,6 +549,7 @@ class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
                 )
 
             self.assertEqual(response.status_code, 200)
+            assert_openapi_response("readInstanceCatalog", response)
             self.assertEqual(
                 response.headers["x-request-id"], _REQUEST_HEADERS["x-request-id"]
             )
@@ -498,9 +586,7 @@ class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
             query = _detail_query()
             reader = _InstanceObservationReader(_instance_observation(query))
             async with AsyncClient(
-                transport=ASGITransport(
-                    app=_app(role, observation_reader=reader)
-                ),
+                transport=ASGITransport(app=_app(role, observation_reader=reader)),
                 base_url="http://test",
             ) as client:
                 client.cookies.set("sentinel_session", _OPAQUE_COOKIE)
@@ -510,6 +596,7 @@ class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
                     params=_detail_params(query),
                 )
             self.assertEqual(response.status_code, 200)
+            assert_openapi_response("readInstanceObservation", response)
             self.assertEqual(response.headers["cache-control"], "no-store")
             body = response.json()
             self.assertEqual(body["query"]["processEpoch"], "process-epoch-1")
@@ -529,9 +616,7 @@ class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
         query = _detail_query(InstanceLayer.CONTAINER)
         reader = _InstanceObservationReader(_instance_observation(query))
         async with AsyncClient(
-            transport=ASGITransport(
-                app=_app("view", observation_reader=reader)
-            ),
+            transport=ASGITransport(app=_app("view", observation_reader=reader)),
             base_url="http://test",
         ) as client:
             client.cookies.set("sentinel_session", _OPAQUE_COOKIE)
@@ -541,6 +626,7 @@ class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
                 params=_detail_params(query),
             )
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readInstanceObservation", response)
         self.assertIsNone(response.json()["metrics"])
 
     async def test_detail_invalid_query_fails_before_authority_read(self) -> None:
@@ -548,9 +634,7 @@ class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
         params = _detail_params(_detail_query())
         params["scope"] = "fleet"
         async with AsyncClient(
-            transport=ASGITransport(
-                app=_app("view", observation_reader=reader)
-            ),
+            transport=ASGITransport(app=_app("view", observation_reader=reader)),
             base_url="http://test",
         ) as client:
             client.cookies.set("sentinel_session", _OPAQUE_COOKIE)
@@ -561,6 +645,21 @@ class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"]["code"], "invalid_request")
+        self.assertEqual(reader.calls, 0)
+
+        duplicate_params = [*_detail_params(_detail_query()).items(), ("scope", "host")]
+        async with AsyncClient(
+            transport=ASGITransport(app=_app("view", observation_reader=reader)),
+            base_url="http://test",
+        ) as client:
+            client.cookies.set("sentinel_session", _OPAQUE_COOKIE)
+            duplicate = await client.get(
+                "/api/v1/instances/instance-1",
+                headers=_REQUEST_HEADERS,
+                params=duplicate_params,
+            )
+        self.assertEqual(duplicate.status_code, 400)
+        self.assertEqual(duplicate.json()["error"]["code"], "invalid_request")
         self.assertEqual(reader.calls, 0)
 
     async def test_detail_authority_errors_match_protocol(self) -> None:
@@ -609,6 +708,7 @@ class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
                 params=_metrics_params(query),
             )
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readMetrics", response)
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertEqual(
             response.json()["query"]["metrics"],
@@ -618,6 +718,96 @@ class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(response.json()["series"]), 6)
         self.assertEqual(reader.query, query)
         self.assertEqual(reader.calls, 1)
+
+    async def test_unintegrated_metrics_are_explicit_and_never_zero_filled(
+        self,
+    ) -> None:
+        query_template = _metrics_query()
+        query = MetricQuery(
+            context=query_template.context,
+            metrics=tuple(METRIC_UNITS),
+            step_ms=query_template.step_ms,
+        )
+        async with AsyncClient(
+            transport=ASGITransport(
+                app=_app("view", metrics_reader=UnavailableMetricsReader())
+            ),
+            base_url="http://test",
+        ) as client:
+            client.cookies.set("sentinel_session", _OPAQUE_COOKIE)
+            response = await client.get(
+                "/api/v1/metrics/query",
+                headers=_REQUEST_HEADERS,
+                params=_metrics_params(query),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readMetrics", response)
+        body = response.json()
+        self.assertEqual(body["query"]["metrics"], list(query.metrics))
+        self.assertEqual(len(body["summary"]), len(query.metrics))
+        self.assertEqual(len(body["series"]), len(query.metrics))
+        for reading in body["summary"]:
+            self.assertEqual(reading["quality"], "not_integrated")
+            self.assertIsNone(reading["value"])
+            self.assertIsNone(reading["sampledAt"])
+            self.assertIsNone(reading["coverage"]["expected"])
+            self.assertEqual(reading["coverage"]["reporting"], 0)
+        for series in body["series"]:
+            self.assertEqual(series["quality"], "not_integrated")
+            self.assertEqual(series["samples"], [])
+
+    async def test_unavailable_reader_preserves_query_and_emits_no_fabricated_facts(
+        self,
+    ) -> None:
+        query = _metrics_query()
+
+        bundle = await UnavailableMetricsReader().read_metrics(query)
+
+        self.assertEqual(bundle.query, query)
+        self.assertEqual(bundle.as_of.tzinfo, UTC)
+        self.assertEqual(bundle.annotations, ())
+        summary_by_metric = {reading.metric: reading for reading in bundle.summary}
+        series_by_metric = {series.metric: series for series in bundle.series}
+        self.assertEqual(set(summary_by_metric), set(query.metrics))
+        self.assertEqual(set(series_by_metric), set(query.metrics))
+
+        for metric in query.metrics:
+            reading = summary_by_metric[metric]
+            series = series_by_metric[metric]
+            self.assertEqual(reading.source, "not-integrated")
+            self.assertEqual(reading.denominator, METRIC_DENOMINATORS[metric])
+            self.assertEqual(reading.unit, METRIC_UNITS[metric])
+            self.assertIs(reading.quality, MetricQuality.NOT_INTEGRATED)
+            self.assertIsNone(reading.value)
+            self.assertIsNone(reading.sampled_at)
+            self.assertIsNone(reading.coverage.expected)
+            self.assertIsNone(reading.coverage.inventory_source)
+            self.assertEqual(reading.coverage.reporting, 0)
+            self.assertEqual(series.source, reading.source)
+            self.assertEqual(series.denominator, reading.denominator)
+            self.assertEqual(series.unit, reading.unit)
+            self.assertIs(series.quality, MetricQuality.NOT_INTEGRATED)
+            self.assertEqual(series.coverage, reading.coverage)
+            self.assertEqual(series.samples, ())
+
+    async def test_generic_app_without_metrics_authority_remains_unavailable(
+        self,
+    ) -> None:
+        query = _metrics_query()
+        async with AsyncClient(
+            transport=ASGITransport(app=_app("view")),
+            base_url="http://test",
+        ) as client:
+            client.cookies.set("sentinel_session", _OPAQUE_COOKIE)
+            response = await client.get(
+                "/api/v1/metrics/query",
+                headers=_REQUEST_HEADERS,
+                params=_metrics_params(query),
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["code"], "service_unavailable")
 
     async def test_metrics_query_rejects_invalid_selection_before_authority(
         self,
@@ -646,6 +836,13 @@ class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
                     "invalid_request",
                     invalid_selection,
                 )
+            duplicate = await client.get(
+                "/api/v1/metrics/query",
+                headers=_REQUEST_HEADERS,
+                params=[*params.items(), ("scope", "application")],
+            )
+            self.assertEqual(duplicate.status_code, 400)
+            self.assertEqual(duplicate.json()["error"]["code"], "invalid_request")
         self.assertEqual(reader.calls, 0)
 
     async def test_metrics_query_authority_errors_match_protocol(self) -> None:
@@ -678,6 +875,10 @@ class InstanceCatalogApiTest(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertEqual(response.status_code, status)
             self.assertEqual(response.json()["error"]["code"], code)
+            if status == 429:
+                self.assertEqual(response.json()["error"]["retryAfterMs"], 500)
+            else:
+                self.assertNotIn("retryAfterMs", response.json()["error"])
             self.assertNotIn("private metrics", response.text)
 
     async def test_invalid_filters_reject_before_authority_read(self) -> None:

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
@@ -40,7 +45,15 @@ from atlas_richie.sentinel_console.domain.instance_observation import (
     ObservationContext,
 )
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from session_test_doubles import UnusedSessionRevoker
+from atlas_richie.sentinel_console.infrastructure.persistence.metrics_fleet_overview_reader import (
+    SQLAlchemyMetricsFleetOverviewReader,
+)
+from atlas_richie.sentinel_console.infrastructure.persistence.metrics_history_reader import (
+    SQLAlchemyMetricsHistoryReader,
+)
+from atlas_richie.sentinel_console.infrastructure.persistence.migration_runner import (
+    upgrade_database,
+)
 
 _REQUEST_HEADERS = {"x-request-id": "fleet-overview-read-1"}
 _OPAQUE_COOKIE = "synthetic-session-token-for-fleet-read-0001"
@@ -236,15 +249,17 @@ class FleetOverviewApiTest(unittest.IsolatedAsyncioTestCase):
 
     def test_fleet_query_search_uses_utf16_units_and_unicode_scalars(self) -> None:
         for invalid_search in ("🌋" * 101, "invalid-\ud800"):
-            with self.subTest(search=repr(invalid_search)):
-                with self.assertRaisesRegex(ValueError, "fleet search is out of range"):
-                    FleetQuery(
-                        context=_query().context,
-                        page=1,
-                        page_size=20,
-                        search=invalid_search,
-                        step_ms=60_000,
-                    )
+            with (
+                self.subTest(search=repr(invalid_search)),
+                self.assertRaisesRegex(ValueError, "fleet search is out of range"),
+            ):
+                FleetQuery(
+                    context=_query().context,
+                    page=1,
+                    page_size=20,
+                    search=invalid_search,
+                    step_ms=60_000,
+                )
 
     async def test_admin_and_viewer_receive_exact_authority_snapshot(self) -> None:
         expected = _snapshot()
@@ -260,6 +275,7 @@ class FleetOverviewApiTest(unittest.IsolatedAsyncioTestCase):
                 )
 
             self.assertEqual(response.status_code, 200)
+            assert_openapi_response("readFleet", response)
             self.assertEqual(
                 response.headers["x-request-id"], _REQUEST_HEADERS["x-request-id"]
             )
@@ -289,6 +305,7 @@ class FleetOverviewApiTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.status_code, 401)
+        assert_openapi_response("readFleet", response)
         self.assertEqual(response.json()["error"]["code"], "unauthenticated")
         self.assertEqual(reader.calls, 0)
 
@@ -349,9 +366,9 @@ class FleetOverviewApiTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status_code, 400)
                 self.assertEqual(response.json()["error"]["code"], "invalid_request")
             duplicate = await client.get(
-                "/api/v1/fleet/overview?" + "&".join(
-                    f"{key}={value}" for key, value in _params().items()
-                ) + "&page=2",
+                "/api/v1/fleet/overview?"
+                + "&".join(f"{key}={value}" for key, value in _params().items())
+                + "&page=2",
                 headers=_REQUEST_HEADERS,
             )
 
@@ -374,6 +391,51 @@ class FleetOverviewApiTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 503)
             self.assertEqual(response.json()["error"]["code"], "service_unavailable")
             self.assertNotIn("private", response.text)
+
+    async def test_sql_reader_returns_renderable_empty_snapshot_instead_of_503(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="sentinel-fleet-api-", dir="/private/tmp"
+        ) as temporary_directory:
+            engine = create_async_engine(
+                f"sqlite+aiosqlite:///{Path(temporary_directory) / 'console.db'}"
+            )
+            try:
+                await upgrade_database(engine)
+
+                async def resolve_engine():
+                    return engine
+
+                metrics_reader = SQLAlchemyMetricsHistoryReader(resolve_engine)
+                reader = SQLAlchemyMetricsFleetOverviewReader(
+                    resolve_engine,
+                    metrics_reader,
+                    clock=lambda: _TO + timedelta(seconds=1),
+                )
+                async with AsyncClient(
+                    transport=ASGITransport(app=_app("view", reader=reader)),
+                    base_url="http://test",
+                ) as client:
+                    client.cookies.set("sentinel_session", _OPAQUE_COOKIE)
+                    response = await client.get(
+                        "/api/v1/fleet/overview",
+                        params=_params(),
+                        headers=_REQUEST_HEADERS,
+                    )
+            finally:
+                await engine.dispose()
+
+        self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readFleet", response)
+        body = response.json()
+        self.assertEqual(body["totalApplications"], 0)
+        self.assertEqual(body["applications"]["items"], [])
+        self.assertEqual(body["coverage"]["expected"], None)
+        self.assertEqual(
+            {item["quality"] for item in body["metrics"]["summary"]},
+            {MetricQuality.NO_SAMPLES.value},
+        )
 
     async def test_target_and_rate_limit_errors_use_stable_wire_codes(self) -> None:
         for error, status, code in (

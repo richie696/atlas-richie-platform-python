@@ -26,11 +26,9 @@ class RulePublicationProviderRouter:
         if not configured:
             raise ValueError("publication provider adapters are invalid")
         for provider, adapter in configured.items():
-            if (
-                not isinstance(provider, ConfigurationSourceProvider)
-                or getattr(adapter, "supported_providers", None)
-                != frozenset({provider})
-            ):
+            if not isinstance(provider, ConfigurationSourceProvider) or getattr(
+                adapter, "supported_providers", None
+            ) != frozenset({provider}):
                 raise ValueError("publication provider adapters are invalid")
         self._adapters = MappingProxyType(configured)
         self.supported_providers = frozenset(configured)

@@ -13,7 +13,7 @@ from ..application.read_session import ReadSession
 from ..domain.session import AccountRole, SessionIdentity
 from .browser_origin import normalize_browser_origin
 from .browser_security import SESSION_COOKIE_NAME, browser_write_proof
-from .http_support import error_response, strict_request_id
+from .http_support import error_response, request_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +32,7 @@ async def authorize_admin_write(
     allowed_browser_origins: Collection[str],
 ) -> tuple[AdminWriteAccess | None, Response | None]:
     """Validate request-id, browser proof, active session and admin role in order."""
-    request_id_value, valid_request_id = strict_request_id(request)
+    request_id_value, valid_request_id = request_id(request)
     if not valid_request_id:
         return None, error_response(request_id_value, "invalid_request", 400)
     allowed_origins = frozenset(
@@ -43,9 +43,7 @@ async def authorize_admin_write(
         return None, error_response(request_id_value, failure[0], failure[1])
     assert proof is not None
     try:
-        identity = await read_session.execute(
-            request.cookies.get(SESSION_COOKIE_NAME)
-        )
+        identity = await read_session.execute(request.cookies.get(SESSION_COOKIE_NAME))
     except SessionAuthorityUnavailable:
         return None, error_response(request_id_value, "service_unavailable", 503)
     if identity is None:

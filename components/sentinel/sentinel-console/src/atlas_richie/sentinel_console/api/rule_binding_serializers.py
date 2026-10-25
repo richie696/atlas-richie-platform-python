@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..application.rule_binding_ports import RuleBindingRegistrationReceipt
 from ..domain.rule_bindings import RuleBinding, RuleBindingPage
 
 
@@ -37,5 +38,19 @@ def _rule_binding_body(binding: RuleBinding) -> dict[str, object]:
         "sourceId": binding.source_id,
         "sourceLabel": binding.source_label,
         "location": binding.location,
+    }
+
+
+def rule_binding_registration_receipt_body(
+    receipt: RuleBindingRegistrationReceipt,
+) -> dict[str, object]:
+    """Serialize only the original safe registration result or a correlated miss."""
+    return {
+        "requestKey": receipt.request_key,
+        "bindingId": receipt.binding_id,
+        "status": receipt.status.value,
+        "binding": (
+            None if receipt.binding is None else rule_binding_body(receipt.binding)
+        ),
     }
 

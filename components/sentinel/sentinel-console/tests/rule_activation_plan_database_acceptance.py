@@ -10,27 +10,43 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import delete, insert, select
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.mutate_rule_set import (
     CancelRuleActivationPlan,
+    CreateRuleActivationPlan,
     RuleMutationCommand,
     RuleOperationRejection,
     RuleOperationStatus,
 )
 from atlas_richie.sentinel_console.application.rule_activation_plan_ports import (
+    RuleActivationPlanClaim,
     RuleActivationPlanClaimConflict,
 )
 from atlas_richie.sentinel_console.application.run_rule_activation_plan_worker import (
     RuleActivationPlanWorkerOutcome,
     RunRuleActivationPlanWorker,
 )
+from atlas_richie.sentinel_console.domain.configuration_source import (
+    ConfigurationSourceProvider,
+)
+from atlas_richie.sentinel_console.domain.rule_candidates import candidate_checksum
 from atlas_richie.sentinel_console.domain.rule_bindings import RuleBinding, RuleKind
 from atlas_richie.sentinel_console.domain.rule_publication_targets import (
     NacosRulePublicationTarget,
     VersionedRulePublicationTarget,
+)
+from atlas_richie.sentinel_console.domain.rule_publications import (
+    PublicationPhase,
+    PublicationPhaseName,
+    PublicationStage,
+)
+from atlas_richie.sentinel_console.domain.system_audit import AuditAction
+from atlas_richie.sentinel_console.infrastructure.persistence.current_session_reader import (
+    SqlAlchemyCurrentSessionReader,
 )
 from atlas_richie.sentinel_console.infrastructure.persistence.models import (
     AccountRecord,
@@ -42,14 +58,61 @@ from atlas_richie.sentinel_console.infrastructure.persistence.models import (
     RuleSetVersionRecord,
     RuleValidationReceiptRecord,
 )
+from atlas_richie.sentinel_console.infrastructure.persistence.rule_activation_plan_reader import (
+    SqlAlchemyRuleActivationPlanReader,
+)
 from atlas_richie.sentinel_console.infrastructure.persistence.rule_activation_plan_work_queue import (
     SqlAlchemyRuleActivationPlanWorkQueue,
 )
 from atlas_richie.sentinel_console.infrastructure.persistence.rule_mutation_store import (
     SqlAlchemyRuleMutationStore,
 )
+from atlas_richie.sentinel_console.infrastructure.persistence.rule_publish_outbox import (
+    RulePublishClaimConflict,
+    SqlAlchemyRulePublishOutbox,
+)
+from atlas_richie.sentinel_console.infrastructure.persistence.system_audit_reader import (
+    SqlAlchemySystemAuditReader,
+)
+from atlas_richie.sentinel_console.infrastructure.sentinel_rule_version_encoder import (
+    SentinelRuleVersionJsonEncoder,
+)
+from atlas_richie.sentinel_console.api.rule_candidate_parsing import (
+    parse_rule_candidate,
+)
 
 _RULE_COMMAND_KEY = b"synthetic-plan-cancel-acceptance-key-000000000000"
+_RULE_PROFILE = "sentinel-profile-v1"
+
+
+def _persisted_flow_version_facts(
+    binding_id: str, *, record_id: str, resource: str, count: int
+) -> tuple[str, list[dict[str, object]]]:
+    """Build a version row whose persisted checksum matches its typed rule."""
+    rule = {
+        "kind": "flow",
+        "value": {
+            "resource": resource,
+            "limitApp": "default",
+            "grade": 1,
+            "count": count,
+            "strategy": 0,
+            "controlBehavior": 0,
+            "clusterMode": False,
+        },
+    }
+    candidate = parse_rule_candidate(
+        {
+            "bindingId": binding_id,
+            "profile": _RULE_PROFILE,
+            "kind": "flow",
+            "baseVersionId": None,
+            "baseChecksum": "sha256:empty",
+            "sourceRevision": None,
+            "rules": [{"recordId": record_id, "rule": rule}],
+        }
+    )
+    return candidate_checksum(candidate), [{"id": record_id, "rule": rule}]
 _ADMIN_SESSION = "synthetic-plan-cancel-admin-session"
 _ADMIN_CSRF = "synthetic-plan-cancel-admin-csrf"
 
@@ -112,7 +175,9 @@ class _StartGatedWorkQueue:
 
 
 class _ProcessPublicationEnqueuer:
-    def __init__(self, store: SqlAlchemyRuleMutationStore, worker_id: str, queue) -> None:
+    def __init__(
+        self, store: SqlAlchemyRuleMutationStore, worker_id: str, queue
+    ) -> None:
         self._store = store
         self._worker_id = worker_id
         self._queue = queue
@@ -163,6 +228,7 @@ def _run_asgi_activation_worker_in_child(
             active_fingerprint_key_id="acceptance",
             binding_reader=_FixedBindingReader(binding_id),
             publication_target_reader=_FixedPublicationTargetReader(target),
+            publication_payload_encoder=SentinelRuleVersionJsonEncoder(_RULE_PROFILE),
         )
         worker = RunRuleActivationPlanWorker(
             work_queue=_StartGatedWorkQueue(
@@ -298,17 +364,14 @@ async def _run_two_asgi_activation_workers(
         for process in processes:
             process.start()
         started = [
-            await asyncio.to_thread(status_queue.get, True, 30)
-            for _ in processes
+            await asyncio.to_thread(status_queue.get, True, 30) for _ in processes
         ]
         errors = [event for event in started if event.get("event") != "started"]
         if errors:
             raise AssertionError(f"ASGI activation child failed to start: {errors}")
 
         start_gate.set()
-        publication_events = [
-            await asyncio.to_thread(publication_queue.get, True, 30)
-        ]
+        publication_events = [await asyncio.to_thread(publication_queue.get, True, 30)]
         expected_publication_id = publication_events[0].get("publication_id")
         deadline = asyncio.get_running_loop().time() + 10
         while True:
@@ -369,6 +432,8 @@ async def assert_independent_plan_workers_fence_and_recover(
     scheduler_loser_plan_id = f"plan-scheduler-loser-{test_id}"
     process_plan_id = f"plan-process-restart-{test_id}"
     asgi_plan_id = f"plan-asgi-lifespans-{test_id}"
+    session_digest = hashlib.sha256(_ADMIN_SESSION.encode()).hexdigest()
+    csrf_digest = hashlib.sha256(_ADMIN_CSRF.encode()).hexdigest()
     version_ids = (f"version-a-{test_id}", f"version-b-{test_id}")
     validation_ids = (f"validation-a-{test_id}", f"validation-b-{test_id}")
     now = datetime.now(UTC).replace(microsecond=0)
@@ -399,16 +464,33 @@ async def assert_independent_plan_workers_fence_and_recover(
                     updated_at=now,
                 )
             )
+            await connection.execute(
+                insert(AuthenticationSessionRecord).values(
+                    session_hash=session_digest,
+                    account_id=account_id,
+                    session_epoch=f"epoch-{test_id[:24]}",
+                    csrf_hash=csrf_digest,
+                    created_at=now,
+                    expires_at=now + timedelta(days=1),
+                    revoked_at=None,
+                )
+            )
             for index, (version_id, validation_id) in enumerate(
                 zip(version_ids, validation_ids)
             ):
+                checksum, records = _persisted_flow_version_facts(
+                    binding_id,
+                    record_id=f"record-{index}",
+                    resource="/synthetic",
+                    count=index + 1,
+                )
                 await connection.execute(
                     insert(RuleValidationReceiptRecord).values(
                         validation_id=validation_id,
                         binding_id=binding_id,
                         profile="sentinel-profile-v1",
                         base_checksum="sha256:empty",
-                        candidate_checksum=f"sha256:{index}",
+                        candidate_checksum=checksum,
                         is_publishable=True,
                         issues=[],
                         actor_account_id=account_id,
@@ -423,23 +505,11 @@ async def assert_independent_plan_workers_fence_and_recover(
                         kind="flow",
                         profile="sentinel-profile-v1",
                         base_version_id=None,
-                        checksum=f"sha256:{index}",
+                        checksum=checksum,
                         name=version_id,
                         note="synthetic concurrency acceptance",
                         validation_id=validation_id,
-                        records=[
-                            {
-                                "id": f"record-{index}",
-                                "rule": {
-                                    "kind": "flow",
-                                    "value": {
-                                        "resource": "/synthetic",
-                                        "grade": 1,
-                                        "count": index + 1,
-                                    },
-                                },
-                            }
-                        ],
+                        records=records,
                         created_at=now,
                         created_by_account_id=account_id,
                     )
@@ -475,7 +545,9 @@ async def assert_independent_plan_workers_fence_and_recover(
             )
         )
         first_claims = [claim for result in first_results for claim in result]
-        case.assertEqual(len(first_claims), 1, "competing workers must produce one claim")
+        case.assertEqual(
+            len(first_claims), 1, "competing workers must produce one claim"
+        )
         first_claim = first_claims[0]
         case.assertEqual(first_claim.plan.id, plan_id)
         case.assertEqual(first_claim.attempt, 1)
@@ -490,7 +562,9 @@ async def assert_independent_plan_workers_fence_and_recover(
             )
         )
         recovery_claims = [claim for result in recovery_results for claim in result]
-        case.assertEqual(len(recovery_claims), 1, "expired claim must have one new owner")
+        case.assertEqual(
+            len(recovery_claims), 1, "expired claim must have one new owner"
+        )
         recovery_claim = recovery_claims[0]
         case.assertEqual(recovery_claim.plan.id, plan_id)
         case.assertEqual(recovery_claim.attempt, 2)
@@ -505,12 +579,16 @@ async def assert_independent_plan_workers_fence_and_recover(
 
         async with engine.connect() as connection:
             row = (
-                await connection.execute(
-                    select(RuleActivationPlanRecord.__table__).where(
-                        RuleActivationPlanRecord.plan_id == plan_id
+                (
+                    await connection.execute(
+                        select(RuleActivationPlanRecord.__table__).where(
+                            RuleActivationPlanRecord.plan_id == plan_id
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
         stored_expiry = row["claim_lease_expires_at"]
         if stored_expiry.tzinfo is None:
             stored_expiry = stored_expiry.replace(tzinfo=UTC)
@@ -538,12 +616,16 @@ async def assert_independent_plan_workers_fence_and_recover(
         )
         async with engine.connect() as connection:
             blocked_row = (
-                await connection.execute(
-                    select(RuleActivationPlanRecord.__table__).where(
-                        RuleActivationPlanRecord.plan_id == plan_id
+                (
+                    await connection.execute(
+                        select(RuleActivationPlanRecord.__table__).where(
+                            RuleActivationPlanRecord.plan_id == plan_id
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
         case.assertEqual(blocked_row["state"], "blocked")
         case.assertIsNone(blocked_row["claim_token"])
         case.assertIsNone(blocked_row["claim_lease_expires_at"])
@@ -592,6 +674,7 @@ async def assert_independent_plan_workers_fence_and_recover(
             publication_target_reader=_FixedPublicationTargetReader(
                 scheduler_publication_target
             ),
+            publication_payload_encoder=SentinelRuleVersionJsonEncoder(_RULE_PROFILE),
         )
         scheduler_enqueuer = _GatedPublicationEnqueuer(scheduler_store)
         schedulers = tuple(
@@ -605,7 +688,9 @@ async def assert_independent_plan_workers_fence_and_recover(
         scheduler_winner_task = asyncio.create_task(schedulers[0].run_once())
         await asyncio.wait_for(scheduler_enqueuer.started.wait(), timeout=10)
         loser_outcome = await asyncio.wait_for(schedulers[1].run_once(), timeout=10)
-        case.assertEqual(loser_outcome, (), "losing scheduler must emit no publication command")
+        case.assertEqual(
+            loser_outcome, (), "losing scheduler must emit no publication command"
+        )
         scheduler_enqueuer.resume.set()
         winner_outcome = await asyncio.wait_for(scheduler_winner_task, timeout=10)
         case.assertEqual(
@@ -615,30 +700,109 @@ async def assert_independent_plan_workers_fence_and_recover(
         case.assertEqual(scheduler_enqueuer.calls, 1)
         async with engine.connect() as connection:
             scheduler_plan = (
-                await connection.execute(
-                    select(RuleActivationPlanRecord.__table__).where(
-                        RuleActivationPlanRecord.plan_id == scheduler_loser_plan_id
+                (
+                    await connection.execute(
+                        select(RuleActivationPlanRecord.__table__).where(
+                            RuleActivationPlanRecord.plan_id == scheduler_loser_plan_id
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
+            scheduler_operation = (
+                (
+                    await connection.execute(
+                        select(RuleMutationOperationRecord.__table__).where(
+                            RuleMutationOperationRecord.origin_plan_id
+                            == scheduler_loser_plan_id,
+                            RuleMutationOperationRecord.origin_phase == "activation",
+                        )
+                    )
+                )
+                .mappings()
+                .one()
+            )
         case.assertEqual(scheduler_plan["state"], "activating")
         case.assertEqual(scheduler_plan["claim_attempt_count"], 1)
         case.assertEqual(
             scheduler_plan["activation_publication_id"],
             scheduler_enqueuer.publication_id,
         )
+        case.assertIsNone(scheduler_operation["actor_account_id"])
+        case.assertIsNone(scheduler_operation["session_hash"])
+        case.assertEqual(scheduler_operation["status"], "pending")
         async with engine.connect() as connection:
             scheduler_publication = (
-                await connection.execute(
-                    select(RulePublicationRecord.__table__).where(
-                        RulePublicationRecord.publication_id
-                        == scheduler_enqueuer.publication_id
+                (
+                    await connection.execute(
+                        select(RulePublicationRecord.__table__).where(
+                            RulePublicationRecord.publication_id
+                            == scheduler_enqueuer.publication_id
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
         case.assertEqual(scheduler_publication["validation_state"], "awaiting")
         case.assertEqual(scheduler_publication["write_state"], "awaiting")
         case.assertEqual(scheduler_publication["read_back_state"], "awaiting")
+
+        audit_app = build_app(
+            bootstrap_initialization_reader=object(),
+            setup_window_reader=object(),
+            bootstrap_operator_verifier=object(),
+            current_session_reader=SqlAlchemyCurrentSessionReader(engine),
+            current_session_revoker=object(),
+            account_directory_reader=object(),
+            allowed_browser_origins=frozenset({"https://console.test"}),
+            system_audit_reader=SqlAlchemySystemAuditReader(
+                engine, clock=lambda: scheduler_now + timedelta(seconds=1)
+            ),
+        )
+        audit_start = (
+            (now - timedelta(seconds=1))
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+        audit_end = (
+            (scheduler_now + timedelta(seconds=2))
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=audit_app), base_url="https://console.test"
+        ) as client:
+            client.cookies.set("sentinel_session", _ADMIN_SESSION)
+            audit_response = await client.get(
+                "/api/v1/system/audit",
+                params={
+                    "start": audit_start,
+                    "end": audit_end,
+                    "action": AuditAction.PLAN_ACTIVATE.value,
+                    "page": "1",
+                    "pageSize": "20",
+                },
+                headers={"x-request-id": f"scheduled-audit-read-{test_id}"},
+            )
+        case.assertEqual(audit_response.status_code, 200, audit_response.text)
+        audit_body = audit_response.json()
+        scheduled_audits = [
+            item
+            for item in audit_body["items"]
+            if item["targetId"] == scheduler_loser_plan_id
+        ]
+        case.assertEqual(len(scheduled_audits), 1)
+        case.assertEqual(audit_body["total"], 1)
+        case.assertIsNone(scheduled_audits[0]["actorId"])
+        case.assertEqual(scheduled_audits[0]["result"], "unknown")
+        case.assertTrue(
+            scheduled_audits[0]["requestId"].startswith("scheduled-rule-publish:")
+        )
+        case.assertNotIn(version_ids[0], audit_response.text)
+        case.assertNotIn(version_ids[1], audit_response.text)
+        case.assertEqual(scheduler_plan["created_by_account_id"], account_id)
 
         # Prove the claim itself survives an OS-process exit, and that newly
         # started workers recover its expired lease without double ownership.
@@ -754,19 +918,27 @@ async def assert_independent_plan_workers_fence_and_recover(
         asgi_publication_id = str(asgi_events[0]["publication_id"])
         async with engine.connect() as connection:
             asgi_plan = (
-                await connection.execute(
-                    select(RuleActivationPlanRecord.__table__).where(
-                        RuleActivationPlanRecord.plan_id == asgi_plan_id
+                (
+                    await connection.execute(
+                        select(RuleActivationPlanRecord.__table__).where(
+                            RuleActivationPlanRecord.plan_id == asgi_plan_id
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             asgi_operations = (
-                await connection.execute(
-                    select(RuleMutationOperationRecord.operation_id).where(
-                    RuleMutationOperationRecord.origin_plan_id == asgi_plan_id
+                (
+                    await connection.execute(
+                        select(RuleMutationOperationRecord.operation_id).where(
+                            RuleMutationOperationRecord.origin_plan_id == asgi_plan_id
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             asgi_publications = await connection.scalar(
                 select(RulePublicationRecord.publication_id).where(
                     RulePublicationRecord.publication_id == asgi_publication_id
@@ -774,9 +946,7 @@ async def assert_independent_plan_workers_fence_and_recover(
             )
         case.assertEqual(asgi_plan["state"], "activating")
         case.assertEqual(asgi_plan["claim_attempt_count"], 1)
-        case.assertEqual(
-            asgi_plan["activation_publication_id"], asgi_publication_id
-        )
+        case.assertEqual(asgi_plan["activation_publication_id"], asgi_publication_id)
         case.assertEqual(len(asgi_operations), 1)
         case.assertEqual(asgi_publications, asgi_publication_id)
     finally:
@@ -835,6 +1005,11 @@ async def assert_independent_plan_workers_fence_and_recover(
                 )
             )
             await connection.execute(
+                delete(AuthenticationSessionRecord).where(
+                    AuthenticationSessionRecord.session_hash == session_digest
+                )
+            )
+            await connection.execute(
                 delete(AccountRecord).where(AccountRecord.account_id == account_id)
             )
         await worker_engine.dispose()
@@ -854,8 +1029,14 @@ async def assert_cancel_racing_activation_claim_preserves_started_publication(
     cancel_wins_plan_id = f"plan-cancel-wins-{test_id}"
     session_digest = hashlib.sha256(_ADMIN_SESSION.encode()).hexdigest()
     csrf_digest = hashlib.sha256(_ADMIN_CSRF.encode()).hexdigest()
-    version_ids = (f"version-plan-cancel-a-{test_id}", f"version-plan-cancel-b-{test_id}")
-    validation_ids = (f"validation-plan-cancel-a-{test_id}", f"validation-plan-cancel-b-{test_id}")
+    version_ids = (
+        f"version-plan-cancel-a-{test_id}",
+        f"version-plan-cancel-b-{test_id}",
+    )
+    validation_ids = (
+        f"validation-plan-cancel-a-{test_id}",
+        f"validation-plan-cancel-b-{test_id}",
+    )
     request_key = f"cancel-plan-race-{test_id}"
     now = datetime.now(UTC).replace(microsecond=0)
     binding_reader = _GatedBindingReader(binding_id)
@@ -876,6 +1057,7 @@ async def assert_cancel_racing_activation_claim_preserves_started_publication(
         active_fingerprint_key_id="acceptance",
         binding_reader=binding_reader,
         publication_target_reader=_FixedPublicationTargetReader(publication_target),
+        publication_payload_encoder=SentinelRuleVersionJsonEncoder(_RULE_PROFILE),
     )
     queue = SqlAlchemyRuleActivationPlanWorkQueue(engine)
     scheduled_publication_id: str | None = None
@@ -912,7 +1094,12 @@ async def assert_cancel_racing_activation_claim_preserves_started_publication(
             for index, (version_id, validation_id) in enumerate(
                 zip(version_ids, validation_ids)
             ):
-                checksum = f"sha256:cancel-race-{index}-{test_id}"
+                checksum, records = _persisted_flow_version_facts(
+                    binding_id,
+                    record_id=f"cancel-race-record-{index}",
+                    resource="/acceptance",
+                    count=index + 1,
+                )
                 await connection.execute(
                     insert(RuleValidationReceiptRecord).values(
                         validation_id=validation_id,
@@ -938,20 +1125,7 @@ async def assert_cancel_racing_activation_claim_preserves_started_publication(
                         name=version_id,
                         note="synthetic cancellation race acceptance",
                         validation_id=validation_id,
-                        records=[
-                            {
-                                "id": f"cancel-race-record-{index}",
-                                "rule": {
-                                    "kind": "flow",
-                                    "value": {
-                                        "resource": "/acceptance",
-                                        "limitApp": "default",
-                                        "grade": 1,
-                                        "count": index + 1,
-                                    },
-                                },
-                            }
-                        ],
+                        records=records,
                         created_at=now,
                         created_by_account_id=account_id,
                     )
@@ -1001,7 +1175,9 @@ async def assert_cancel_racing_activation_claim_preserves_started_publication(
             now=now,
             lease_expires_at=now + timedelta(seconds=45),
         )
-        case.assertEqual(len(claims), 1, "scheduler must claim while cancellation is between reads")
+        case.assertEqual(
+            len(claims), 1, "scheduler must claim while cancellation is between reads"
+        )
         claim = claims[0]
         binding_reader.resume.set()
         cancelled = await asyncio.wait_for(cancel_task, timeout=10)
@@ -1022,19 +1198,27 @@ async def assert_cancel_racing_activation_claim_preserves_started_publication(
 
         async with engine.connect() as connection:
             plan = (
-                await connection.execute(
-                    select(RuleActivationPlanRecord.__table__).where(
-                        RuleActivationPlanRecord.plan_id == plan_id
+                (
+                    await connection.execute(
+                        select(RuleActivationPlanRecord.__table__).where(
+                            RuleActivationPlanRecord.plan_id == plan_id
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             operation = (
-                await connection.execute(
-                    select(RuleMutationOperationRecord.__table__).where(
-                        RuleMutationOperationRecord.request_key == request_key
+                (
+                    await connection.execute(
+                        select(RuleMutationOperationRecord.__table__).where(
+                            RuleMutationOperationRecord.request_key == request_key
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             publication_count = await connection.scalar(
                 select(RulePublicationRecord.publication_id).where(
                     RulePublicationRecord.publication_id == scheduled_publication_id
@@ -1042,9 +1226,7 @@ async def assert_cancel_racing_activation_claim_preserves_started_publication(
             )
         case.assertEqual(plan["state"], "activating")
         case.assertEqual(plan["claim_token"], associated.claim_token)
-        case.assertEqual(
-            plan["activation_publication_id"], scheduled_publication_id
-        )
+        case.assertEqual(plan["activation_publication_id"], scheduled_publication_id)
         case.assertEqual(operation["status"], "rejected")
         case.assertEqual(operation["reason"], "conflict")
         case.assertEqual(publication_count, scheduled_publication_id)
@@ -1153,7 +1335,11 @@ async def assert_cancel_racing_activation_claim_preserves_started_publication(
                     RuleMutationOperationRecord.request_key.in_(
                         [request_key, f"cancel-wins-plan-{test_id}"]
                     )
-                    | (RuleMutationOperationRecord.origin_plan_id.in_([plan_id, cancel_wins_plan_id]))
+                    | (
+                        RuleMutationOperationRecord.origin_plan_id.in_(
+                            [plan_id, cancel_wins_plan_id]
+                        )
+                    )
                 )
             )
             await connection.execute(
@@ -1238,6 +1424,130 @@ class _FixedBindingReader:
         )
 
 
+def _finish_activation_publication_then_wait_for_termination(
+    database_url: str,
+    binding_id: str,
+    plan_id: str,
+    target_revision: str,
+    source_revision: str,
+    data_id: str,
+    now_timestamp: float,
+    lease_expiry_timestamp: float,
+    result_connection,
+    termination_gate: multiprocessing.synchronize.Event,
+) -> None:
+    """Commit scheduled outbox success, then wait for the parent to kill us."""
+
+    async def finish() -> dict[str, object]:
+        engine = create_async_engine(database_url, pool_size=1)
+        now = datetime.fromtimestamp(now_timestamp, UTC)
+        target = VersionedRulePublicationTarget(
+            revision=target_revision,
+            source_revision=source_revision,
+            target=NacosRulePublicationTarget(
+                binding_id=binding_id,
+                source_id="acceptance-source",
+                namespace="acceptance-namespace",
+                group="SENTINEL_RULES",
+                data_id=data_id,
+            ),
+        )
+        try:
+            store = SqlAlchemyRuleMutationStore(
+                engine,
+                fingerprint_keys={"acceptance": _RULE_COMMAND_KEY},
+                active_fingerprint_key_id="acceptance",
+                binding_reader=_FixedBindingReader(binding_id),
+                publication_target_reader=_FixedPublicationTargetReader(target),
+                publication_payload_encoder=SentinelRuleVersionJsonEncoder(_RULE_PROFILE),
+            )
+            claims = await SqlAlchemyRuleActivationPlanWorkQueue(engine).claim_due(
+                now=now,
+                lease_expires_at=datetime.fromtimestamp(lease_expiry_timestamp, UTC),
+            )
+            if len(claims) != 1 or claims[0].plan.id != plan_id:
+                raise AssertionError("child did not claim the expected activation")
+            scheduled = await store.enqueue_scheduled_publication(claims[0], now=now)
+            if scheduled.publication_id is None:
+                raise AssertionError("scheduled publication was not persisted")
+
+            outbox = SqlAlchemyRulePublishOutbox(engine)
+            publication_claims = await outbox.claim_ready(
+                now=now + timedelta(seconds=1),
+                lease_expires_at=now + timedelta(seconds=20),
+                supported_providers=frozenset({ConfigurationSourceProvider.NACOS}),
+            )
+            if (
+                len(publication_claims) != 1
+                or publication_claims[0].publication_id != scheduled.publication_id
+            ):
+                raise AssertionError("child did not claim the expected outbox item")
+            publication_claim = publication_claims[0]
+            for index, phase_name in enumerate(
+                (
+                    PublicationPhaseName.VALIDATION,
+                    PublicationPhaseName.CONFIGURATION_WRITE,
+                    PublicationPhaseName.READ_BACK,
+                )
+            ):
+                phase_started_at = now + timedelta(seconds=2 + index * 2)
+                await outbox.advance_claimed_phase(
+                    publication_claim,
+                    phase_name,
+                    expected_state=PublicationStage.AWAITING,
+                    next_phase=PublicationPhase(
+                        PublicationStage.RUNNING, phase_started_at, None
+                    ),
+                )
+                await outbox.advance_claimed_phase(
+                    publication_claim,
+                    phase_name,
+                    expected_state=PublicationStage.RUNNING,
+                    next_phase=PublicationPhase(
+                        PublicationStage.SUCCEEDED,
+                        phase_started_at + timedelta(seconds=1),
+                        None,
+                    ),
+                )
+            await outbox.complete_claimed_publication(
+                publication_claim,
+                completed_at=now + timedelta(seconds=8),
+            )
+            async with engine.connect() as connection:
+                plan_publication_id = (
+                    await connection.execute(
+                        select(
+                            RuleActivationPlanRecord.activation_publication_id
+                        ).where(RuleActivationPlanRecord.plan_id == plan_id)
+                    )
+                ).scalar_one()
+            if plan_publication_id is not None:
+                raise AssertionError("plan was linked before the crash window")
+            return {
+                "status": "publication_completed",
+                "publication_id": scheduled.publication_id,
+                "claim_token": claims[0].claim_token,
+                "claim_attempt": claims[0].attempt,
+                "publication_claim": publication_claim,
+            }
+        finally:
+            await engine.dispose()
+
+    try:
+        result_connection.send(asyncio.run(finish()))
+        termination_gate.wait(30)
+    except BaseException as error:
+        try:
+            result_connection.send(
+                {"status": "error", "error_type": type(error).__name__}
+            )
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+        raise
+    finally:
+        result_connection.close()
+
+
 class _GatedPublicationEnqueuer:
     def __init__(self, store: SqlAlchemyRuleMutationStore) -> None:
         self._store = store
@@ -1253,3 +1563,367 @@ class _GatedPublicationEnqueuer:
         result = await self._store.enqueue_scheduled_publication(claim, now=now)
         self.publication_id = result.publication_id
         return result
+
+
+async def assert_activation_recovers_completed_publication_after_lost_association(
+    case: unittest.TestCase,
+    engine: AsyncEngine,
+    database_url: str,
+) -> None:
+    """Prove process-loss recovery after outbox success on PostgreSQL and MySQL."""
+    if engine.dialect.name not in {"postgresql", "mysql"}:
+        raise ValueError("acceptance requires PostgreSQL or MySQL")
+
+    test_id = uuid4().hex
+    account_id = str(uuid4())
+    binding_id = f"plan-recovery-binding-{test_id}"
+    plan_request_key = f"plan-recovery-create-{test_id}"
+    plan_request_id = f"plan-recovery-create-request-{test_id}"
+    version_ids = (
+        f"plan-recovery-promo-{test_id}",
+        f"plan-recovery-daily-{test_id}",
+    )
+    validation_ids = (
+        f"plan-recovery-promo-validation-{test_id}",
+        f"plan-recovery-daily-validation-{test_id}",
+    )
+    username = f"plan-recovery-{test_id}"
+    now = datetime.now(UTC).replace(microsecond=0)
+    plan_lease_expiry = now + timedelta(seconds=30)
+    scheduled_publication_id: str | None = None
+    plan_id: str | None = None
+    rows_seeded = False
+
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                insert(AccountRecord).values(
+                    account_id=account_id,
+                    username=username,
+                    username_key=hashlib.sha256(username.encode()).hexdigest(),
+                    password_hash="$argon2id$synthetic-plan-recovery-acceptance",
+                    role_id="admin",
+                    status="active",
+                    built_in=False,
+                    last_login_at=None,
+                    revision=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            await connection.execute(
+                insert(AuthenticationSessionRecord).values(
+                    session_hash=hashlib.sha256(_ADMIN_SESSION.encode()).hexdigest(),
+                    account_id=account_id,
+                    session_epoch=str(uuid4()),
+                    csrf_hash=hashlib.sha256(_ADMIN_CSRF.encode()).hexdigest(),
+                    created_at=now,
+                    expires_at=now + timedelta(days=1),
+                    revoked_at=None,
+                )
+            )
+            for index, (version_id, validation_id) in enumerate(
+                zip(version_ids, validation_ids)
+            ):
+                checksum, records = _persisted_flow_version_facts(
+                    binding_id,
+                    record_id=f"plan-recovery-record-{index}",
+                    resource="/recovery",
+                    count=index + 1,
+                )
+                await connection.execute(
+                    insert(RuleValidationReceiptRecord).values(
+                        validation_id=validation_id,
+                        binding_id=binding_id,
+                        profile="sentinel-profile-v1",
+                        base_checksum="sha256:empty",
+                        candidate_checksum=checksum,
+                        is_publishable=True,
+                        issues=[],
+                        actor_account_id=account_id,
+                        request_id=f"plan-recovery-validation-{index}-{test_id}",
+                        created_at=now,
+                    )
+                )
+                await connection.execute(
+                    insert(RuleSetVersionRecord).values(
+                        version_id=version_id,
+                        binding_id=binding_id,
+                        kind="flow",
+                        profile="sentinel-profile-v1",
+                        base_version_id=None,
+                        checksum=checksum,
+                        name=version_id,
+                        note="synthetic lost-association recovery acceptance",
+                        validation_id=validation_id,
+                        records=records,
+                        created_at=now,
+                        created_by_account_id=account_id,
+                    )
+                )
+        rows_seeded = True
+
+        target = VersionedRulePublicationTarget(
+            revision=f"target-revision-{test_id}",
+            source_revision=f"source-revision-{test_id}",
+            target=NacosRulePublicationTarget(
+                binding_id=binding_id,
+                source_id="acceptance-source",
+                namespace=f"namespace-{test_id}",
+                group="SENTINEL_RULES",
+                data_id=f"plan-recovery-{test_id}.json",
+            ),
+        )
+        store = SqlAlchemyRuleMutationStore(
+            engine,
+            fingerprint_keys={"acceptance": _RULE_COMMAND_KEY},
+            active_fingerprint_key_id="acceptance",
+            binding_reader=_FixedBindingReader(binding_id),
+            publication_target_reader=_FixedPublicationTargetReader(target),
+            publication_payload_encoder=SentinelRuleVersionJsonEncoder(_RULE_PROFILE),
+        )
+        created = await store.mutate(
+            RuleMutationCommand(
+                binding_id,
+                plan_request_key,
+                CreateRuleActivationPlan(
+                    version_ids[0],
+                    version_ids[1],
+                    now - timedelta(seconds=1),
+                    now + timedelta(minutes=5),
+                    "UTC",
+                ),
+            ),
+            actor_id=account_id,
+            session_digest=hashlib.sha256(_ADMIN_SESSION.encode()).hexdigest(),
+            csrf_digest=hashlib.sha256(_ADMIN_CSRF.encode()).hexdigest(),
+            request_id=plan_request_id,
+            now=now,
+        )
+        case.assertEqual(created.status, RuleOperationStatus.COMPLETED)
+        plan_id = created.result.id
+
+        process_context = multiprocessing.get_context("spawn")
+        parent_connection, child_connection = process_context.Pipe(duplex=False)
+        termination_gate = process_context.Event()
+        child_process = process_context.Process(
+            target=_finish_activation_publication_then_wait_for_termination,
+            args=(
+                database_url,
+                binding_id,
+                plan_id,
+                f"target-revision-{test_id}",
+                f"source-revision-{test_id}",
+                f"plan-recovery-{test_id}.json",
+                now.timestamp(),
+                plan_lease_expiry.timestamp(),
+                child_connection,
+                termination_gate,
+            ),
+        )
+        child_process.start()
+        child_connection.close()
+        try:
+            if not parent_connection.poll(30):
+                raise AssertionError("child did not reach the outbox commit boundary")
+            child_result = parent_connection.recv()
+            case.assertEqual(
+                child_result.get("status"), "publication_completed", child_result
+            )
+            scheduled_publication_id = child_result["publication_id"]
+            stale_claim_token = child_result["claim_token"]
+            case.assertEqual(child_result["claim_attempt"], 1)
+            stale_publication_claim = child_result["publication_claim"]
+            case.assertEqual(stale_publication_claim.attempt, 1)
+            async with engine.connect() as connection:
+                child_exit_plan = (
+                    await connection.execute(
+                        select(
+                            RuleActivationPlanRecord.activation_publication_id
+                        ).where(RuleActivationPlanRecord.plan_id == plan_id)
+                    )
+                ).scalar_one()
+                persisted_publication = (
+                    (
+                        await connection.execute(
+                            select(RulePublicationRecord.__table__).where(
+                                RulePublicationRecord.publication_id
+                                == scheduled_publication_id
+                            )
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+            case.assertIsNone(child_exit_plan)
+            case.assertEqual(persisted_publication["validation_state"], "succeeded")
+            case.assertEqual(persisted_publication["write_state"], "succeeded")
+            case.assertEqual(persisted_publication["read_back_state"], "succeeded")
+            async with engine.connect() as connection:
+                operation_status = await connection.scalar(
+                    select(RuleMutationOperationRecord.status).where(
+                        RuleMutationOperationRecord.operation_id
+                        == stale_publication_claim.operation_id
+                    )
+                )
+            case.assertEqual(operation_status, "completed")
+            child_process.terminate()
+            child_process.join(timeout=15)
+            if child_process.is_alive():
+                child_process.kill()
+                child_process.join(timeout=5)
+                raise AssertionError("child failed to terminate at the crash boundary")
+            case.assertNotEqual(child_process.exitcode, 0)
+        finally:
+            if child_process.is_alive():
+                child_process.terminate()
+                child_process.join(timeout=15)
+            parent_connection.close()
+
+        restarted_store = SqlAlchemyRuleMutationStore(
+            engine,
+            fingerprint_keys={"acceptance": _RULE_COMMAND_KEY},
+            active_fingerprint_key_id="acceptance",
+            binding_reader=_FixedBindingReader(binding_id),
+            publication_target_reader=_FixedPublicationTargetReader(target),
+            publication_payload_encoder=SentinelRuleVersionJsonEncoder(_RULE_PROFILE),
+        )
+        recovery_now = plan_lease_expiry + timedelta(milliseconds=1)
+        with case.assertRaises(RulePublishClaimConflict):
+            await SqlAlchemyRulePublishOutbox(engine).advance_claimed_phase(
+                stale_publication_claim,
+                PublicationPhaseName.READ_BACK,
+                expected_state=PublicationStage.RUNNING,
+                next_phase=PublicationPhase(
+                    PublicationStage.SUCCEEDED, now + timedelta(seconds=9), None
+                ),
+            )
+
+        stale_plan_snapshot = await SqlAlchemyRuleActivationPlanReader(
+            engine
+        ).read_rule_activation_plans(binding_id)
+        stale_plan = next(
+            item for item in stale_plan_snapshot.items if item.id == plan_id
+        )
+        stale_claim = RuleActivationPlanClaim(
+            plan=stale_plan,
+            claim_token=str(stale_claim_token),
+            lease_expires_at=plan_lease_expiry,
+            attempt=1,
+        )
+        with case.assertRaises(RuleActivationPlanClaimConflict):
+            await SqlAlchemyRuleActivationPlanWorkQueue(engine).associate_publication(
+                stale_claim, str(scheduled_publication_id), now=recovery_now
+            )
+
+        restarted_scheduler = RunRuleActivationPlanWorker(
+            work_queue=SqlAlchemyRuleActivationPlanWorkQueue(engine),
+            publication_enqueuer=restarted_store,
+            clock=lambda: recovery_now,
+        )
+        case.assertEqual(
+            await restarted_scheduler.run_once(),
+            (RuleActivationPlanWorkerOutcome.COMPLETED,),
+        )
+        recovered_plan = await SqlAlchemyRuleActivationPlanReader(
+            engine
+        ).read_rule_activation_plans(binding_id)
+        case.assertEqual(recovered_plan.items[0].state.value, "active")
+        case.assertEqual(
+            recovered_plan.items[0].activation_publication_id,
+            scheduled_publication_id,
+        )
+        async with engine.connect() as connection:
+            recovered_attempt_count = await connection.scalar(
+                select(RuleActivationPlanRecord.claim_attempt_count).where(
+                    RuleActivationPlanRecord.plan_id == plan_id
+                )
+            )
+        case.assertEqual(recovered_attempt_count, 2)
+        case.assertEqual(await restarted_scheduler.run_once(), ())
+
+        async with engine.connect() as connection:
+            operation_count = await connection.scalar(
+                select(func.count())
+                .select_from(RuleMutationOperationRecord)
+                .where(
+                    RuleMutationOperationRecord.origin_plan_id == plan_id,
+                    RuleMutationOperationRecord.origin_phase == "activation",
+                )
+            )
+            publication_count = await connection.scalar(
+                select(func.count())
+                .select_from(RulePublicationRecord)
+                .where(RulePublicationRecord.publication_id == scheduled_publication_id)
+            )
+            accepted_audit_count = await connection.scalar(
+                select(func.count())
+                .select_from(AuditEventRecord)
+                .where(
+                    AuditEventRecord.action == "rules.activation_plan.activate",
+                    AuditEventRecord.target_id == plan_id,
+                    AuditEventRecord.outcome == "accepted",
+                )
+            )
+            completed_audit_count = await connection.scalar(
+                select(func.count())
+                .select_from(AuditEventRecord)
+                .where(
+                    AuditEventRecord.action == "rules.activation_plan.activate",
+                    AuditEventRecord.target_id == plan_id,
+                    AuditEventRecord.outcome == "completed",
+                )
+            )
+        case.assertEqual(operation_count, 1)
+        case.assertEqual(publication_count, 1)
+        case.assertEqual(accepted_audit_count, 1)
+        case.assertEqual(completed_audit_count, 1)
+    finally:
+        if rows_seeded:
+            async with engine.begin() as connection:
+                if scheduled_publication_id is not None:
+                    await connection.execute(
+                        delete(RulePublicationRecord).where(
+                            RulePublicationRecord.publication_id
+                            == scheduled_publication_id
+                        )
+                    )
+                if plan_id is not None:
+                    await connection.execute(
+                        delete(AuditEventRecord).where(
+                            AuditEventRecord.target_id == plan_id
+                        )
+                    )
+                    await connection.execute(
+                        delete(RuleMutationOperationRecord).where(
+                            (RuleMutationOperationRecord.origin_plan_id == plan_id)
+                            | (
+                                RuleMutationOperationRecord.request_key
+                                == plan_request_key
+                            )
+                        )
+                    )
+                    await connection.execute(
+                        delete(RuleActivationPlanRecord).where(
+                            RuleActivationPlanRecord.plan_id == plan_id
+                        )
+                    )
+                await connection.execute(
+                    delete(RuleSetVersionRecord).where(
+                        RuleSetVersionRecord.version_id.in_(version_ids)
+                    )
+                )
+                await connection.execute(
+                    delete(RuleValidationReceiptRecord).where(
+                        RuleValidationReceiptRecord.validation_id.in_(validation_ids)
+                    )
+                )
+                await connection.execute(
+                    delete(AuthenticationSessionRecord).where(
+                        AuthenticationSessionRecord.session_hash
+                        == hashlib.sha256(_ADMIN_SESSION.encode()).hexdigest()
+                    )
+                )
+                await connection.execute(
+                    delete(AccountRecord).where(AccountRecord.account_id == account_id)
+                )

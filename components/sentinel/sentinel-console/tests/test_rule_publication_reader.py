@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import unittest
-
-from sqlalchemy import insert
-from sqlalchemy.ext.asyncio import create_async_engine
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 from atlas_richie.sentinel_console.application.rule_publication_ports import (
     RulePublicationConflict,
@@ -15,8 +13,8 @@ from atlas_richie.sentinel_console.application.rule_publication_ports import (
 from atlas_richie.sentinel_console.domain.rule_publications import (
     PublicationPhase,
     PublicationPhaseName,
-    PublicationReceiptState,
     PublicationReason,
+    PublicationReceiptState,
     PublicationStage,
     RulePublication,
     RulePublicationReceipt,
@@ -33,12 +31,14 @@ from atlas_richie.sentinel_console.infrastructure.persistence.models import (
 from atlas_richie.sentinel_console.infrastructure.persistence.rule_publication_reader import (
     SqlAlchemyRulePublicationReader,
 )
-from atlas_richie.sentinel_console.infrastructure.persistence.rule_publication_store import (
-    SqlAlchemyRulePublicationStore,
-)
 from atlas_richie.sentinel_console.infrastructure.persistence.rule_publication_receipt_store import (
     SqlAlchemyRulePublicationReceiptStore,
 )
+from atlas_richie.sentinel_console.infrastructure.persistence.rule_publication_store import (
+    SqlAlchemyRulePublicationStore,
+)
+from sqlalchemy import func, insert, select
+from sqlalchemy.ext.asyncio import create_async_engine
 
 _NOW = datetime(2026, 10, 9, 8, 0, 0, 123000, tzinfo=UTC)
 
@@ -119,12 +119,23 @@ class SqlAlchemyRulePublicationReaderTests(unittest.IsolatedAsyncioTestCase):
 
     async def _seed_publication(self, **values) -> None:
         async with self.engine.begin() as connection:
+            current = await connection.execute(
+                select(func.max(RulePublicationRecord.publication_sequence)).where(
+                    RulePublicationRecord.binding_id == values["binding_id"]
+                )
+            )
+            next_sequence = (current.scalar_one_or_none() or 0) + 1
             await connection.execute(
                 insert(RulePublicationRecord).values(
                     target_version_id=values["version_id"],
                     target_checksum="sha256:candidate",
+                    publication_sequence=next_sequence,
                     base_version_id=None,
-                    **{key: value for key, value in values.items() if key != "version_id"},
+                    **{
+                        key: value
+                        for key, value in values.items()
+                        if key != "version_id"
+                    },
                 )
             )
 
@@ -136,8 +147,12 @@ class SqlAlchemyRulePublicationReaderTests(unittest.IsolatedAsyncioTestCase):
         publication = result.items[0]
         self.assertEqual(publication.id, "publication-a")
         self.assertEqual(publication.validation.state, PublicationStage.SUCCEEDED)
-        self.assertEqual(publication.configuration_write.state, PublicationStage.UNKNOWN)
-        self.assertEqual(publication.configuration_write.reason, PublicationReason.UNKNOWN)
+        self.assertEqual(
+            publication.configuration_write.state, PublicationStage.UNKNOWN
+        )
+        self.assertEqual(
+            publication.configuration_write.reason, PublicationReason.UNKNOWN
+        )
         self.assertEqual(publication.read_back.state, PublicationStage.AWAITING)
 
     async def test_detail_is_scoped_to_binding_and_missing_is_not_found(self):
@@ -156,10 +171,34 @@ class SqlAlchemyRulePublicationReaderTests(unittest.IsolatedAsyncioTestCase):
 
         await self.store.create_rule_publication(publication)
         loaded = await self.reader.read_rule_publication("binding-a", publication.id)
-        self.assertEqual(loaded, publication)
-
+        self.assertEqual(loaded, replace(publication, publication_sequence=2))
         with self.assertRaises(RulePublicationConflict):
             await self.store.create_rule_publication(publication)
+
+    async def test_payload_checksum_is_immutable_idempotent_and_internal(self):
+        digest = "a" * 64
+        await self.store.ensure_rule_publication_payload_checksum(
+            "binding-a", "publication-a", digest
+        )
+        await self.store.ensure_rule_publication_payload_checksum(
+            "binding-a", "publication-a", digest
+        )
+        async with self.engine.connect() as connection:
+            persisted = await connection.scalar(
+                select(RulePublicationRecord.target_payload_checksum).where(
+                    RulePublicationRecord.binding_id == "binding-a",
+                    RulePublicationRecord.publication_id == "publication-a",
+                )
+            )
+        self.assertEqual(persisted, digest)
+        with self.assertRaises(RulePublicationConflict):
+            await self.store.ensure_rule_publication_payload_checksum(
+                "binding-a", "publication-a", "b" * 64
+            )
+        with self.assertRaises(RulePublicationNotFound):
+            await self.store.ensure_rule_publication_payload_checksum(
+                "binding-a", "missing-publication", digest
+            )
 
     async def test_phase_transition_is_monotonic_binding_scoped_and_durable(self):
         publication = _new_publication("publication-transition")
@@ -199,9 +238,7 @@ class SqlAlchemyRulePublicationReaderTests(unittest.IsolatedAsyncioTestCase):
                 publication.id,
                 PublicationPhaseName.CONFIGURATION_WRITE,
                 expected_state=PublicationStage.AWAITING,
-                next_phase=PublicationPhase(
-                    PublicationStage.RUNNING, _NOW, None
-                ),
+                next_phase=PublicationPhase(PublicationStage.RUNNING, _NOW, None),
             )
         with self.assertRaises(RulePublicationNotFound):
             await self.store.advance_rule_publication_phase(
@@ -209,9 +246,7 @@ class SqlAlchemyRulePublicationReaderTests(unittest.IsolatedAsyncioTestCase):
                 publication.id,
                 PublicationPhaseName.VALIDATION,
                 expected_state=PublicationStage.SUCCEEDED,
-                next_phase=PublicationPhase(
-                    PublicationStage.RUNNING, _NOW, None
-                ),
+                next_phase=PublicationPhase(PublicationStage.RUNNING, _NOW, None),
             )
 
         persisted = await self.reader.read_rule_publication("binding-a", publication.id)
@@ -228,9 +263,15 @@ class SqlAlchemyRulePublicationReaderTests(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_receipt_store_records_latest_and_reads_full_page_counters(self):
-        await self._record_receipt(_receipt("instance-c", PublicationReceiptState.FAILED))
-        await self._record_receipt(_receipt("instance-a", PublicationReceiptState.APPLIED))
-        await self._record_receipt(_receipt("instance-b", PublicationReceiptState.PENDING))
+        await self._record_receipt(
+            _receipt("instance-c", PublicationReceiptState.FAILED)
+        )
+        await self._record_receipt(
+            _receipt("instance-a", PublicationReceiptState.APPLIED)
+        )
+        await self._record_receipt(
+            _receipt("instance-b", PublicationReceiptState.PENDING)
+        )
 
         first = await self.receipt_store.read_rule_publication_receipts(
             "binding-a", "publication-a", page=1, page_size=2
@@ -239,8 +280,12 @@ class SqlAlchemyRulePublicationReaderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.expected, None)
         self.assertEqual(first.inventory_source, None)
         self.assertEqual((first.applied, first.pending, first.failed), (1, 1, 1))
-        self.assertEqual([item.instance_id for item in first.items], ["instance-a", "instance-b"])
-        first.validate_for(await self.reader.read_rule_publication("binding-a", "publication-a"))
+        self.assertEqual(
+            [item.instance_id for item in first.items], ["instance-a", "instance-b"]
+        )
+        first.validate_for(
+            await self.reader.read_rule_publication("binding-a", "publication-a")
+        )
 
         second = await self.receipt_store.read_rule_publication_receipts(
             "binding-a", "publication-a", page=2, page_size=2
@@ -285,6 +330,57 @@ class SqlAlchemyRulePublicationReaderTests(unittest.IsolatedAsyncioTestCase):
             "binding-a", "publication-a", page=1, page_size=10
         )
         self.assertEqual(persisted.items, (newer,))
+
+    async def test_receipt_store_rejects_publication_outside_exact_binding(self):
+        receipt = _receipt("instance-a", PublicationReceiptState.PENDING)
+
+        with self.assertRaises(RulePublicationNotFound):
+            await self.receipt_store.record_rule_publication_receipt(
+                "binding-other", "publication-a", receipt
+            )
+        with self.assertRaises(RulePublicationNotFound):
+            await self.receipt_store.record_rule_publication_receipt(
+                "binding-a", "publication-missing", receipt
+            )
+
+    async def test_receipts_remain_scoped_to_publication_when_version_bytes_match(self):
+        await self._seed_publication(
+            publication_id="publication-b",
+            binding_id="binding-a",
+            version_id="version-1",
+            created_at=_NOW + timedelta(milliseconds=1),
+            validation_state="succeeded",
+            validation_observed_at=_NOW,
+            validation_reason=None,
+            write_state="unknown",
+            write_observed_at=_NOW,
+            write_reason="unknown",
+            read_back_state="awaiting",
+            read_back_observed_at=None,
+            read_back_reason=None,
+        )
+        first = _receipt("instance-a", PublicationReceiptState.PENDING)
+        second = _receipt(
+            "instance-a",
+            PublicationReceiptState.FAILED,
+            last_report_at=_NOW + timedelta(milliseconds=2),
+        )
+
+        await self.receipt_store.record_rule_publication_receipt(
+            "binding-a", "publication-a", first
+        )
+        await self.receipt_store.record_rule_publication_receipt(
+            "binding-a", "publication-b", second
+        )
+
+        first_page = await self.receipt_store.read_rule_publication_receipts(
+            "binding-a", "publication-a", page=1, page_size=10
+        )
+        second_page = await self.receipt_store.read_rule_publication_receipts(
+            "binding-a", "publication-b", page=1, page_size=10
+        )
+        self.assertEqual(first_page.items, (first,))
+        self.assertEqual(second_page.items, (second,))
 
     async def _record_receipt(self, receipt: RulePublicationReceipt) -> None:
         await self.receipt_store.record_rule_publication_receipt(

@@ -8,11 +8,32 @@ from ...application.mutate_rule_set import (
     RuleMutationAuthority,
     RuleMutationBindingReader,
 )
-from ...application.rule_publication_ports import RulePublicationTargetWriter
+from ...application.rule_publication_ports import (
+    RulePublicationPayloadEncoder,
+    RulePublicationTargetWriter,
+)
 from ..security.rule_command_keys import RuleCommandKeyConfiguration
 from .rule_mutation_store import SqlAlchemyRuleMutationStore
 from .rule_publication_target_reader import SqlAlchemyRulePublicationTargetReader
 from .rule_publication_target_writer import SqlAlchemyRulePublicationTargetWriter
+
+
+def create_sql_rule_mutation_store(
+    engine: AsyncEngine,
+    key_configuration: RuleCommandKeyConfiguration,
+    *,
+    binding_reader: RuleMutationBindingReader,
+    publication_payload_encoder: RulePublicationPayloadEncoder | None = None,
+) -> SqlAlchemyRuleMutationStore:
+    """Create the shared SQL authority/enqueuer used by commands and schedules."""
+    return SqlAlchemyRuleMutationStore(
+        engine,
+        fingerprint_keys=key_configuration.fingerprint_keys,
+        active_fingerprint_key_id=key_configuration.active_fingerprint_key_id,
+        binding_reader=binding_reader,
+        publication_target_reader=SqlAlchemyRulePublicationTargetReader(engine),
+        publication_payload_encoder=publication_payload_encoder,
+    )
 
 
 def compose_sql_rule_mutation_authority(
@@ -20,18 +41,18 @@ def compose_sql_rule_mutation_authority(
     key_configuration: RuleCommandKeyConfiguration,
     *,
     binding_reader: RuleMutationBindingReader,
+    publication_payload_encoder: RulePublicationPayloadEncoder | None = None,
 ) -> RuleMutationAuthority:
     """Compose SQL command storage with independent keys and exact binding facts.
 
     Binding ownership remains outside the SQL identity database; callers must
     provide its authoritative reader rather than relying on a synthetic copy.
     """
-    return SqlAlchemyRuleMutationStore(
+    return create_sql_rule_mutation_store(
         engine,
-        fingerprint_keys=key_configuration.fingerprint_keys,
-        active_fingerprint_key_id=key_configuration.active_fingerprint_key_id,
+        key_configuration,
         binding_reader=binding_reader,
-        publication_target_reader=SqlAlchemyRulePublicationTargetReader(engine),
+        publication_payload_encoder=publication_payload_encoder,
     )
 
 

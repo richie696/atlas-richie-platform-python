@@ -28,6 +28,7 @@ from atlas_richie.sentinel_console.infrastructure.consul_rule_source_writer impo
     ConsulRuleSourceWriteReceipt,
 )
 
+
 class _Reader:
     def __init__(self):
         self.key = None
@@ -74,9 +75,7 @@ class ConsulRulePublicationProviderTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_maps_exact_key_revision_and_value(self):
-        observed = await self.provider.read_configuration(
-            self.connection, self.target
-        )
+        observed = await self.provider.read_configuration(self.connection, self.target)
         written_revision = await self.provider.write_configuration_if_revision(
             self.connection,
             self.target,
@@ -87,6 +86,7 @@ class ConsulRulePublicationProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.reader.key, self.target.key)
         self.assertEqual(observed.value, b"[]")
         self.assertEqual(observed.revision, "12")
+        self.assertTrue(observed.conditional_replay_safe)
         self.assertEqual(self.writer.command.expected_modify_index, "12")
         self.assertEqual(self.writer.command.value, b"[candidate]")
         self.assertEqual(written_revision, "13")

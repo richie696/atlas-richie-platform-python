@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import unittest
+from datetime import UTC, datetime, timedelta
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
@@ -20,7 +22,6 @@ from atlas_richie.sentinel_console.domain.system_audit import (
     AuditResult,
     SystemAuditPage,
 )
-from session_test_doubles import UnusedSessionRevoker
 
 _REQUEST_HEADERS = {"x-request-id": "audit-read-1"}
 _OPAQUE_COOKIE = "synthetic-session-token-for-console-read-0001"
@@ -146,6 +147,7 @@ class SystemAuditApiTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readSystemAudit", response)
         self.assertEqual(response.headers["x-request-id"], "audit-read-1")
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertEqual(response.headers["vary"], "Cookie")
@@ -187,9 +189,7 @@ class SystemAuditApiTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_mismatched_authority_query_is_not_returned_as_success(self) -> None:
         async with AsyncClient(
-            transport=ASGITransport(
-                app=_app("admin", reader=_MismatchedAuditReader())
-            ),
+            transport=ASGITransport(app=_app("admin", reader=_MismatchedAuditReader())),
             base_url="http://test",
         ) as client:
             client.cookies.set("sentinel_session", _OPAQUE_COOKIE)
@@ -200,6 +200,7 @@ class SystemAuditApiTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.status_code, 503)
+        assert_openapi_response("readSystemAudit", response)
         self.assertEqual(response.json()["error"]["code"], "service_unavailable")
         self.assertNotIn("account-create", response.text)
 
@@ -218,6 +219,7 @@ class SystemAuditApiTest(unittest.IsolatedAsyncioTestCase):
                     "/api/v1/system/audit", params=_params(), headers=_REQUEST_HEADERS
                 )
             self.assertEqual(response.status_code, status)
+            assert_openapi_response("readSystemAudit", response)
             self.assertEqual(response.json()["error"]["code"], code)
             self.assertEqual(reader.calls, 0)
 
@@ -235,6 +237,7 @@ class SystemAuditApiTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readSystemAudit", response)
         self.assertIsNotNone(reader.query)
         self.assertEqual(reader.query.action, AuditAction.PLAN_ACTIVATE)
         self.assertEqual(response.json()["query"]["action"], "plan-activate")
@@ -280,6 +283,8 @@ class SystemAuditApiTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertTrue(all(response.status_code == 400 for response in responses))
+        for response in responses:
+            assert_openapi_response("readSystemAudit", response)
         self.assertTrue(
             all(
                 response.json()["error"]["code"] == "invalid_request"
@@ -287,10 +292,13 @@ class SystemAuditApiTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertEqual(invalid_request_id.status_code, 400)
+        assert_openapi_response("readSystemAudit", invalid_request_id)
         self.assertEqual(invalid_request_id.json()["error"]["code"], "invalid_request")
         self.assertEqual(reader.calls, 0)
 
-    async def test_audit_domain_rejects_surrogate_actor_filter_without_encoding_failure(self) -> None:
+    async def test_audit_domain_rejects_surrogate_actor_filter_without_encoding_failure(
+        self,
+    ) -> None:
         with self.assertRaisesRegex(ValueError, "actor filter is invalid"):
             AuditQuery(_START, _END, "\ud800", None, None, 1, 20)
 
@@ -311,6 +319,7 @@ class SystemAuditApiTest(unittest.IsolatedAsyncioTestCase):
                     "/api/v1/system/audit", params=_params(), headers=_REQUEST_HEADERS
                 )
             self.assertEqual(response.status_code, 503)
+            assert_openapi_response("readSystemAudit", response)
             self.assertEqual(response.json()["error"]["code"], "service_unavailable")
             self.assertNotIn("private", response.text)
 

@@ -6,6 +6,14 @@ import pytest
 
 from atlas_richie.sentinel_console.api.query_parsing import parse_utc_timestamp
 from atlas_richie.sentinel_console.api.system_observation_access import utc_timestamp
+from atlas_richie.sentinel_console.domain.utc_time import (
+    current_utc_millisecond_instant,
+    is_wire_utc_millisecond_instant,
+)
+
+
+def test_current_utc_instant_matches_worker_wire_precision() -> None:
+    assert is_wire_utc_millisecond_instant(current_utc_millisecond_instant())
 
 
 def test_utc_timestamp_normalizes_aware_instants_to_utc_milliseconds() -> None:

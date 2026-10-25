@@ -14,14 +14,19 @@ from ...application.runtime_database_locator import (
     RuntimeDatabaseLocatorError,
     RuntimeDatabaseLocatorStore,
 )
-from .database_runtime import create_database_engine_from_locator
+from .database_runtime import (
+    SUPPORTED_RUNTIME_DATABASE_DIALECTS,
+    create_database_engine_from_locator,
+)
 from .migration_runner import upgrade_database
-
-_RUNTIME_DATABASE_DIALECTS = frozenset({"mysql", "postgresql"})
 
 
 class RuntimeDatabaseUnavailable(SQLAlchemyError):
     """The runtime database is not configured or cannot be activated."""
+
+
+class RuntimeDatabaseNotConfigured(RuntimeDatabaseUnavailable):
+    """The first-run flow has not selected a runtime database yet."""
 
 
 class RuntimeDatabaseEngineProvider:
@@ -60,7 +65,7 @@ class RuntimeDatabaseEngineProvider:
         """Return the selected engine or fail closed before setup is complete."""
         locator = await self._read_locator()
         if locator is None:
-            raise RuntimeDatabaseUnavailable(
+            raise RuntimeDatabaseNotConfigured(
                 "Console runtime database is not configured"
             ) from None
         return await self._engine_for(locator)
@@ -117,8 +122,8 @@ class RuntimeDatabaseEngineBridge:
 
     @property
     def supported_dialects(self) -> frozenset[str]:
-        """Expose the finite dialect set accepted by the first-run locator."""
-        return _RUNTIME_DATABASE_DIALECTS
+        """Expose dialects supplied by the selected engine adapter registry."""
+        return SUPPORTED_RUNTIME_DATABASE_DIALECTS
 
     def __init__(self, provider: RuntimeDatabaseEngineProvider) -> None:
         self._provider = provider
@@ -148,5 +153,6 @@ class RuntimeDatabaseEngineBridge:
 __all__ = [
     "RuntimeDatabaseEngineBridge",
     "RuntimeDatabaseEngineProvider",
+    "RuntimeDatabaseNotConfigured",
     "RuntimeDatabaseUnavailable",
 ]

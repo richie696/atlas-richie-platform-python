@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+import asyncio
 import hashlib
 import hmac
 import json
+import threading
 import unittest
+from datetime import UTC, datetime, timedelta
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
 from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -51,9 +54,7 @@ _PREVIOUS_SESSION_TOKEN = "previous-session-token-for-login-flow-00001"
 _SESSION_TOKEN = "session-token-for-login-flow-test-00000001"
 _ROTATED_CSRF = "csrf-token-for-login-flow-test-00000000002"
 _CLIENT_IDENTITY_KEY = b"synthetic-client-identity-hmac-key-32"
-_CLIENT_KEY = hmac.new(
-    _CLIENT_IDENTITY_KEY, b"127.0.0.1", hashlib.sha256
-).hexdigest()
+_CLIENT_KEY = hmac.new(_CLIENT_IDENTITY_KEY, b"127.0.0.1", hashlib.sha256).hexdigest()
 _NOW = datetime.now(UTC)
 
 
@@ -88,6 +89,20 @@ class _CredentialReaderSpy:
         return await self.reader.read_login_credential(username_key)
 
 
+class _BlockingPasswordVerifier:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def verify_unknown_account(self, candidate: str) -> None:
+        raise AssertionError("known login should verify the account hash")
+
+    def verify_account_password(self, encoded_hash: str | None, candidate: str) -> bool:
+        self.started.set()
+        self.release.wait(timeout=2)
+        return True
+
+
 class LoginApiTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -118,9 +133,7 @@ class LoginApiTest(unittest.IsolatedAsyncioTestCase):
             allowed_browser_origins=frozenset({_ORIGIN}),
             login_service=self.login,
             client_identity_hmac_key=_CLIENT_IDENTITY_KEY,
-            client_address_resolver=ClientAddressResolver.from_cidrs(
-                ("10.20.0.0/16",)
-            ),
+            client_address_resolver=ClientAddressResolver.from_cidrs(("10.20.0.0/16",)),
         )
         async with self.engine.begin() as connection:
             await connection.execute(
@@ -176,6 +189,7 @@ class LoginApiTest(unittest.IsolatedAsyncioTestCase):
             me = await client.get("/api/v1/auth/me", headers={"x-request-id": "me-1"})
 
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("login", response)
         self.assertEqual(response.headers["x-request-id"], "login-request-1")
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertEqual(response.headers["x-sentinel-csrf"], _ROTATED_CSRF)
@@ -192,6 +206,7 @@ class LoginApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("httponly", set_cookies[1].lower())
         self.assertIn("samesite=strict", set_cookies[1].lower())
         self.assertEqual(me.status_code, 200)
+        assert_openapi_response("readSession", me)
         self.assertEqual(me.json(), identity)
 
         session_digest = hashlib.sha256(_SESSION_TOKEN.encode()).hexdigest()
@@ -204,9 +219,7 @@ class LoginApiTest(unittest.IsolatedAsyncioTestCase):
                         AuthenticationSessionRecord.csrf_hash,
                         AuthenticationSessionRecord.session_epoch,
                         AuthenticationSessionRecord.expires_at,
-                    ).where(
-                        AuthenticationSessionRecord.session_hash == session_digest
-                    )
+                    ).where(AuthenticationSessionRecord.session_hash == session_digest)
                 )
             ).one()
             account = (
@@ -230,6 +243,39 @@ class LoginApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(account.replace(tzinfo=UTC), _NOW)
         self.assertEqual(previous_revocation.replace(tzinfo=UTC), _NOW)
         self.assertEqual(self.limiter.successes, [_CLIENT_KEY])
+
+    async def test_password_verification_does_not_block_the_event_loop(self) -> None:
+        verifier = _BlockingPasswordVerifier()
+        self.login._password_hasher = verifier
+        client = AsyncClient(transport=ASGITransport(app=self.app), base_url=_ORIGIN)
+        client.cookies.set("__Host-sentinel_csrf", _CSRF)
+        client.cookies.set("sentinel_session", _PREVIOUS_SESSION_TOKEN)
+        request = asyncio.create_task(
+            client.post(
+                "/api/v1/auth/login",
+                headers=_proof_headers(_CSRF),
+                json={"username": _USERNAME, "password": _PASSWORD},
+            )
+        )
+        self.assertTrue(await asyncio.to_thread(verifier.started.wait, 1))
+
+        heartbeat_count = 0
+
+        async def heartbeat() -> None:
+            nonlocal heartbeat_count
+            while not verifier.release.is_set():
+                heartbeat_count += 1
+                await asyncio.sleep(0)
+
+        heartbeat_task = asyncio.create_task(heartbeat())
+        await asyncio.sleep(0.01)
+        verifier.release.set()
+        response = await request
+        await heartbeat_task
+        await client.aclose()
+
+        self.assertGreater(heartbeat_count, 0)
+        self.assertEqual(response.status_code, 200)
 
     async def test_login_preserves_ecmascript_non_whitespace_username_suffixes(
         self,
@@ -336,6 +382,8 @@ class LoginApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             all(not result.headers.get_list("set-cookie") for result in results)
         )
+        for result in results:
+            assert_openapi_response("login", result)
         self.assertEqual(len(self.limiter.failures), 4)
         self.assertNotIn(_PASSWORD, " ".join(result.text for result in results))
 

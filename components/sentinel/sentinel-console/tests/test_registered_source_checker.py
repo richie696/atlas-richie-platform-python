@@ -73,6 +73,13 @@ class PinnedAioHttpJsonClientTests(unittest.TestCase):
 
         self.assertIsNotNone(client)
 
+    def test_request_timeout_is_bounded_and_numeric(self) -> None:
+        self.assertIsNotNone(PinnedAioHttpJsonClient(request_timeout_seconds=8))
+        for value in (True, 0, float("inf"), 61):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "request timeout"):
+                    PinnedAioHttpJsonClient(request_timeout_seconds=value)
+
 
 class RegisteredSourceTargetPolicyTests(unittest.IsolatedAsyncioTestCase):
     async def test_idn_allowlist_and_http_client_use_the_same_ascii_hostname(self) -> None:

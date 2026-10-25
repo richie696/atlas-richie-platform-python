@@ -1,11 +1,11 @@
-"""Validated password input for account-creation commands."""
+"""Validated password input for account-password write commands."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-MIN_ACCOUNT_PASSWORD_UTF16_UNITS = 12
-MAX_ACCOUNT_PASSWORD_UTF16_UNITS = 1024
+MIN_ACCOUNT_PASSWORD_UTF16_UNITS = 8
+MAX_ACCOUNT_PASSWORD_UTF16_UNITS = 32
 
 
 @dataclass(frozen=True, slots=True)

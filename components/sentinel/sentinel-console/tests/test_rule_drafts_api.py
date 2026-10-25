@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
-import unittest
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
@@ -33,7 +35,6 @@ from atlas_richie.sentinel_console.domain.rule_snapshots import (
     RuleRecord,
 )
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from session_test_doubles import UnusedSessionRevoker
 
 _HEADERS = {"x-request-id": "rule-drafts-read-1"}
 _COOKIE = "synthetic-session-token-for-rule-drafts-0001"
@@ -139,9 +140,7 @@ class _RuleDraftDetailReader:
         return self.draft or _rule_draft(draft_id)
 
 
-def _app(
-    role: str | None, *, reader=None, detail_reader=None, session_reader=None
-):
+def _app(role: str | None, *, reader=None, detail_reader=None, session_reader=None):
     return build_app(
         bootstrap_initialization_reader=_Initialized(),
         setup_window_reader=_OpenSetupWindow(),
@@ -198,6 +197,7 @@ class RuleDraftApiTests(unittest.IsolatedAsyncioTestCase):
         reader = _RuleDraftReader()
         response = await self._get("admin", reader=reader)
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readRuleDrafts", response)
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertEqual(reader.binding_id, "binding-1")
         body = response.json()
@@ -213,12 +213,14 @@ class RuleDraftApiTests(unittest.IsolatedAsyncioTestCase):
                 reader = _RuleDraftReader()
                 response = await self._get(role, reader=reader)
                 self.assertEqual(response.status_code, status)
+                assert_openapi_response("readRuleDrafts", response)
                 self.assertEqual(reader.calls, 0)
 
     async def test_invalid_binding_and_session_failure_do_not_read_drafts(self):
         reader = _RuleDraftReader()
         invalid = await self._get("admin", reader=reader, binding_id=" ")
         self.assertEqual(invalid.status_code, 400)
+        assert_openapi_response("readRuleDrafts", invalid)
         self.assertEqual(reader.calls, 0)
         unavailable_reader = _RuleDraftReader()
         unavailable = await self._get(
@@ -227,11 +229,13 @@ class RuleDraftApiTests(unittest.IsolatedAsyncioTestCase):
             session_reader=_SessionReader("unavailable"),
         )
         self.assertEqual(unavailable.status_code, 503)
+        assert_openapi_response("readRuleDrafts", unavailable)
         self.assertEqual(unavailable_reader.calls, 0)
 
     async def test_missing_and_failed_authorities_map_to_stable_responses(self):
         missing = await self._get("admin")
         self.assertEqual(missing.status_code, 503)
+        assert_openapi_response("readRuleDrafts", missing)
         cases = (
             (RuleDraftNotFound("private binding"), 404, "not_found"),
             (RuleDraftRateLimited(25), 429, "rate_limited"),
@@ -247,6 +251,7 @@ class RuleDraftApiTests(unittest.IsolatedAsyncioTestCase):
                     "admin", reader=_RuleDraftReader(error=error)
                 )
                 self.assertEqual(response.status_code, status)
+                assert_openapi_response("readRuleDrafts", response)
                 self.assertEqual(response.json()["error"]["code"], code)
                 self.assertNotIn("private", response.text)
 
@@ -258,11 +263,13 @@ class RuleDraftApiTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertEqual(response.status_code, 503)
+        assert_openapi_response("readRuleDrafts", response)
 
     async def test_admin_reads_one_exact_draft(self):
         reader = _RuleDraftDetailReader()
         response = await self._get_detail("admin", reader=reader)
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readRuleDraft", response)
         self.assertEqual(reader.binding_id, "binding-1")
         self.assertEqual(reader.draft_id, "draft-1")
         self.assertEqual(response.json()["id"], "draft-1")
@@ -272,17 +279,18 @@ class RuleDraftApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_draft_detail_permissions_and_invalid_paths_skip_reader(self):
         missing = await self._get_detail("admin")
         self.assertEqual(missing.status_code, 503)
+        assert_openapi_response("readRuleDraft", missing)
         for role, status in (("view", 403), (None, 401)):
             with self.subTest(role=role):
                 reader = _RuleDraftDetailReader()
                 response = await self._get_detail(role, reader=reader)
                 self.assertEqual(response.status_code, status)
+                assert_openapi_response("readRuleDraft", response)
                 self.assertEqual(reader.calls, 0)
         invalid_reader = _RuleDraftDetailReader()
-        invalid = await self._get_detail(
-            "admin", reader=invalid_reader, draft_id=" "
-        )
+        invalid = await self._get_detail("admin", reader=invalid_reader, draft_id=" ")
         self.assertEqual(invalid.status_code, 400)
+        assert_openapi_response("readRuleDraft", invalid)
         self.assertEqual(invalid_reader.calls, 0)
 
     async def test_draft_detail_mismatch_and_authority_errors_fail_closed(self):
@@ -291,6 +299,7 @@ class RuleDraftApiTests(unittest.IsolatedAsyncioTestCase):
             "admin", reader=_RuleDraftDetailReader(draft=wrong)
         )
         self.assertEqual(wrong_id.status_code, 503)
+        assert_openapi_response("readRuleDraft", wrong_id)
         wrong_binding = StoredRuleDraft(
             id="draft-1",
             binding_id="other-binding",
@@ -307,6 +316,7 @@ class RuleDraftApiTests(unittest.IsolatedAsyncioTestCase):
             "admin", reader=_RuleDraftDetailReader(draft=wrong_binding)
         )
         self.assertEqual(foreign.status_code, 503)
+        assert_openapi_response("readRuleDraft", foreign)
         cases = (
             (RuleDraftDetailNotFound("private"), 404, "not_found"),
             (RuleDraftDetailRateLimited(25), 429, "rate_limited"),
@@ -322,6 +332,7 @@ class RuleDraftApiTests(unittest.IsolatedAsyncioTestCase):
                     "admin", reader=_RuleDraftDetailReader(error=error)
                 )
                 self.assertEqual(response.status_code, status)
+                assert_openapi_response("readRuleDraft", response)
                 self.assertEqual(response.json()["error"]["code"], code)
                 self.assertNotIn("private", response.text)
 

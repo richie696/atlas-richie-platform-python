@@ -48,6 +48,7 @@ class SqlLoginCompositionTests(unittest.TestCase):
         attempt_limiter.assert_called_once_with(
             engine,
             policy=attempt_limit.to_policy(),
+            additional_dialect_adapters=(),
         )
         password_hasher.assert_called_once_with()
         login.assert_called_once_with(

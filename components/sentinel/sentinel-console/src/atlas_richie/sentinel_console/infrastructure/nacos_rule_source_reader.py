@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 import hashlib
+from http import HTTPStatus
 import re
 
 import aiohttp
@@ -34,6 +35,7 @@ from .registered_source_checker import (
 _MAX_NACOS_CONFIG_BYTES = 512 * 1024
 _NACOS_CONFIG_RESPONSE_BYTES = _MAX_NACOS_CONFIG_BYTES + 65_536
 _NACOS_CONFIG_PATH = "/v3/admin/cs/config"
+_NACOS_RESOURCE_NOT_FOUND_CODE = 20_004
 _MD5_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
 
 
@@ -43,6 +45,10 @@ class NacosRuleSourceReadRejected(RuntimeError):
 
 class NacosRuleSourceReadUnavailable(RuntimeError):
     """A fresh exact config value and provider revision could not be verified."""
+
+
+class NacosRuleSourceAbsent(RuntimeError):
+    """Nacos returned its authoritative config-not-found response for this key."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +134,13 @@ class NacosRuleSourceReader:
 
         if status in NACOS_HTTP_DENIED_STATUSES:
             raise NacosRuleSourceReadRejected
+        if status == HTTPStatus.NOT_FOUND:
+            if (
+                type(payload.get("code")) is int
+                and payload.get("code") == _NACOS_RESOURCE_NOT_FOUND_CODE
+            ):
+                raise NacosRuleSourceAbsent
+            raise NacosRuleSourceReadUnavailable
         if status != NACOS_HTTP_OK_STATUS or not is_nacos_success_code(
             payload.get("code")
         ):
@@ -189,6 +202,7 @@ def _decode_snapshot(
 
 
 __all__ = [
+    "NacosRuleSourceAbsent",
     "NacosRuleSourceReadRejected",
     "NacosRuleSourceReadUnavailable",
     "NacosRuleSourceReader",

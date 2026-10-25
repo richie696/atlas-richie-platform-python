@@ -13,7 +13,7 @@ from ..application.errors import SessionAuthorityUnavailable
 from ..application.revoke_current_session import RevokeCurrentSession
 from ..domain.session import SessionRevocationResult
 from .browser_origin import normalize_browser_origin
-from .browser_security import CSRF_COOKIE_NAME, SESSION_COOKIE_NAME
+from .browser_security import CSRF_COOKIE_NAME, SECURE_COOKIES, SESSION_COOKIE_NAME
 from .http_support import cookie_count, error_response, request_id
 
 
@@ -80,14 +80,14 @@ def logout_route(
         response.delete_cookie(
             SESSION_COOKIE_NAME,
             path="/",
-            secure=True,
+            secure=SECURE_COOKIES,
             httponly=True,
             samesite="lax",
         )
         response.delete_cookie(
             CSRF_COOKIE_NAME,
             path="/",
-            secure=True,
+            secure=SECURE_COOKIES,
             httponly=True,
             samesite="strict",
         )

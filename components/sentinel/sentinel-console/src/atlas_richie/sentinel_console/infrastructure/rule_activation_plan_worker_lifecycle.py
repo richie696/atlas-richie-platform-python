@@ -10,6 +10,9 @@ from typing import AsyncIterator
 from starlette.applications import Starlette
 
 from ..application.run_rule_activation_plan_worker import RunRuleActivationPlanWorker
+from .persistence.runtime_database_engine_provider import (
+    RuntimeDatabaseNotConfigured,
+)
 
 _LOGGER = logging.getLogger(__name__)
 _MAX_POLL_INTERVAL_SECONDS = 300.0
@@ -44,6 +47,10 @@ class RuleActivationPlanWorkerLoop:
                 await self._worker.run_once(limit=self._batch_size)
             except asyncio.CancelledError:
                 raise
+            except RuntimeDatabaseNotConfigured:
+                # Setup mode has no scheduler database yet; retry after the
+                # first-run flow writes the runtime locator.
+                pass
             except Exception as error:
                 _LOGGER.warning(
                     "rule activation plan worker iteration failed; error_type=%s",

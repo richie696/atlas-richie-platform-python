@@ -6,6 +6,7 @@ import hashlib
 import unittest
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
@@ -92,6 +93,7 @@ class LogoutApiTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.status_code, 204)
+        assert_openapi_response("logout", response)
         self.assertEqual(response.content, b"")
         self.assertEqual(response.headers["x-request-id"], "logout-success-1")
         self.assertEqual(response.headers["cache-control"], "no-store")
@@ -130,10 +132,9 @@ class LogoutApiTest(unittest.IsolatedAsyncioTestCase):
                 transport=ASGITransport(app=_app(revoker)), base_url=_ORIGIN
             ) as client:
                 client.cookies.set("sentinel_session", _COOKIE)
-                response = await client.post(
-                    "/api/v1/auth/logout", headers=headers
-                )
+                response = await client.post("/api/v1/auth/logout", headers=headers)
             self.assertEqual(response.status_code, 403)
+            assert_openapi_response("logout", response)
             self.assertEqual(response.json()["error"]["code"], "csrf_failed")
             self.assertEqual(revoker.calls, [])
 
@@ -185,9 +186,7 @@ class LogoutApiTest(unittest.IsolatedAsyncioTestCase):
                 "csrf_failed",
             ),
             (
-                _SessionRevoker(
-                    error=SessionAuthorityUnavailable("private db detail")
-                ),
+                _SessionRevoker(error=SessionAuthorityUnavailable("private db detail")),
                 "logout-store-1",
                 503,
                 "service_unavailable",
@@ -252,8 +251,10 @@ class LogoutApiTest(unittest.IsolatedAsyncioTestCase):
                     ("x-sentinel-csrf", _CSRF),
                     (
                         "cookie",
-                        f"sentinel_session={_COOKIE}; sentinel_session={_COOKIE}; "
-                        f"__Host-sentinel_csrf={_CSRF}",
+                        (
+                            f"sentinel_session={_COOKIE}; sentinel_session={_COOKIE}; "
+                            f"__Host-sentinel_csrf={_CSRF}"
+                        ),
                     ),
                 ],
             )
@@ -273,9 +274,11 @@ class LogoutApiTest(unittest.IsolatedAsyncioTestCase):
                     ("x-sentinel-csrf", _CSRF),
                     (
                         "cookie",
-                        f"sentinel_session={_COOKIE}; "
-                        f"__Host-sentinel_csrf={_CSRF}; "
-                        f"__Host-sentinel_csrf={_CSRF}",
+                        (
+                            f"sentinel_session={_COOKIE}; "
+                            f"__Host-sentinel_csrf={_CSRF}; "
+                            f"__Host-sentinel_csrf={_CSRF}"
+                        ),
                     ),
                 ],
             )

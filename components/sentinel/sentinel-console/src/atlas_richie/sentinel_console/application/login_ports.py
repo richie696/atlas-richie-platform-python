@@ -32,6 +32,7 @@ class LoginSessionWriter(Protocol):
         self,
         *,
         account_id: str,
+        expected_password_hash: str,
         session_digest: str,
         csrf_digest: str,
         session_epoch: str,

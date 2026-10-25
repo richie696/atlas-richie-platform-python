@@ -21,6 +21,7 @@ from atlas_richie.sentinel_console.domain.rule_publication_targets import (
     NacosRulePublicationTarget,
 )
 from atlas_richie.sentinel_console.infrastructure.nacos_rule_source_reader import (
+    NacosRuleSourceAbsent,
     NacosRuleSourceReadRejected,
     NacosRuleSourceReadUnavailable,
     NacosRuleSourceReader,
@@ -215,10 +216,25 @@ class NacosRuleSourceReaderTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(NacosRuleSourceReadUnavailable):
                     await reader.read(self._connection(), _TARGET)
 
-    async def test_not_found_is_not_guessed_to_be_absent_and_network_failure_is_unknown(
+    async def test_only_documented_nacos_not_found_code_means_absent(
         self,
     ) -> None:
-        for response in ((404, b"", {}), OSError("redacted transport detail")):
+        reader = NacosRuleSourceReader(
+            self.policy,
+            ScriptedPinnedHttpClient(
+                (404, b'{"code":20004,"message":"resource not found"}', {})
+            ),
+        )
+        with self.assertRaises(NacosRuleSourceAbsent):
+            await reader.read(self._connection(), _TARGET)
+
+        invalid_absence_responses = (
+            (404, b"", {}),
+            (404, b'{"code":20005,"message":"resource conflict"}', {}),
+            (404, b'{"code":true}', {}),
+            OSError("redacted transport detail"),
+        )
+        for response in invalid_absence_responses:
             with self.subTest(response=response):
                 reader = NacosRuleSourceReader(
                     self.policy, ScriptedPinnedHttpClient(response)

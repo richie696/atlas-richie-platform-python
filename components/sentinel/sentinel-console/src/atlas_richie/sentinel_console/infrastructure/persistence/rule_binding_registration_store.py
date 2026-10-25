@@ -18,6 +18,7 @@ from ...application.rule_binding_ports import (
     RuleBindingRegistrationConflict,
     RuleBindingRegistrationForbidden,
     RuleBindingRegistrationIdempotencyConflict,
+    RuleBindingRegistrationReceiptReader,
     RuleBindingRegistrationUnauthenticated,
 )
 from ...domain.configuration_source import ConfigurationSourceProvider
@@ -46,6 +47,119 @@ class SqlAlchemyRuleBindingRegistrationStore:
 
     def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine
+
+    async def read_rule_binding_registration(
+        self,
+        binding_id: str,
+        request_key: str,
+        *,
+        actor_id: str,
+        session_digest: str,
+        now: datetime,
+    ) -> RuleBinding | None:
+        """Read the exact actor receipt after rechecking the current admin session.
+
+        The current session is deliberately not compared to the operation's original
+        session hash. It must be a valid active admin session for the same actor;
+        write replay continues to enforce its original session and fingerprint.
+        """
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (binding_id, request_key, actor_id, session_digest)
+        ) or not is_wire_utc_millisecond_instant(now):
+            raise ValueError("binding registration receipt context is invalid")
+        try:
+            async with self._engine.begin() as connection:
+                await self._authorize_receipt_read(
+                    connection,
+                    actor_id=actor_id,
+                    session_digest=session_digest,
+                    now=now,
+                )
+                operation = RuleBindingRegistrationOperationRecord.__table__
+                receipt = await connection.execute(
+                    select(operation.c.binding_id)
+                    .where(
+                        operation.c.request_key == request_key,
+                        operation.c.binding_id == binding_id,
+                        operation.c.actor_account_id == actor_id,
+                    )
+                    .limit(1)
+                )
+                if receipt.scalar_one_or_none() is None:
+                    return None
+                return await self._read_binding(connection, binding_id)
+        except (
+            RuleBindingRegistrationForbidden,
+            RuleBindingRegistrationUnauthenticated,
+        ):
+            raise
+        except (SQLAlchemyError, TypeError, ValueError):
+            raise RuleBindingRegistrationAuthorityUnavailable(
+                "binding registration receipt authority is unavailable"
+            ) from None
+
+    async def _authorize_receipt_read(
+        self,
+        connection,
+        *,
+        actor_id: str,
+        session_digest: str,
+        now: datetime,
+    ) -> None:
+        result = await connection.execute(
+            select(AccountRecord.role_id)
+            .join(
+                AuthenticationSessionRecord,
+                AuthenticationSessionRecord.account_id == AccountRecord.account_id,
+            )
+            .where(
+                AccountRecord.account_id == actor_id,
+                AccountRecord.status == "active",
+                AuthenticationSessionRecord.session_hash == session_digest,
+                AuthenticationSessionRecord.revoked_at.is_(None),
+                AuthenticationSessionRecord.expires_at > now,
+            )
+            .with_for_update()
+        )
+        active = result.one_or_none()
+        if active is None:
+            raise RuleBindingRegistrationUnauthenticated(
+                "administrator session is inactive"
+            )
+        if active.role_id != AccountRole.ADMIN.value:
+            raise RuleBindingRegistrationForbidden("administrator role is required")
+
+    async def _read_binding(self, connection, binding_id: str) -> RuleBinding:
+        metadata = RuleBindingRecord.__table__
+        sources = RegisteredConfigurationSourceRecord.__table__
+        targets = RulePublicationTargetRecord.__table__
+        result = await connection.execute(
+            select(
+                metadata.c.binding_id,
+                metadata.c.environment_id,
+                metadata.c.app_id,
+                metadata.c.kind,
+                metadata.c.profile,
+                metadata.c.source_id,
+                metadata.c.location,
+                sources.c.name.label("source_label"),
+                sources.c.provider.label("source_provider"),
+                targets.c.source_id.label("target_source_id"),
+                targets.c.target_body,
+            )
+            .select_from(
+                metadata.join(sources, metadata.c.source_id == sources.c.source_id)
+                .join(targets, metadata.c.binding_id == targets.c.binding_id)
+            )
+            .where(metadata.c.binding_id == binding_id)
+        )
+        binding_row = result.mappings().one_or_none()
+        if binding_row is None:
+            raise RuleBindingRegistrationAuthorityUnavailable(
+                "binding operation result is unavailable"
+            )
+        return binding_from_authority_row(binding_row)
 
     async def register_rule_binding(
         self,
@@ -241,35 +355,7 @@ class SqlAlchemyRuleBindingRegistrationStore:
             raise RuleBindingRegistrationIdempotencyConflict(
                 "idempotency key was used for another binding"
             )
-        metadata = RuleBindingRecord.__table__
-        sources = RegisteredConfigurationSourceRecord.__table__
-        targets = RulePublicationTargetRecord.__table__
-        result = await connection.execute(
-            select(
-                metadata.c.binding_id,
-                metadata.c.environment_id,
-                metadata.c.app_id,
-                metadata.c.kind,
-                metadata.c.profile,
-                metadata.c.source_id,
-                metadata.c.location,
-                sources.c.name.label("source_label"),
-                sources.c.provider.label("source_provider"),
-                targets.c.source_id.label("target_source_id"),
-                targets.c.target_body,
-            )
-            .select_from(
-                metadata.join(sources, metadata.c.source_id == sources.c.source_id)
-                .join(targets, metadata.c.binding_id == targets.c.binding_id)
-            )
-            .where(metadata.c.binding_id == row["binding_id"])
-        )
-        binding_row = result.mappings().one_or_none()
-        if binding_row is None:
-            raise RuleBindingRegistrationAuthorityUnavailable(
-                "binding operation result is unavailable"
-            )
-        return binding_from_authority_row(binding_row)
+        return await self._read_binding(connection, row["binding_id"])
 
 
 def _valid_command_context(

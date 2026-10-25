@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import importlib.util
 import ipaddress
-from pathlib import Path
 import sqlite3
 import ssl
 import sys
 import tempfile
 import unittest
+from enum import StrEnum
+from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar, Self
 from unittest.mock import AsyncMock, patch
 
 from atlas_richie.sentinel_console.application.bootstrap_database_check import (
@@ -20,14 +22,24 @@ from atlas_richie.sentinel_console.application.bootstrap_database_check import (
     BootstrapDatabaseFailureReason,
     BootstrapDatabaseKind,
 )
+from atlas_richie.sentinel_console.infrastructure.bootstrap_database_check_adapters import (
+    BootstrapDatabaseCheckAdapterRegistry,
+)
 from atlas_richie.sentinel_console.infrastructure.bootstrap_database_connector import (
     BootstrapDatabaseConnector,
-    _BootstrapDatabaseAuthenticationRejected,
-    _PinnedHostnameMySQLMixin,
-    _probe_postgresql_address,
 )
 from atlas_richie.sentinel_console.infrastructure.bootstrap_database_targets import (
     ResolvedBootstrapDatabaseTarget,
+)
+from atlas_richie.sentinel_console.infrastructure.pinned_mysql_connection import (
+    PinnedHostnameMySQLConnectionMixin,
+)
+from atlas_richie.sentinel_console.infrastructure.postgresql_bootstrap_database_check_adapter import (
+    BootstrapDatabaseAuthenticationRejected,
+    probe_postgresql_address,
+)
+from atlas_richie.sentinel_console.infrastructure.sqlite_bootstrap_database_check_adapter import (
+    SQLiteBootstrapDatabaseCheckAdapter,
 )
 
 
@@ -35,7 +47,7 @@ class _FakeCursor:
     def __init__(self, calls: list[tuple[str, str]]) -> None:
         self._calls = calls
 
-    async def __aenter__(self) -> _FakeCursor:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> None:
@@ -53,7 +65,7 @@ class _FakePostgreSQLConnection:
     def __init__(self, calls: list[tuple[str, str]]) -> None:
         self._calls = calls
 
-    async def __aenter__(self) -> _FakePostgreSQLConnection:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> None:
@@ -64,7 +76,7 @@ class _FakePostgreSQLConnection:
 
 
 class _FakeMySQLConnection:
-    instances: list[_FakeMySQLConnection] = []
+    instances: ClassVar[list[_FakeMySQLConnection]] = []
 
     def __init__(self, **options: object) -> None:
         self.options = options
@@ -132,6 +144,97 @@ class BootstrapDatabaseConnectorTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_unknown_database_kind_returns_unsupported(self) -> None:
+        checker = BootstrapDatabaseConnector(_FakeTargetPolicy(self._target()))
+        candidate = BootstrapDatabaseCandidate(kind="future-db")  # type: ignore[arg-type]
+
+        result = await checker.check(candidate)
+
+        self.assertEqual(
+            result.reason,
+            BootstrapDatabaseFailureReason.UNSUPPORTED,
+        )
+
+    async def test_composition_owned_future_check_adapter_is_selected(self) -> None:
+        class FutureDatabaseKind(StrEnum):
+            FUTURE = "future"
+
+        class FutureDatabaseCheckAdapter:
+            kind = FutureDatabaseKind.FUTURE
+
+            async def check(
+                self, candidate: BootstrapDatabaseCandidate
+            ) -> BootstrapDatabaseCheckResult:
+                self.candidate = candidate
+                return BootstrapDatabaseCheckResult(reachable=True)
+
+        adapter = FutureDatabaseCheckAdapter()
+        checker = BootstrapDatabaseConnector(
+            _FakeTargetPolicy(self._target()),
+            additional_adapters=(adapter,),
+        )
+        candidate = BootstrapDatabaseCandidate(
+            kind=FutureDatabaseKind.FUTURE,  # type: ignore[arg-type]
+            host="db.internal.example",
+            port=7443,
+            database="sentinel",
+            username="bootstrap",
+            password="never-log-this-secret",
+        )
+
+        result = await checker.check(candidate)
+
+        self.assertEqual(result, BootstrapDatabaseCheckResult(reachable=True))
+        self.assertIs(adapter.candidate, candidate)
+        self.assertNotIn("never-log-this-secret", repr(adapter.candidate))
+
+    async def test_future_check_adapter_exposes_only_stable_failure_reason(
+        self,
+    ) -> None:
+        class FutureDatabaseKind(StrEnum):
+            FUTURE = "future"
+
+        class FutureDatabaseCheckAdapter:
+            kind = FutureDatabaseKind.FUTURE
+
+            async def check(
+                self, candidate: BootstrapDatabaseCandidate
+            ) -> BootstrapDatabaseCheckResult:
+                del candidate
+                return BootstrapDatabaseCheckResult(
+                    reachable=False,
+                    reason=BootstrapDatabaseFailureReason.CONNECTION,
+                )
+
+        checker = BootstrapDatabaseConnector(
+            _FakeTargetPolicy(self._target()),
+            additional_adapters=(FutureDatabaseCheckAdapter(),),
+        )
+
+        result = await checker.check(
+            BootstrapDatabaseCandidate(
+                kind=FutureDatabaseKind.FUTURE,  # type: ignore[arg-type]
+            )
+        )
+
+        self.assertEqual(
+            result,
+            BootstrapDatabaseCheckResult(
+                reachable=False,
+                reason=BootstrapDatabaseFailureReason.CONNECTION,
+            ),
+        )
+        self.assertNotIn("driver", repr(result))
+
+    def test_check_adapter_registry_rejects_duplicate_kinds(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be unique"):
+            BootstrapDatabaseCheckAdapterRegistry(
+                (
+                    SQLiteBootstrapDatabaseCheckAdapter(),
+                    SQLiteBootstrapDatabaseCheckAdapter(),
+                )
+            )
+
     async def test_sqlite_uses_only_the_deployment_owned_path_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "console.db"
@@ -184,14 +287,12 @@ class BootstrapDatabaseConnectorTest(unittest.IsolatedAsyncioTestCase):
         calls: list[tuple[str, str]] = []
         fake_driver = SimpleNamespace(
             AsyncConnection=SimpleNamespace(
-                connect=AsyncMock(
-                    return_value=_FakePostgreSQLConnection(calls)
-                )
+                connect=AsyncMock(return_value=_FakePostgreSQLConnection(calls))
             ),
             Error=Exception,
         )
 
-        await _probe_postgresql_address(
+        await probe_postgresql_address(
             fake_driver,
             self._candidate(),
             "db.internal.example",
@@ -218,8 +319,33 @@ class BootstrapDatabaseConnectorTest(unittest.IsolatedAsyncioTestCase):
             Error=FakeAuthenticationError,
         )
 
-        with self.assertRaises(_BootstrapDatabaseAuthenticationRejected):
-            await _probe_postgresql_address(
+        with self.assertRaises(BootstrapDatabaseAuthenticationRejected):
+            await probe_postgresql_address(
+                fake_driver,
+                self._candidate(),
+                "db.internal.example",
+                "10.30.1.8",
+                None,
+            )
+
+    async def test_postgresql_libpq_connect_authentication_is_normalized(self) -> None:
+        class LibpqConnectError(Exception):
+            sqlstate = None
+
+        fake_driver = SimpleNamespace(
+            AsyncConnection=SimpleNamespace(
+                connect=AsyncMock(
+                    side_effect=LibpqConnectError(
+                        "connection failed: FATAL: password authentication failed "
+                        'for user "bootstrap"'
+                    )
+                )
+            ),
+            Error=LibpqConnectError,
+        )
+
+        with self.assertRaises(BootstrapDatabaseAuthenticationRejected):
+            await probe_postgresql_address(
                 fake_driver,
                 self._candidate(),
                 "db.internal.example",
@@ -232,15 +358,10 @@ class BootstrapDatabaseConnectorTest(unittest.IsolatedAsyncioTestCase):
             Connection=_FakeMySQLConnection,
             errors=SimpleNamespace(Error=Exception),
         )
-        checker = BootstrapDatabaseConnector(
-            _FakeTargetPolicy(self._target(port=3306))
-        )
+        checker = BootstrapDatabaseConnector(_FakeTargetPolicy(self._target(port=3306)))
 
         with patch.dict(sys.modules, {"asyncmy": fake_driver}):
-            result = await checker._check_mysql(
-                self._candidate(BootstrapDatabaseKind.MYSQL),
-                self._target(port=3306),
-            )
+            result = await checker.check(self._candidate(BootstrapDatabaseKind.MYSQL))
 
         connection = _FakeMySQLConnection.instances[0]
         self.assertTrue(result.reachable)
@@ -267,19 +388,16 @@ class BootstrapDatabaseConnectorTest(unittest.IsolatedAsyncioTestCase):
             Connection=RejectingConnection,
             errors=SimpleNamespace(Error=AuthenticationError),
         )
-        checker = BootstrapDatabaseConnector(
-            _FakeTargetPolicy(self._target(port=3306))
-        )
+        checker = BootstrapDatabaseConnector(_FakeTargetPolicy(self._target(port=3306)))
 
         with patch.dict(sys.modules, {"asyncmy": fake_driver}):
-            result = await checker._check_mysql(
-                self._candidate(BootstrapDatabaseKind.MYSQL),
-                self._target(port=3306),
-            )
+            result = await checker.check(self._candidate(BootstrapDatabaseKind.MYSQL))
 
         self.assertEqual(result.reason, BootstrapDatabaseFailureReason.AUTHENTICATION)
 
-    async def test_mysql_close_driver_error_is_normalized_as_connection_failure(self) -> None:
+    async def test_mysql_close_driver_error_is_normalized_as_connection_failure(
+        self,
+    ) -> None:
         class DriverError(Exception):
             pass
 
@@ -292,21 +410,18 @@ class BootstrapDatabaseConnectorTest(unittest.IsolatedAsyncioTestCase):
             Connection=CloseFailingConnection,
             errors=SimpleNamespace(Error=DriverError),
         )
-        checker = BootstrapDatabaseConnector(
-            _FakeTargetPolicy(self._target(port=3306))
-        )
+        checker = BootstrapDatabaseConnector(_FakeTargetPolicy(self._target(port=3306)))
 
         with patch.dict(sys.modules, {"asyncmy": fake_driver}):
-            result = await checker._check_mysql(
-                self._candidate(BootstrapDatabaseKind.MYSQL),
-                self._target(port=3306),
-            )
+            result = await checker.check(self._candidate(BootstrapDatabaseKind.MYSQL))
 
         self.assertFalse(result.reachable)
         self.assertEqual(result.reason, BootstrapDatabaseFailureReason.CONNECTION)
         self.assertTrue(CloseFailingConnection.instances[0].closed)
 
-    async def test_mysql_close_driver_error_does_not_mask_authentication_rejection(self) -> None:
+    async def test_mysql_close_driver_error_does_not_mask_authentication_rejection(
+        self,
+    ) -> None:
         class DriverError(Exception):
             pass
 
@@ -322,28 +437,23 @@ class BootstrapDatabaseConnectorTest(unittest.IsolatedAsyncioTestCase):
             Connection=AuthenticationAndCloseFailingConnection,
             errors=SimpleNamespace(Error=DriverError),
         )
-        checker = BootstrapDatabaseConnector(
-            _FakeTargetPolicy(self._target(port=3306))
-        )
+        checker = BootstrapDatabaseConnector(_FakeTargetPolicy(self._target(port=3306)))
 
         with patch.dict(sys.modules, {"asyncmy": fake_driver}):
-            result = await checker._check_mysql(
-                self._candidate(BootstrapDatabaseKind.MYSQL),
-                self._target(port=3306),
-            )
+            result = await checker.check(self._candidate(BootstrapDatabaseKind.MYSQL))
 
         self.assertFalse(result.reachable)
-        self.assertEqual(
-            result.reason, BootstrapDatabaseFailureReason.AUTHENTICATION
-        )
+        self.assertEqual(result.reason, BootstrapDatabaseFailureReason.AUTHENTICATION)
 
     async def test_missing_driver_is_not_reported_as_database_reachable(self) -> None:
         checker = BootstrapDatabaseConnector(_FakeTargetPolicy(self._target()))
         candidate = self._candidate()
 
-        with patch.dict(sys.modules, {"psycopg": None}):
-            with self.assertRaises(BootstrapDatabaseCheckUnavailable):
-                await checker.check(candidate)
+        with (
+            patch.dict(sys.modules, {"psycopg": None}),
+            self.assertRaises(BootstrapDatabaseCheckUnavailable),
+        ):
+            await checker.check(candidate)
 
     async def test_mysql_rejects_unverified_tls_context(self) -> None:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -364,7 +474,7 @@ class BootstrapDatabaseConnectorTest(unittest.IsolatedAsyncioTestCase):
 
         connection_class = type(
             "_PinnedHostnameAsyncMySQLConnection",
-            (_PinnedHostnameMySQLMixin, asyncmy.Connection),
+            (PinnedHostnameMySQLConnectionMixin, asyncmy.Connection),
             {},
         )
         connection = connection_class(
@@ -381,7 +491,7 @@ class BootstrapDatabaseConnectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(issubclass(connection_class, asyncmy.Connection))
         self.assertIs(
             connection_class._request_authentication,
-            _PinnedHostnameMySQLMixin._request_authentication,
+            PinnedHostnameMySQLConnectionMixin._request_authentication,
         )
         self.assertEqual(connection._host, "10.30.1.8")
         self.assertTrue(connection._ssl_context.check_hostname)

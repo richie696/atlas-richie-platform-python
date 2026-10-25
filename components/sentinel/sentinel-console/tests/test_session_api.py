@@ -6,6 +6,7 @@ import hashlib
 import unittest
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
@@ -72,8 +73,10 @@ class SessionApiTest(unittest.IsolatedAsyncioTestCase):
             malformed = await client.get("/api/v1/auth/me", headers=_REQUEST_HEADERS)
 
         self.assertEqual(anonymous.status_code, 200)
+        assert_openapi_response("readSession", anonymous)
         self.assertIsNone(anonymous.json())
         self.assertEqual(malformed.status_code, 200)
+        assert_openapi_response("readSession", malformed)
         self.assertIsNone(malformed.json())
         self.assertEqual(reader.digests, [])
 

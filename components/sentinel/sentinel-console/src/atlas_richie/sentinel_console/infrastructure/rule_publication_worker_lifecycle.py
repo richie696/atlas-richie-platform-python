@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from typing import AsyncIterator
 
 from starlette.applications import Starlette
 
 from ..application.run_rule_publication_worker import RunRulePublicationWorker
+from .persistence.rule_publish_outbox import RulePublishClaimConflict
+from .persistence.runtime_database_engine_provider import (
+    RuntimeDatabaseNotConfigured,
+)
 
 _LOGGER = logging.getLogger(__name__)
 _MAX_POLL_INTERVAL_SECONDS = 300.0
+_MAX_ERROR_BACKOFF_SECONDS = 30.0
+_RETRY_JITTER_UPPER_FACTOR = 1.5
 
 
 class RulePublicationWorkerLoop:
@@ -39,22 +46,64 @@ class RulePublicationWorkerLoop:
 
     async def run(self, stop: asyncio.Event) -> None:
         """Run bounded polling; each database claim remains lease-fenced."""
+        consecutive_failures = 0
+        failure_delay_seconds = self._poll_interval_seconds
+        error_backoff_ceiling = max(
+            _MAX_ERROR_BACKOFF_SECONDS, self._poll_interval_seconds
+        )
         while not stop.is_set():
+            wait_seconds = self._poll_interval_seconds
             try:
                 await self._worker.run_once(limit=self._batch_size)
             except asyncio.CancelledError:
                 raise
+            except RuntimeDatabaseNotConfigured:
+                # Before first-run setup selects a database, polling is expected.
+                # Keep retrying so this process becomes active after setup.
+                consecutive_failures = 0
+                failure_delay_seconds = self._poll_interval_seconds
             except Exception as error:
+                consecutive_failures += 1
+                if consecutive_failures > 1:
+                    failure_delay_seconds = min(
+                        failure_delay_seconds * 2, error_backoff_ceiling
+                    )
+                jitter_floor_seconds = max(
+                    self._poll_interval_seconds,
+                    min(failure_delay_seconds, error_backoff_ceiling / 2),
+                )
+                jitter_ceiling_seconds = min(
+                    failure_delay_seconds * _RETRY_JITTER_UPPER_FACTOR,
+                    error_backoff_ceiling,
+                )
+                wait_seconds = min(
+                    random.uniform(
+                        jitter_floor_seconds,
+                        jitter_ceiling_seconds,
+                    ),
+                    error_backoff_ceiling,
+                )
                 # Provider and database exception messages may contain secrets or
                 # rule content. Keep logs useful without echoing untrusted detail.
-                _LOGGER.warning(
-                    "rule publication worker iteration failed; error_type=%s",
-                    type(error).__name__,
-                )
+                if isinstance(error, RulePublishClaimConflict):
+                    # These messages are fixed internal fencing reasons, never
+                    # provider responses or user-controlled content.
+                    _LOGGER.warning(
+                        "rule publication worker iteration failed; "
+                        "error_type=%s; reason=%s",
+                        type(error).__name__,
+                        str(error),
+                    )
+                else:
+                    _LOGGER.warning(
+                        "rule publication worker iteration failed; error_type=%s",
+                        type(error).__name__,
+                    )
+            else:
+                consecutive_failures = 0
+                failure_delay_seconds = self._poll_interval_seconds
             try:
-                await asyncio.wait_for(
-                    stop.wait(), timeout=self._poll_interval_seconds
-                )
+                await asyncio.wait_for(stop.wait(), timeout=wait_seconds)
             except TimeoutError:
                 continue
 

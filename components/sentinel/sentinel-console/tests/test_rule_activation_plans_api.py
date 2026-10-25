@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import unittest
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-import unittest
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
@@ -21,7 +23,6 @@ from atlas_richie.sentinel_console.domain.rule_activation_plans import (
     RuleActivationPlanState,
 )
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from session_test_doubles import UnusedSessionRevoker
 
 _HEADERS = {"x-request-id": "rule-activation-plans-read-1"}
 _COOKIE = "synthetic-session-token-for-rule-plans-0001"
@@ -160,6 +161,7 @@ class RuleActivationPlansApiTests(unittest.IsolatedAsyncioTestCase):
                 )
                 response = await self._get(role, reader=reader)
                 self.assertEqual(response.status_code, 200)
+                assert_openapi_response("readRuleActivationPlans", response)
                 self.assertEqual(reader.binding_id, "binding-1")
                 body = response.json()
                 self.assertEqual(body["asOf"], "2026-10-09T01:00:01.123Z")
@@ -176,6 +178,7 @@ class RuleActivationPlansApiTests(unittest.IsolatedAsyncioTestCase):
         anonymous_reader = _PlanReader()
         anonymous = await self._get(None, reader=anonymous_reader)
         self.assertEqual(anonymous.status_code, 401)
+        assert_openapi_response("readRuleActivationPlans", anonymous)
         self.assertEqual(anonymous_reader.calls, 0)
         invalid_reader = _PlanReader()
         invalid = await self._get("admin", reader=invalid_reader, binding_id=" ")
@@ -232,9 +235,11 @@ class RuleActivationPlanDomainTests(unittest.TestCase):
     def test_time_zone_uses_the_cross_runtime_nonblank_and_scalar_contract(self):
         plan = _plan()
         for blank in (" ", "\u0085", "\u001c", "\ufeff", "Asia/Shanghai\ud800"):
-            with self.subTest(time_zone=repr(blank)):
-                with self.assertRaises(ValueError):
-                    replace(plan, time_zone=blank)
+            with (
+                self.subTest(time_zone=repr(blank)),
+                self.assertRaises(ValueError),
+            ):
+                replace(plan, time_zone=blank)
 
     def test_collection_is_complete_bounded_unique_and_binding_scoped(self):
         plan = _plan()

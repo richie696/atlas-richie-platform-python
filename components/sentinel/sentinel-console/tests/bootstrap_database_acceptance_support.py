@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+import base64
 import hashlib
-from pathlib import Path
+import hmac
+import multiprocessing
+import os
+import shutil
+import socket
+import ssl
+import sys
 import tempfile
-from uuid import uuid4
+import unittest
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, TransportError
 from sqlalchemy import func, insert, select, update
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from atlas_richie.sentinel_console.application.bootstrap_database_check import (
@@ -30,6 +41,9 @@ from atlas_richie.sentinel_console.application.bootstrap_source_check import (
     BootstrapSourceProvider,
     NacosDirectCredentials,
 )
+from atlas_richie.sentinel_console.application.login_ports import (
+    LoginAuthorityUnavailable,
+)
 from atlas_richie.sentinel_console.application.runtime_database_locator import (
     RuntimeDatabaseLocator,
     RuntimeDatabaseTarget,
@@ -37,13 +51,6 @@ from atlas_richie.sentinel_console.application.runtime_database_locator import (
 from atlas_richie.sentinel_console.domain.account_password import AccountPassword
 from atlas_richie.sentinel_console.domain.account_username import AccountUsername
 from atlas_richie.sentinel_console.domain.session import AccountRole
-from atlas_richie.sentinel_console.infrastructure.persistence import (
-    bootstrap_initialization_transaction as transaction_module,
-)
-from atlas_richie.sentinel_console.infrastructure.persistence import (
-    identity_composition,
-    login_attempt_configuration,
-)
 from atlas_richie.sentinel_console.infrastructure.bootstrap_database_engine import (
     PreparedBootstrapDatabase,
 )
@@ -51,28 +58,36 @@ from atlas_richie.sentinel_console.infrastructure.bootstrap_database_targets imp
     BootstrapDatabaseTargetPolicy,
     BootstrapDatabaseTargetRule,
 )
-from atlas_richie.sentinel_console.infrastructure.persistence.database_runtime import (
-    ConsoleDatabaseConfiguration,
-)
 from atlas_richie.sentinel_console.infrastructure.persistence import (
     bootstrap_authorization_file_authority,
-    bootstrap_initialization_coordinator,
     first_run_composition,
+    identity_composition,
+    login_attempt_configuration,
+    login_attempt_limiter,
     runtime_database_engine_provider,
     runtime_database_locator_configuration,
     setup_window_configuration,
+)
+from atlas_richie.sentinel_console.infrastructure.persistence import (
+    bootstrap_initialization_transaction as transaction_module,
+)
+from atlas_richie.sentinel_console.infrastructure.persistence.database_runtime import (
+    ConsoleDatabaseConfiguration,
 )
 from atlas_richie.sentinel_console.infrastructure.persistence.migration_runner import (
     upgrade_database,
 )
 from atlas_richie.sentinel_console.infrastructure.persistence.models import (
     AccountRecord,
-    AuthenticationSessionRecord,
     AuditEventRecord,
+    AuthenticationSessionRecord,
     ConsoleGuardRecord,
     InitializationOperationRecord,
     LoginAttemptRecord,
     RegisteredConfigurationSourceRecord,
+)
+from atlas_richie.sentinel_console.infrastructure.security import (
+    registered_source_keys,
 )
 from atlas_richie.sentinel_console.infrastructure.security.account_command_keys import (
     AccountCommandKeyConfiguration,
@@ -82,9 +97,6 @@ from atlas_richie.sentinel_console.infrastructure.security.client_identity_key i
 )
 from atlas_richie.sentinel_console.infrastructure.security.password_hash import (
     PasswordHashService,
-)
-from atlas_richie.sentinel_console.infrastructure.security import (
-    registered_source_keys,
 )
 from atlas_richie.sentinel_console.infrastructure.security.secret_cipher import (
     AesGcmSecretCipher,
@@ -115,6 +127,232 @@ _RuntimeDatabaseLocatorConfiguration = (
 _SetupWindowConfiguration = setup_window_configuration.SetupWindowConfiguration
 
 
+async def assert_two_uvicorn_workers_serve_sql_login_cooldown(
+    test_case: unittest.TestCase,
+    engine: AsyncEngine,
+    database_url_value: str,
+    database_kind: str,
+) -> None:
+    """Verify login cooldown across a two-worker CLI and a second CLI process."""
+    from test_first_run_deployment_configuration import (
+        _environment as first_run_environment,
+    )
+
+    database_url = make_url(database_url_value)
+    test_case.assertIsNotNone(database_url.port)
+    origin = "https://console.acceptance.invalid"
+    state_directory = Path(
+        tempfile.mkdtemp(
+            prefix="sentinel-console-two-worker-",
+            dir=Path(tempfile.gettempdir()).resolve(),
+        )
+    )
+    environment = first_run_environment()
+    postgresql_root_certificate = os.environ.get(
+        "SENTINEL_CONSOLE_POSTGRESQL_ROOT_CERTIFICATE"
+    )
+    if postgresql_root_certificate is not None:
+        environment["SENTINEL_CONSOLE_POSTGRESQL_ROOT_CERTIFICATE"] = (
+            postgresql_root_certificate
+        )
+    environment.update(
+        {
+            "SENTINEL_CONSOLE_SETUP_WINDOW_PATH": str(
+                state_directory / "setup-window.json"
+            ),
+            "SENTINEL_CONSOLE_RUNTIME_LOCATOR_PATH": str(
+                state_directory / "runtime-locator.json"
+            ),
+            "SENTINEL_CONSOLE_BOOTSTRAP_AUTHORITY_PATH": str(
+                state_directory / "bootstrap-authority.json"
+            ),
+            "SENTINEL_CONSOLE_BOOTSTRAP_INITIALIZATION_LOCK_PATH": str(
+                state_directory / "initialize.lock"
+            ),
+            "SENTINEL_CONSOLE_BOOTSTRAP_DATABASE_TARGETS": (
+                f"{database_kind}|127.0.0.1/32|{database_url.port}"
+            ),
+            "SENTINEL_CONSOLE_ALLOWED_BROWSER_ORIGINS": origin,
+            "SENTINEL_CONSOLE_LOGIN_FAILURE_THRESHOLD": "2",
+            "SENTINEL_CONSOLE_LOGIN_FAILURE_WINDOW_SECONDS": "300",
+            "SENTINEL_CONSOLE_LOGIN_BLOCK_DURATION_SECONDS": "120",
+        }
+    )
+    processes: list[asyncio.subprocess.Process] = []
+    server_outputs: list[str] = []
+    suffix = uuid4().hex
+    csrf = f"acceptance-{suffix}-csrf-value-long-enough-0001"
+    username = f"missing-worker-http-{suffix}"
+    client_digest = hmac.new(
+        base64.b64decode(environment["SENTINEL_CONSOLE_CLIENT_IDENTITY_HMAC_KEY"]),
+        b"127.0.0.1",
+        hashlib.sha256,
+    ).hexdigest()
+    guard_marked_initialized = False
+
+    def reserve_port() -> int:
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            return int(listener.getsockname()[1])
+
+    async def start_server(worker_count: int) -> tuple[asyncio.subprocess.Process, int]:
+        port = reserve_port()
+        server_environment = {
+            **environment,
+            "SENTINEL_CONSOLE_BIND_HOST": "127.0.0.1",
+            "SENTINEL_CONSOLE_PORT": str(port),
+            "SENTINEL_CONSOLE_WORKERS": str(worker_count),
+        }
+        inherited_python_path = server_environment.get("PYTHONPATH", "")
+        server_environment["PYTHONPATH"] = os.pathsep.join(
+            part for part in (source_directory, inherited_python_path) if part
+        )
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "atlas_richie.sentinel_console",
+            "serve",
+            cwd=str(Path(__file__).resolve().parents[1]),
+            env={**os.environ, **server_environment},
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        processes.append(process)
+        return process, port
+
+    async def wait_for_bootstrap(
+        client: AsyncClient, process: asyncio.subprocess.Process, request_id: str
+    ) -> None:
+        deadline = asyncio.get_running_loop().time() + 45
+        while asyncio.get_running_loop().time() < deadline:
+            if process.returncode is not None:
+                break
+            try:
+                response = await client.get(
+                    "/api/v1/system/bootstrap",
+                    headers={"x-request-id": request_id},
+                )
+                if response.status_code == 200:
+                    test_case.assertTrue(response.json()["initialized"])
+                    return
+            except TransportError:
+                pass
+            await asyncio.sleep(0.1)
+        test_case.fail("a real Console CLI process did not serve initialized bootstrap")
+
+    try:
+        runtime_locator = _RuntimeDatabaseLocatorConfiguration.from_environment(
+            environment
+        )
+        await runtime_locator.create_store().write(
+            database_url_value,
+            expected_revision=None,
+            target=RuntimeDatabaseTarget("127.0.0.1", ("127.0.0.1",)),
+        )
+        async with engine.begin() as connection:
+            await connection.execute(
+                update(ConsoleGuardRecord)
+                .where(ConsoleGuardRecord.singleton_id == 1)
+                .values(
+                    initialized=True,
+                    revision=1,
+                    initialized_at=datetime.now(UTC),
+                )
+            )
+        guard_marked_initialized = True
+
+        source_directory = str(Path(__file__).resolve().parents[1] / "src")
+        first_process, first_port = await start_server(worker_count=2)
+        second_process, second_port = await start_server(worker_count=1)
+
+        async with (
+            AsyncClient(base_url=f"http://127.0.0.1:{first_port}") as first_client,
+            AsyncClient(base_url=f"http://127.0.0.1:{second_port}") as second_client,
+        ):
+            await wait_for_bootstrap(
+                first_client, first_process, f"worker-a-bootstrap-{suffix}"
+            )
+            await wait_for_bootstrap(
+                second_client, second_process, f"worker-b-bootstrap-{suffix}"
+            )
+
+            async def failed_login(client: AsyncClient, index: int):
+                return await client.post(
+                    "/api/v1/auth/login",
+                    headers={
+                        "origin": origin,
+                        "cookie": f"__Host-sentinel_csrf={csrf}",
+                        "x-sentinel-csrf": csrf,
+                        "x-request-id": f"worker-login-{suffix}-{index}",
+                    },
+                    json={
+                        "username": username,
+                        "password": f"synthetic-invalid-{index}-{suffix}",
+                    },
+                )
+
+            first_rejected = await failed_login(first_client, 1)
+            second_rejected = await failed_login(second_client, 2)
+            test_case.assertEqual(first_rejected.status_code, 401)
+            test_case.assertEqual(second_rejected.status_code, 401)
+
+            # Process B has seen only one failure. Its next request can be
+            # blocked only if the threshold includes process A's SQL write.
+            blocked = await failed_login(second_client, 3)
+            test_case.assertEqual(blocked.status_code, 429, blocked.text)
+            test_case.assertEqual(blocked.json()["error"]["code"], "rate_limited")
+            retry_after = blocked.json()["error"]["retryAfterMs"]
+            test_case.assertGreaterEqual(retry_after, 1)
+            test_case.assertLessEqual(retry_after, 120_000)
+            test_case.assertNotIn(username, blocked.text)
+
+        async with engine.connect() as connection:
+            attempt = (
+                await connection.execute(
+                    select(
+                        LoginAttemptRecord.failure_count,
+                        LoginAttemptRecord.blocked_until_ms,
+                    ).where(LoginAttemptRecord.client_identity_digest == client_digest)
+                )
+            ).one()
+        test_case.assertEqual(attempt.failure_count, 2)
+        test_case.assertIsNotNone(attempt.blocked_until_ms)
+    finally:
+        for process in processes:
+            if process.returncode is None:
+                process.terminate()
+            try:
+                output, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            except TimeoutError:
+                process.kill()
+                output, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            server_outputs.append(output.decode("utf-8", errors="replace"))
+        async with engine.begin() as connection:
+            await connection.execute(
+                LoginAttemptRecord.__table__.delete().where(
+                    LoginAttemptRecord.client_identity_digest == client_digest
+                )
+            )
+            if guard_marked_initialized:
+                await connection.execute(
+                    update(ConsoleGuardRecord)
+                    .where(ConsoleGuardRecord.singleton_id == 1)
+                    .values(initialized=False, revision=0, initialized_at=None)
+                )
+        shutil.rmtree(state_directory)
+
+    test_case.assertEqual(
+        server_outputs[0].count("Started server process"),
+        2,
+        "the first real CLI must start both configured worker processes",
+    )
+    test_case.assertEqual(
+        server_outputs[1].count("Started server process"),
+        1,
+        "the second real CLI must start its independent server process",
+    )
+
+
 class _OperatorVerifier:
     async def is_current_operator(self, opaque_session: str | None) -> bool:
         return opaque_session in {_OPERATOR_SESSION, _SECOND_OPERATOR_SESSION}
@@ -143,13 +381,11 @@ async def assert_competing_bootstrap_initializations_are_serialized(
     trigger_name = f"sentinel_test_bootstrap_pause_{suffix}"
     function_name = trigger_name
     cipher = AesGcmSecretCipher("acceptance-v1", {"acceptance-v1": b"s" * 32})
-    transaction = (
-        transaction_module.SqlAlchemyBootstrapInitializationTransaction(
-            engine,
-            operator_verifier=_OperatorVerifier(),
-            source_secret_cipher=cipher,
-            idempotency_key=b"i" * 32,
-        )
+    transaction = transaction_module.SqlAlchemyBootstrapInitializationTransaction(
+        engine,
+        operator_verifier=_OperatorVerifier(),
+        source_secret_cipher=cipher,
+        idempotency_key=b"i" * 32,
     )
     initialization_input = BootstrapInitializationInput(
         database=BootstrapDatabaseCandidate(
@@ -181,9 +417,7 @@ async def assert_competing_bootstrap_initializations_are_serialized(
         if initialized is not False:
             raise AssertionError("the dedicated database must be uninitialized")
         if dialect == "postgresql":
-            await connection.exec_driver_sql(
-                _postgres_function_sql(function_name)
-            )
+            await connection.exec_driver_sql(_postgres_function_sql(function_name))
             await connection.exec_driver_sql(
                 _postgres_trigger_sql(trigger_name, function_name)
             )
@@ -234,21 +468,29 @@ async def assert_competing_bootstrap_initializations_are_serialized(
                 .where(AuditEventRecord.request_id.in_(request_keys))
             )
             admin = (
-                await connection.execute(
-                    select(AccountRecord.__table__).where(
-                        AccountRecord.username == admin_username,
-                        AccountRecord.built_in.is_(True),
+                (
+                    await connection.execute(
+                        select(AccountRecord.__table__).where(
+                            AccountRecord.username == admin_username,
+                            AccountRecord.built_in.is_(True),
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             source = (
-                await connection.execute(
-                    select(RegisteredConfigurationSourceRecord.__table__).where(
-                        RegisteredConfigurationSourceRecord.updated_by_account_id
-                        == admin["account_id"]
+                (
+                    await connection.execute(
+                        select(RegisteredConfigurationSourceRecord.__table__).where(
+                            RegisteredConfigurationSourceRecord.updated_by_account_id
+                            == admin["account_id"]
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             admin_count = await connection.scalar(
                 select(func.count())
                 .select_from(AccountRecord)
@@ -266,19 +508,27 @@ async def assert_competing_bootstrap_initializations_are_serialized(
                 )
             )
             operation_rows = (
-                await connection.execute(
-                    select(InitializationOperationRecord.__table__).where(
-                        InitializationOperationRecord.request_key.in_(request_keys)
+                (
+                    await connection.execute(
+                        select(InitializationOperationRecord.__table__).where(
+                            InitializationOperationRecord.request_key.in_(request_keys)
+                        )
                     )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
             audit_rows = (
-                await connection.execute(
-                    select(AuditEventRecord.__table__).where(
-                        AuditEventRecord.request_id.in_(request_keys)
+                (
+                    await connection.execute(
+                        select(AuditEventRecord.__table__).where(
+                            AuditEventRecord.request_id.in_(request_keys)
+                        )
                     )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
 
         actual_counts = (
             initialized,
@@ -324,10 +574,12 @@ async def assert_competing_bootstrap_initializations_are_serialized(
             await connection.execute(
                 RegisteredConfigurationSourceRecord.__table__.delete().where(
                     RegisteredConfigurationSourceRecord.updated_by_account_id
-                    == select(AccountRecord.account_id).where(
+                    == select(AccountRecord.account_id)
+                    .where(
                         AccountRecord.username == admin_username,
                         AccountRecord.built_in.is_(True),
-                    ).scalar_subquery()
+                    )
+                    .scalar_subquery()
                 )
             )
             await connection.execute(
@@ -406,9 +658,7 @@ async def assert_bootstrap_retries_are_deduplicated_and_actor_bound(
         if initialized is not False:
             raise AssertionError("the dedicated database must be uninitialized")
         if dialect == "postgresql":
-            await connection.exec_driver_sql(
-                _postgres_function_sql(function_name)
-            )
+            await connection.exec_driver_sql(_postgres_function_sql(function_name))
             await connection.exec_driver_sql(
                 _postgres_trigger_sql(trigger_name, function_name)
             )
@@ -436,13 +686,17 @@ async def assert_bootstrap_retries_are_deduplicated_and_actor_bound(
 
         async with engine.begin() as connection:
             admin = (
-                await connection.execute(
-                    select(AccountRecord.__table__).where(
-                        AccountRecord.username == admin_username,
-                        AccountRecord.built_in.is_(True),
+                (
+                    await connection.execute(
+                        select(AccountRecord.__table__).where(
+                            AccountRecord.username == admin_username,
+                            AccountRecord.built_in.is_(True),
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             operation_count = await connection.scalar(
                 select(func.count())
                 .select_from(InitializationOperationRecord)
@@ -517,10 +771,12 @@ async def assert_bootstrap_retries_are_deduplicated_and_actor_bound(
             await connection.execute(
                 RegisteredConfigurationSourceRecord.__table__.delete().where(
                     RegisteredConfigurationSourceRecord.updated_by_account_id
-                    == select(AccountRecord.account_id).where(
+                    == select(AccountRecord.account_id)
+                    .where(
                         AccountRecord.username == admin_username,
                         AccountRecord.built_in.is_(True),
-                    ).scalar_subquery()
+                    )
+                    .scalar_subquery()
                 )
             )
             await connection.execute(
@@ -563,13 +819,13 @@ def _postgres_trigger_sql(trigger_name: str, function_name: str) -> str:
 
 
 def _mysql_trigger_sql(trigger_name: str) -> str:
-    return f'''CREATE TRIGGER `{trigger_name}` BEFORE UPDATE ON console_guard
+    return f"""CREATE TRIGGER `{trigger_name}` BEFORE UPDATE ON console_guard
         FOR EACH ROW
         BEGIN
             IF OLD.initialized = FALSE AND NEW.initialized = TRUE THEN
                 DO SLEEP(0.15);
             END IF;
-        END'''
+        END"""
 
 
 async def assert_sql_identity_http_persists_credentials_and_sessions(
@@ -591,6 +847,7 @@ async def assert_sql_identity_http_persists_credentials_and_sessions(
     password_hasher = PasswordHashService()
     preexisting_attempt_digests: set[str]
     new_attempt_digests: set[str] = set()
+    logout_session_digest: str | None = None
 
     async with engine.begin() as connection:
         initialized = await connection.scalar(
@@ -667,9 +924,10 @@ async def assert_sql_identity_http_persists_credentials_and_sessions(
             if login.status_code != 200:
                 raise AssertionError(f"real SQL login failed: {login.status_code}")
             identity = login.json()
-            if identity.get("accountId") != account_id or identity.get(
-                "roleId"
-            ) != AccountRole.ADMIN.value:
+            if (
+                identity.get("accountId") != account_id
+                or identity.get("roleId") != AccountRole.ADMIN.value
+            ):
                 raise AssertionError("login returned the wrong persisted identity")
             first_session = client.cookies.get("sentinel_session")
             current_csrf = login.headers.get("x-sentinel-csrf")
@@ -759,44 +1017,97 @@ async def assert_sql_identity_http_persists_credentials_and_sessions(
             )
             if final_identity.json() != new_login.json():
                 raise AssertionError("rotated credentials lost identity continuity")
+            logout_session = client.cookies.get("sentinel_session")
+            logout_csrf = client.cookies.get("__Host-sentinel_csrf")
+            if not logout_session or not logout_csrf:
+                raise AssertionError("confirmed login did not retain browser proofs")
+            logout_session_digest = hashlib.sha256(
+                logout_session.encode("ascii")
+            ).hexdigest()
+            logged_out = await client.post(
+                "/api/v1/auth/logout",
+                headers={
+                    "origin": _CONSOLE_ORIGIN,
+                    "x-request-id": f"{request_prefix}-logout",
+                    "x-sentinel-csrf": logout_csrf,
+                },
+            )
+            if logged_out.status_code != 204 or logged_out.content != b"":
+                raise AssertionError("real SQL logout did not return an empty 204")
+            deleted_cookies = logged_out.headers.get_list("set-cookie")
+            if len(deleted_cookies) != 2 or any(
+                "max-age=0" not in cookie.lower() for cookie in deleted_cookies
+            ):
+                raise AssertionError("logout did not expire both browser cookies")
+
+            # Replaying a previously issued opaque proof must remain anonymous;
+            # cookie deletion alone is not evidence of server-side revocation.
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url=_CONSOLE_ORIGIN,
+            ) as stale_client:
+                stale_client.cookies.set(
+                    "sentinel_session",
+                    logout_session,
+                    domain="console.acceptance.invalid",
+                    path="/",
+                )
+                stale_session = await stale_client.get(
+                    "/api/v1/auth/me",
+                    headers={"x-request-id": f"{request_prefix}-me-after-logout"},
+                )
+            if stale_session.status_code != 200 or stale_session.json() is not None:
+                raise AssertionError("logout left the persisted session active")
 
         async with engine.begin() as connection:
             account = (
-                await connection.execute(
-                    select(AccountRecord.__table__).where(
-                        AccountRecord.account_id == account_id
-                    )
-                )
-            ).mappings().one()
-            sessions = (
-                await connection.execute(
-                    select(AuthenticationSessionRecord.__table__).where(
-                        AuthenticationSessionRecord.account_id == account_id
-                    )
-                )
-            ).mappings().all()
-            audit = (
-                await connection.execute(
-                    select(AuditEventRecord.__table__).where(
-                        AuditEventRecord.request_id == password_request_id
-                    )
-                )
-            ).mappings().one()
-            new_attempt_digests = set(
                 (
-                    await connection.scalars(
-                        select(LoginAttemptRecord.client_identity_digest)
+                    await connection.execute(
+                        select(AccountRecord.__table__).where(
+                            AccountRecord.account_id == account_id
+                        )
                     )
-                ).all()
-            ) - preexisting_attempt_digests
+                )
+                .mappings()
+                .one()
+            )
+            sessions = (
+                (
+                    await connection.execute(
+                        select(AuthenticationSessionRecord.__table__).where(
+                            AuthenticationSessionRecord.account_id == account_id
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            audit = (
+                (
+                    await connection.execute(
+                        select(AuditEventRecord.__table__).where(
+                            AuditEventRecord.request_id == password_request_id
+                        )
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            new_attempt_digests = (
+                set(
+                    (
+                        await connection.scalars(
+                            select(LoginAttemptRecord.client_identity_digest)
+                        )
+                    ).all()
+                )
+                - preexisting_attempt_digests
+            )
 
-        if (
-            not password_hasher.verify_password(
-                account["password_hash"], new_password
-            )
-            or password_hasher.verify_password(
-                account["password_hash"], original_password
-            )
+        if not password_hasher.verify_password(
+            account["password_hash"], new_password
+        ) or password_hasher.verify_password(
+            account["password_hash"], original_password
         ):
             raise AssertionError("database password hash did not rotate correctly")
         session_hashes = {session["session_hash"] for session in sessions}
@@ -808,17 +1119,26 @@ async def assert_sql_identity_http_persists_credentials_and_sessions(
             raise AssertionError("database persisted raw session or CSRF material")
         if not any(session["revoked_at"] is not None for session in sessions):
             raise AssertionError("password update left the original session active")
-        if (
-            audit["action"] != "auth.password.change"
-            or audit["outcome"] != "completed"
+        if logout_session_digest is None or not any(
+            session["session_hash"] == logout_session_digest
+            and session["revoked_at"] is not None
+            for session in sessions
         ):
+            raise AssertionError("logout did not persist revocation for its session")
+        if audit["action"] != "auth.password.change" or audit["outcome"] != "completed":
             raise AssertionError("password change did not persist its audit fact")
         persisted_projection = repr(
             (dict(account), [dict(row) for row in sessions], dict(audit))
         )
         if any(
             secret in persisted_projection
-            for secret in (original_password, new_password, first_session, csrf_token)
+            for secret in (
+                original_password,
+                new_password,
+                first_session,
+                logout_session or "",
+                csrf_token,
+            )
         ):
             raise AssertionError("identity persistence exposed credential material")
     finally:
@@ -853,6 +1173,362 @@ async def assert_sql_identity_http_persists_credentials_and_sessions(
             )
 
 
+async def assert_sql_login_cooldown_shared_across_app_instances(
+    engine: AsyncEngine,
+    database_url: str,
+) -> None:
+    """Prove two SQL-composed ASGI app instances share login cooldown state."""
+    suffix = uuid4().hex
+    account_id = str(uuid4())
+    username = f"shared-limit-admin-{suffix}"
+    password = "synthetic-shared-limit-password-42"
+    request_prefix = f"shared-login-limit-{suffix}"
+    browser_origin = _CONSOLE_ORIGIN
+    client_identity_key = hashlib.sha256(
+        f"synthetic-client-identity-key-{suffix}".encode("ascii")
+    ).digest()
+    command_key = hashlib.sha256(
+        f"synthetic-account-command-key-{suffix}".encode("ascii")
+    ).digest()
+    limited_client_host = "198.51.100.27"
+    separate_client_host = "192.0.2.41"
+    limited_client_digest = hmac.new(
+        client_identity_key,
+        limited_client_host.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    separate_client_digest = hmac.new(
+        client_identity_key,
+        separate_client_host.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    second_engine = create_async_engine(database_url, pool_size=2)
+    password_hasher = PasswordHashService()
+    policy = login_attempt_configuration.LoginAttemptLimitConfiguration(2, 300, 120)
+    csrf_values = (
+        f"synthetic-{suffix}-csrf-for-limited-client-0001",
+        f"synthetic-{suffix}-csrf-for-separated-client-0001",
+    )
+
+    def build_app(app_engine: AsyncEngine):
+        return identity_composition.build_sql_identity_app(
+            app_engine,
+            attempt_limit=policy,
+            account_command_keys=AccountCommandKeyConfiguration(
+                "acceptance-v1", {"acceptance-v1": command_key}
+            ),
+            client_identity_key=ClientIdentityKeyConfiguration(client_identity_key),
+            session_ttl=timedelta(hours=1),
+            setup_window_reader=_ClosedSetupWindow(),
+            bootstrap_operator_verifier=_OperatorVerifier(),
+            bootstrap_initialization_reader=_InitializedReader(),
+            allowed_browser_origins=frozenset({browser_origin}),
+        )
+
+    async def login(client: AsyncClient, *, request_id: str, supplied_password: str):
+        return await client.post(
+            "/api/v1/auth/login",
+            headers={
+                "origin": browser_origin,
+                "x-sentinel-csrf": client.cookies.get("__Host-sentinel_csrf"),
+                "x-request-id": request_id,
+            },
+            json={"username": username, "password": supplied_password},
+        )
+
+    try:
+        async with engine.begin() as connection:
+            initialized = await connection.scalar(
+                select(ConsoleGuardRecord.initialized).where(
+                    ConsoleGuardRecord.singleton_id == 1
+                )
+            )
+            if initialized is not False:
+                raise AssertionError("the dedicated database must be uninitialized")
+            await connection.execute(
+                update(ConsoleGuardRecord)
+                .where(ConsoleGuardRecord.singleton_id == 1)
+                .values(initialized=True, revision=1, initialized_at=datetime.now(UTC))
+            )
+            await connection.execute(
+                insert(AccountRecord).values(
+                    account_id=account_id,
+                    username=username,
+                    username_key=AccountUsername(username).lookup_key,
+                    password_hash=password_hasher.hash_password(password),
+                    role_id=AccountRole.ADMIN.value,
+                    status="active",
+                    built_in=False,
+                    last_login_at=None,
+                    revision=1,
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
+                )
+            )
+
+        first_app = build_app(engine)
+        second_app = build_app(second_engine)
+        async with (
+            AsyncClient(
+                transport=ASGITransport(
+                    app=first_app, client=(limited_client_host, 49001)
+                ),
+                base_url=browser_origin,
+            ) as first_worker,
+            AsyncClient(
+                transport=ASGITransport(
+                    app=second_app, client=(limited_client_host, 49002)
+                ),
+                base_url=browser_origin,
+            ) as second_worker,
+            AsyncClient(
+                transport=ASGITransport(
+                    app=second_app, client=(separate_client_host, 49003)
+                ),
+                base_url=browser_origin,
+            ) as independent_client,
+        ):
+            for client, csrf in zip(
+                (first_worker, second_worker, independent_client),
+                (csrf_values[0], csrf_values[0], csrf_values[1]),
+                strict=True,
+            ):
+                client.cookies.set("__Host-sentinel_csrf", csrf)
+
+            rejected_responses = await asyncio.gather(
+                login(
+                    first_worker,
+                    request_id=f"{request_prefix}-failure-0",
+                    supplied_password="synthetic-wrong-password-42",
+                ),
+                login(
+                    second_worker,
+                    request_id=f"{request_prefix}-failure-1",
+                    supplied_password="synthetic-wrong-password-42",
+                ),
+            )
+            for rejected in rejected_responses:
+                if rejected.status_code != 401:
+                    raise AssertionError(
+                        "concurrent failures reaching the threshold must retain generic 401"
+                    )
+                if any(
+                    secret in rejected.text
+                    for secret in (username, password, "synthetic-wrong-password-42")
+                ):
+                    raise AssertionError("login failure exposed credential material")
+
+            blocked = await login(
+                second_worker,
+                request_id=f"{request_prefix}-valid-but-limited",
+                supplied_password=password,
+            )
+            if blocked.status_code != 429:
+                raise AssertionError(
+                    "a second SQL app instance did not observe the shared cooldown"
+                )
+            blocked_body = blocked.json()
+            blocked_error = blocked_body.get("error", {})
+            retry_after_ms = blocked_error.get("retryAfterMs")
+            if (
+                blocked_error.get("code") != "rate_limited"
+                or isinstance(retry_after_ms, bool)
+                or not isinstance(retry_after_ms, int)
+                or not 1 <= retry_after_ms <= 120_000
+            ):
+                raise AssertionError("shared cooldown returned an invalid retry hint")
+            if password in blocked.text or username in blocked.text:
+                raise AssertionError("rate-limit response exposed identity material")
+
+            independent_login = await login(
+                independent_client,
+                request_id=f"{request_prefix}-separate-client",
+                supplied_password=password,
+            )
+            if independent_login.status_code != 200:
+                raise AssertionError(
+                    "one client's cooldown incorrectly blocked another client"
+                )
+
+        async with engine.begin() as connection:
+            row_result = await connection.execute(
+                select(
+                    LoginAttemptRecord.client_identity_digest,
+                    LoginAttemptRecord.failure_count,
+                    LoginAttemptRecord.blocked_until_ms,
+                ).where(
+                    LoginAttemptRecord.client_identity_digest == limited_client_digest
+                )
+            )
+            row = row_result.mappings().one_or_none()
+            if (
+                row is None
+                or row["failure_count"] != 2
+                or row["blocked_until_ms"] is None
+                or row["client_identity_digest"] != limited_client_digest
+            ):
+                raise AssertionError("shared cooldown state was not persisted safely")
+            if username in str(dict(row)) or limited_client_host in str(dict(row)):
+                raise AssertionError("raw login identity was persisted")
+
+            now_ms = int(datetime.now(UTC).timestamp() * 1000)
+            await connection.execute(
+                update(LoginAttemptRecord)
+                .where(
+                    LoginAttemptRecord.client_identity_digest == limited_client_digest
+                )
+                .values(blocked_until_ms=now_ms - 1)
+            )
+
+        async with AsyncClient(
+            transport=ASGITransport(
+                app=second_app, client=(limited_client_host, 49004)
+            ),
+            base_url=browser_origin,
+        ) as recovered_client:
+            recovered_client.cookies.set("__Host-sentinel_csrf", csrf_values[0])
+            recovered = await login(
+                recovered_client,
+                request_id=f"{request_prefix}-cooldown-expired",
+                supplied_password=password,
+            )
+        if recovered.status_code != 200:
+            raise AssertionError("shared SQL cooldown did not recover after expiry")
+
+        async with engine.connect() as connection:
+            remaining = await connection.scalar(
+                select(func.count())
+                .select_from(LoginAttemptRecord)
+                .where(
+                    LoginAttemptRecord.client_identity_digest.in_(
+                        (limited_client_digest, separate_client_digest)
+                    )
+                )
+            )
+        if remaining != 0:
+            raise AssertionError("a successful login did not clear its shared digest")
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(
+                AuthenticationSessionRecord.__table__.delete().where(
+                    AuthenticationSessionRecord.account_id == account_id
+                )
+            )
+            await connection.execute(
+                LoginAttemptRecord.__table__.delete().where(
+                    LoginAttemptRecord.client_identity_digest.in_(
+                        (limited_client_digest, separate_client_digest)
+                    )
+                )
+            )
+            await connection.execute(
+                AccountRecord.__table__.delete().where(
+                    AccountRecord.account_id == account_id
+                )
+            )
+            await connection.execute(
+                update(ConsoleGuardRecord)
+                .where(ConsoleGuardRecord.singleton_id == 1)
+                .values(initialized=False, revision=0, initialized_at=None)
+            )
+        await second_engine.dispose()
+
+
+def _record_login_failures_in_process(
+    database_url: str,
+    digest: str,
+    start_gate,
+) -> None:
+    """Use an independent spawned process and engine to mutate one test digest."""
+    if not start_gate.wait(timeout=30):
+        raise SystemExit(2)
+
+    async def record_failures() -> None:
+        process_engine = create_async_engine(database_url, pool_size=1)
+        try:
+            limiter = login_attempt_limiter.SqlAlchemyLoginAttemptLimiter(
+                process_engine,
+                policy=login_attempt_limiter.LoginAttemptLimitPolicy(
+                    failure_threshold=4,
+                    window=timedelta(minutes=5),
+                    block_duration=timedelta(minutes=2),
+                ),
+            )
+            await limiter.record_failure(digest)
+            await limiter.record_failure(digest)
+        finally:
+            await process_engine.dispose()
+
+    try:
+        asyncio.run(record_failures())
+    except (LoginAuthorityUnavailable, SQLAlchemyError, OSError, ValueError):
+        raise SystemExit(1) from None
+
+
+async def assert_sql_login_cooldown_serializes_across_processes(
+    engine: AsyncEngine,
+    database_url: str,
+) -> None:
+    """Prove two OS processes serialize first failures in disposable SQL."""
+    digest = hashlib.sha256(f"process-login-limit-{uuid4().hex}".encode()).hexdigest()
+    context = multiprocessing.get_context("spawn")
+    start_gate = context.Event()
+    workers = [
+        context.Process(
+            target=_record_login_failures_in_process,
+            args=(database_url, digest, start_gate),
+        )
+        for _ in range(2)
+    ]
+
+    async with engine.begin() as connection:
+        await connection.execute(
+            LoginAttemptRecord.__table__.delete().where(
+                LoginAttemptRecord.client_identity_digest == digest
+            )
+        )
+
+    try:
+        for worker in workers:
+            worker.start()
+        start_gate.set()
+        for worker in workers:
+            worker.join(timeout=35)
+        if any(worker.is_alive() for worker in workers):
+            raise AssertionError("a spawned login limiter worker did not finish")
+        if any(worker.exitcode != 0 for worker in workers):
+            raise AssertionError("a spawned login limiter worker failed")
+
+        async with engine.connect() as connection:
+            row = (
+                (
+                    await connection.execute(
+                        select(
+                            LoginAttemptRecord.failure_count,
+                            LoginAttemptRecord.blocked_until_ms,
+                        ).where(LoginAttemptRecord.client_identity_digest == digest)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if row is None or row["failure_count"] != 4 or row["blocked_until_ms"] is None:
+            raise AssertionError("concurrent OS workers lost a persisted login failure")
+    finally:
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(timeout=5)
+            if worker.pid is not None and not worker.is_alive():
+                worker.close()
+        async with engine.begin() as connection:
+            await connection.execute(
+                LoginAttemptRecord.__table__.delete().where(
+                    LoginAttemptRecord.client_identity_digest == digest
+                )
+            )
+
+
 async def assert_first_run_http_persists_on_real_database(
     engine: AsyncEngine, dialect: str
 ) -> None:
@@ -875,12 +1551,76 @@ async def assert_first_run_http_persists_on_real_database(
     source_endpoint = f"https://consul-{suffix}.acceptance.invalid:8501"
     origin = _CONSOLE_ORIGIN
     candidate_port = 5432 if dialect == "postgresql" else 3306
+    postgresql_check_host = os.environ.get("SENTINEL_E2E_POSTGRES_HOST")
+    postgresql_check_port_value = os.environ.get("SENTINEL_E2E_POSTGRES_PORT")
+    postgresql_root_certificate = os.environ.get(
+        "SENTINEL_CONSOLE_POSTGRESQL_ROOT_CERTIFICATE"
+    )
+    postgresql_check_port = (
+        int(postgresql_check_port_value)
+        if postgresql_check_port_value is not None
+        else None
+    )
+    if (
+        dialect == "postgresql"
+        and postgresql_check_host == "127.0.0.1"
+        and postgresql_check_port is not None
+        and postgresql_root_certificate is not None
+    ):
+        candidate_port = postgresql_check_port
+    mysql_check_host = os.environ.get("SENTINEL_E2E_MYSQL_HOST")
+    mysql_check_port_value = os.environ.get("SENTINEL_E2E_MYSQL_PORT")
+    mysql_root_certificate = os.environ.get("SENTINEL_CONSOLE_MYSQL_ROOT_CERTIFICATE")
+    mysql_check_port = (
+        int(mysql_check_port_value) if mysql_check_port_value is not None else None
+    )
+    database_target_rules = [
+        BootstrapDatabaseTargetRule.create(
+            _DATABASE_KIND[dialect],
+            "10.0.0.0/8",
+            frozenset({candidate_port}),
+        )
+    ]
+    if (
+        dialect == "postgresql"
+        and postgresql_check_host == "127.0.0.1"
+        and postgresql_check_port is not None
+        and postgresql_root_certificate is not None
+    ):
+        database_target_rules.append(
+            BootstrapDatabaseTargetRule.create(
+                BootstrapDatabaseKind.POSTGRESQL,
+                "127.0.0.1/32",
+                frozenset({postgresql_check_port}),
+            )
+        )
+    mysql_ssl_context = None
+    if (
+        dialect == "mysql"
+        and mysql_check_host == "127.0.0.1"
+        and mysql_check_port is not None
+        and mysql_root_certificate is not None
+    ):
+        database_target_rules.append(
+            BootstrapDatabaseTargetRule.create(
+                BootstrapDatabaseKind.MYSQL,
+                "127.0.0.1/32",
+                frozenset({mysql_check_port}),
+            )
+        )
+        mysql_ssl_context = ssl.create_default_context(cafile=mysql_root_certificate)
     initialization_body = {
         "requestKey": request_key,
         "input": {
             "database": {
                 "kind": dialect,
-                "host": "database.acceptance.invalid",
+                "host": (
+                    postgresql_check_host
+                    if dialect == "postgresql" and postgresql_check_host is not None
+                    else mysql_check_host
+                    if dialect == "mysql" and mysql_check_host is not None
+                    else "database.acceptance.invalid"
+                ),
                 "port": candidate_port,
                 "database": test_database_url.database,
                 "username": test_database_url.username,
@@ -923,20 +1663,10 @@ async def assert_first_run_http_persists_on_real_database(
                 )
             ),
             initialization_lock_path=directory / "initialize.lock",
-            database_target_policy=BootstrapDatabaseTargetPolicy(
-                [
-                    BootstrapDatabaseTargetRule.create(
-                        _DATABASE_KIND[dialect],
-                        "10.0.0.0/8",
-                        frozenset({candidate_port}),
-                    )
-                ]
-            ),
+            database_target_policy=BootstrapDatabaseTargetPolicy(database_target_rules),
             bootstrap_idempotency_key=b"i" * 32,
             login_attempt_limit=(
-                login_attempt_configuration.LoginAttemptLimitConfiguration(
-                    5, 300, 300
-                )
+                login_attempt_configuration.LoginAttemptLimitConfiguration(5, 300, 300)
             ),
             account_command_keys=AccountCommandKeyConfiguration(
                 "acceptance-v1", {"acceptance-v1": b"a" * 32}
@@ -949,6 +1679,10 @@ async def assert_first_run_http_persists_on_real_database(
                 {"fingerprint-active": b"f" * 32},
             ),
             allowed_browser_origins=frozenset({origin}),
+            mysql_ssl_context=mysql_ssl_context,
+            postgresql_root_certificate=(
+                postgresql_root_certificate if dialect == "postgresql" else None
+            ),
         )
         setup_window = configuration.setup_window.create_store()
         await setup_window.set_setup_window_open(True, expected_revision=None)
@@ -957,29 +1691,33 @@ async def assert_first_run_http_persists_on_real_database(
             locator_url = ConsoleDatabaseConfiguration.from_bootstrap_candidate(
                 candidate
             ).secret_url_for_storage()
+            target_host = candidate.host or "database.acceptance.invalid"
+            target_addresses = (
+                ("127.0.0.1",) if target_host == "127.0.0.1" else ("192.0.2.42",)
+            )
             return PreparedBootstrapDatabase(
                 engine=create_async_engine(test_database_url),
                 locator_database_url=locator_url,
                 locator_target=RuntimeDatabaseTarget(
-                    candidate.host or "database.acceptance.invalid",
-                    ("192.0.2.42",),
+                    target_host,
+                    target_addresses,
                 ),
             )
 
-        def open_test_target(_locator):
+        def open_test_target(_locator, **_options):
             return create_async_engine(test_database_url)
 
-        app = first_run_composition.build_first_run_sql_identity_app(configuration)
+        with patch.object(
+            first_run_composition,
+            "create_database_engine_from_locator",
+            open_test_target,
+        ):
+            app = first_run_composition.build_first_run_sql_identity_app(configuration)
         with (
             patch.object(
                 first_run_composition.BootstrapDatabaseEngineFactory,
                 "create",
                 create_test_target,
-            ),
-            patch.object(
-                bootstrap_initialization_coordinator,
-                "create_database_engine_from_locator",
-                open_test_target,
             ),
         ):
             async with AsyncClient(
@@ -1012,6 +1750,125 @@ async def assert_first_run_http_persists_on_real_database(
                     "authorization response exposed the operator code",
                 )
 
+                if (
+                    dialect == "postgresql"
+                    and postgresql_check_host == "127.0.0.1"
+                    and postgresql_check_port is not None
+                    and postgresql_root_certificate is not None
+                ):
+                    check_database = {
+                        "kind": "postgresql",
+                        "host": postgresql_check_host,
+                        "port": postgresql_check_port,
+                        "database": test_database_url.database,
+                        "username": test_database_url.username,
+                        "password": test_database_url.password,
+                    }
+                    invalid_check = await client.post(
+                        "/api/v1/system/bootstrap/database-check",
+                        json={
+                            **check_database,
+                            "password": "synthetic-invalid-postgresql-password",
+                        },
+                        headers={
+                            "origin": origin,
+                            "x-request-id": f"{request_key}-postgresql-auth-failure",
+                            "x-sentinel-csrf": authorized.headers["x-sentinel-csrf"],
+                        },
+                    )
+                    require(
+                        invalid_check.status_code == 200
+                        and invalid_check.json()
+                        == {
+                            "status": "unreachable",
+                            "reason": "authentication",
+                        },
+                        "real PostgreSQL credential failure was not safely classified: "
+                        f"{invalid_check.status_code} {invalid_check.text}",
+                    )
+                    require(
+                        "synthetic-invalid-postgresql-password"
+                        not in invalid_check.text,
+                        "database-check response exposed submitted password",
+                    )
+                    reachable_check = await client.post(
+                        "/api/v1/system/bootstrap/database-check",
+                        json=check_database,
+                        headers={
+                            "origin": origin,
+                            "x-request-id": f"{request_key}-postgresql-reachable",
+                            "x-sentinel-csrf": authorized.headers["x-sentinel-csrf"],
+                        },
+                    )
+                    require(
+                        reachable_check.status_code == 200
+                        and reachable_check.json() == {"status": "reachable"},
+                        "real PostgreSQL TLS connectivity check did not succeed",
+                    )
+                    require(
+                        (test_database_url.password or "") not in reachable_check.text,
+                        "database-check response exposed database password",
+                    )
+
+                if (
+                    dialect == "mysql"
+                    and mysql_check_host == "127.0.0.1"
+                    and mysql_check_port is not None
+                    and mysql_root_certificate is not None
+                ):
+                    check_database = {
+                        "kind": "mysql",
+                        "host": mysql_check_host,
+                        "port": mysql_check_port,
+                        "database": test_database_url.database,
+                        "username": test_database_url.username,
+                        "password": test_database_url.password,
+                    }
+                    invalid_check = await client.post(
+                        "/api/v1/system/bootstrap/database-check",
+                        json={
+                            **check_database,
+                            "password": "synthetic-invalid-mysql-password",
+                        },
+                        headers={
+                            "origin": origin,
+                            "x-request-id": f"{request_key}-mysql-auth-failure",
+                            "x-sentinel-csrf": authorized.headers["x-sentinel-csrf"],
+                        },
+                    )
+                    require(
+                        invalid_check.status_code == 200
+                        and invalid_check.json()
+                        == {
+                            "status": "unreachable",
+                            "reason": "authentication",
+                        },
+                        "real MySQL credential failure was not safely classified",
+                    )
+                    require(
+                        "synthetic-invalid-mysql-password" not in invalid_check.text,
+                        "database-check response exposed submitted password",
+                    )
+
+                    reachable_check = await client.post(
+                        "/api/v1/system/bootstrap/database-check",
+                        json=check_database,
+                        headers={
+                            "origin": origin,
+                            "x-request-id": f"{request_key}-mysql-reachable",
+                            "x-sentinel-csrf": authorized.headers["x-sentinel-csrf"],
+                        },
+                    )
+                    require(
+                        reachable_check.status_code == 200
+                        and reachable_check.json() == {"status": "reachable"},
+                        "real MySQL TLS connectivity check did not succeed",
+                    )
+                    require(
+                        (test_database_url.password or "") not in reachable_check.text,
+                        "database-check response exposed database password",
+                    )
+
                 initialized = await client.post(
                     "/api/v1/system/bootstrap/initialize",
                     json=initialization_body,
@@ -1043,6 +1900,10 @@ async def assert_first_run_http_persists_on_real_database(
                     "/api/v1/system/bootstrap",
                     headers={"x-request-id": f"{request_key}-after"},
                 )
+                session = await client.get(
+                    "/api/v1/auth/me",
+                    headers={"x-request-id": f"{request_key}-session-after"},
+                )
                 receipt = await client.get(
                     f"/api/v1/system/bootstrap/operations/{request_key}",
                     headers={"x-request-id": f"{request_key}-receipt"},
@@ -1057,14 +1918,25 @@ async def assert_first_run_http_persists_on_real_database(
                         "idempotency-key": request_key,
                     },
                 )
+                async with engine.connect() as connection:
+                    gate_database_value = await connection.scalar(
+                        select(ConsoleGuardRecord.initialized).where(
+                            ConsoleGuardRecord.singleton_id == 1
+                        )
+                    )
                 require(
-                    gate.status_code == 200
-                    and gate.json().get("initialized") is True,
-                    "bootstrap gate did not close after first-run setup",
+                    gate.status_code == 200 and gate.json().get("initialized") is True,
+                    "bootstrap gate did not close after first-run setup: "
+                    f"HTTP {gate.status_code}, initialized="
+                    f"{gate.json().get('initialized')!r}, "
+                    f"database_guard={gate_database_value!r}",
                 )
                 require(
-                    receipt.status_code == 200
-                    and receipt.json() == initialized.json(),
+                    session.status_code == 200 and session.json() is None,
+                    "first-run initialization established a business login session",
+                )
+                require(
+                    receipt.status_code == 200 and receipt.json() == initialized.json(),
                     "first-run operation receipt was not durably recoverable",
                 )
                 require(
@@ -1088,10 +1960,18 @@ async def assert_first_run_http_persists_on_real_database(
         def create_runtime_engine(
             locator: RuntimeDatabaseLocator,
         ) -> AsyncEngine:
+            loopback_target_was_approved = (
+                dialect == "postgresql" and postgresql_check_host == "127.0.0.1"
+            ) or (dialect == "mysql" and mysql_check_host == "127.0.0.1")
+            expected_target = (
+                ("127.0.0.1", ("127.0.0.1",))
+                if loopback_target_was_approved
+                else ("database.acceptance.invalid", ("192.0.2.42",))
+            )
             require(
                 locator.target is not None
-                and locator.target.hostname == "database.acceptance.invalid"
-                and locator.target.addresses == ("192.0.2.42",),
+                and locator.target.hostname == expected_target[0]
+                and locator.target.addresses == expected_target[1],
                 "runtime locator did not preserve the approved database target",
             )
             runtime_engine = create_async_engine(test_database_url)
@@ -1103,14 +1983,21 @@ async def assert_first_run_http_persists_on_real_database(
         )
 
         def initialize_runtime_provider(provider, locator_store, **kwargs) -> None:
-            kwargs.setdefault("engine_factory", create_runtime_engine)
-            kwargs.setdefault("migration", upgrade_database)
+            kwargs["engine_factory"] = create_runtime_engine
+            kwargs["migration"] = upgrade_database
             original_provider_init(provider, locator_store, **kwargs)
 
-        with patch.object(
-            runtime_database_engine_provider.RuntimeDatabaseEngineProvider,
-            "__init__",
-            new=initialize_runtime_provider,
+        with (
+            patch.object(
+                runtime_database_engine_provider.RuntimeDatabaseEngineProvider,
+                "__init__",
+                new=initialize_runtime_provider,
+            ),
+            patch.object(
+                first_run_composition,
+                "create_database_engine_from_locator",
+                open_test_target,
+            ),
         ):
             restarted_app = first_run_composition.build_first_run_sql_identity_app(
                 configuration
@@ -1124,14 +2011,7 @@ async def assert_first_run_http_persists_on_real_database(
             disposed_engines.append(target)
             await original_dispose(target, close=close)
 
-        with (
-            patch.object(AsyncEngine, "dispose", dispose_and_track),
-            patch.object(
-                bootstrap_initialization_coordinator,
-                "create_database_engine_from_locator",
-                open_test_target,
-            ),
-        ):
+        with patch.object(AsyncEngine, "dispose", dispose_and_track):
             async with restarted_app.router.lifespan_context(restarted_app):
                 async with AsyncClient(
                     transport=ASGITransport(app=restarted_app), base_url=origin
@@ -1177,27 +2057,39 @@ async def assert_first_run_http_persists_on_real_database(
             )
         )
         admin = (
-            await connection.execute(
-                select(AccountRecord.__table__).where(
-                    AccountRecord.username == admin_username,
-                    AccountRecord.built_in.is_(True),
+            (
+                await connection.execute(
+                    select(AccountRecord.__table__).where(
+                        AccountRecord.username == admin_username,
+                        AccountRecord.built_in.is_(True),
+                    )
                 )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         operation = (
-            await connection.execute(
-                select(InitializationOperationRecord.__table__).where(
-                    InitializationOperationRecord.request_key == request_key
+            (
+                await connection.execute(
+                    select(InitializationOperationRecord.__table__).where(
+                        InitializationOperationRecord.request_key == request_key
+                    )
                 )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         source = (
-            await connection.execute(
-                select(RegisteredConfigurationSourceRecord.__table__).where(
-                    RegisteredConfigurationSourceRecord.endpoint == source_endpoint
+            (
+                await connection.execute(
+                    select(RegisteredConfigurationSourceRecord.__table__).where(
+                        RegisteredConfigurationSourceRecord.endpoint == source_endpoint
+                    )
                 )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
 
     password_hasher = PasswordHashService()
     persisted_projection = repr((dict(admin), dict(operation), dict(source)))

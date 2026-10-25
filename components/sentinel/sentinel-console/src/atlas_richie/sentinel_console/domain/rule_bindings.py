@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import StrEnum
 import re
+from dataclasses import dataclass
+from datetime import datetime
+from enum import StrEnum
 
+from .wire_numbers import MAX_SAFE_JSON_INTEGER
 from .wire_strings import (
     has_non_blank_wire_content,
     is_bounded_wire_identifier,
     is_bounded_wire_text,
 )
-from .wire_numbers import MAX_SAFE_JSON_INTEGER
 
 _MAX_IDENTIFIER_UNITS = 200
 _MAX_TEXT_UNITS = 200
@@ -19,6 +20,8 @@ _MAX_LOCATION_UNITS = 512
 _MAX_SEARCH_UNITS = 200
 _MAX_PAGE = 1_000_000
 _MAX_PAGE_SIZE = 100
+MAX_RULE_BINDING_SCOPE_ITEMS = 1_000
+MAX_RULE_BINDING_SCOPE_ROWS = 10_000
 _SENSITIVE_QUERY_NAME = re.compile(
     r"(?:^|[&;?])(?:access[_-]?token|api[_-]?key|credential|password|secret|token)\s*=",
     re.IGNORECASE,
@@ -145,3 +148,87 @@ class RuleBindingPage:
             for item in self.items
         ):
             raise ValueError("rule binding page does not match its exact filters")
+
+
+@dataclass(frozen=True, slots=True)
+class RuleBindingScopeEnvironment:
+    """One environment identity persisted by at least one valid rule binding."""
+
+    id: str
+    name: str
+
+    def __post_init__(self) -> None:
+        if not _valid_identifier(self.id) or not _valid_text(
+            self.name, _MAX_TEXT_UNITS
+        ):
+            raise ValueError("rule binding environment scope is invalid")
+        if not has_non_blank_wire_content(self.name):
+            raise ValueError("rule binding environment name is blank")
+
+
+@dataclass(frozen=True, slots=True)
+class RuleBindingScopeApplication:
+    """One application identity and the environment that owns its bindings."""
+
+    id: str
+    environment_id: str
+    name: str
+
+    def __post_init__(self) -> None:
+        if (
+            not _valid_identifier(self.id)
+            or not _valid_identifier(self.environment_id)
+            or not _valid_text(self.name, _MAX_TEXT_UNITS)
+            or not has_non_blank_wire_content(self.name)
+        ):
+            raise ValueError("rule binding application scope is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class RuleBindingScopeCatalog:
+    """A bounded snapshot of scopes proven by the rule-binding authority."""
+
+    as_of: datetime
+    environments: tuple[RuleBindingScopeEnvironment, ...]
+    applications: tuple[RuleBindingScopeApplication, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.as_of, datetime)
+            or self.as_of.tzinfo is None
+            or self.as_of.utcoffset() is None
+            or not 1970 <= self.as_of.year <= 9999
+        ):
+            raise ValueError("rule binding scope time must be timezone-aware")
+        if (
+            not isinstance(self.environments, tuple)
+            or len(self.environments) > MAX_RULE_BINDING_SCOPE_ITEMS
+            or any(
+                not isinstance(item, RuleBindingScopeEnvironment)
+                for item in self.environments
+            )
+        ):
+            raise ValueError("rule binding environments exceed their bound")
+        if (
+            not isinstance(self.applications, tuple)
+            or len(self.applications) > MAX_RULE_BINDING_SCOPE_ITEMS
+            or any(
+                not isinstance(item, RuleBindingScopeApplication)
+                for item in self.applications
+            )
+        ):
+            raise ValueError("rule binding applications exceed their bound")
+        if len({item.id for item in self.environments}) != len(self.environments):
+            raise ValueError("rule binding environment scopes must be unique")
+        application_keys = {
+            (item.environment_id, item.id) for item in self.applications
+        }
+        if len(application_keys) != len(self.applications):
+            raise ValueError("rule binding application scopes must be unique")
+        environment_ids = {item.id for item in self.environments}
+        if any(
+            item.environment_id not in environment_ids for item in self.applications
+        ):
+            raise ValueError(
+                "rule binding application scope references an unknown environment"
+            )

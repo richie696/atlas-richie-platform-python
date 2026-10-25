@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import base64
 import json
-from typing import cast
 import unittest
+from typing import cast
 
 from atlas_richie.sentinel_console.application.check_registered_source import (
     SourceCheckAuthenticationMode,
@@ -15,9 +15,9 @@ from atlas_richie.sentinel_console.domain.configuration_source import (
     ConfigurationSourceProvider,
 )
 from atlas_richie.sentinel_console.infrastructure.consul_rule_source_reader import (
+    ConsulRuleSourceReader,
     ConsulRuleSourceReadRejected,
     ConsulRuleSourceReadUnavailable,
-    ConsulRuleSourceReader,
     ConsulRuleSourceSnapshot,
 )
 from atlas_richie.sentinel_console.infrastructure.registered_source_checker import (
@@ -95,7 +95,7 @@ class ConsulRuleSourceReaderTests(unittest.IsolatedAsyncioTestCase):
         request = client.requests[0]
         self.assertEqual(request["method"], "GET")
         self.assertEqual(request["path"], "/v1/kv/sentinel/apps/orders/rules")
-        self.assertEqual(request["params"], {"dc": "dc-east"})
+        self.assertEqual(request["params"], {"dc": "dc-east", "consistent": "true"})
         self.assertEqual(request["headers"]["X-Consul-Token"], "[REDACTED_SECRET]")
 
     async def test_absent_key_is_distinct_from_empty_or_invalid_response(self) -> None:
@@ -125,11 +125,11 @@ class ConsulRuleSourceReaderTests(unittest.IsolatedAsyncioTestCase):
             (b"payload", "0"),
             (b"payload", "01x"),
         ):
-            with self.subTest(value=value, revision=revision):
-                with self.assertRaises(ValueError):
-                    ConsulRuleSourceSnapshot(
-                        _KEY, cast(bytes | None, value), revision
-                    )
+            with (
+                self.subTest(value=value, revision=revision),
+                self.assertRaises(ValueError),
+            ):
+                ConsulRuleSourceSnapshot(_KEY, cast(bytes | None, value), revision)
 
     async def test_wrong_key_malformed_metadata_and_network_failure_fail_closed(self):
         malformed = (
@@ -145,7 +145,9 @@ class ConsulRuleSourceReaderTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ConsulRuleSourceReadUnavailable):
                     await reader.read(self._connection(), _KEY)
 
-    async def test_unexpected_transport_programming_error_is_not_reclassified(self) -> None:
+    async def test_unexpected_transport_programming_error_is_not_reclassified(
+        self,
+    ) -> None:
         reader = ConsulRuleSourceReader(
             self.policy, ScriptedPinnedHttpClient(RuntimeError("bug in adapter"))
         )

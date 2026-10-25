@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import unittest
+from datetime import UTC, datetime, timedelta
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.check_registered_source import (
@@ -14,8 +16,8 @@ from atlas_richie.sentinel_console.application.check_registered_source import (
     RegisteredSourceCheckUnavailable,
     SourceCheckAuthenticationMode,
     SourceCheckCapability,
-    SourceConnectionInput,
     SourceCheckFailureReason,
+    SourceConnectionInput,
 )
 from atlas_richie.sentinel_console.application.source_credential_references import (
     ResolvedSourceCredentials,
@@ -24,7 +26,6 @@ from atlas_richie.sentinel_console.domain.configuration_source import (
     ConfigurationSourceProvider,
 )
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from session_test_doubles import UnusedSessionRevoker
 
 _SESSION = "registered-source-session-token-0000000000000001"
 _CSRF = "registered-source-csrf-token-00000000000000001"
@@ -141,9 +142,11 @@ class RegisteredSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
             source_credential_reference_resolver=credential_reference_resolver,
         )
 
-    async def _client(self, app):
+    async def _client(self, app, *, authenticated: bool = True):
         return AsyncClient(
-            transport=ASGITransport(app=app), base_url="https://console.test"
+            transport=ASGITransport(app=app),
+            base_url="https://console.test",
+            cookies=self._cookies(authenticated=authenticated),
         )
 
     @staticmethod
@@ -177,17 +180,15 @@ class RegisteredSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
     async def test_admin_check_returns_short_lived_capabilities(self) -> None:
         checker = _Checker()
         async with await self._client(
-            self._build_app(
-                checker=checker, credential_resolver=_CredentialResolver()
-            )
+            self._build_app(checker=checker, credential_resolver=_CredentialResolver())
         ) as client:
             response = await client.post(
                 "/api/v1/system/sources/check",
                 json=self._body(),
                 headers=self._headers(),
-                cookies=self._cookies(),
             )
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("checkRegisteredSource", response)
         self.assertEqual(
             response.json(),
             {
@@ -203,7 +204,9 @@ class RegisteredSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
             ("source-1", "revision-8"),
         )
         self.assertEqual(actor_id, "account-1")
-        self.assertEqual(command.authentication_mode, SourceCheckAuthenticationMode.DIRECT)
+        self.assertEqual(
+            command.authentication_mode, SourceCheckAuthenticationMode.DIRECT
+        )
         self.assertEqual(command.endpoint, "https://nacos.internal:8848")
         self.assertEqual(command.location, "sentinel")
         self.assertEqual(command.password, "private-password")
@@ -213,15 +216,16 @@ class RegisteredSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
         cases = (("view", True, 403), (None, True, 401))
         for role, authenticated, expected_status in cases:
             async with await self._client(
-                self._build_app(role=role, checker=checker)
+                self._build_app(role=role, checker=checker),
+                authenticated=authenticated,
             ) as client:
                 response = await client.post(
                     "/api/v1/system/sources/check",
                     json=self._body(),
                     headers=self._headers(),
-                    cookies=self._cookies(authenticated=authenticated),
                 )
             self.assertEqual(response.status_code, expected_status)
+            assert_openapi_response("checkRegisteredSource", response)
         self.assertEqual(checker.commands, [])
 
     async def test_bad_csrf_origin_and_schema_do_not_call_checker(self) -> None:
@@ -231,19 +235,60 @@ class RegisteredSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
                 "/api/v1/system/sources/check",
                 json=self._body(),
                 headers=self._headers(origin="https://attacker.test"),
-                cookies=self._cookies(),
             )
             bad_schema = await client.post(
                 "/api/v1/system/sources/check",
                 json={**self._body(), "unexpected": True},
                 headers=self._headers(),
-                cookies=self._cookies(),
             )
         self.assertEqual(bad_origin.status_code, 403)
+        assert_openapi_response("checkRegisteredSource", bad_origin)
         self.assertEqual(bad_schema.status_code, 400)
+        assert_openapi_response("checkRegisteredSource", bad_schema)
         self.assertEqual(checker.commands, [])
 
-    async def test_source_check_rejects_utf16_overflow_and_blank_references_before_checker(self) -> None:
+    async def test_source_identity_and_expected_revision_must_be_paired(self) -> None:
+        checker = _Checker()
+        bodies = (self._body(), self._body())
+        bodies[0]["expectedRevision"] = None
+        bodies[1]["sourceId"] = None
+        async with await self._client(self._build_app(checker=checker)) as client:
+            responses = [
+                await client.post(
+                    "/api/v1/system/sources/check",
+                    json=body,
+                    headers=self._headers(),
+                )
+                for body in bodies
+            ]
+
+        for response in responses:
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.json()["error"]["code"], "invalid_request")
+            assert_openapi_response("checkRegisteredSource", response)
+        self.assertEqual(checker.commands, [])
+
+        candidate = self._body()
+        candidate.update(sourceId=None, expectedRevision=None)
+        candidate["source"] = {
+            "provider": "nacos",
+            "endpoint": "https://nacos.internal:8848",
+            "namespace": "sentinel",
+            "authentication": {"mode": "none"},
+        }
+        async with await self._client(self._build_app(checker=checker)) as client:
+            accepted = await client.post(
+                "/api/v1/system/sources/check",
+                json=candidate,
+                headers=self._headers(),
+            )
+        self.assertEqual(accepted.status_code, 200)
+        assert_openapi_response("checkRegisteredSource", accepted)
+        self.assertEqual(len(checker.commands), 1)
+
+    async def test_source_check_rejects_utf16_overflow_and_blank_references_before_checker(
+        self,
+    ) -> None:
         checker = _Checker()
         cases = []
         for field, value in (
@@ -305,13 +350,15 @@ class RegisteredSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
                     "/api/v1/system/sources/check",
                     json=body,
                     headers=self._headers(),
-                    cookies=self._cookies(),
                 )
                 for body in cases
             ]
         self.assertTrue(all(response.status_code == 400 for response in responses))
         self.assertTrue(
-            all(response.json()["error"]["code"] == "invalid_request" for response in responses)
+            all(
+                response.json()["error"]["code"] == "invalid_request"
+                for response in responses
+            )
         )
         self.assertEqual(checker.commands, [])
 
@@ -332,21 +379,23 @@ class RegisteredSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
                 "/api/v1/system/sources/check",
                 json=body,
                 headers=self._headers(),
-                cookies=self._cookies(),
             )
             mismatch = await client.post(
                 "/api/v1/system/sources/check",
                 json={**body, "expectedRevision": "revision-1"},
                 headers=self._headers(),
-                cookies=self._cookies(),
             )
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("checkRegisteredSource", response)
         self.assertNotIn("private-token", repr(checker.commands[0][0]))
         self.assertNotIn("private-token", response.text)
         self.assertEqual(mismatch.status_code, 400)
+        assert_openapi_response("checkRegisteredSource", mismatch)
         self.assertEqual(len(checker.commands), 1)
 
-    async def test_credential_reference_is_resolved_before_checker_and_not_returned(self):
+    async def test_credential_reference_is_resolved_before_checker_and_not_returned(
+        self,
+    ):
         checker = _Checker()
         body = {
             "sourceId": None,
@@ -371,10 +420,10 @@ class RegisteredSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
                 "/api/v1/system/sources/check",
                 json=body,
                 headers=self._headers(),
-                cookies=self._cookies(),
             )
 
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("checkRegisteredSource", response)
         self.assertNotIn("resolved-private-password", response.text)
         command, _actor_id = checker.commands[0]
         self.assertIs(command.authentication_mode, SourceCheckAuthenticationMode.DIRECT)
@@ -387,8 +436,14 @@ class RegisteredSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
             expires_at=_NOW + timedelta(seconds=30),
             reason=SourceCheckFailureReason.AUTHENTICATION,
         )
+        unsupported_result = RegisteredSourceCheckResult(
+            checked_at=_NOW,
+            expires_at=_NOW + timedelta(seconds=30),
+            reason=SourceCheckFailureReason.UNSUPPORTED,
+        )
         cases = (
             (_Checker(result), 200, "authentication"),
+            (_Checker(unsupported_result), 200, "unsupported"),
             (
                 _Checker(error=RegisteredSourceCheckRateLimited(250)),
                 429,
@@ -411,11 +466,14 @@ class RegisteredSourceCheckApiTest(unittest.IsolatedAsyncioTestCase):
                     "/api/v1/system/sources/check",
                     json=self._body(),
                     headers=self._headers(),
-                    cookies=self._cookies(),
                 )
             self.assertEqual(response.status_code, expected_status)
+            assert_openapi_response("checkRegisteredSource", response)
             if expected_status == 200:
+                self.assertEqual(response.json()["status"], "unreachable")
                 self.assertEqual(response.json()["reason"], expected_code)
             else:
                 self.assertEqual(response.json()["error"]["code"], expected_code)
+                if expected_code == "rate_limited":
+                    self.assertEqual(response.json()["error"]["retryAfterMs"], 250)
         self.assertNotIn("private failure", response.text)

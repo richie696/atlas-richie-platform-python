@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import ipaddress
 import socket
 import unittest
+import zipfile
+
+import aiohttp
 
 from atlas_richie.sentinel_console.application.check_registered_source import (
     SourceCheckAuthenticationMode,
@@ -29,7 +33,9 @@ from atlas_richie.sentinel_console.infrastructure.nacos_rule_source_writer impor
     NacosRuleSourceOutcomeUnknown,
     NacosRuleSourceUnavailable,
     NacosRuleSourceWrite,
+    NacosRuleSourceWriteRejected,
     NacosRuleSourceWriter,
+    _single_config_archive,
 )
 from atlas_richie.sentinel_console.infrastructure.registered_source_checker import (
     RegisteredSourceTargetPolicy,
@@ -83,10 +89,23 @@ class _GrpcClient:
 class _HttpClient:
     def __init__(self):
         self.calls = []
+        self.raw_calls = []
+        self.raw_response = (
+            200,
+            b'{"code":0,"data":{"succCount":1,"skipCount":0}}',
+            {},
+        )
+        self.raw_error = None
 
     async def request(self, **kwargs):
         self.calls.append(kwargs)
         return 200, {"accessToken": "ephemeral-access-token"}, {}
+
+    async def request_raw(self, **kwargs):
+        self.raw_calls.append(kwargs)
+        if self.raw_error is not None:
+            raise self.raw_error
+        return self.raw_response
 
 
 class NacosRuleSourceWriterTests(unittest.IsolatedAsyncioTestCase):
@@ -152,7 +171,7 @@ class NacosRuleSourceWriterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(target.hostname, "nacos.example.test")
         self.assertEqual(target.port, 9848)
         self.assertEqual(target.addresses, (ipaddress.ip_address("192.0.2.17"),))
-        self.assertTrue(target.secure)
+        self.assertFalse(target.secure)
         self.assertEqual(request_type, "ConfigPublishRequest")
         self.assertEqual(body["tenant"], "tenant-a")
         self.assertEqual(body["group"], "SENTINEL_GROUP")
@@ -183,6 +202,18 @@ class NacosRuleSourceWriterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.grpc.calls, [])
         self.assertEqual(self.reader.calls, [])
+
+    async def test_grpc_tls_is_explicit_and_independent_of_https_admin_endpoint(self):
+        writer = NacosRuleSourceWriter(
+            self.policy,
+            self.reader,
+            grpc_client=self.grpc,
+            grpc_tls_enabled=True,
+        )
+
+        await writer.write(self.command)
+
+        self.assertTrue(self.grpc.calls[0][0].secure)
 
     async def test_direct_credentials_are_exchanged_over_pinned_http_and_sent_as_grpc_header(self):
         connection = SourceConnectionInput(
@@ -222,6 +253,120 @@ class NacosRuleSourceWriterTests(unittest.IsolatedAsyncioTestCase):
                 value=b"new-rules",
             )
         self.assertEqual(self.grpc.calls, [])
+
+    async def test_create_only_uses_one_item_import_abort_then_exact_readback(self):
+        command = NacosRuleSourceWrite(
+            connection=self.connection,
+            target=self.target,
+            expected_md5=None,
+            value=b"new-rules",
+        )
+
+        receipt = await self.writer.write(command)
+
+        self.assertEqual(receipt.md5, _md5(b"new-rules"))
+        self.assertEqual(self.grpc.calls, [])
+        self.assertEqual(len(self.http.raw_calls), 1)
+        request = self.http.raw_calls[0]
+        self.assertEqual(request["method"], "POST")
+        self.assertEqual(request["path"], "/v3/admin/cs/config/import")
+        self.assertEqual(request["params"], {})
+        self.assertIsInstance(request["form"], aiohttp.FormData)
+        self.assertEqual(len(self.reader.calls), 1)
+
+    async def test_create_only_classifies_exact_aborted_duplicate_as_conflict(self):
+        self.http.raw_response = (
+            200,
+            b'{"code":0,"data":{"succCount":0,"skipCount":0,'
+            b'"failData":[{"dataId":"sentinel-rules.json",'
+            b'"group":"SENTINEL_GROUP"}]}}',
+            {},
+        )
+        command = NacosRuleSourceWrite(
+            connection=self.connection,
+            target=self.target,
+            expected_md5=None,
+            value=b"new-rules",
+        )
+
+        with self.assertRaises(NacosRuleSourceConflict):
+            await self.writer.write(command)
+
+        self.assertEqual(self.grpc.calls, [])
+        self.assertEqual(self.reader.calls, [])
+
+    async def test_create_only_transport_failure_is_unknown_and_not_retried(self):
+        self.http.raw_error = aiohttp.ClientConnectionError()
+        command = NacosRuleSourceWrite(
+            connection=self.connection,
+            target=self.target,
+            expected_md5=None,
+            value=b"new-rules",
+        )
+
+        with self.assertRaises(NacosRuleSourceOutcomeUnknown):
+            await self.writer.write(command)
+
+        self.assertEqual(len(self.http.raw_calls), 1)
+        self.assertEqual(self.grpc.calls, [])
+        self.assertEqual(self.reader.calls, [])
+
+    async def test_create_only_requires_exact_readback(self):
+        self.reader.snapshot = NacosRuleSourceSnapshot(
+            namespace="tenant-a",
+            group="SENTINEL_GROUP",
+            data_id="sentinel-rules.json",
+            value=b"different-rules",
+            md5=_md5(b"different-rules"),
+        )
+        command = NacosRuleSourceWrite(
+            connection=self.connection,
+            target=self.target,
+            expected_md5=None,
+            value=b"new-rules",
+        )
+
+        with self.assertRaises(NacosRuleSourceOutcomeUnknown):
+            await self.writer.write(command)
+
+        self.assertEqual(len(self.reader.calls), 1)
+
+    def test_single_item_archive_has_nacos_metadata_and_exact_content(self):
+        archive_bytes = _single_config_archive(self.target, b"rule-payload")
+
+        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
+            self.assertEqual(
+                set(archive.namelist()),
+                {".metadata.yml", "SENTINEL_GROUP/sentinel-rules.json"},
+            )
+            metadata = archive.read(".metadata.yml").decode("utf-8")
+            content = archive.read(
+                "SENTINEL_GROUP/sentinel-rules.json"
+            )
+
+        self.assertIn('group: "SENTINEL_GROUP"', metadata)
+        self.assertIn('dataId: "sentinel-rules.json"', metadata)
+        self.assertIn('type: "json"', metadata)
+        self.assertEqual(content, b"rule-payload")
+
+    def test_single_item_archive_rejects_unrepresentable_path_identity(self):
+        for group, data_id in (
+            ("BAD/GROUP", "sentinel-rules.json"),
+            ("..", "sentinel-rules.json"),
+            ("SENTINEL_GROUP", "../sentinel-rules.json"),
+            ("SENTINEL_GROUP", "bad\\sentinel-rules.json"),
+        ):
+            with self.subTest(group=group, data_id=data_id):
+                target = NacosRulePublicationTarget(
+                    binding_id="binding-1",
+                    source_id="source-1",
+                    namespace="tenant-a",
+                    group=group,
+                    data_id=data_id,
+                )
+
+                with self.assertRaises(NacosRuleSourceWriteRejected):
+                    _single_config_archive(target, b"candidate")
 
     async def test_maps_provider_cas_conflict_without_readback(self):
         self.grpc.response = (

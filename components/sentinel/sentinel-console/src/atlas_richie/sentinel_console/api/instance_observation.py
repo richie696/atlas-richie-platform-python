@@ -23,7 +23,13 @@ from ..domain.session import SessionCapability
 from .http_support import error_response
 from .instance_serializers import instance_body
 from .metric_serializers import context_body, metric_bundle_body
-from .query_parsing import parse_integer, parse_utc_timestamp
+from .query_parsing import (
+    MAX_QUERY_STEP_MS,
+    MIN_QUERY_INTEGER,
+    parse_integer,
+    parse_query_values,
+    parse_utc_timestamp,
+)
 from .system_observation_access import (
     authorize_system_read,
     system_read_headers,
@@ -78,22 +84,13 @@ def instance_observation_route(
             _observation_body(result), headers=system_read_headers(request_id_value)
         )
 
-    return Route(
-        "/api/v1/instances/{instance_id}", read_detail, methods=["GET"]
-    )
+    return Route("/api/v1/instances/{instance_id}", read_detail, methods=["GET"])
 
 
 def _parse_query(request: Request) -> InstanceDetailQuery:
-    supplied: dict[str, str] = {}
-    for name, value in request.query_params.multi_items():
-        if (
-            name not in _REQUIRED_QUERY_FIELDS | _OPTIONAL_QUERY_FIELDS
-            or name in supplied
-        ):
-            raise ValueError("query parameters must be known and unique")
-        supplied[name] = value
-    if not _REQUIRED_QUERY_FIELDS.issubset(supplied):
-        raise ValueError("required instance detail query field is missing")
+    supplied = parse_query_values(
+        request, _REQUIRED_QUERY_FIELDS, _OPTIONAL_QUERY_FIELDS
+    )
     return InstanceDetailQuery(
         environment_id=supplied["environmentId"],
         app_id=supplied["appId"],
@@ -105,7 +102,7 @@ def _parse_query(request: Request) -> InstanceDetailQuery:
             parse_utc_timestamp(supplied["to"]),
         ),
         process_epoch=supplied["processEpoch"],
-        step_ms=parse_integer(supplied["stepMs"], 1, 604_800_000),
+        step_ms=parse_integer(supplied["stepMs"], MIN_QUERY_INTEGER, MAX_QUERY_STEP_MS),
     )
 
 

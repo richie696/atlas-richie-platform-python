@@ -104,6 +104,7 @@ class RulePublication:
     validation: PublicationPhase
     configuration_write: PublicationPhase
     read_back: PublicationPhase
+    publication_sequence: int = 1
 
     def __post_init__(self) -> None:
         identities = (
@@ -121,6 +122,11 @@ class RulePublication:
             raise ValueError("publication base version is invalid")
         if not is_wire_utc_millisecond_instant(self.created_at):
             raise ValueError("publication time must be millisecond-precise")
+        if (
+            type(self.publication_sequence) is not int
+            or not 1 <= self.publication_sequence <= MAX_SAFE_JSON_INTEGER
+        ):
+            raise ValueError("publication sequence is invalid")
         if not all(
             isinstance(phase, PublicationPhase)
             for phase in (self.validation, self.configuration_write, self.read_back)
@@ -175,19 +181,23 @@ def publication_phase_transition_allowed(
     ):
         return False
     return (
-        expected_state is PublicationStage.AWAITING
-        and next_state is PublicationStage.RUNNING
-    ) or (
-        expected_state is PublicationStage.RUNNING
-        and next_state
-        in {
-            PublicationStage.SUCCEEDED,
-            PublicationStage.FAILED,
-            PublicationStage.UNKNOWN,
-        }
-    ) or (
-        expected_state is PublicationStage.UNKNOWN
-        and next_state in {PublicationStage.SUCCEEDED, PublicationStage.FAILED}
+        (
+            expected_state is PublicationStage.AWAITING
+            and next_state is PublicationStage.RUNNING
+        )
+        or (
+            expected_state is PublicationStage.RUNNING
+            and next_state
+            in {
+                PublicationStage.SUCCEEDED,
+                PublicationStage.FAILED,
+                PublicationStage.UNKNOWN,
+            }
+        )
+        or (
+            expected_state is PublicationStage.UNKNOWN
+            and next_state in {PublicationStage.SUCCEEDED, PublicationStage.FAILED}
+        )
     )
 
 

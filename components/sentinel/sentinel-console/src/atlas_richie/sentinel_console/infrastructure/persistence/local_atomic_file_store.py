@@ -8,6 +8,7 @@ import fcntl
 import os
 import stat
 import tempfile
+import time
 from pathlib import Path
 from typing import AsyncIterator, Iterator
 
@@ -72,7 +73,9 @@ class LocalAtomicFileStore:
         try:
             yield
         finally:
-            await asyncio.shield(asyncio.to_thread(os.close, descriptor))
+            await asyncio.shield(
+                asyncio.to_thread(self._release_locked_descriptor, descriptor)
+            )
 
     def _read_sync(self) -> bytes | None:
         with self._exclusive_lock():
@@ -123,9 +126,22 @@ class LocalAtomicFileStore:
             yield
         finally:
             try:
-                os.close(descriptor)
+                self._release_locked_descriptor(descriptor)
             except OSError:
                 pass
+
+    @staticmethod
+    def _release_locked_descriptor(descriptor: int) -> None:
+        """Explicitly release the advisory lock before closing its descriptor.
+
+        Some shared POSIX filesystems do not promptly release a remote lock on
+        close alone. Sending `LOCK_UN` makes the release boundary explicit; the
+        descriptor is still closed if the unlock operation itself fails.
+        """
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
     def _open_locked_descriptor(self) -> int:
         self._verify_parent()
@@ -144,7 +160,7 @@ class LocalAtomicFileStore:
                 or stat.S_IMODE(lock_stat.st_mode) & 0o077
             ):
                 raise LocalAtomicFileStoreError("atomic file lock is unsafe")
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            self._acquire_exclusive_lock(descriptor)
         except LocalAtomicFileStoreError:
             if descriptor is not None:
                 os.close(descriptor)
@@ -154,6 +170,18 @@ class LocalAtomicFileStore:
                 os.close(descriptor)
             raise LocalAtomicFileStoreError("atomic file lock is unavailable") from None
         return descriptor
+
+    @staticmethod
+    def _acquire_exclusive_lock(descriptor: int) -> None:
+        """Poll non-blocking advisory acquisition to avoid stale NFS waiters."""
+        delay_seconds = 0.01
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except BlockingIOError:
+                time.sleep(delay_seconds)
+                delay_seconds = min(delay_seconds * 2, 0.1)
 
     def _read_unlocked(self) -> bytes:
         try:

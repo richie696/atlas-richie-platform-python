@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import unittest
+from datetime import UTC, datetime
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
@@ -18,7 +20,6 @@ from atlas_richie.sentinel_console.domain.observation_catalog import (
     ObservationEnvironment,
 )
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from session_test_doubles import UnusedSessionRevoker
 
 _REQUEST_HEADERS = {"x-request-id": "observation-catalog-read-1"}
 _OPAQUE_COOKIE = "synthetic-session-token-for-console-read-0001"
@@ -84,9 +85,7 @@ def _snapshot() -> ObservationCatalogSnapshot:
     return ObservationCatalogSnapshot(
         as_of=_AS_OF,
         environments=(ObservationEnvironment("prod", "Production"),),
-        applications=(
-            ObservationApplication("checkout", "prod", "Checkout API"),
-        ),
+        applications=(ObservationApplication("checkout", "prod", "Checkout API"),),
     )
 
 
@@ -124,6 +123,7 @@ class ObservationCatalogApiTest(unittest.IsolatedAsyncioTestCase):
                 )
 
             self.assertEqual(response.status_code, 200)
+            assert_openapi_response("readObservationCatalog", response)
             self.assertEqual(
                 response.headers["x-request-id"], _REQUEST_HEADERS["x-request-id"]
             )
@@ -144,14 +144,13 @@ class ObservationCatalogApiTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.status_code, 401)
+        assert_openapi_response("readObservationCatalog", response)
         self.assertEqual(response.json()["error"]["code"], "unauthenticated")
         self.assertEqual(reader.calls, 0)
 
     async def test_invalid_request_id_and_unavailable_session_fail_closed(self) -> None:
         async with AsyncClient(
-            transport=ASGITransport(
-                app=_app("admin", reader=_CatalogReader())
-            ),
+            transport=ASGITransport(app=_app("admin", reader=_CatalogReader())),
             base_url="http://test",
         ) as client:
             client.cookies.set("sentinel_session", _OPAQUE_COOKIE)
@@ -195,9 +194,7 @@ class ObservationCatalogApiTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("private catalog detail", response.text)
 
         async with AsyncClient(
-            transport=ASGITransport(
-                app=_app("view", reader=_InvalidCatalogReader())
-            ),
+            transport=ASGITransport(app=_app("view", reader=_InvalidCatalogReader())),
             base_url="http://test",
         ) as client:
             client.cookies.set("sentinel_session", _OPAQUE_COOKIE)
@@ -224,11 +221,19 @@ class ObservationCatalogApiTest(unittest.IsolatedAsyncioTestCase):
                 (),
             )
 
-    def test_domain_rejects_blank_names_and_inconsistent_catalog_relationships(self) -> None:
+    def test_domain_rejects_blank_names_and_inconsistent_catalog_relationships(
+        self,
+    ) -> None:
         for blank_name in ("\x1c", "\x85", "\ufeff", "\u3000"):
-            with self.subTest(blank_name=repr(blank_name)), self.assertRaises(ValueError):
+            with (
+                self.subTest(blank_name=repr(blank_name)),
+                self.assertRaises(ValueError),
+            ):
                 ObservationEnvironment("prod", blank_name)
-            with self.subTest(blank_name=repr(blank_name)), self.assertRaises(ValueError):
+            with (
+                self.subTest(blank_name=repr(blank_name)),
+                self.assertRaises(ValueError),
+            ):
                 ObservationApplication("checkout", "prod", blank_name)
 
         environment = ObservationEnvironment("prod", "Production")
@@ -248,8 +253,9 @@ class ObservationCatalogApiTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
         for create_snapshot in invalid_snapshots:
-            with self.subTest(create_snapshot=create_snapshot), self.assertRaises(
-                ValueError
+            with (
+                self.subTest(create_snapshot=create_snapshot),
+                self.assertRaises(ValueError),
             ):
                 create_snapshot()
 
@@ -271,9 +277,11 @@ class ObservationCatalogApiTest(unittest.IsolatedAsyncioTestCase):
             lambda: ObservationApplication("checkout", "prod", "invalid-\ud800"),
         )
         for create_invalid_value in invalid_values:
-            with self.subTest(create_invalid_value=create_invalid_value):
-                with self.assertRaises(ValueError):
-                    create_invalid_value()
+            with (
+                self.subTest(create_invalid_value=create_invalid_value),
+                self.assertRaises(ValueError),
+            ):
+                create_invalid_value()
 
 
 if __name__ == "__main__":

@@ -10,23 +10,23 @@ from ..application.rule_publication_ports import (
     RulePublicationProviderRejected,
     RulePublicationProviderUnavailable,
 )
+from ..domain.configuration_source import ConfigurationSourceProvider
 from ..domain.rule_publication_targets import (
     ConsulRulePublicationTarget,
     RulePublicationTarget,
 )
-from ..domain.configuration_source import ConfigurationSourceProvider
 from .consul_rule_source_reader import (
+    ConsulRuleSourceReader,
     ConsulRuleSourceReadRejected,
     ConsulRuleSourceReadUnavailable,
-    ConsulRuleSourceReader,
 )
 from .consul_rule_source_writer import (
     ConsulRuleSourceConflict,
     ConsulRuleSourceOutcomeUnknown,
     ConsulRuleSourceUnavailable,
     ConsulRuleSourceWrite,
-    ConsulRuleSourceWriteRejected,
     ConsulRuleSourceWriter,
+    ConsulRuleSourceWriteRejected,
 )
 
 
@@ -59,6 +59,7 @@ class ConsulRulePublicationProvider:
         return RuleConfigurationSnapshot(
             revision=snapshot.modify_index,
             value=snapshot.value,
+            conditional_replay_safe=True,
         )
 
     async def write_configuration_if_revision(

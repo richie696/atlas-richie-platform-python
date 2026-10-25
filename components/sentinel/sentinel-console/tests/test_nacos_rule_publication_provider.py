@@ -10,8 +10,8 @@ from atlas_richie.sentinel_console.application.check_registered_source import (
     SourceConnectionInput,
 )
 from atlas_richie.sentinel_console.application.rule_publication_ports import (
+    RuleConfigurationSnapshot,
     RulePublicationProviderConflict,
-    RulePublicationProviderRejected,
 )
 from atlas_richie.sentinel_console.domain.configuration_source import (
     ConfigurationSourceProvider,
@@ -23,6 +23,7 @@ from atlas_richie.sentinel_console.infrastructure.nacos_rule_publication_provide
     NacosRulePublicationProvider,
 )
 from atlas_richie.sentinel_console.infrastructure.nacos_rule_source_reader import (
+    NacosRuleSourceAbsent,
     NacosRuleSourceSnapshot,
 )
 from atlas_richie.sentinel_console.infrastructure.nacos_rule_source_writer import (
@@ -38,9 +39,12 @@ def _md5(value: bytes) -> str:
 class _Reader:
     def __init__(self):
         self.target = None
+        self.error = None
 
     async def read(self, connection, target):
         self.target = target
+        if self.error is not None:
+            raise self.error
         return NacosRuleSourceSnapshot(
             namespace=target.namespace,
             group=target.group,
@@ -87,9 +91,7 @@ class NacosRulePublicationProviderTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_maps_md5_baseline_target_and_receipt(self):
-        snapshot = await self.provider.read_configuration(
-            self.connection, self.target
-        )
+        snapshot = await self.provider.read_configuration(self.connection, self.target)
         revision = await self.provider.write_configuration_if_revision(
             self.connection,
             self.target,
@@ -99,19 +101,30 @@ class NacosRulePublicationProviderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.reader.target, self.target)
         self.assertEqual(snapshot.revision, _md5(b"[]"))
+        self.assertFalse(snapshot.conditional_replay_safe)
         self.assertEqual(self.writer.command.expected_md5, _md5(b"[]"))
         self.assertEqual(self.writer.command.value, b"candidate")
         self.assertEqual(revision, _md5(b"candidate"))
 
-    async def test_rejects_absent_config_without_blanking_cas_token(self):
-        with self.assertRaises(RulePublicationProviderRejected):
-            await self.provider.write_configuration_if_revision(
-                self.connection,
-                self.target,
-                expected_revision=None,
-                value=b"candidate",
-            )
-        self.assertIsNone(self.writer.command)
+    async def test_maps_only_authoritative_nacos_absence_to_create_snapshot(self):
+        self.reader.error = NacosRuleSourceAbsent
+
+        snapshot = await self.provider.read_configuration(self.connection, self.target)
+
+        self.assertEqual(snapshot, RuleConfigurationSnapshot(None, None))
+        self.assertEqual(self.reader.target, self.target)
+
+    async def test_routes_absent_config_to_explicit_create_only_writer_mode(self):
+        revision = await self.provider.write_configuration_if_revision(
+            self.connection,
+            self.target,
+            expected_revision=None,
+            value=b"candidate",
+        )
+
+        self.assertIsNone(self.writer.command.expected_md5)
+        self.assertEqual(self.writer.command.value, b"candidate")
+        self.assertEqual(revision, _md5(b"candidate"))
 
     async def test_maps_conflict_without_leaking_provider_exception(self):
         self.writer.error = NacosRuleSourceConflict

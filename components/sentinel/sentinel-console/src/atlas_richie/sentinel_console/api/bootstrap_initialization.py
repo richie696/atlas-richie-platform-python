@@ -25,7 +25,7 @@ from .bootstrap_browser_security import has_valid_bootstrap_browser_proof
 from .bootstrap_database_check import parse_database_candidate
 from .bootstrap_source_check import parse_source_candidate
 from .browser_origin import normalize_browser_origin
-from .http_support import error_response, read_json_object, strict_request_id
+from .http_support import error_response, read_json_object, request_id
 
 _OPERATOR_COOKIE_NAME = "sentinel_bootstrap"
 _MAX_BODY_BYTES = 16_384
@@ -49,7 +49,7 @@ def bootstrap_initialization_routes(
         raise ValueError("at least one browser origin must be configured")
 
     async def initialize(request: Request) -> Response:
-        request_id_value, valid_request_id = strict_request_id(request)
+        request_id_value, valid_request_id = request_id(request)
         if not valid_request_id:
             return error_response(request_id_value, "invalid_request", 400)
         if not has_valid_bootstrap_browser_proof(request, allowed_origins):
@@ -90,7 +90,7 @@ def bootstrap_initialization_routes(
         )
 
     async def read(request: Request) -> Response:
-        request_id_value, valid_request_id = strict_request_id(request)
+        request_id_value, valid_request_id = request_id(request)
         if not valid_request_id:
             return error_response(request_id_value, "invalid_request", 400)
         request_key = request.path_params.get("request_key", "")

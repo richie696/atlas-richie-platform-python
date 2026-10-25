@@ -42,6 +42,7 @@ class SqlAlchemyOwnPasswordCredentialReader:
                     .where(
                         AccountRecord.account_id == actor.account_id,
                         AccountRecord.status == "active",
+                        AccountRecord.deleted_at.is_(None),
                         AuthenticationSessionRecord.session_hash
                         == actor.session_digest,
                         AuthenticationSessionRecord.revoked_at.is_(None),

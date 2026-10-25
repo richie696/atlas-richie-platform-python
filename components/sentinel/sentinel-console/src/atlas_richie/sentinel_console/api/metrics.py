@@ -19,7 +19,13 @@ from ..domain.instance_observation import MetricQuery, ObservationContext
 from ..domain.session import SessionCapability
 from .http_support import error_response
 from .metric_serializers import metric_bundle_body
-from .query_parsing import parse_integer, parse_utc_timestamp
+from .query_parsing import (
+    MAX_QUERY_STEP_MS,
+    MIN_QUERY_INTEGER,
+    parse_integer,
+    parse_query_values,
+    parse_utc_timestamp,
+)
 from .system_observation_access import (
     authorize_system_read,
     system_read_headers,
@@ -79,16 +85,9 @@ def metrics_route(
 
 
 def _parse_query(request: Request) -> MetricQuery:
-    supplied: dict[str, str] = {}
-    for name, value in request.query_params.multi_items():
-        if (
-            name not in _REQUIRED_QUERY_FIELDS | _OPTIONAL_QUERY_FIELDS
-            or name in supplied
-        ):
-            raise ValueError("query parameters must be known and unique")
-        supplied[name] = value
-    if not _REQUIRED_QUERY_FIELDS.issubset(supplied):
-        raise ValueError("required metric query field is missing")
+    supplied = parse_query_values(
+        request, _REQUIRED_QUERY_FIELDS, _OPTIONAL_QUERY_FIELDS
+    )
     metric_selection = supplied["metrics"]
     if not 1 <= len(metric_selection) <= _MAX_METRIC_SELECTION_LENGTH:
         raise ValueError("metric selection length is out of range")
@@ -106,5 +105,5 @@ def _parse_query(request: Request) -> MetricQuery:
             ),
         ),
         metrics=metrics,
-        step_ms=parse_integer(supplied["stepMs"], 1, 604_800_000),
+        step_ms=parse_integer(supplied["stepMs"], MIN_QUERY_INTEGER, MAX_QUERY_STEP_MS),
     )

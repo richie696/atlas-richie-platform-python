@@ -22,6 +22,7 @@ class SqlAlchemyLoginSessionWriter:
         self,
         *,
         account_id: str,
+        expected_password_hash: str,
         session_digest: str,
         csrf_digest: str,
         session_epoch: str,
@@ -29,7 +30,7 @@ class SqlAlchemyLoginSessionWriter:
         expires_at: datetime,
         previous_session_digest: str | None,
     ) -> bool:
-        """Conditionally write a session while the account is still active."""
+        """Lock the account and reject a login verified before password rotation."""
         try:
             async with self._engine.begin() as connection:
                 account = await connection.execute(
@@ -37,6 +38,8 @@ class SqlAlchemyLoginSessionWriter:
                     .where(
                         AccountRecord.account_id == account_id,
                         AccountRecord.status == "active",
+                        AccountRecord.deleted_at.is_(None),
+                        AccountRecord.password_hash == expected_password_hash,
                     )
                     .with_for_update()
                 )

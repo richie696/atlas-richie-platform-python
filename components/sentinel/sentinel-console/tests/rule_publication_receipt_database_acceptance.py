@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -17,8 +19,15 @@ from atlas_richie.sentinel_console.domain.rule_publications import (
     PublicationReceiptState,
     RulePublicationReceipt,
 )
+from atlas_richie.sentinel_console.infrastructure.persistence import (
+    identity_composition,
+)
+from atlas_richie.sentinel_console.infrastructure.persistence.login_attempt_configuration import (
+    LoginAttemptLimitConfiguration,
+)
 from atlas_richie.sentinel_console.infrastructure.persistence.models import (
     AccountRecord,
+    AuthenticationSessionRecord,
     RulePublicationReceiptRecord,
     RulePublicationRecord,
     RuleSetVersionRecord,
@@ -27,12 +36,26 @@ from atlas_richie.sentinel_console.infrastructure.persistence.models import (
 from atlas_richie.sentinel_console.infrastructure.persistence.rule_publication_receipt_store import (
     SqlAlchemyRulePublicationReceiptStore,
 )
+from atlas_richie.sentinel_console.infrastructure.security.account_command_keys import (
+    AccountCommandKeyConfiguration,
+)
+from atlas_richie.sentinel_console.infrastructure.security.client_identity_key import (
+    ClientIdentityKeyConfiguration,
+)
+
+_CONSOLE_ORIGIN = "https://receipt.acceptance.invalid"
+_SESSION_COOKIE_NAME = "sentinel_session"
+
+
+class _ClosedSetupWindow:
+    async def is_setup_window_open(self) -> bool:
+        return False
 
 
 async def assert_runtime_publication_receipt_persistence(
     case, engine: AsyncEngine, dialect: str
 ) -> None:
-    """Verify exact target checks, concurrent idempotency, ordering and paging."""
+    """Verify SQL receipt persistence and the composed authenticated HTTP read."""
     if dialect not in {"postgresql", "mysql"}:
         raise ValueError("acceptance requires PostgreSQL or MySQL")
     token = uuid4().hex
@@ -51,10 +74,10 @@ async def assert_runtime_publication_receipt_persistence(
             await connection.execute(
                 insert(AccountRecord).values(
                     account_id=account_id,
-                    username="receipt-acceptance-admin",
+                    username=f"receipt-view-{token[:12]}",
                     username_key=token[:64],
                     password_hash="$argon2id$acceptance-only",
-                    role_id="admin",
+                    role_id="view",
                     status="active",
                     built_in=False,
                     revision=1,
@@ -98,6 +121,7 @@ async def assert_runtime_publication_receipt_persistence(
                     binding_id=binding_id,
                     target_version_id=version_id,
                     target_checksum=checksum,
+                    publication_sequence=1,
                     base_version_id=None,
                     created_at=now,
                     validation_state="succeeded",
@@ -124,16 +148,10 @@ async def assert_runtime_publication_receipt_persistence(
             state=PublicationReceiptState.PENDING,
         )
         await asyncio.gather(
-            store.record_rule_publication_receipt(
-                binding_id, publication_id, pending
-            ),
-            store.record_rule_publication_receipt(
-                binding_id, publication_id, pending
-            ),
+            store.record_rule_publication_receipt(binding_id, publication_id, pending),
+            store.record_rule_publication_receipt(binding_id, publication_id, pending),
         )
-        await store.record_rule_publication_receipt(
-            binding_id, publication_id, pending
-        )
+        await store.record_rule_publication_receipt(binding_id, publication_id, pending)
         with case.assertRaises(RulePublicationConflict):
             await store.record_rule_publication_receipt(
                 binding_id,
@@ -155,9 +173,7 @@ async def assert_runtime_publication_receipt_persistence(
             last_report_at=applied_at,
             state=PublicationReceiptState.APPLIED,
         )
-        await store.record_rule_publication_receipt(
-            binding_id, publication_id, applied
-        )
+        await store.record_rule_publication_receipt(binding_id, publication_id, applied)
         page = await store.read_rule_publication_receipts(
             binding_id, publication_id, page=1, page_size=10
         )
@@ -167,8 +183,73 @@ async def assert_runtime_publication_receipt_persistence(
         case.assertEqual(page.items, (applied,))
         case.assertIsNone(page.expected)
         case.assertIsNone(page.inventory_source)
+
+        session_token = f"receipt-session-{token}"
+        async with engine.begin() as connection:
+            await connection.execute(
+                insert(AuthenticationSessionRecord).values(
+                    session_hash=hashlib.sha256(
+                        session_token.encode("ascii")
+                    ).hexdigest(),
+                    account_id=account_id,
+                    session_epoch="receipt-process-epoch",
+                    csrf_hash=hashlib.sha256(
+                        f"receipt-csrf-{token}".encode("ascii")
+                    ).hexdigest(),
+                    created_at=now,
+                    expires_at=now + timedelta(hours=1),
+                    revoked_at=None,
+                )
+            )
+
+        app = identity_composition.build_sql_identity_app(
+            engine,
+            attempt_limit=LoginAttemptLimitConfiguration(5, 300, 300),
+            account_command_keys=AccountCommandKeyConfiguration(
+                "receipt-acceptance-v1", {"receipt-acceptance-v1": b"a" * 32}
+            ),
+            client_identity_key=ClientIdentityKeyConfiguration(b"c" * 32),
+            session_ttl=timedelta(hours=1),
+            setup_window_reader=_ClosedSetupWindow(),
+            allowed_browser_origins=frozenset({_CONSOLE_ORIGIN}),
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url=_CONSOLE_ORIGIN,
+            cookies={_SESSION_COOKIE_NAME: session_token},
+        ) as client:
+            response = await client.get(
+                f"/api/v1/rulesets/{binding_id}/publications/{publication_id}/receipts"
+                "?page=1&pageSize=10",
+                headers={"x-request-id": f"receipt-read-{token}"},
+            )
+            client.cookies.clear()
+            unauthenticated = await client.get(
+                f"/api/v1/rulesets/{binding_id}/publications/{publication_id}/receipts"
+                "?page=1&pageSize=10",
+                headers={"x-request-id": f"receipt-anon-{token}"},
+            )
+
+        case.assertEqual(response.status_code, 200)
+        case.assertEqual(response.headers["cache-control"], "no-store")
+        case.assertEqual(response.headers["vary"], "Cookie")
+        body = response.json()
+        case.assertEqual(body["bindingId"], binding_id)
+        case.assertEqual(body["publicationId"], publication_id)
+        case.assertEqual(body["total"], 1)
+        case.assertEqual(body["applied"], 1)
+        case.assertEqual(body["pending"], 0)
+        case.assertEqual(body["items"][0]["instanceId"], instance_id)
+        case.assertEqual(body["items"][0]["loadedVersionId"], version_id)
+        case.assertEqual(body["items"][0]["loadedChecksum"], checksum)
+        case.assertEqual(unauthenticated.status_code, 401)
     finally:
         async with engine.begin() as connection:
+            await connection.execute(
+                delete(AuthenticationSessionRecord).where(
+                    AuthenticationSessionRecord.account_id == account_id
+                )
+            )
             await connection.execute(
                 delete(RulePublicationReceiptRecord).where(
                     RulePublicationReceiptRecord.publication_id == publication_id

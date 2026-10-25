@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import unittest
+from datetime import UTC
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.mutate_registered_source import (
+    RegisteredSourceDeletionOperation,
     RegisteredSourceOperation,
     SourceMutationKind,
     SourceMutationStatus,
@@ -21,7 +24,6 @@ from atlas_richie.sentinel_console.domain.registered_sources import (
     SourceAuthenticationMode,
 )
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from session_test_doubles import UnusedSessionRevoker
 
 _SESSION = "registered-source-session-token-0000000000000001"
 _CSRF = "registered-source-csrf-token-00000000000000001"
@@ -71,10 +73,15 @@ class _MutationAuthority:
             else operation
         )
         self.commands = []
+        self.deletions = []
         self.lookups = []
 
     async def mutate(self, command, **context):
         self.commands.append((command, context))
+        return self.operation
+
+    async def delete(self, command, **context):
+        self.deletions.append((command, context))
         return self.operation
 
     async def read_operation(self, request_key, **context):
@@ -142,6 +149,7 @@ class RegisteredSourceCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 cookies=self._cookies(),
             )
         self.assertEqual(response.status_code, 202)
+        assert_openapi_response("mutateRegisteredSource", response)
         self.assertEqual(
             response.json(), {"status": "pending", "requestKey": "source-request-1"}
         )
@@ -162,6 +170,7 @@ class RegisteredSourceCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 cookies=self._cookies(),
             )
         self.assertEqual(denied.status_code, 403)
+        assert_openapi_response("mutateRegisteredSource", denied)
         self.assertEqual(authority.commands, [])
 
         app = self._build_app(authority=authority)
@@ -179,14 +188,19 @@ class RegisteredSourceCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 cookies=self._cookies(),
             )
         self.assertEqual(csrf.status_code, 403)
+        assert_openapi_response("mutateRegisteredSource", csrf)
         self.assertEqual(mismatch.status_code, 409)
+        assert_openapi_response("mutateRegisteredSource", mismatch)
         self.assertEqual(authority.commands, [])
 
     async def test_invalid_command_body_uses_contract_validation_error(self) -> None:
         authority = _MutationAuthority()
         invalid_bodies = [
             {**self._body(), "unexpected": True},
-            *({**self._body(), "name": blank} for blank in ("\x1c", "\x85", "\ufeff", "\u3000")),
+            *(
+                {**self._body(), "name": blank}
+                for blank in ("\x1c", "\x85", "\ufeff", "\u3000")
+            ),
         ]
         async with await self._client(self._build_app(authority=authority)) as client:
             responses = [
@@ -199,15 +213,94 @@ class RegisteredSourceCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 for body in invalid_bodies
             ]
         self.assertTrue(all(response.status_code == 422 for response in responses))
+        for response in responses:
+            assert_openapi_response("mutateRegisteredSource", response)
         self.assertTrue(
-            all(response.json()["error"]["code"] == "validation_failed" for response in responses)
+            all(
+                response.json()["error"]["code"] == "validation_failed"
+                for response in responses
+            )
         )
         self.assertEqual(authority.commands, [])
+
+    async def test_admin_delete_uses_safe_operation_receipt(self) -> None:
+        authority = _MutationAuthority(
+            RegisteredSourceDeletionOperation(
+                "source-request-1",
+                SourceMutationStatus.COMPLETED,
+                deleted_source_id="source-1",
+            )
+        )
+        app = self._build_app(authority=authority)
+        body = {
+            "kind": "delete",
+            "requestKey": "source-request-1",
+            "sourceId": "source-1",
+            "expectedRevision": "revision-2",
+        }
+        async with await self._client(app) as client:
+            response = await client.post(
+                "/api/v1/system/sources/commands",
+                json=body,
+                headers=self._headers(),
+                cookies=self._cookies(),
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(
+            response.json(),
+            {
+                "status": "completed",
+                "requestKey": "source-request-1",
+                "deletedSourceId": "source-1",
+            },
+        )
+        command, context = authority.deletions[0]
+        self.assertEqual(command.source_id, "source-1")
+        self.assertEqual(command.expected_revision, "revision-2")
+        self.assertEqual(context["actor_id"], "account-1")
+        self.assertEqual(authority.commands, [])
+
+    async def test_viewer_cannot_delete_and_invalid_delete_never_reaches_authority(
+        self,
+    ) -> None:
+        authority = _MutationAuthority()
+        body = {
+            "kind": "delete",
+            "requestKey": "source-request-1",
+            "sourceId": "source-1",
+            "expectedRevision": "revision-2",
+        }
+        app = self._build_app(role="view", authority=authority)
+        async with await self._client(app) as client:
+            denied = await client.post(
+                "/api/v1/system/sources/commands",
+                json=body,
+                headers=self._headers(),
+                cookies=self._cookies(),
+            )
+        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(authority.deletions, [])
+
+        app = self._build_app(authority=authority)
+        async with await self._client(app) as client:
+            malformed = await client.post(
+                "/api/v1/system/sources/commands",
+                json={**body, "name": "unexpected"},
+                headers=self._headers(),
+                cookies=self._cookies(),
+            )
+        self.assertEqual(malformed.status_code, 422)
+        self.assertEqual(authority.deletions, [])
 
     async def test_direct_credentials_are_ephemeral_and_never_echoed(self) -> None:
         authority = _MutationAuthority()
         body = self._body(
-            authentication={"mode": "direct", "username": "operator", "password": "do-not-echo"}
+            authentication={
+                "mode": "direct",
+                "username": "operator",
+                "password": "do-not-echo",
+            }
         )
         async with await self._client(self._build_app(authority=authority)) as client:
             response = await client.post(
@@ -217,10 +310,13 @@ class RegisteredSourceCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 cookies=self._cookies(),
             )
         self.assertEqual(response.status_code, 202)
+        assert_openapi_response("mutateRegisteredSource", response)
         self.assertNotIn("do-not-echo", response.text)
         self.assertNotIn("do-not-echo", repr(authority.commands[0][0]))
 
-    async def test_conditional_update_requires_and_preserves_source_revision(self) -> None:
+    async def test_conditional_update_requires_and_preserves_source_revision(
+        self,
+    ) -> None:
         authority = _MutationAuthority()
         body = {
             "kind": "update",
@@ -243,13 +339,16 @@ class RegisteredSourceCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 cookies=self._cookies(),
             )
         self.assertEqual(response.status_code, 202)
+        assert_openapi_response("mutateRegisteredSource", response)
         command = authority.commands[0][0]
         self.assertEqual(command.kind, SourceMutationKind.UPDATE)
         self.assertEqual(command.source.source_id, "source-1")
         self.assertEqual(command.source.expected_revision, "revision-8")
         self.assertEqual(command.source.authentication_mode.value, "keep")
 
-    async def test_completed_operation_contains_only_safe_registered_facts(self) -> None:
+    async def test_completed_operation_contains_only_safe_registered_facts(
+        self,
+    ) -> None:
         record = RegisteredConfigurationSource(
             id="source-1",
             revision="revision-2",
@@ -273,11 +372,14 @@ class RegisteredSourceCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 cookies=self._cookies(),
             )
         self.assertEqual(response.status_code, 202)
+        assert_openapi_response("mutateRegisteredSource", response)
         self.assertEqual(response.json()["record"]["namespace"], "sentinel")
         self.assertNotIn("password", response.text)
         self.assertTrue(response.json()["record"]["credentialConfigured"])
 
-    async def test_original_operation_lookup_requires_admin_and_returns_not_found(self) -> None:
+    async def test_original_operation_lookup_requires_admin_and_returns_not_found(
+        self,
+    ) -> None:
         authority = _MutationAuthority(None)
         async with await self._client(self._build_app(authority=authority)) as client:
             response = await client.get(
@@ -286,6 +388,7 @@ class RegisteredSourceCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 cookies=self._cookies(),
             )
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readRegisteredSourceOperation", response)
         self.assertEqual(
             response.json(), {"status": "not_found", "requestKey": "source-request-1"}
         )
@@ -301,9 +404,12 @@ class RegisteredSourceCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 cookies=self._cookies(),
             )
         self.assertEqual(denied.status_code, 403)
+        assert_openapi_response("readRegisteredSourceOperation", denied)
         self.assertEqual(authority.lookups, [])
 
-    async def test_operation_lookup_rejects_invalid_request_id_as_bad_request(self) -> None:
+    async def test_operation_lookup_rejects_invalid_request_id_as_bad_request(
+        self,
+    ) -> None:
         authority = _MutationAuthority()
         async with await self._client(self._build_app(authority=authority)) as client:
             response = await client.get(
@@ -312,6 +418,7 @@ class RegisteredSourceCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 cookies=self._cookies(),
             )
         self.assertEqual(response.status_code, 400)
+        assert_openapi_response("readRegisteredSourceOperation", response)
         self.assertEqual(response.json()["error"]["code"], "invalid_request")
         self.assertEqual(authority.lookups, [])
 

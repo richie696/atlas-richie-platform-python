@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import Mapping
 from uuid import uuid4
 
-from sqlalchemy import and_, insert, select, update
+from sqlalchemy import and_, delete, insert, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -26,6 +26,8 @@ from ...application.check_registered_source import (
     SourceConnectionInput,
 )
 from ...application.mutate_registered_source import (
+    RegisteredSourceDeletion,
+    RegisteredSourceDeletionOperation,
     RegisteredSourceMutation,
     RegisteredSourceMutationAuthority,
     RegisteredSourceOperation,
@@ -36,6 +38,7 @@ from ...application.mutate_registered_source import (
     SourceMutationRejection,
     SourceMutationStatus,
     SourceMutationUnauthenticated,
+    SourceDeletionRejection,
 )
 from ...application.registered_source_ports import (
     RegisteredSourceProbe,
@@ -65,10 +68,17 @@ from .models import (
     RegisteredConfigurationSourceRecord,
     RegisteredSourceProbeRecord,
     RegisteredSourceOperationRecord,
+    RegisteredSourceDeletionOperationRecord,
+    RuleBindingRecord,
 )
 
 _FINGERPRINT_DOMAIN = b"atlas-richie-sentinel-source-mutation:v1\x00"
+_DELETION_FINGERPRINT_DOMAIN = b"atlas-richie-sentinel-source-deletion:v1\x00"
 _KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+
+
+class _SourceReferenceConflict(RuntimeError):
+    """Rollback a delete savepoint when a restrictive reference won a race."""
 
 
 class SqlAlchemyRegisteredSourceStore(
@@ -145,6 +155,17 @@ class SqlAlchemyRegisteredSourceStore(
                         fingerprints=fingerprints,
                     )
 
+                deletion_prior = await connection.execute(
+                    select(RegisteredSourceDeletionOperationRecord.request_key).where(
+                        RegisteredSourceDeletionOperationRecord.request_key
+                        == command.request_key
+                    )
+                )
+                if deletion_prior.scalar_one_or_none() is not None:
+                    raise SourceMutationIdempotencyConflict(
+                        "request key belongs to a source deletion"
+                    )
+
                 operation = await self._apply_mutation(
                     connection,
                     command=command,
@@ -205,8 +226,8 @@ class SqlAlchemyRegisteredSourceStore(
 
     async def read_operation(
         self, request_key: str, *, actor_id: str, session_digest: str
-    ) -> RegisteredSourceOperation | None:
-        """Return an operation only to its original actor and browser session."""
+    ) -> RegisteredSourceOperation | RegisteredSourceDeletionOperation | None:
+        """Return an actor-owned operation after reauthorizing the current admin session."""
         try:
             async with self._engine.connect() as connection:
                 await self._authorize_read(
@@ -216,17 +237,196 @@ class SqlAlchemyRegisteredSourceStore(
                     select(RegisteredSourceOperationRecord.__table__).where(
                         RegisteredSourceOperationRecord.request_key == request_key,
                         RegisteredSourceOperationRecord.actor_account_id == actor_id,
-                        RegisteredSourceOperationRecord.session_hash == session_digest,
                     )
                 )
                 row = result.mappings().one_or_none()
+                deletion_result = await connection.execute(
+                    select(RegisteredSourceDeletionOperationRecord.__table__).where(
+                        RegisteredSourceDeletionOperationRecord.request_key
+                        == request_key,
+                        RegisteredSourceDeletionOperationRecord.actor_account_id
+                        == actor_id,
+                    )
+                )
+                deletion_row = deletion_result.mappings().one_or_none()
         except (SourceMutationForbidden, SourceMutationUnauthenticated):
             raise
         except SQLAlchemyError:
             raise SourceMutationAuthorityUnavailable(
                 "registered source operation history is unavailable"
             ) from None
+        if row is not None and deletion_row is not None:
+            raise SourceMutationAuthorityUnavailable(
+                "source operation identity is ambiguous"
+            )
+        if deletion_row is not None:
+            return _deletion_operation_from_row(deletion_row)
         return _operation_from_row(row) if row is not None else None
+
+    async def delete(
+        self,
+        command: RegisteredSourceDeletion,
+        *,
+        actor_id: str,
+        session_digest: str,
+        csrf_digest: str,
+        request_id: str,
+        now: datetime,
+    ) -> RegisteredSourceDeletionOperation:
+        """Delete an unreferenced source, secret envelope and probe atomically."""
+        instant = _aware_utc(now)
+        fingerprint_key_id, fingerprints = self._deletion_fingerprints(command)
+        fingerprint_digest = fingerprints[fingerprint_key_id]
+        operation_id = str(uuid4())
+        audit_event_id = str(uuid4())
+        try:
+            async with self._engine.begin() as connection:
+                await self._authorize_write(
+                    connection,
+                    actor_id=actor_id,
+                    session_digest=session_digest,
+                    csrf_digest=csrf_digest,
+                    now=instant,
+                )
+                prior = await connection.execute(
+                    select(RegisteredSourceDeletionOperationRecord.__table__)
+                    .where(
+                        RegisteredSourceDeletionOperationRecord.request_key
+                        == command.request_key
+                    )
+                    .with_for_update()
+                )
+                prior_row = prior.mappings().one_or_none()
+                if prior_row is not None:
+                    return self._recover_deletion(
+                        prior_row,
+                        actor_id=actor_id,
+                        session_digest=session_digest,
+                        fingerprints=fingerprints,
+                    )
+
+                mutation_prior = await connection.execute(
+                    select(RegisteredSourceOperationRecord.request_key).where(
+                        RegisteredSourceOperationRecord.request_key
+                        == command.request_key
+                    )
+                )
+                if mutation_prior.scalar_one_or_none() is not None:
+                    raise SourceMutationIdempotencyConflict(
+                        "request key belongs to a source mutation"
+                    )
+
+                source_result = await connection.execute(
+                    select(RegisteredConfigurationSourceRecord.__table__)
+                    .where(
+                        RegisteredConfigurationSourceRecord.source_id
+                        == command.source_id
+                    )
+                    .with_for_update()
+                )
+                source_row = source_result.mappings().one_or_none()
+                if source_row is None:
+                    operation = _rejected_deletion(
+                        command.request_key, SourceDeletionRejection.NOT_FOUND
+                    )
+                elif source_row["revision"] != command.expected_revision:
+                    operation = _rejected_deletion(
+                        command.request_key, SourceDeletionRejection.CONFLICT
+                    )
+                else:
+                    binding_result = await connection.execute(
+                        select(RuleBindingRecord.binding_id)
+                        .where(RuleBindingRecord.source_id == command.source_id)
+                        .limit(1)
+                    )
+                    if binding_result.scalar_one_or_none() is not None:
+                        operation = _rejected_deletion(
+                            command.request_key,
+                            SourceDeletionRejection.SOURCE_IN_USE,
+                        )
+                    else:
+                        try:
+                            async with connection.begin_nested():
+                                # SQLite deployments may not enable FK cascades on
+                                # every connection. Remove the ephemeral probe
+                                # explicitly so deletion semantics match all dialects.
+                                await connection.execute(
+                                    delete(RegisteredSourceProbeRecord).where(
+                                        RegisteredSourceProbeRecord.source_id
+                                        == command.source_id
+                                    )
+                                )
+                                deleted = await connection.execute(
+                                    delete(RegisteredConfigurationSourceRecord)
+                                    .where(
+                                        RegisteredConfigurationSourceRecord.source_id
+                                        == command.source_id,
+                                        RegisteredConfigurationSourceRecord.revision
+                                        == command.expected_revision,
+                                    )
+                                )
+                                if deleted.rowcount != 1:
+                                    raise _SourceReferenceConflict
+                        except (_SourceReferenceConflict, IntegrityError):
+                            operation = _rejected_deletion(
+                                command.request_key,
+                                SourceDeletionRejection.SOURCE_IN_USE,
+                            )
+                        else:
+                            operation = RegisteredSourceDeletionOperation(
+                                command.request_key,
+                                SourceMutationStatus.COMPLETED,
+                                deleted_source_id=command.source_id,
+                            )
+
+                await connection.execute(
+                    insert(RegisteredSourceDeletionOperationRecord).values(
+                        request_key=command.request_key,
+                        operation_id=operation_id,
+                        actor_account_id=actor_id,
+                        session_hash=session_digest,
+                        fingerprint_key_id=fingerprint_key_id,
+                        fingerprint_digest=fingerprint_digest,
+                        status=operation.status.value,
+                        reason=operation.reason.value if operation.reason else None,
+                        deleted_source_id=operation.deleted_source_id,
+                        created_at=instant,
+                    )
+                )
+                await connection.execute(
+                    insert(AuditEventRecord).values(
+                        event_id=audit_event_id,
+                        request_id=request_id,
+                        actor_account_id=actor_id,
+                        action="configuration.source.delete",
+                        outcome=(
+                            "completed"
+                            if operation.status is SourceMutationStatus.COMPLETED
+                            else "rejected"
+                        ),
+                        target_kind="configuration_source",
+                        target_id=command.source_id,
+                        created_at=instant,
+                    )
+                )
+                return operation
+        except (
+            SourceMutationForbidden,
+            SourceMutationIdempotencyConflict,
+            SourceMutationUnauthenticated,
+        ):
+            raise
+        except IntegrityError:
+            return await self._recover_deletion_after_integrity_conflict(
+                command,
+                actor_id=actor_id,
+                session_digest=session_digest,
+                fingerprints=fingerprints,
+            )
+        except (SQLAlchemyError, ValueError):
+            raise SourceMutationAuthorityUnavailable(
+                "registered source deletion authority is unavailable"
+            ) from None
 
     async def read_registered_sources(self) -> RegisteredSourcesSnapshot:
         """Read safe registry facts without decrypting or probing credentials."""
@@ -662,6 +862,30 @@ class SqlAlchemyRegisteredSourceStore(
         }
         return active_key_id, MappingProxyType(fingerprints)
 
+    def _deletion_fingerprints(
+        self, command: RegisteredSourceDeletion
+    ) -> tuple[str, Mapping[str, str]]:
+        canonical = json.dumps(
+            {
+                "kind": "delete",
+                "requestKey": command.request_key,
+                "sourceId": command.source_id,
+                "expectedRevision": command.expected_revision,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        active_key_id = self._active_fingerprint_key_id
+        fingerprints = {
+            key_id: hmac.new(
+                key,
+                _DELETION_FINGERPRINT_DOMAIN + canonical,
+                hashlib.sha256,
+            ).hexdigest()
+            for key_id, key in self._fingerprint_keys.items()
+        }
+        return active_key_id, MappingProxyType(fingerprints)
+
     @staticmethod
     def _operation_values(
         operation: RegisteredSourceOperation,
@@ -730,6 +954,38 @@ class SqlAlchemyRegisteredSourceStore(
             fingerprints=fingerprints,
         )
 
+    async def _recover_deletion_after_integrity_conflict(
+        self,
+        command: RegisteredSourceDeletion,
+        *,
+        actor_id: str,
+        session_digest: str,
+        fingerprints: Mapping[str, str],
+    ) -> RegisteredSourceDeletionOperation:
+        try:
+            async with self._engine.connect() as connection:
+                result = await connection.execute(
+                    select(RegisteredSourceDeletionOperationRecord.__table__).where(
+                        RegisteredSourceDeletionOperationRecord.request_key
+                        == command.request_key
+                    )
+                )
+                row = result.mappings().one_or_none()
+        except SQLAlchemyError:
+            raise SourceMutationAuthorityUnavailable(
+                "registered source deletion authority is unavailable"
+            ) from None
+        if row is None:
+            raise SourceMutationAuthorityUnavailable(
+                "registered source deletion authority is unavailable"
+            ) from None
+        return self._recover_deletion(
+            row,
+            actor_id=actor_id,
+            session_digest=session_digest,
+            fingerprints=fingerprints,
+        )
+
     @staticmethod
     def _recover(
         row,
@@ -749,6 +1005,26 @@ class SqlAlchemyRegisteredSourceStore(
         ):
             raise SourceMutationIdempotencyConflict("request key was reused")
         return _operation_from_row(row)
+
+    @staticmethod
+    def _recover_deletion(
+        row,
+        *,
+        actor_id: str,
+        session_digest: str,
+        fingerprints: Mapping[str, str],
+    ) -> RegisteredSourceDeletionOperation:
+        if (
+            row["actor_account_id"] != actor_id
+            or row["session_hash"] != session_digest
+        ):
+            raise SourceMutationForbidden("operation belongs to another actor")
+        fingerprint = fingerprints.get(row["fingerprint_key_id"])
+        if fingerprint is None or not hmac.compare_digest(
+            row["fingerprint_digest"], fingerprint
+        ):
+            raise SourceMutationIdempotencyConflict("request key was reused")
+        return _deletion_operation_from_row(row)
 
 
 def _source_from_registry_row(row) -> RegisteredConfigurationSource:
@@ -832,10 +1108,33 @@ def _operation_from_row(row) -> RegisteredSourceOperation:
     return RegisteredSourceOperation(row["request_key"], status, record, reason)
 
 
+def _deletion_operation_from_row(row) -> RegisteredSourceDeletionOperation:
+    status = SourceMutationStatus(row["status"])
+    reason = (
+        SourceDeletionRejection(row["reason"])
+        if row["reason"] is not None
+        else None
+    )
+    return RegisteredSourceDeletionOperation(
+        request_key=row["request_key"],
+        status=status,
+        deleted_source_id=row["deleted_source_id"],
+        reason=reason,
+    )
+
+
 def _rejected(
     request_key: str, reason: SourceMutationRejection
 ) -> RegisteredSourceOperation:
     return RegisteredSourceOperation(
+        request_key, SourceMutationStatus.REJECTED, reason=reason
+    )
+
+
+def _rejected_deletion(
+    request_key: str, reason: SourceDeletionRejection
+) -> RegisteredSourceDeletionOperation:
+    return RegisteredSourceDeletionOperation(
         request_key, SourceMutationStatus.REJECTED, reason=reason
     )
 

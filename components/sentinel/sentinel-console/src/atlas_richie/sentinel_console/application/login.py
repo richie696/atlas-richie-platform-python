@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -109,7 +110,9 @@ class Login:
         try:
             account_username = AccountUsername(username)
         except (TypeError, ValueError):
-            self._password_hasher.verify_unknown_account(password)
+            await asyncio.to_thread(
+                self._password_hasher.verify_unknown_account, password
+            )
             await self._limiter_call(
                 self._attempt_limiter.record_failure(client_identity_digest)
             )
@@ -119,14 +122,18 @@ class Login:
             account_username.lookup_key
         )
         if credential is None or credential.status != "active":
-            self._password_hasher.verify_unknown_account(password)
+            await asyncio.to_thread(
+                self._password_hasher.verify_unknown_account, password
+            )
             await self._limiter_call(
                 self._attempt_limiter.record_failure(client_identity_digest)
             )
             return LoginResult(LoginOutcome.REJECTED)
 
-        if not self._password_hasher.verify_account_password(
-            credential.password_hash, password
+        if not await asyncio.to_thread(
+            self._password_hasher.verify_account_password,
+            credential.password_hash,
+            password,
         ):
             await self._limiter_call(
                 self._attempt_limiter.record_failure(client_identity_digest)
@@ -168,6 +175,7 @@ class Login:
         )
         issued = await self._session_writer.issue_login_session(
             account_id=credential.account_id,
+            expected_password_hash=credential.password_hash,
             session_digest=_token_digest(session_token),
             csrf_digest=_token_digest(csrf_nonce),
             session_epoch=session_epoch,

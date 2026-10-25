@@ -21,10 +21,14 @@ class ReadAccountDirectory:
         """Read one prevalidated page from the account authority."""
         try:
             page = await self._reader.list_accounts(query)
-        except ValueError as error:
+        except (TypeError, ValueError) as error:
             raise AccountDirectoryContractViolation(
                 "account directory returned an invalid page"
             ) from error
+        if not isinstance(page, AccountDirectoryPage):
+            raise AccountDirectoryContractViolation(
+                "account directory returned an invalid page"
+            )
         if (
             page.page != query.page
             or page.page_size != query.page_size
@@ -42,10 +46,14 @@ class ReadAccountDirectory:
         """Read one account's safe projection."""
         try:
             item = await self._reader.read_account(account_id)
-        except ValueError as error:
+        except (TypeError, ValueError) as error:
             raise AccountDirectoryContractViolation(
                 "account directory returned an invalid account"
             ) from error
+        if item is not None and not isinstance(item, AccountDirectoryItem):
+            raise AccountDirectoryContractViolation(
+                "account directory returned an invalid account"
+            )
         if item is not None and item.account_id != account_id:
             raise AccountDirectoryContractViolation(
                 "account directory detail does not match its identifier"

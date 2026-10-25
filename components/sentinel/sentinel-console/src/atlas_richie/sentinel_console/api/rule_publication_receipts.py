@@ -19,6 +19,7 @@ from ..domain.rule_publications import (
     MAX_PUBLICATION_RECEIPT_PAGE_SIZE,
 )
 from .http_support import error_response
+from .query_parsing import MIN_QUERY_INTEGER, parse_integer, parse_query_values
 from .rule_publication_serializers import rule_publication_receipt_page_body
 from .system_observation_access import authorize_system_read, system_read_headers
 
@@ -82,21 +83,9 @@ def rule_publication_receipts_route(
 
 def _page_arguments(request: Request) -> tuple[int, int]:
     """Parse only the required, unique pagination fields within wire bounds."""
-    supplied: dict[str, str] = {}
-    for name, value in request.query_params.multi_items():
-        if name not in _REQUIRED_QUERY_FIELDS or name in supplied:
-            raise ValueError("receipt pagination fields must be known and unique")
-        supplied[name] = value
-    if not _REQUIRED_QUERY_FIELDS.issubset(supplied):
-        raise ValueError("receipt pagination field is missing")
+    supplied = parse_query_values(request, _REQUIRED_QUERY_FIELDS)
 
     parsed: list[int] = []
     for name, maximum in _PAGE_QUERY_FIELDS:
-        value_text = supplied[name]
-        if not value_text.isascii() or not value_text.isdecimal():
-            raise ValueError("receipt pagination is invalid")
-        value = int(value_text)
-        if not 1 <= value <= maximum:
-            raise ValueError("receipt pagination is out of range")
-        parsed.append(value)
+        parsed.append(parse_integer(supplied[name], MIN_QUERY_INTEGER, maximum))
     return parsed[0], parsed[1]

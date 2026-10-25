@@ -19,7 +19,15 @@ from ..domain.instance_observation import ObservationContext
 from ..domain.session import SessionCapability
 from .fleet_serializers import fleet_snapshot_body
 from .http_support import error_response
-from .query_parsing import parse_integer, parse_utc_timestamp
+from .query_parsing import (
+    MAX_QUERY_PAGE_NUMBER,
+    MAX_QUERY_PAGE_SIZE,
+    MAX_QUERY_STEP_MS,
+    MIN_QUERY_INTEGER,
+    parse_integer,
+    parse_query_values,
+    parse_utc_timestamp,
+)
 from .system_observation_access import authorize_system_read, system_read_headers
 
 _REQUIRED_QUERY_FIELDS = frozenset(
@@ -82,16 +90,9 @@ def fleet_overview_route(
 
 
 def _parse_query(request: Request) -> FleetQuery:
-    supplied: dict[str, str] = {}
-    for name, value in request.query_params.multi_items():
-        if (
-            name not in _REQUIRED_QUERY_FIELDS | _OPTIONAL_QUERY_FIELDS
-            or name in supplied
-        ):
-            raise ValueError("query parameters must be known and unique")
-        supplied[name] = value
-    if not _REQUIRED_QUERY_FIELDS.issubset(supplied):
-        raise ValueError("required fleet query field is missing")
+    supplied = parse_query_values(
+        request, _REQUIRED_QUERY_FIELDS, _OPTIONAL_QUERY_FIELDS
+    )
     app_id = supplied.get("appId")
     return FleetQuery(
         context=ObservationContext(
@@ -105,8 +106,10 @@ def _parse_query(request: Request) -> FleetQuery:
                 parse_utc_timestamp(supplied["to"]),
             ),
         ),
-        page=parse_integer(supplied["page"], 1, 1_000_000),
-        page_size=parse_integer(supplied["pageSize"], 1, 100),
+        page=parse_integer(supplied["page"], MIN_QUERY_INTEGER, MAX_QUERY_PAGE_NUMBER),
+        page_size=parse_integer(
+            supplied["pageSize"], MIN_QUERY_INTEGER, MAX_QUERY_PAGE_SIZE
+        ),
         search=supplied["search"],
-        step_ms=parse_integer(supplied["stepMs"], 1, 604_800_000),
+        step_ms=parse_integer(supplied["stepMs"], MIN_QUERY_INTEGER, MAX_QUERY_STEP_MS),
     )

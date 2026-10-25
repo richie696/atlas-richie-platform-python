@@ -13,7 +13,7 @@ from .client_address import ClientAddressResolver
 from ..application.login import Login, LoginOutcome
 from ..application.login_ports import LoginAuthorityUnavailable
 from .browser_origin import normalize_browser_origin
-from .browser_security import CSRF_COOKIE_NAME, SESSION_COOKIE_NAME
+from .browser_security import CSRF_COOKIE_NAME, SECURE_COOKIES, SESSION_COOKIE_NAME
 from ..domain.account_username import AccountUsername
 from .http_support import cookie_count, error_response, read_json_object, request_id
 
@@ -124,7 +124,7 @@ def login_route(
             SESSION_COOKIE_NAME,
             result.session.session_token,
             path="/",
-            secure=True,
+            secure=SECURE_COOKIES,
             httponly=True,
             samesite="lax",
         )
@@ -132,7 +132,7 @@ def login_route(
             CSRF_COOKIE_NAME,
             result.session.csrf_nonce,
             path="/",
-            secure=True,
+            secure=SECURE_COOKIES,
             httponly=True,
             samesite="strict",
         )

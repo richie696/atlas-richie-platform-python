@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import hashlib
 import unittest
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import create_async_engine
-from httpx import ASGITransport, AsyncClient
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
@@ -41,9 +41,7 @@ class CurrentSessionRevocationPersistenceTest(unittest.IsolatedAsyncioTestCase):
         self.session_digest = hashlib.sha256(
             self.opaque_cookie.encode("ascii")
         ).hexdigest()
-        self.csrf_digest = hashlib.sha256(
-            self.csrf_token.encode("ascii")
-        ).hexdigest()
+        self.csrf_digest = hashlib.sha256(self.csrf_token.encode("ascii")).hexdigest()
         async with self.engine.begin() as connection:
             await connection.execute(
                 insert(AccountRecord).values(
@@ -88,7 +86,9 @@ class CurrentSessionRevocationPersistenceTest(unittest.IsolatedAsyncioTestCase):
             )
         self.assertIsNotNone(revoked_at)
 
-    async def test_asgi_logout_revokes_sqlite_session_and_me_reads_anonymous(self) -> None:
+    async def test_asgi_logout_revokes_sqlite_session_and_me_reads_anonymous(
+        self,
+    ) -> None:
         class _Initialized:
             async def is_initialized(self) -> bool:
                 return True
@@ -130,27 +130,43 @@ class CurrentSessionRevocationPersistenceTest(unittest.IsolatedAsyncioTestCase):
                     "x-sentinel-csrf": self.csrf_token,
                 },
             )
+            deleted_cookies = logged_out.headers.get_list("set-cookie")
             identity = await client.get(
                 "/api/v1/auth/me", headers={"x-request-id": "sqlite-me-after-logout-1"}
             )
 
         self.assertEqual(logged_out.status_code, 204)
         self.assertEqual(logged_out.content, b"")
+        self.assertEqual(len(deleted_cookies), 2)
+        session_deletion = next(
+            cookie.lower()
+            for cookie in deleted_cookies
+            if cookie.startswith("sentinel_session=")
+        )
+        csrf_deletion = next(
+            cookie.lower()
+            for cookie in deleted_cookies
+            if cookie.startswith("__Host-sentinel_csrf=")
+        )
+        for deletion in (session_deletion, csrf_deletion):
+            self.assertIn("max-age=0", deletion)
+            self.assertIn("path=/", deletion)
+            self.assertIn("secure", deletion)
+            self.assertIn("httponly", deletion)
+            self.assertNotIn("domain=", deletion)
+        self.assertIn("samesite=lax", session_deletion)
+        self.assertIn("samesite=strict", csrf_deletion)
         self.assertIsNone(identity.json())
 
     async def test_wrong_csrf_expired_and_unknown_session_do_not_revoke(self) -> None:
-        wrong_csrf = hashlib.sha256(
-            b"wrong csrf token value long enough"
-        ).hexdigest()
+        wrong_csrf = hashlib.sha256(b"wrong csrf token value long enough").hexdigest()
         self.assertIs(
             await self.revoker.revoke_active_session(
                 self.session_digest, wrong_csrf, datetime.now(UTC)
             ),
             SessionRevocationResult.CSRF_FAILED,
         )
-        self.assertIsNotNone(
-            await self.reader.read_active_session(self.session_digest)
-        )
+        self.assertIsNotNone(await self.reader.read_active_session(self.session_digest))
 
         self.assertIs(
             await self.revoker.revoke_active_session(
@@ -162,9 +178,7 @@ class CurrentSessionRevocationPersistenceTest(unittest.IsolatedAsyncioTestCase):
         async with self.engine.begin() as connection:
             await connection.execute(
                 update(AuthenticationSessionRecord)
-                .where(
-                    AuthenticationSessionRecord.session_hash == self.session_digest
-                )
+                .where(AuthenticationSessionRecord.session_hash == self.session_digest)
                 .values(expires_at=self.now - timedelta(seconds=1))
             )
         self.assertIs(

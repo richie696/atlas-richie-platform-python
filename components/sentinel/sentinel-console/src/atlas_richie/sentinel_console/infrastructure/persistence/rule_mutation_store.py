@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
-from datetime import UTC, datetime
-from enum import Enum
 import hashlib
 import hmac
 import json
+from dataclasses import fields, is_dataclass
+from datetime import UTC, datetime
+from enum import Enum
 from types import MappingProxyType
 from typing import Mapping
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -16,6 +16,9 @@ from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from ...api.rule_draft_serializers import stored_rule_draft_body
+from ...api.rule_snapshot_serializers import rule_record_body
+from ...api.rule_version_serializers import rule_set_version_body
 from ...application.mutate_rule_set import (
     CancelRuleActivationPlan,
     ConfigureRulePublicationTarget,
@@ -39,65 +42,64 @@ from ...application.mutate_rule_set import (
     RuleOperationStatus,
     SaveRuleDraft,
 )
-from ...application.rule_publication_ports import (
-    RulePublicationAuthorityUnavailable,
-    RulePublicationTargetReader,
-)
 from ...application.rule_activation_plan_ports import (
     RuleActivationPlanClaim,
     RuleActivationPlanClaimConflict,
     ScheduledPublicationEnqueue,
     ScheduledPublicationState,
 )
-from ...api.rule_draft_serializers import stored_rule_draft_body
-from ...api.rule_snapshot_serializers import rule_record_body
-from ...api.rule_version_serializers import rule_set_version_body
-from ...domain.rule_candidates import (
-    CandidateRule,
-    RuleSetCandidate,
-    candidate_checksum,
-)
-from ...domain.rule_drafts import StoredRuleDraft
-from ...domain.rule_bindings import RuleBinding
-from ...domain.rule_snapshots import RuleRecord
-from ...domain.rule_versions import RuleSetVersion
-from ...domain.rule_publications import (
-    PublicationPhase,
-    PublicationStage,
-    RulePublication,
-)
-from ...domain.rule_publication_targets import (
-    ConsulRulePublicationTarget,
-    NacosRulePublicationTarget,
-    VersionedRulePublicationTarget,
+from ...application.rule_publication_ports import (
+    RulePublicationAuthorityUnavailable,
+    RulePublicationPayloadEncoder,
+    RulePublicationTargetReader,
 )
 from ...domain.rule_activation_plans import (
     RuleActivationPlan,
     RuleActivationPlanPhase,
     RuleActivationPlanState,
 )
-from .rule_draft_mapping import draft_body_from_row, draft_from_body
-from .rule_version_mapping import version_from_body
+from ...domain.rule_bindings import RuleBinding
+from ...domain.rule_candidates import (
+    CandidateRule,
+    RuleSetCandidate,
+    candidate_checksum,
+)
+from ...domain.rule_drafts import StoredRuleDraft
+from ...domain.rule_publication_targets import (
+    ConsulRulePublicationTarget,
+    NacosRulePublicationTarget,
+    VersionedRulePublicationTarget,
+)
+from ...domain.rule_publications import (
+    PublicationPhase,
+    PublicationStage,
+    RulePublication,
+)
+from ...domain.rule_snapshots import RuleRecord
+from ...domain.rule_versions import RuleSetVersion
+from .models import (
+    AccountRecord,
+    AuditEventRecord,
+    AuthenticationSessionRecord,
+    RegisteredConfigurationSourceRecord,
+    RuleActivationPlanRecord,
+    RuleDraftRecord,
+    RuleMutationOperationRecord,
+    RulePublicationRecord,
+    RulePublicationTargetRecord,
+    RuleSetVersionRecord,
+    RuleValidationReceiptRecord,
+)
+from .publication_sequence_allocator import SqlAlchemyPublicationSequenceAllocator
 from .rule_activation_plan_mapping import (
     activation_plan_body_from_row,
     activation_plan_from_body,
     activation_plan_result_body,
 )
+from .rule_draft_mapping import draft_body_from_row, draft_from_body
 from .rule_publication_mapping import publication_from_body
 from .rule_publication_target_mapping import target_body, target_from_body
-from .models import (
-    AccountRecord,
-    AuditEventRecord,
-    AuthenticationSessionRecord,
-    RuleDraftRecord,
-    RuleActivationPlanRecord,
-    RuleMutationOperationRecord,
-    RulePublicationRecord,
-    RuleSetVersionRecord,
-    RuleValidationReceiptRecord,
-    RegisteredConfigurationSourceRecord,
-    RulePublicationTargetRecord,
-)
+from .rule_version_mapping import version_body_from_row, version_from_body
 
 _FINGERPRINT_DOMAIN = b"atlas-richie-sentinel-rule-command:v1\x00"
 _PUBLISH_WORK_SCHEMA_VERSION = 2
@@ -121,22 +123,23 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
         active_fingerprint_key_id: str,
         binding_reader: RuleMutationBindingReader,
         publication_target_reader: RulePublicationTargetReader | None = None,
+        publication_payload_encoder: RulePublicationPayloadEncoder | None = None,
     ) -> None:
         copied_keys = dict(fingerprint_keys)
         if (
             not copied_keys
             or active_fingerprint_key_id not in copied_keys
             or any(
-                not key_id
-                or not isinstance(key, bytes)
-                or len(key) < 32
+                not key_id or not isinstance(key, bytes) or len(key) < 32
                 for key_id, key in copied_keys.items()
             )
         ):
             raise ValueError("rule-command fingerprint keys are invalid")
         self._engine = engine
+        self._publication_sequences = SqlAlchemyPublicationSequenceAllocator()
         self._binding_reader = binding_reader
         self._publication_target_reader = publication_target_reader
+        self._publication_payload_encoder = publication_payload_encoder
         self._fingerprint_keys = MappingProxyType(copied_keys)
         self._active_fingerprint_key_id = active_fingerprint_key_id
 
@@ -158,9 +161,7 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
             return existing
 
         binding = await self._read_binding(claim.plan.binding_id)
-        publication_target = await self._read_publication_target(
-            claim.plan.binding_id
-        )
+        publication_target = await self._read_publication_target(claim.plan.binding_id)
         version_rows = await self._read_scheduled_versions(
             claim.plan.binding_id,
             target_version_id=target_version_id,
@@ -168,11 +169,36 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
         )
         target_version = version_rows.get(target_version_id)
         baseline_version = version_rows.get(baseline_version_id)
+        if self._publication_payload_encoder is None:
+            raise RuleMutationAuthorityUnavailable(
+                "scheduled publication payload encoder is unavailable"
+            )
+        expected_checksum = "missing"
+        if baseline_version is not None:
+            try:
+                baseline_payload = (
+                    self._publication_payload_encoder.encode_rule_version(
+                        baseline_version
+                    )
+                )
+            except (TypeError, ValueError):
+                raise RuleMutationAuthorityUnavailable(
+                    "scheduled publication baseline is unsupported"
+                ) from None
+            if not isinstance(baseline_payload, bytes):
+                raise RuleMutationAuthorityUnavailable(
+                    "scheduled publication baseline is unavailable"
+                )
+            expected_checksum = (
+                f"sha256:{hashlib.sha256(baseline_payload).hexdigest()}"
+            )
         mutation = PublishRuleVersion(
             version_id=target_version_id,
-            version_checksum=target_version["checksum"] if target_version else "missing",
+            version_checksum=target_version.checksum
+            if target_version
+            else "missing",
             expected_version_id=baseline_version_id,
-            expected_checksum=baseline_version["checksum"] if baseline_version else "missing",
+            expected_checksum=expected_checksum,
             expected_source_revision=(
                 publication_target.source_revision
                 if publication_target is not None
@@ -284,14 +310,22 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
 
     async def _read_scheduled_versions(
         self, binding_id: str, *, target_version_id: str, baseline_version_id: str
-    ) -> dict[str, dict[str, object]]:
+    ) -> dict[str, RuleSetVersion]:
         try:
             async with self._engine.connect() as connection:
                 result = await connection.execute(
                     select(
                         RuleSetVersionRecord.version_id,
                         RuleSetVersionRecord.binding_id,
+                        RuleSetVersionRecord.kind,
+                        RuleSetVersionRecord.profile,
+                        RuleSetVersionRecord.base_version_id,
                         RuleSetVersionRecord.checksum,
+                        RuleSetVersionRecord.name,
+                        RuleSetVersionRecord.note,
+                        RuleSetVersionRecord.created_at,
+                        RuleSetVersionRecord.created_by_account_id,
+                        RuleSetVersionRecord.records,
                     ).where(
                         RuleSetVersionRecord.version_id.in_(
                             (target_version_id, baseline_version_id)
@@ -303,11 +337,16 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
             raise RuleMutationAuthorityUnavailable(
                 "scheduled publication versions are unavailable"
             ) from None
-        return {
-            row["version_id"]: dict(row)
-            for row in rows
-            if row["binding_id"] == binding_id
-        }
+        try:
+            return {
+                row["version_id"]: version_from_body(version_body_from_row(row))
+                for row in rows
+                if row["binding_id"] == binding_id
+            }
+        except (KeyError, TypeError, ValueError):
+            raise RuleMutationAuthorityUnavailable(
+                "scheduled publication version facts are invalid"
+            ) from None
 
     async def _read_scheduled_operation(
         self,
@@ -360,9 +399,7 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
                 "scheduled publication history is inconsistent"
             )
         try:
-            publication_id = _scheduled_publication_id(
-                claim.plan.id, phase
-            )
+            publication_id = _scheduled_publication_id(claim.plan.id, phase)
             operation = _operation_from_row(row)
             if operation.status is RuleOperationStatus.PENDING:
                 publication_id = row["work_payload"]["publicationId"]
@@ -437,8 +474,7 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
                 previous = await connection.execute(
                     select(RuleMutationOperationRecord.__table__)
                     .where(
-                        RuleMutationOperationRecord.request_key
-                        == command.request_key
+                        RuleMutationOperationRecord.request_key == command.request_key
                     )
                     .with_for_update()
                 )
@@ -473,8 +509,7 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
                 previous = await connection.execute(
                     select(RuleMutationOperationRecord.__table__)
                     .where(
-                        RuleMutationOperationRecord.request_key
-                        == command.request_key
+                        RuleMutationOperationRecord.request_key == command.request_key
                     )
                     .with_for_update()
                 )
@@ -559,7 +594,7 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
         actor_id: str,
         session_digest: str,
     ) -> RuleMutationOperation | None:
-        """Read a command receipt only within its original actor and session."""
+        """Read an actor-owned receipt after reauthorizing the current admin session."""
         try:
             async with self._engine.begin() as connection:
                 await self._authorize_read(
@@ -570,7 +605,6 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
                         RuleMutationOperationRecord.request_key == request_key,
                         RuleMutationOperationRecord.binding_id == binding_id,
                         RuleMutationOperationRecord.actor_account_id == actor_id,
-                        RuleMutationOperationRecord.session_hash == session_digest,
                     )
                 )
                 row = result.mappings().one_or_none()
@@ -590,8 +624,13 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
             ) from None
 
     async def _authorize_write(
-        self, connection, *, actor_id: str, session_digest: str,
-        csrf_digest: str, now: datetime,
+        self,
+        connection,
+        *,
+        actor_id: str,
+        session_digest: str,
+        csrf_digest: str,
+        now: datetime,
     ) -> None:
         result = await connection.execute(
             select(AccountRecord.role_id, AuthenticationSessionRecord.csrf_hash)
@@ -678,8 +717,13 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
             raise RuleMutationForbidden("administrator role is required")
 
     async def _apply(
-        self, connection, *, command: RuleMutationCommand,
-        actor_id: str, binding: RuleBinding | None, now: datetime,
+        self,
+        connection,
+        *,
+        command: RuleMutationCommand,
+        actor_id: str,
+        binding: RuleBinding | None,
+        now: datetime,
         publication_id: str | None,
         publication_target: VersionedRulePublicationTarget | None,
     ) -> tuple[RuleMutationOperation, str | None]:
@@ -699,8 +743,11 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
                     command.binding_id,
                 )
             return await self._save_draft(
-                connection, command=command, mutation=mutation,
-                actor_id=actor_id, now=now,
+                connection,
+                command=command,
+                mutation=mutation,
+                actor_id=actor_id,
+                now=now,
             )
         if isinstance(mutation, DeleteRuleDraft):
             return await self._delete_draft(connection, command, mutation)
@@ -756,8 +803,13 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
         )
 
     async def _save_draft(
-        self, connection, *, command: RuleMutationCommand,
-        mutation: SaveRuleDraft, actor_id: str, now: datetime,
+        self,
+        connection,
+        *,
+        command: RuleMutationCommand,
+        mutation: SaveRuleDraft,
+        actor_id: str,
+        now: datetime,
     ) -> tuple[RuleMutationOperation, str]:
         candidate = mutation.candidate
         if candidate.binding_id != command.binding_id:
@@ -830,11 +882,7 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
                     RuleDraftRecord.revision == mutation.expected_revision,
                 )
                 .values(
-                    **{
-                        key: value
-                        for key, value in values.items()
-                        if key != "draft_id"
-                    }
+                    **{key: value for key, value in values.items() if key != "draft_id"}
                 )
             )
             if changed.rowcount != 1:
@@ -889,11 +937,17 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
         )
         target = target_result.one_or_none()
         if target is None or target.binding_id != command.binding_id:
-            return _rejected(command, RuleOperationRejection.NOT_FOUND), mutation.version_id
+            return _rejected(
+                command, RuleOperationRejection.NOT_FOUND
+            ), mutation.version_id
         if target.checksum != mutation.version_checksum:
-            return _rejected(command, RuleOperationRejection.CONFLICT), mutation.version_id
+            return _rejected(
+                command, RuleOperationRejection.CONFLICT
+            ), mutation.version_id
         if target.kind != binding.kind.value or target.profile != binding.profile:
-            return _rejected(command, RuleOperationRejection.VALIDATION), mutation.version_id
+            return _rejected(
+                command, RuleOperationRejection.VALIDATION
+            ), mutation.version_id
 
         validation_result = await connection.execute(
             select(
@@ -902,9 +956,7 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
                 RuleValidationReceiptRecord.candidate_checksum,
                 RuleValidationReceiptRecord.is_publishable,
             )
-            .where(
-                RuleValidationReceiptRecord.validation_id == target.validation_id
-            )
+            .where(RuleValidationReceiptRecord.validation_id == target.validation_id)
             .with_for_update()
         )
         validation = validation_result.one_or_none()
@@ -915,26 +967,40 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
             or validation.candidate_checksum != target.checksum
             or validation.is_publishable is not True
         ):
-            return _rejected(command, RuleOperationRejection.VALIDATION), mutation.version_id
+            return _rejected(
+                command, RuleOperationRejection.VALIDATION
+            ), mutation.version_id
 
         if mutation.expected_version_id is not None:
+            # The command checksum is the observed provider-payload checksum,
+            # not the Console candidate-model checksum stored on this row.
+            # Verify the immutable version identity here; the publication
+            # worker later compares the exact encoded provider bytes with the
+            # observed checksum before performing the provider side effect.
             baseline_result = await connection.execute(
                 select(
                     RuleSetVersionRecord.binding_id,
-                    RuleSetVersionRecord.checksum,
                 )
-                .where(
-                    RuleSetVersionRecord.version_id == mutation.expected_version_id
-                )
+                .where(RuleSetVersionRecord.version_id == mutation.expected_version_id)
                 .with_for_update()
             )
             baseline = baseline_result.one_or_none()
             if (
                 baseline is None
                 or baseline.binding_id != command.binding_id
-                or baseline.checksum != mutation.expected_checksum
             ):
-                return _rejected(command, RuleOperationRejection.CONFLICT), mutation.version_id
+                return _rejected(
+                    command, RuleOperationRejection.CONFLICT
+                ), mutation.version_id
+
+        try:
+            publication_sequence = await self._publication_sequences.next(
+                connection, command.binding_id
+            )
+        except (RuntimeError, ValueError):
+            raise RuleMutationAuthorityUnavailable(
+                "rule publication sequence authority is unavailable"
+            ) from None
 
         publication = RulePublication(
             id=publication_id,
@@ -944,10 +1010,9 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
             base_version_id=mutation.expected_version_id,
             created_at=now,
             validation=PublicationPhase(PublicationStage.AWAITING, None, None),
-            configuration_write=PublicationPhase(
-                PublicationStage.AWAITING, None, None
-            ),
+            configuration_write=PublicationPhase(PublicationStage.AWAITING, None, None),
             read_back=PublicationPhase(PublicationStage.AWAITING, None, None),
+            publication_sequence=publication_sequence,
         )
         await connection.execute(
             insert(RulePublicationRecord).values(
@@ -955,6 +1020,7 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
                 binding_id=publication.binding_id,
                 target_version_id=publication.target_version_id,
                 target_checksum=publication.target_checksum,
+                publication_sequence=publication.publication_sequence,
                 base_version_id=publication.base_version_id,
                 created_at=publication.created_at,
                 validation_state=publication.validation.state.value,
@@ -978,7 +1044,9 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
         )
 
     async def _delete_draft(
-        self, connection, command: RuleMutationCommand,
+        self,
+        connection,
+        command: RuleMutationCommand,
         mutation: DeleteRuleDraft,
     ) -> tuple[RuleMutationOperation, str]:
         result = await connection.execute(
@@ -1074,9 +1142,7 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
             )
         validation_result = await connection.execute(
             select(RuleValidationReceiptRecord.__table__)
-            .where(
-                RuleValidationReceiptRecord.validation_id == mutation.validation_id
-            )
+            .where(RuleValidationReceiptRecord.validation_id == mutation.validation_id)
             .with_for_update()
         )
         receipt = validation_result.mappings().one_or_none()
@@ -1167,7 +1233,9 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
             or mutation.restore_version_id not in available_version_ids
             or mutation.version_id == mutation.restore_version_id
         ):
-            return _rejected(command, RuleOperationRejection.VALIDATION), command.binding_id
+            return _rejected(
+                command, RuleOperationRejection.VALIDATION
+            ), command.binding_id
 
         plan_count = await connection.scalar(
             select(func.count())
@@ -1175,7 +1243,9 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
             .where(RuleActivationPlanRecord.binding_id == command.binding_id)
         )
         if plan_count is None or plan_count >= 1_000:
-            return _rejected(command, RuleOperationRejection.VALIDATION), command.binding_id
+            return _rejected(
+                command, RuleOperationRejection.VALIDATION
+            ), command.binding_id
 
         active_states = tuple(
             state.value
@@ -1197,7 +1267,9 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
             )
         )
         if overlapping:
-            return _rejected(command, RuleOperationRejection.CONFLICT), command.binding_id
+            return _rejected(
+                command, RuleOperationRejection.CONFLICT
+            ), command.binding_id
 
         try:
             plan = RuleActivationPlan(
@@ -1214,7 +1286,9 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
                 restore_publication_id=None,
             )
         except (TypeError, ValueError):
-            return _rejected(command, RuleOperationRejection.VALIDATION), command.binding_id
+            return _rejected(
+                command, RuleOperationRejection.VALIDATION
+            ), command.binding_id
         await connection.execute(
             insert(RuleActivationPlanRecord).values(
                 plan_id=plan.id,
@@ -1260,7 +1334,9 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
         )
         row = result.mappings().one_or_none()
         if row is None:
-            return _rejected(command, RuleOperationRejection.NOT_FOUND), mutation.plan_id
+            return _rejected(
+                command, RuleOperationRejection.NOT_FOUND
+            ), mutation.plan_id
         if (
             row["revision"] != mutation.expected_revision
             or row["state"] not in _CANCELLABLE_ACTIVATION_PLAN_STATES
@@ -1273,9 +1349,7 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
                 RuleActivationPlanRecord.plan_id == mutation.plan_id,
                 RuleActivationPlanRecord.binding_id == command.binding_id,
                 RuleActivationPlanRecord.revision == mutation.expected_revision,
-                RuleActivationPlanRecord.state.in_(
-                    _CANCELLABLE_ACTIVATION_PLAN_STATES
-                ),
+                RuleActivationPlanRecord.state.in_(_CANCELLABLE_ACTIVATION_PLAN_STATES),
             )
             .values(revision=revision, state=RuleActivationPlanState.CANCELLED.value)
         )
@@ -1310,7 +1384,9 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
         if requested.binding_id != command.binding_id or (
             requested.source_id != binding.source_id
         ):
-            return _rejected(command, RuleOperationRejection.VALIDATION), command.binding_id
+            return _rejected(
+                command, RuleOperationRejection.VALIDATION
+            ), command.binding_id
 
         source_result = await connection.execute(
             select(
@@ -1318,23 +1394,27 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
                 RegisteredConfigurationSourceRecord.provider,
                 RegisteredConfigurationSourceRecord.location,
             )
-            .where(
-                RegisteredConfigurationSourceRecord.source_id == requested.source_id
-            )
+            .where(RegisteredConfigurationSourceRecord.source_id == requested.source_id)
             .with_for_update()
         )
         source = source_result.one_or_none()
         if source is None:
-            return _rejected(command, RuleOperationRejection.NOT_FOUND), requested.source_id
+            return _rejected(
+                command, RuleOperationRejection.NOT_FOUND
+            ), requested.source_id
         if (
             source.revision != mutation.expected_source_revision
             or source.provider != requested.provider.value
         ):
-            return _rejected(command, RuleOperationRejection.CONFLICT), requested.source_id
+            return _rejected(
+                command, RuleOperationRejection.CONFLICT
+            ), requested.source_id
 
         if isinstance(requested, NacosRulePublicationTarget):
             if requested.namespace != source.location:
-                return _rejected(command, RuleOperationRejection.VALIDATION), command.binding_id
+                return _rejected(
+                    command, RuleOperationRejection.VALIDATION
+                ), command.binding_id
             target = requested
         elif isinstance(requested, ConsulRulePublicationTarget):
             target = ConsulRulePublicationTarget(
@@ -1344,7 +1424,9 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
                 datacenter=source.location,
             )
         else:
-            return _rejected(command, RuleOperationRejection.UNSUPPORTED), command.binding_id
+            return _rejected(
+                command, RuleOperationRejection.UNSUPPORTED
+            ), command.binding_id
 
         current_result = await connection.execute(
             select(RulePublicationTargetRecord.target_revision)
@@ -1353,7 +1435,9 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
         )
         current_revision = current_result.scalar_one_or_none()
         if current_revision != mutation.expected_target_revision:
-            return _rejected(command, RuleOperationRejection.CONFLICT), command.binding_id
+            return _rejected(
+                command, RuleOperationRejection.CONFLICT
+            ), command.binding_id
 
         versioned = VersionedRulePublicationTarget(
             revision=str(uuid4()),
@@ -1369,7 +1453,9 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
             "updated_at": now,
         }
         if current_revision is None:
-            await connection.execute(insert(RulePublicationTargetRecord).values(**values))
+            await connection.execute(
+                insert(RulePublicationTargetRecord).values(**values)
+            )
         else:
             changed = await connection.execute(
                 update(RulePublicationTargetRecord)
@@ -1378,11 +1464,17 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
                     RulePublicationTargetRecord.target_revision == current_revision,
                 )
                 .values(
-                    **{key: value for key, value in values.items() if key != "binding_id"}
+                    **{
+                        key: value
+                        for key, value in values.items()
+                        if key != "binding_id"
+                    }
                 )
             )
             if changed.rowcount != 1:
-                return _rejected(command, RuleOperationRejection.CONFLICT), command.binding_id
+                return _rejected(
+                    command, RuleOperationRejection.CONFLICT
+                ), command.binding_id
 
         operation = RuleMutationOperation(
             command.binding_id,
@@ -1413,8 +1505,13 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
         }
 
     def _recover(
-        self, row, *, command: RuleMutationCommand, actor_id: str,
-        session_digest: str, fingerprints: Mapping[str, str],
+        self,
+        row,
+        *,
+        command: RuleMutationCommand,
+        actor_id: str,
+        session_digest: str,
+        fingerprints: Mapping[str, str],
     ) -> RuleMutationOperation:
         if (
             row["binding_id"] != command.binding_id
@@ -1436,14 +1533,23 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
         return _operation_from_row(row)
 
     async def _recover_race(
-        self, command, *, actor_id, session_digest, csrf_digest,
-        now, fingerprints,
+        self,
+        command,
+        *,
+        actor_id,
+        session_digest,
+        csrf_digest,
+        now,
+        fingerprints,
     ) -> RuleMutationOperation:
         try:
             async with self._engine.begin() as connection:
                 await self._authorize_write(
-                    connection, actor_id=actor_id, session_digest=session_digest,
-                    csrf_digest=csrf_digest, now=now,
+                    connection,
+                    actor_id=actor_id,
+                    session_digest=session_digest,
+                    csrf_digest=csrf_digest,
+                    now=now,
                 )
                 result = await connection.execute(
                     select(RuleMutationOperationRecord.__table__).where(
@@ -1456,11 +1562,18 @@ class SqlAlchemyRuleMutationStore(RuleMutationAuthority):
                         "rule mutation transaction could not be confirmed"
                     )
                 return self._recover(
-                    row, command=command, actor_id=actor_id,
-                    session_digest=session_digest, fingerprints=fingerprints,
+                    row,
+                    command=command,
+                    actor_id=actor_id,
+                    session_digest=session_digest,
+                    fingerprints=fingerprints,
                 )
-        except (RuleMutationForbidden, RuleMutationIdempotencyConflict,
-                RuleMutationUnauthenticated, RuleMutationAuthorityUnavailable):
+        except (
+            RuleMutationForbidden,
+            RuleMutationIdempotencyConflict,
+            RuleMutationUnauthenticated,
+            RuleMutationAuthorityUnavailable,
+        ):
             raise
         except SQLAlchemyError:
             raise RuleMutationAuthorityUnavailable(
@@ -1497,16 +1610,12 @@ def _scheduled_phase(
     raise ValueError("activation plan claim phase is not executable")
 
 
-def _scheduled_request_key(
-    plan_id: str, phase: RuleActivationPlanPhase
-) -> str:
+def _scheduled_request_key(plan_id: str, phase: RuleActivationPlanPhase) -> str:
     digest = hashlib.sha256(f"{plan_id}\x00{phase.value}".encode("utf-8")).hexdigest()
     return f"scheduled-rule-publish:{digest}"
 
 
-def _scheduled_publication_id(
-    plan_id: str, phase: RuleActivationPlanPhase
-) -> str:
+def _scheduled_publication_id(plan_id: str, phase: RuleActivationPlanPhase) -> str:
     return str(
         uuid5(
             NAMESPACE_URL,
@@ -1659,8 +1768,11 @@ def _operation_from_row(row) -> RuleMutationOperation:
     else:
         raise ValueError("persisted rule command result is invalid")
     return RuleMutationOperation(
-        row["binding_id"], row["request_key"], status,
-        mutation_kind=kind, result=value,
+        row["binding_id"],
+        row["request_key"],
+        status,
+        mutation_kind=kind,
+        result=value,
     )
 
 

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from unittest.mock import patch
 
 from starlette.applications import Starlette
 
 from atlas_richie.sentinel_console.app import build_app
+from atlas_richie.sentinel_console.infrastructure.persistence.runtime_database_engine_provider import (
+    RuntimeDatabaseNotConfigured,
+)
 from atlas_richie.sentinel_console.infrastructure.rule_publication_worker_lifecycle import (
     RulePublicationWorkerLoop,
     install_rule_publication_worker_lifecycle,
@@ -31,6 +35,30 @@ class _Worker:
         except asyncio.CancelledError:
             self.cancelled = True
             raise
+
+
+class _SetupModeWorker:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.entered = asyncio.Event()
+
+    async def run_once(self, *, limit: int):
+        self.calls += 1
+        self.entered.set()
+        if self.calls == 1:
+            raise RuntimeDatabaseNotConfigured("database is not configured")
+        await asyncio.Event().wait()
+
+
+class _RetryWorker:
+    def __init__(self, *, failures: int) -> None:
+        self.calls = 0
+        self.failures = failures
+
+    async def run_once(self, *, limit: int):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise RuntimeError("retryable failure")
 
 
 class RulePublicationWorkerLoopTests(unittest.IsolatedAsyncioTestCase):
@@ -94,6 +122,101 @@ class RulePublicationWorkerLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(
             any("potentially sensitive detail" in item for item in captured.output)
         )
+
+    async def test_missing_database_is_quiet_and_worker_keeps_retrying(self) -> None:
+        worker = _SetupModeWorker()
+        stop = asyncio.Event()
+        loop = RulePublicationWorkerLoop(
+            worker, poll_interval_seconds=0.01, batch_size=2
+        )
+        task = asyncio.create_task(loop.run(stop))
+        try:
+            with self.assertNoLogs(
+                "atlas_richie.sentinel_console.infrastructure.rule_publication_worker_lifecycle",
+                level="WARNING",
+            ):
+                await asyncio.wait_for(worker.entered.wait(), timeout=0.5)
+                await asyncio.sleep(0.03)
+            self.assertGreaterEqual(worker.calls, 2)
+        finally:
+            stop.set()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    async def test_transient_failures_back_off_and_success_resets_delay(self) -> None:
+        worker = _RetryWorker(failures=3)
+        stop = asyncio.Event()
+        loop = RulePublicationWorkerLoop(
+            worker, poll_interval_seconds=0.04, batch_size=2
+        )
+        observed_delays: list[float] = []
+
+        async def record_wait(awaitable, *, timeout: float):
+            observed_delays.append(timeout)
+            if len(observed_delays) < 4:
+                awaitable.close()
+                raise TimeoutError
+            stop.set()
+            await awaitable
+
+        with (
+            patch(
+                "atlas_richie.sentinel_console.infrastructure."
+                "rule_publication_worker_lifecycle.random.uniform",
+                side_effect=lambda lower, upper: upper,
+            ),
+            patch(
+                "atlas_richie.sentinel_console.infrastructure."
+                "rule_publication_worker_lifecycle.asyncio.wait_for",
+                side_effect=record_wait,
+            ),
+        ):
+            await loop.run(stop)
+
+        self.assertEqual(worker.calls, 4)
+        self.assertEqual(observed_delays, [0.06, 0.12, 0.24, 0.04])
+
+    async def test_backoff_stays_capped_and_jitter_remains_at_ceiling(
+        self,
+    ) -> None:
+        worker = _RetryWorker(failures=2)
+        stop = asyncio.Event()
+        loop = RulePublicationWorkerLoop(worker, poll_interval_seconds=20, batch_size=2)
+        observed_delays: list[float] = []
+        jitter_bounds: list[tuple[float, float]] = []
+
+        async def stop_after_failure(awaitable, *, timeout: float):
+            observed_delays.append(timeout)
+            if len(observed_delays) == 1:
+                awaitable.close()
+                raise TimeoutError
+            stop.set()
+            await awaitable
+
+        def choose_upper_bound(lower: float, upper: float) -> float:
+            jitter_bounds.append((lower, upper))
+            return upper
+
+        with (
+            patch(
+                "atlas_richie.sentinel_console.infrastructure."
+                "rule_publication_worker_lifecycle.random.uniform",
+                side_effect=choose_upper_bound,
+            ),
+            patch(
+                "atlas_richie.sentinel_console.infrastructure."
+                "rule_publication_worker_lifecycle.asyncio.wait_for",
+                side_effect=stop_after_failure,
+            ),
+        ):
+            await loop.run(stop)
+
+        self.assertEqual(worker.calls, 2)
+        self.assertEqual(observed_delays, [30.0, 30.0])
+        self.assertEqual(jitter_bounds, [(20.0, 30.0), (20.0, 30.0)])
 
     def test_invalid_runtime_bounds_are_rejected(self) -> None:
         worker = _Worker()

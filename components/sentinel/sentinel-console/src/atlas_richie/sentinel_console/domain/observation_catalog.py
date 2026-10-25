@@ -11,7 +11,7 @@ from .wire_strings import (
     is_bounded_wire_text,
 )
 
-_MAX_CATALOG_ITEMS = 1_000
+MAX_OBSERVATION_CATALOG_ITEMS = 1_000
 _MAX_TEXT_LENGTH = 200
 _MIN_SUPPORTED_UTC_YEAR = 1970
 
@@ -77,7 +77,7 @@ class ObservationCatalogSnapshot:
             raise ValueError("observation catalog time must be timezone-aware")
         if (
             not isinstance(self.environments, tuple)
-            or len(self.environments) > _MAX_CATALOG_ITEMS
+            or len(self.environments) > MAX_OBSERVATION_CATALOG_ITEMS
             or any(
                 not isinstance(item, ObservationEnvironment)
                 for item in self.environments
@@ -86,7 +86,7 @@ class ObservationCatalogSnapshot:
             raise ValueError("observation environments must be a bounded tuple")
         if (
             not isinstance(self.applications, tuple)
-            or len(self.applications) > _MAX_CATALOG_ITEMS
+            or len(self.applications) > MAX_OBSERVATION_CATALOG_ITEMS
             or any(
                 not isinstance(item, ObservationApplication)
                 for item in self.applications
@@ -104,4 +104,6 @@ class ObservationCatalogSnapshot:
         if any(
             item.environment_id not in environment_ids for item in self.applications
         ):
-            raise ValueError("observation application references an unknown environment")
+            raise ValueError(
+                "observation application references an unknown environment"
+            )

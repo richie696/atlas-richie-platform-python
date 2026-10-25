@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
-import unittest
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
@@ -14,6 +16,10 @@ from atlas_richie.sentinel_console.application.rule_publication_ports import (
     RulePublicationAuthorityUnavailable,
     RulePublicationNotFound,
     RulePublicationRateLimited,
+)
+from atlas_richie.sentinel_console.domain.rule_publication_targets import (
+    NacosRulePublicationTarget,
+    VersionedRulePublicationTarget,
 )
 from atlas_richie.sentinel_console.domain.rule_publications import (
     PublicationPhase,
@@ -25,12 +31,7 @@ from atlas_richie.sentinel_console.domain.rule_publications import (
     RulePublicationReceipt,
     RulePublicationReceiptPage,
 )
-from atlas_richie.sentinel_console.domain.rule_publication_targets import (
-    NacosRulePublicationTarget,
-    VersionedRulePublicationTarget,
-)
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from session_test_doubles import UnusedSessionRevoker
 
 _HEADERS = {"x-request-id": "rule-publications-read-1"}
 _COOKIE = "synthetic-session-token-for-rule-publications-0001"
@@ -274,7 +275,9 @@ def _app(
 
 
 class RulePublicationApiTests(unittest.IsolatedAsyncioTestCase):
-    async def test_target_read_projects_versioned_provider_fields_without_credentials(self):
+    async def test_target_read_projects_versioned_provider_fields_without_credentials(
+        self,
+    ):
         target = VersionedRulePublicationTarget(
             revision="target-rev-2",
             source_revision="source-rev-5",
@@ -297,6 +300,7 @@ class RulePublicationApiTests(unittest.IsolatedAsyncioTestCase):
                 "/api/v1/rulesets/binding-1/publication-target", headers=_HEADERS
             )
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readRulePublicationTarget", response)
         self.assertEqual(reader.binding_id, "binding-1")
         self.assertEqual(response.json()["targetRevision"], "target-rev-2")
         self.assertEqual(response.json()["sourceRevision"], "source-rev-5")
@@ -304,7 +308,9 @@ class RulePublicationApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("credential", response.text)
         self.assertNotIn("token", response.text.lower())
 
-    async def test_target_read_requires_session_and_returns_explicit_unconfigured_value(self):
+    async def test_target_read_requires_session_and_returns_explicit_unconfigured_value(
+        self,
+    ):
         reader = _PublicationTargetReader()
         app = _app("view", target_reader=reader)
         async with AsyncClient(
@@ -314,6 +320,7 @@ class RulePublicationApiTests(unittest.IsolatedAsyncioTestCase):
                 "/api/v1/rulesets/binding-1/publication-target", headers=_HEADERS
             )
         self.assertEqual(anonymous.status_code, 401)
+        assert_openapi_response("readRulePublicationTarget", anonymous)
         self.assertIsNone(reader.binding_id)
         app = _app("admin", target_reader=reader)
         async with AsyncClient(
@@ -325,6 +332,7 @@ class RulePublicationApiTests(unittest.IsolatedAsyncioTestCase):
                 "/api/v1/rulesets/binding-1/publication-target", headers=_HEADERS
             )
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readRulePublicationTarget", response)
         self.assertEqual(response.json(), {"bindingId": "binding-1", "target": None})
 
     async def _get(
@@ -405,6 +413,7 @@ class RulePublicationApiTests(unittest.IsolatedAsyncioTestCase):
         reader = _PublicationReader(collection=_collection(items=(publication,)))
         response = await self._get("view", reader=reader)
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readRulePublications", response)
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertEqual(reader.binding_id, "binding-1")
         body = response.json()
@@ -424,6 +433,7 @@ class RulePublicationApiTests(unittest.IsolatedAsyncioTestCase):
         anonymous_reader = _PublicationReader()
         anonymous = await self._get(None, reader=anonymous_reader)
         self.assertEqual(anonymous.status_code, 401)
+        assert_openapi_response("readRulePublications", anonymous)
         self.assertEqual(anonymous_reader.calls, 0)
         invalid_reader = _PublicationReader()
         invalid = await self._get("admin", reader=invalid_reader, binding_id=" ")
@@ -470,6 +480,7 @@ class RulePublicationApiTests(unittest.IsolatedAsyncioTestCase):
         reader = _PublicationDetailReader()
         response = await self._get_detail("admin", reader=reader)
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readRulePublication", response)
         self.assertEqual(reader.binding_id, "binding-1")
         self.assertEqual(reader.publication_id, "publication-1")
         self.assertEqual(response.json()["id"], "publication-1")
@@ -479,6 +490,7 @@ class RulePublicationApiTests(unittest.IsolatedAsyncioTestCase):
         anonymous_reader = _PublicationDetailReader()
         anonymous = await self._get_detail(None, reader=anonymous_reader)
         self.assertEqual(anonymous.status_code, 401)
+        assert_openapi_response("readRulePublication", anonymous)
         self.assertEqual(anonymous_reader.calls, 0)
         invalid_reader = _PublicationDetailReader()
         invalid = await self._get_detail(
@@ -545,6 +557,7 @@ class RulePublicationApiTests(unittest.IsolatedAsyncioTestCase):
         )
         response = await self._get_receipts("view", reader=reader)
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readRulePublicationReceipts", response)
         self.assertEqual(reader.arguments, ("binding-1", "publication-1", 1, 10))
         body = response.json()
         self.assertEqual(body["asOf"], "2026-10-09T01:00:01.123Z")
@@ -559,6 +572,7 @@ class RulePublicationApiTests(unittest.IsolatedAsyncioTestCase):
         reader = _PublicationReceiptReader()
         anonymous = await self._get_receipts(None, reader=reader)
         self.assertEqual(anonymous.status_code, 401)
+        assert_openapi_response("readRulePublicationReceipts", anonymous)
         self.assertEqual(reader.calls, 0)
         invalid_queries = (
             "page=1&page=2&pageSize=10",
@@ -570,9 +584,7 @@ class RulePublicationApiTests(unittest.IsolatedAsyncioTestCase):
         )
         for query in invalid_queries:
             with self.subTest(query=query):
-                response = await self._get_receipts(
-                    "admin", reader=reader, query=query
-                )
+                response = await self._get_receipts("admin", reader=reader, query=query)
                 self.assertEqual(response.status_code, 400)
                 self.assertEqual(reader.calls, 0)
         missing = await self._get_receipts("admin")
@@ -686,9 +698,13 @@ class RulePublicationDomainTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _receipt_page(total=2, expected=2)
         with self.assertRaises(ValueError):
-            _receipt_page(total=2, expected=1, applied=2, items=(applied, second_applied))
+            _receipt_page(
+                total=2, expected=1, applied=2, items=(applied, second_applied)
+            )
         with self.assertRaises(ValueError):
-            _receipt_page(total=2, applied=1, pending=0, items=(applied, second_applied))
+            _receipt_page(
+                total=2, applied=1, pending=0, items=(applied, second_applied)
+            )
         with self.assertRaises(ValueError):
             _receipt_page(
                 total=2,

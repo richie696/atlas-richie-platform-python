@@ -36,6 +36,14 @@ class SourceMutationRejection(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+class SourceDeletionRejection(StrEnum):
+    """Finite, safe reasons why a source deletion was not applied."""
+
+    CONFLICT = "conflict"
+    NOT_FOUND = "not_found"
+    SOURCE_IN_USE = "source_in_use"
+
+
 @dataclass(frozen=True, slots=True)
 class RegisteredSourceMutation:
     """Idempotent registration/update input with ephemeral connection secrets."""
@@ -86,6 +94,47 @@ class RegisteredSourceOperation:
             raise ValueError("not-found source operation cannot carry a result")
 
 
+@dataclass(frozen=True, slots=True)
+class RegisteredSourceDeletion:
+    """Idempotent delete command; only a revision and identifiers are retained."""
+
+    request_key: str
+    source_id: str
+    expected_revision: str
+
+    def __post_init__(self) -> None:
+        if not self.request_key or len(self.request_key) > 128:
+            raise ValueError("source deletion request key is invalid")
+        if not self.source_id or len(self.source_id) > 200:
+            raise ValueError("source deletion identity is invalid")
+        if not self.expected_revision or len(self.expected_revision) > 200:
+            raise ValueError("source deletion revision is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class RegisteredSourceDeletionOperation:
+    """Safe deletion receipt without endpoint, location, or credential material."""
+
+    request_key: str
+    status: SourceMutationStatus
+    deleted_source_id: str | None = None
+    reason: SourceDeletionRejection | None = None
+
+    def __post_init__(self) -> None:
+        if not self.request_key or len(self.request_key) > 128:
+            raise ValueError("source deletion operation request key is invalid")
+        if (self.status is SourceMutationStatus.COMPLETED) != (
+            self.deleted_source_id is not None
+        ):
+            raise ValueError("completed source deletion requires exactly one identity")
+        if (self.status is SourceMutationStatus.REJECTED) != (self.reason is not None):
+            raise ValueError("rejected source deletion requires exactly one reason")
+        if self.status is SourceMutationStatus.NOT_FOUND and (
+            self.deleted_source_id is not None or self.reason is not None
+        ):
+            raise ValueError("not-found source deletion cannot carry a result")
+
+
 class SourceMutationAuthorityUnavailable(RuntimeError):
     """The durable source-registry mutation authority is unavailable."""
 
@@ -129,5 +178,17 @@ class RegisteredSourceMutationAuthority(Protocol):
 
     async def read_operation(
         self, request_key: str, *, actor_id: str, session_digest: str
-    ) -> RegisteredSourceOperation | None:
-        """Read only the original actor-owned operation result."""
+    ) -> RegisteredSourceOperation | RegisteredSourceDeletionOperation | None:
+        """Reauthorize the current session, then read the actor-owned operation result."""
+
+    async def delete(
+        self,
+        command: RegisteredSourceDeletion,
+        *,
+        actor_id: str,
+        session_digest: str,
+        csrf_digest: str,
+        request_id: str,
+        now: datetime,
+    ) -> RegisteredSourceDeletionOperation:
+        """Atomically remove an unreferenced source and its online credential."""

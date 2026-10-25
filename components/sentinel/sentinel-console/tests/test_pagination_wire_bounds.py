@@ -16,6 +16,11 @@ from atlas_richie.sentinel_console.api.incident_query_parsing import (
 from atlas_richie.sentinel_console.api.instance_catalog import (
     _parse_query as parse_instances,
 )
+from atlas_richie.sentinel_console.api.instance_observation import (
+    _parse_query as parse_instance_observation,
+)
+from atlas_richie.sentinel_console.api.metrics import _parse_query as parse_metrics
+from atlas_richie.sentinel_console.api.query_parsing import parse_query_values
 from atlas_richie.sentinel_console.api.rule_binding_parsing import (
     parse_rule_binding_query,
 )
@@ -78,8 +83,7 @@ _PAGED_QUERIES: tuple[tuple[str, Callable[[Request], object], dict[str, str]], .
 )
 
 
-def _request(parameters: dict[str, str]) -> Request:
-    query = urlencode(parameters).encode("ascii")
+def _request_with_query(query: bytes) -> Request:
     return Request(
         {
             "type": "http",
@@ -89,10 +93,47 @@ def _request(parameters: dict[str, str]) -> Request:
             "path": "/",
             "raw_path": b"/",
             "query_string": query,
+            "path_params": {"instance_id": "instance-1"},
             "headers": [],
             "client": ("test", 1234),
             "server": ("test", 80),
         }
+    )
+
+
+def _request(parameters: dict[str, str]) -> Request:
+    return _request_with_query(urlencode(parameters).encode("ascii"))
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    (
+        (b"page=2&search=", {"page": "2", "search": ""}),
+        (b"page=2&%70age=3&search=", None),
+        (b"page=2&search=&unexpected=yes", None),
+        (b"page=2", None),
+    ),
+)
+def test_strict_query_values_reject_decoded_duplicates_unknown_and_missing_keys(
+    query: bytes, expected: dict[str, str] | None
+) -> None:
+    request = _request_with_query(query)
+    if expected is None:
+        with pytest.raises(ValueError):
+            parse_query_values(
+                request,
+                frozenset({"page", "search"}),
+                frozenset({"status"}),
+            )
+        return
+
+    assert (
+        parse_query_values(
+            request,
+            frozenset({"page", "search"}),
+            frozenset({"status"}),
+        )
+        == expected
     )
 
 
@@ -143,6 +184,31 @@ def test_paged_query_parsers_reject_values_above_wire_maximum(
     assert _is_rejected(result), (name, field, result)
 
 
+@pytest.mark.parametrize(
+    ("name", "parser", "parameters", "field"),
+    (
+        (name, parser, parameters, field)
+        for name, parser, parameters in _PAGED_QUERIES
+        for field in ("page", "pageSize")
+        if field in parameters
+    ),
+)
+def test_paged_query_parsers_reject_noncanonical_integer_values(
+    name: str,
+    parser: Callable[[Request], object],
+    parameters: dict[str, str],
+    field: str,
+) -> None:
+    changed = {**parameters, field: "01"}
+
+    try:
+        result = parser(_request(changed))
+    except (TypeError, ValueError):
+        return
+
+    assert _is_rejected(result), (name, field, result)
+
+
 def test_incident_parser_accepts_maximum_page_size() -> None:
     query = parse_incident_timeline_query(
         _request(
@@ -173,3 +239,53 @@ def test_incident_parser_rejects_page_size_outside_wire_bounds(page_size: str) -
                 }
             )
         )
+
+
+def test_incident_parser_rejects_noncanonical_page_size() -> None:
+    with pytest.raises(ValueError):
+        parse_incident_timeline_query(
+            _request(
+                {
+                    "environmentId": "prod",
+                    "scope": "fleet",
+                    "from": _FROM,
+                    "to": _TO,
+                    "pageSize": "01",
+                }
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("parser", "parameters"),
+    (
+        (
+            parse_metrics,
+            {
+                "environmentId": "prod",
+                "scope": "fleet",
+                "from": _FROM,
+                "to": _TO,
+                "metrics": "http_qps",
+                "stepMs": "060000",
+            },
+        ),
+        (
+            parse_instance_observation,
+            {
+                "environmentId": "prod",
+                "appId": "checkout",
+                "scope": "process",
+                "from": _FROM,
+                "to": _TO,
+                "processEpoch": "epoch-1",
+                "stepMs": "060000",
+            },
+        ),
+    ),
+)
+def test_observation_query_parsers_reject_noncanonical_step_ms(
+    parser: Callable[[Request], object], parameters: dict[str, str]
+) -> None:
+    with pytest.raises(ValueError):
+        parser(_request(parameters))

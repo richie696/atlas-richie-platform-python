@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Callable, Protocol
+from typing import Protocol
 
+from atlas_richie.contracts.rules.managed_publication.v1 import (
+    ManagedRuleKind,
+    ManagedRulePublicationV1,
+    decode_managed_rule_publication,
+    encode_managed_rule_publication,
+)
+
+from ..domain.configuration_source import ConfigurationSourceProvider
+from ..domain.rule_bindings import is_rule_binding_identifier
+from ..domain.rule_publication_targets import RulePublicationTarget
 from ..domain.rule_publications import (
     PublicationPhase,
     PublicationPhaseName,
@@ -15,33 +27,33 @@ from ..domain.rule_publications import (
     PublicationStage,
     RulePublication,
 )
-from ..domain.configuration_source import ConfigurationSourceProvider
-from ..domain.rule_publication_targets import RulePublicationTarget
 from ..domain.rule_versions import RuleSetVersion
 from ..domain.utc_time import is_wire_utc_millisecond_instant
 from .mutate_rule_set import RuleOperationRejection
 from .read_rule_publication import ReadRulePublication
 from .read_rule_version import ReadRuleVersion
-from .rule_version_ports import (
-    RuleSetVersionAuthorityUnavailable,
-    RuleSetVersionNotFound,
-)
 from .resolve_registered_source_connection import (
     RegisteredSourceConnectionUnavailable,
     ResolveRegisteredSourceConnection,
 )
 from .rule_publication_ports import (
-    RuleConfigurationSnapshot,
+    RulePublicationAuthorityUnavailable,
+    RulePublicationConflict,
+    RulePublicationPayloadChecksumWriter,
     RulePublicationPayloadEncoder,
+    RulePublicationProfileUnsupported,
     RulePublicationProvider,
     RulePublicationProviderConflict,
     RulePublicationProviderOutcomeUnknown,
-    RulePublicationProfileUnsupported,
     RulePublicationProviderRejected,
     RulePublicationProviderUnavailable,
     RulePublicationValueUnsupported,
     RulePublishOutbox,
     RulePublishWorkClaim,
+)
+from .rule_version_ports import (
+    RuleSetVersionAuthorityUnavailable,
+    RuleSetVersionNotFound,
 )
 
 _MAX_LEASE = timedelta(minutes=5)
@@ -160,7 +172,9 @@ class RunRulePublicationWorker:
         version_reader: ReadRuleVersion,
         source_connection_resolver: ResolveRegisteredSourceConnection,
         payload_encoder: RulePublicationPayloadEncoder,
+        payload_checksum_writer: RulePublicationPayloadChecksumWriter,
         provider: RulePublicationProvider,
+        managed_binding_ids: frozenset[str] = frozenset(),
         clock: Callable[[], datetime],
         lease_duration: timedelta = timedelta(seconds=60),
     ) -> None:
@@ -171,7 +185,13 @@ class RunRulePublicationWorker:
         self._version_reader = version_reader
         self._source_connection_resolver = source_connection_resolver
         self._payload_encoder = payload_encoder
+        self._payload_checksum_writer = payload_checksum_writer
         self._provider = provider
+        if not isinstance(managed_binding_ids, frozenset) or any(
+            not is_rule_binding_identifier(value) for value in managed_binding_ids
+        ):
+            raise ValueError("managed publication bindings are invalid")
+        self._managed_binding_ids = managed_binding_ids
         supported_providers = getattr(provider, "supported_providers", None)
         if (
             not isinstance(supported_providers, frozenset)
@@ -212,6 +232,7 @@ class RunRulePublicationWorker:
             seen_request_keys.add(claim.request_key)
             outcomes.append(await self._execute(claim))
         return tuple(outcomes)
+
 
     async def _execute(
         self, claim: RulePublishWorkClaim
@@ -282,16 +303,23 @@ class RunRulePublicationWorker:
             )
 
         try:
-            candidate = self._payload_encoder.encode_rule_version(version)
-            baseline = await self._read_baseline(claim)
+            native_candidate = self._payload_encoder.encode_rule_version(version)
+            payload_checksum = hashlib.sha256(native_candidate).hexdigest()
+            candidate = self._encode_candidate(publication, version, native_candidate)
+            await (
+                self._payload_checksum_writer.ensure_rule_publication_payload_checksum(
+                    claim.binding_id,
+                    claim.publication_id,
+                    payload_checksum,
+                )
+            )
+            baseline_version, baseline = await self._read_baseline(claim)
             connection = await self._source_connection_resolver.execute(
                 claim.target.source_id,
                 claim.source_revision,
                 claim.target.provider,
             )
-            current = await self._provider.read_configuration(
-                connection, claim.target
-            )
+            current = await self._provider.read_configuration(connection, claim.target)
         except RegisteredSourceConnectionUnavailable:
             return await self._preflight_failure(
                 claim,
@@ -327,6 +355,20 @@ class RunRulePublicationWorker:
                 PublicationReason.UNSUPPORTED,
                 RuleOperationRejection.VALIDATION,
             )
+        except RulePublicationConflict:
+            return await self._preflight_failure(
+                claim,
+                publication,
+                PublicationReason.CONFLICT,
+                RuleOperationRejection.CONFLICT,
+            )
+        except RulePublicationAuthorityUnavailable:
+            return await self._preflight_failure(
+                claim,
+                publication,
+                PublicationReason.UNAVAILABLE,
+                RuleOperationRejection.UNAVAILABLE,
+            )
         except RuleSetVersionNotFound:
             return await self._preflight_failure(
                 claim,
@@ -341,7 +383,7 @@ class RunRulePublicationWorker:
                 PublicationReason.CONFLICT,
                 RuleOperationRejection.CONFLICT,
             )
-        except (RuleSetVersionAuthorityUnavailable, OSError, TimeoutError):
+        except RuleSetVersionAuthorityUnavailable:
             return await self._preflight_failure(
                 claim,
                 publication,
@@ -349,7 +391,15 @@ class RunRulePublicationWorker:
                 RuleOperationRejection.UNAVAILABLE,
             )
 
-        if current.value != baseline and not (
+        baseline_matches = current.value == baseline or self._managed_baseline_matches(
+            current.value,
+            claim,
+            publication,
+            version,
+            baseline_version,
+            baseline,
+        )
+        if not baseline_matches and not (
             publication.configuration_write.state
             in (PublicationStage.RUNNING, PublicationStage.UNKNOWN)
             and current.value == candidate
@@ -358,6 +408,17 @@ class RunRulePublicationWorker:
                 PublicationStage.RUNNING,
                 PublicationStage.UNKNOWN,
             }:
+                # A strong provider read makes a third value a known conflict,
+                # not an unresolved transport outcome. Weak/eventual readers
+                # must retain UNKNOWN because they cannot prove the CAS lost.
+                if current.conditional_replay_safe:
+                    return await self._fail(
+                        claim,
+                        publication,
+                        PublicationPhaseName.CONFIGURATION_WRITE,
+                        PublicationReason.CONFLICT,
+                        RuleOperationRejection.CONFLICT,
+                    )
                 if publication.configuration_write.state is PublicationStage.RUNNING:
                     await self._advance(
                         claim,
@@ -379,7 +440,10 @@ class RunRulePublicationWorker:
         write_state = publication.configuration_write.state
         if write_state in (PublicationStage.RUNNING, PublicationStage.UNKNOWN):
             # A previous worker may have dispatched the CAS before losing its
-            # lease. Reconcile exact provider state; never blindly resend it.
+            # lease. Reconcile exact provider state. A replay is allowed only
+            # when the provider attests this read is strongly consistent and
+            # the original baseline is still present; the provider CAS remains
+            # the final concurrency fence.
             if current.value == candidate:
                 publication = await self._resolve_unknown_or_running(
                     claim,
@@ -388,16 +452,57 @@ class RunRulePublicationWorker:
                     PublicationStage.SUCCEEDED,
                 )
             else:
-                if write_state is PublicationStage.RUNNING:
-                    await self._advance(
+                if (
+                    write_state is PublicationStage.UNKNOWN
+                    and current.conditional_replay_safe
+                    and current.value == baseline
+                ):
+                    try:
+                        await self._provider.write_configuration_if_revision(
+                            connection,
+                            claim.target,
+                            expected_revision=current.revision,
+                            value=candidate,
+                        )
+                    except RulePublicationProviderConflict:
+                        # The strong baseline read authorizes one conditional
+                        # replay, not repeated uncertainty. A definite CAS
+                        # conflict proves another writer advanced the source;
+                        # persist that known outcome so scheduled plans block.
+                        return await self._fail(
+                            claim,
+                            publication,
+                            PublicationPhaseName.CONFIGURATION_WRITE,
+                            PublicationReason.CONFLICT,
+                            RuleOperationRejection.CONFLICT,
+                        )
+                    except (
+                        RulePublicationProviderRejected,
+                        RulePublicationProviderUnavailable,
+                        RulePublicationProviderOutcomeUnknown,
+                        OSError,
+                        TimeoutError,
+                    ):
+                        # Preserve the unknown fact. A later owner must read
+                        # again before it can reconcile or attempt another CAS.
+                        return RulePublicationWorkerOutcome.UNKNOWN
+                    publication = await self._resolve_unknown_or_running(
                         claim,
                         publication,
                         PublicationPhaseName.CONFIGURATION_WRITE,
-                        PublicationStage.RUNNING,
-                        PublicationStage.UNKNOWN,
-                        PublicationReason.UNKNOWN,
+                        PublicationStage.SUCCEEDED,
                     )
-                return RulePublicationWorkerOutcome.UNKNOWN
+                else:
+                    if write_state is PublicationStage.RUNNING:
+                        await self._advance(
+                            claim,
+                            publication,
+                            PublicationPhaseName.CONFIGURATION_WRITE,
+                            PublicationStage.RUNNING,
+                            PublicationStage.UNKNOWN,
+                            PublicationReason.UNKNOWN,
+                        )
+                    return RulePublicationWorkerOutcome.UNKNOWN
         elif write_state is PublicationStage.AWAITING:
             publication = await self._advance(
                 claim,
@@ -457,15 +562,87 @@ class RunRulePublicationWorker:
 
         return await self._verify_read_back(claim, publication, connection, candidate)
 
-    async def _read_baseline(self, claim: _RulePublishClaimView) -> bytes | None:
+    def _encode_candidate(
+        self,
+        publication: RulePublication,
+        version: RuleSetVersion,
+        native_payload: bytes,
+    ) -> bytes:
+        """Wrap only explicitly enabled bindings; preserve native payload bytes."""
+        if version.binding_id not in self._managed_binding_ids:
+            return native_payload
+        try:
+            envelope = ManagedRulePublicationV1(
+                binding_id=publication.binding_id,
+                publication_id=publication.id,
+                target_version_id=version.id,
+                publication_sequence=publication.publication_sequence,
+                rule_kind=ManagedRuleKind(version.kind.value),
+                profile_id=version.profile,
+                payload_sha256=hashlib.sha256(native_payload).hexdigest(),
+                rule_payload=native_payload,
+            )
+            return encode_managed_rule_publication(envelope)
+        except (TypeError, ValueError):
+            raise RulePublicationValueUnsupported(
+                "managed publication envelope is outside the supported contract"
+            ) from None
+
+    def _managed_baseline_matches(
+        self,
+        current_value: bytes | None,
+        claim: _RulePublishClaimView,
+        publication: RulePublication,
+        candidate_version: RuleSetVersion,
+        baseline_version: RuleSetVersion | None,
+        baseline_payload: bytes | None,
+    ) -> bool:
+        """Accept only an exact managed baseline tied to local version authority."""
+        if claim.binding_id not in self._managed_binding_ids or current_value is None:
+            return False
+
         if claim.expected_version_id is None:
-            return None
-        baseline = await self._version_reader.execute(
-            claim.binding_id, claim.expected_version_id
+            # The first managed publication may adopt an existing native array
+            # only when it exactly matches the source snapshot checksum.
+            return claim.expected_checksum == _source_payload_checksum(current_value)
+
+        if (
+            baseline_version is None
+            or baseline_payload is None
+            or baseline_version.id != claim.expected_version_id
+        ):
+            return False
+        try:
+            envelope = decode_managed_rule_publication(current_value)
+        except ValueError:
+            return False
+        payload_digest = hashlib.sha256(envelope.rule_payload).hexdigest()
+        return (
+            envelope.binding_id == claim.binding_id
+            and envelope.target_version_id == claim.expected_version_id
+            and envelope.publication_sequence < publication.publication_sequence
+            and envelope.rule_kind.value == candidate_version.kind.value
+            and envelope.profile_id == candidate_version.profile
+            and envelope.payload_sha256 == payload_digest
+            and claim.expected_checksum == _source_payload_checksum(envelope.rule_payload)
+            and envelope.rule_payload == baseline_payload
         )
-        if baseline.checksum != claim.expected_checksum:
-            raise ValueError("publish baseline checksum changed")
-        return self._payload_encoder.encode_rule_version(baseline)
+
+    async def _read_baseline(
+        self, claim: _RulePublishClaimView
+    ) -> tuple[RuleSetVersion | None, bytes | None]:
+        if claim.expected_version_id is None:
+            return None, None
+        try:
+            baseline = await self._version_reader.execute(
+                claim.binding_id, claim.expected_version_id
+            )
+        except RuleSetVersionNotFound:
+            return None, None
+        payload = self._payload_encoder.encode_rule_version(baseline)
+        if _source_payload_checksum(payload) != claim.expected_checksum:
+            raise ValueError("publish source baseline checksum changed")
+        return baseline, payload
 
     async def _succeed_validation(
         self, claim: _RulePublishClaimView, publication: RulePublication
@@ -520,9 +697,7 @@ class RunRulePublicationWorker:
                 PublicationStage.RUNNING,
             )
         try:
-            observed = await self._provider.read_configuration(
-                connection, claim.target
-            )
+            observed = await self._provider.read_configuration(connection, claim.target)
         except (
             RulePublicationProviderUnavailable,
             RulePublicationProviderOutcomeUnknown,
@@ -618,9 +793,7 @@ class RunRulePublicationWorker:
         if any(phase.state is PublicationStage.UNKNOWN for phase in phases):
             return RulePublicationWorkerOutcome.UNKNOWN
         reason = next(
-            phase.reason
-            for phase in phases
-            if phase.state is PublicationStage.FAILED
+            phase.reason for phase in phases if phase.state is PublicationStage.FAILED
         )
         rejection = {
             PublicationReason.CONFLICT: RuleOperationRejection.CONFLICT,
@@ -754,6 +927,11 @@ def _millisecond_instant(value: datetime) -> datetime:
     if not is_wire_utc_millisecond_instant(value):
         raise ValueError("worker clock must return a UTC millisecond instant")
     return value
+
+
+def _source_payload_checksum(payload: bytes) -> str:
+    """Return the checksum form used by RuleSetSnapshotReader for source bytes."""
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
 __all__ = ["RulePublicationWorkerOutcome", "RunRulePublicationWorker"]

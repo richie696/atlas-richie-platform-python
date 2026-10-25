@@ -13,6 +13,9 @@ from atlas_richie.sentinel_console.application.bootstrap_database_check import (
     BootstrapDatabaseCandidate,
     BootstrapDatabaseKind,
 )
+from atlas_richie.sentinel_console.application.runtime_database_locator import (
+    RuntimeDatabaseTarget,
+)
 from atlas_richie.sentinel_console.infrastructure.bootstrap_database_engine import (
     BootstrapDatabaseEngineFactory,
 )
@@ -20,10 +23,9 @@ from atlas_richie.sentinel_console.infrastructure.bootstrap_database_targets imp
     BootstrapDatabaseTargetRejected,
     ResolvedBootstrapDatabaseTarget,
 )
-from atlas_richie.sentinel_console.application.runtime_database_locator import (
-    RuntimeDatabaseTarget,
+from atlas_richie.sentinel_console.infrastructure.persistence import (
+    database_engine_adapters,
 )
-from atlas_richie.sentinel_console.infrastructure.persistence import database_runtime
 
 
 class _TargetPolicy:
@@ -67,7 +69,9 @@ class BootstrapDatabaseEngineFactoryTests(unittest.IsolatedAsyncioTestCase):
         factory = BootstrapDatabaseEngineFactory(
             self.policy, postgresql_root_certificate="/etc/ssl/db-ca.pem"
         )
-        with patch.object(database_runtime, "create_async_engine", return_value=engine) as create:
+        with patch.object(
+            database_engine_adapters, "create_async_engine", return_value=engine
+        ) as create:
             result = await factory.create(self._candidate())
 
         self.assertIs(result.engine, engine)
@@ -77,7 +81,7 @@ class BootstrapDatabaseEngineFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("secret-never-log", repr(result))
         self.assertEqual(len(self.policy.calls), 1)
-        url, = create.call_args.args
+        (url,) = create.call_args.args
         self.assertEqual(url.host, "db.internal.example")
         self.assertNotIn("secret-never-log", repr(url))
         self.assertEqual(
@@ -93,7 +97,7 @@ class BootstrapDatabaseEngineFactoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_denied_target_never_constructs_an_engine(self) -> None:
         self.policy.resolve = AsyncMock(side_effect=BootstrapDatabaseTargetRejected)
         factory = BootstrapDatabaseEngineFactory(self.policy)
-        with patch.object(database_runtime, "create_async_engine") as create:
+        with patch.object(database_engine_adapters, "create_async_engine") as create:
             with self.assertRaises(BootstrapDatabaseTargetRejected):
                 await factory.create(self._candidate())
         create.assert_not_called()
@@ -123,8 +127,12 @@ class BootstrapDatabaseEngineFactoryTests(unittest.IsolatedAsyncioTestCase):
         factory = BootstrapDatabaseEngineFactory(self.policy)
         engine = object()
         with patch.dict(sys.modules, {"asyncmy": fake_driver}):
-            with patch.object(database_runtime, "create_async_engine", return_value=engine) as create:
-                result = await factory.create(self._candidate(BootstrapDatabaseKind.MYSQL))
+            with patch.object(
+                database_engine_adapters, "create_async_engine", return_value=engine
+            ) as create:
+                result = await factory.create(
+                    self._candidate(BootstrapDatabaseKind.MYSQL)
+                )
                 creator = create.call_args.kwargs["async_creator"]
                 connection = await creator()
 
@@ -133,9 +141,7 @@ class BootstrapDatabaseEngineFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, [("db.internal.example", "10.30.1.8")])
         self.assertEqual(create.call_args.args[0].host, "db.internal.example")
         self.assertNotIn("secret-never-log", repr(create.call_args))
-        self.assertEqual(
-            result.locator_target.addresses, ("10.30.1.8", "10.30.1.9")
-        )
+        self.assertEqual(result.locator_target.addresses, ("10.30.1.8", "10.30.1.9"))
 
     async def test_unverified_mysql_tls_configuration_is_rejected(self) -> None:
         unsafe_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)

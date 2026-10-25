@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
 
-from httpx import ASGITransport, AsyncClient
-
 from atlas_richie.sentinel_console import app as console_app
 from atlas_richie.sentinel_console.app import build_app
+from httpx import ASGITransport, AsyncClient
 from session_test_doubles import UnusedSessionRevoker
 
 
@@ -67,7 +68,7 @@ class StaticWebTest(unittest.IsolatedAsyncioTestCase):
             assets = web_root / "assets"
             assets.mkdir()
             (web_root / "index.html").write_text(
-                '<!doctype html><title>Console UI</title>', encoding="utf-8"
+                "<!doctype html><title>Console UI</title>", encoding="utf-8"
             )
             (assets / "index-0123456789abcdef.js").write_text(
                 "console.log('console')", encoding="utf-8"
@@ -78,6 +79,7 @@ class StaticWebTest(unittest.IsolatedAsyncioTestCase):
                 transport=ASGITransport(app=app), base_url="https://console.test"
             ) as client:
                 root = await client.get("/")
+                health = await client.get("/healthz")
                 deep_link = await client.get("/overview")
                 asset = await client.get("/assets/index-0123456789abcdef.js")
                 api_miss = await client.get("/api/v1/not-implemented")
@@ -86,6 +88,11 @@ class StaticWebTest(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(root.status_code, 200)
+        self.assertEqual(health.status_code, 200)
+        self.assertEqual(health.json(), {"status": "ok"})
+        self.assertEqual(health.headers["content-type"], "application/json")
+        self.assertNotIn("<title>Console UI</title>", health.text)
+        self.assertEqual(health.headers["cache-control"], "no-store")
         self.assertEqual(deep_link.text, root.text)
         self.assertEqual(root.headers["cache-control"], "no-cache")
         self.assertIn("max-age=31536000", asset.headers["cache-control"])
@@ -97,22 +104,45 @@ class StaticWebTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(api_hit.json(), {"initialized": True})
         self.assertEqual(api_hit.headers["x-request-id"], "web-api-1")
 
+    async def test_process_health_is_available_without_dashboard_assets(self) -> None:
+        app = self._build_app(Path("/missing-dashboard-assets"))
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="https://console.test"
+        ) as client:
+            health = await client.get("/healthz")
+            fallback = await client.get("/healthz/deep")
+
+        self.assertEqual(health.status_code, 200)
+        self.assertEqual(health.json(), {"status": "ok"})
+        self.assertEqual(fallback.status_code, 404)
+
     @unittest.skipUnless(
         Path(console_app.__file__).with_name("web").is_dir(),
         "production Dashboard assets have not been packaged",
     )
     async def test_packaged_wheel_assets_are_discovered_without_node(self) -> None:
-        app = self._build_app()
+        isolated_web_directory = os.environ.get("SENTINEL_CONSOLE_WEB_DIRECTORY")
+        app = self._build_app(
+            dashboard_web_directory=(
+                Path(isolated_web_directory) if isolated_web_directory else None
+            )
+        )
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="https://console.test"
         ) as client:
             page = await client.get("/")
             route = await client.get("/rules")
+            asset_path_match = re.search(r'src="(/assets/[^"]+)"', page.text)
+            if asset_path_match is None:
+                self.fail("packaged Console page does not reference a JS asset")
+            asset = await client.get(asset_path_match.group(1))
             api_miss = await client.get("/api/not-registered")
 
         self.assertEqual(page.status_code, 200)
         self.assertIn("Atlas Richie Sentinel Console", page.text)
         self.assertEqual(route.text, page.text)
+        self.assertEqual(asset.status_code, 200)
+        self.assertIn("max-age=31536000", asset.headers["cache-control"])
         self.assertEqual(api_miss.status_code, 404)
         self.assertEqual(api_miss.json()["error"]["code"], "not_found")
 
@@ -122,7 +152,7 @@ class StaticWebTest(unittest.IsolatedAsyncioTestCase):
             assets = web_root / "assets"
             assets.mkdir()
             (web_root / "index.html").write_text(
-                '<!doctype html><title>Prefixed Console</title>'
+                "<!doctype html><title>Prefixed Console</title>"
                 '<script src="/ops/sentinel/assets/app.js"></script>',
                 encoding="utf-8",
             )

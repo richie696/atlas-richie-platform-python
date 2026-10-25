@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import unittest
+from datetime import UTC, datetime
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
@@ -21,7 +23,6 @@ from atlas_richie.sentinel_console.domain.registered_sources import (
     SourceAuthenticationMode,
 )
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from session_test_doubles import UnusedSessionRevoker
 
 _REQUEST_HEADERS = {"x-request-id": "registered-sources-read-1"}
 _OPAQUE_COOKIE = "synthetic-session-token-for-console-read-0001"
@@ -137,6 +138,7 @@ class RegisteredSourcesApiTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("readRegisteredSources", response)
         self.assertEqual(response.headers["x-request-id"], "registered-sources-read-1")
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertEqual(response.headers["vary"], "Cookie")
@@ -188,6 +190,7 @@ class RegisteredSourcesApiTest(unittest.IsolatedAsyncioTestCase):
                     "/api/v1/system/sources", headers=_REQUEST_HEADERS
                 )
             self.assertEqual(response.status_code, expected_status)
+            assert_openapi_response("readRegisteredSources", response)
             self.assertEqual(response.json()["error"]["code"], expected_code)
             self.assertEqual(reader.calls, 0)
 
@@ -203,6 +206,7 @@ class RegisteredSourcesApiTest(unittest.IsolatedAsyncioTestCase):
                 "/api/v1/system/sources", headers={"x-request-id": "bad\nrequest"}
             )
         self.assertEqual(response.status_code, 400)
+        assert_openapi_response("readRegisteredSources", response)
         self.assertEqual(response.json()["error"]["code"], "invalid_request")
 
         async with AsyncClient(
@@ -220,6 +224,7 @@ class RegisteredSourcesApiTest(unittest.IsolatedAsyncioTestCase):
                 "/api/v1/system/sources", headers=_REQUEST_HEADERS
             )
         self.assertEqual(response.status_code, 503)
+        assert_openapi_response("readRegisteredSources", response)
         self.assertEqual(response.json()["error"]["code"], "service_unavailable")
         self.assertNotIn("private session store detail", response.text)
 
@@ -234,6 +239,7 @@ class RegisteredSourcesApiTest(unittest.IsolatedAsyncioTestCase):
                     "/api/v1/system/sources", headers=_REQUEST_HEADERS
                 )
             self.assertEqual(response.status_code, 503)
+            assert_openapi_response("readRegisteredSources", response)
             self.assertEqual(response.json()["error"]["code"], "service_unavailable")
             self.assertNotIn("private source registry detail", response.text)
 
@@ -248,6 +254,7 @@ class RegisteredSourcesApiTest(unittest.IsolatedAsyncioTestCase):
                 "/api/v1/system/sources", headers=_REQUEST_HEADERS
             )
         self.assertEqual(response.status_code, 503)
+        assert_openapi_response("readRegisteredSources", response)
         self.assertEqual(response.json()["error"]["code"], "service_unavailable")
 
     async def test_domain_rejects_unsafe_or_contradictory_source_facts(self) -> None:

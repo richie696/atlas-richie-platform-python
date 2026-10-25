@@ -5,6 +5,13 @@ from __future__ import annotations
 from starlette.requests import Request
 
 from ..domain.rule_bindings import RuleBindingQuery, RuleKind
+from .query_parsing import (
+    MAX_QUERY_PAGE_NUMBER,
+    MAX_QUERY_PAGE_SIZE,
+    MIN_QUERY_INTEGER,
+    parse_integer,
+    parse_query_values,
+)
 
 _REQUIRED = frozenset({"environmentId", "page", "pageSize"})
 _OPTIONAL = frozenset({"appId", "kind", "search"})
@@ -12,13 +19,7 @@ _OPTIONAL = frozenset({"appId", "kind", "search"})
 
 def parse_rule_binding_query(request: Request) -> RuleBindingQuery:
     """Reject unknown/repeated parameters and parse bounded exact filters."""
-    supplied: dict[str, str] = {}
-    for name, value in request.query_params.multi_items():
-        if name not in _REQUIRED | _OPTIONAL or name in supplied:
-            raise ValueError("rule binding query parameters must be known and unique")
-        supplied[name] = value
-    if not _REQUIRED.issubset(supplied):
-        raise ValueError("required rule binding query field is missing")
+    supplied = parse_query_values(request, _REQUIRED, _OPTIONAL)
     app_id = supplied.get("appId")
     kind_value = supplied.get("kind")
     return RuleBindingQuery(
@@ -26,16 +27,8 @@ def parse_rule_binding_query(request: Request) -> RuleBindingQuery:
         app_id=app_id,
         kind=RuleKind(kind_value) if kind_value is not None else None,
         search=supplied.get("search", ""),
-        page=_positive_integer(supplied["page"], 1_000_000),
-        page_size=_positive_integer(supplied["pageSize"], 100),
+        page=parse_integer(supplied["page"], MIN_QUERY_INTEGER, MAX_QUERY_PAGE_NUMBER),
+        page_size=parse_integer(
+            supplied["pageSize"], MIN_QUERY_INTEGER, MAX_QUERY_PAGE_SIZE
+        ),
     )
-
-
-def _positive_integer(value: str, maximum: int) -> int:
-    if not value.isascii() or not value.isdecimal():
-        raise ValueError("rule binding page values must be unsigned decimal integers")
-    parsed = int(value)
-    if not 1 <= parsed <= maximum:
-        raise ValueError("rule binding page value is out of range")
-    return parsed
-

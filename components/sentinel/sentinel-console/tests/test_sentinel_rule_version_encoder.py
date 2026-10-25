@@ -258,6 +258,60 @@ class SentinelRuleVersionJsonEncoderTest(unittest.TestCase):
         with self.assertRaises(RulePublicationValueUnsupported):
             self.encoder.encode_rule_version(cluster_version)
 
+    def test_encodes_only_supported_rust_flow_subset_using_rust_native_count_shape(self) -> None:
+        encoder = SentinelRuleVersionJsonEncoder("sentinel-rust-v1")
+        version = _version(
+            RuleKind.FLOW,
+            RuleRecord(
+                "flow-rust",
+                FlowRuleValue(
+                    "GET /api/hello",
+                    "default",
+                    FlowGrade.QPS,
+                    3,
+                    FlowStrategy.DIRECT,
+                    FlowControlBehavior.REJECT,
+                    False,
+                ),
+            ),
+            profile="sentinel-rust-v1",
+        )
+
+        self.assertEqual(
+            json.loads(encoder.encode_rule_version(version)),
+            [
+                {
+                    "resource": "GET /api/hello",
+                    "limitApp": "default",
+                    "grade": 1,
+                    "count": 3,
+                    "strategy": 0,
+                    "controlBehavior": 0,
+                    "clusterMode": False,
+                }
+            ],
+        )
+
+        unsupported = _version(
+            RuleKind.FLOW,
+            RuleRecord(
+                "flow-rust-warmup",
+                FlowRuleValue(
+                    "GET /api/hello",
+                    "default",
+                    FlowGrade.QPS,
+                    3,
+                    FlowStrategy.DIRECT,
+                    FlowControlBehavior.QUEUEING,
+                    False,
+                    max_queueing_time_ms=100,
+                ),
+            ),
+            profile="sentinel-rust-v1",
+        )
+        with self.assertRaises(RulePublicationValueUnsupported):
+            encoder.encode_rule_version(unsupported)
+
         irrelevant_ratio = _version(
             RuleKind.DEGRADE,
             RuleRecord(
@@ -287,6 +341,132 @@ class SentinelRuleVersionJsonEncoderTest(unittest.TestCase):
             with self.subTest(profile=value):
                 with self.assertRaises(ValueError):
                     SentinelRuleVersionJsonEncoder(value)
+
+    def test_encodes_go_v1_flow_using_the_go_sdk_wire_fields(self) -> None:
+        version = _version(
+            RuleKind.FLOW,
+            RuleRecord(
+                "console-flow-id",
+                FlowRuleValue(
+                    resource="GET /api/hello",
+                    limit_app="default",
+                    grade=FlowGrade.QPS,
+                    count=2,
+                    strategy=FlowStrategy.DIRECT,
+                    control_behavior=FlowControlBehavior.REJECT,
+                    cluster_mode=False,
+                ),
+            ),
+            profile="sentinel-go-v1",
+        )
+        encoded = SentinelRuleVersionJsonEncoder("sentinel-go-v1").encode_rule_version(version)
+        self.assertEqual(
+            json.loads(encoded),
+            [{
+                "resource": "GET /api/hello",
+                "threshold": 2,
+                "statIntervalInMs": 1000,
+                "tokenCalculateStrategy": 0,
+                "controlBehavior": 0,
+                "relationStrategy": 0,
+                "refResource": "",
+            }],
+        )
+
+    def test_java_and_go_expand_only_exponent_numbers_not_resource_strings(self) -> None:
+        for profile, threshold_field in (
+            ("sentinel-java-v1", "count"),
+            ("sentinel-go-v1", "threshold"),
+        ):
+            version = _version(
+                RuleKind.FLOW,
+                RuleRecord(
+                    "console-flow-id",
+                    FlowRuleValue(
+                        resource="GET /api/t07/1e85",
+                        limit_app="default",
+                        grade=FlowGrade.QPS,
+                        count=0.0000001,
+                        strategy=FlowStrategy.DIRECT,
+                        control_behavior=FlowControlBehavior.REJECT,
+                        cluster_mode=False,
+                    ),
+                ),
+                profile=profile,
+            )
+
+            encoded = SentinelRuleVersionJsonEncoder(profile).encode_rule_version(version)
+            decoded = json.loads(encoded)[0]
+
+            self.assertEqual(decoded["resource"], "GET /api/t07/1e85")
+            self.assertEqual(decoded[threshold_field], 0.0000001)
+            self.assertIn(b"0.0000001", encoded)
+            self.assertIn(b"GET /api/t07/1e85", encoded)
+
+    def test_one_worker_encoder_can_route_multiple_exact_runtime_profiles(self) -> None:
+        encoder = SentinelRuleVersionJsonEncoder(
+            "sentinel-java-v1, sentinel-go-v1"
+        )
+        rule = RuleRecord(
+            "console-flow-id",
+            FlowRuleValue(
+                resource="GET /api/hello",
+                limit_app="default",
+                grade=FlowGrade.QPS,
+                count=2,
+                strategy=FlowStrategy.DIRECT,
+                control_behavior=FlowControlBehavior.REJECT,
+                cluster_mode=False,
+            ),
+        )
+
+        java = encoder.encode_rule_version(
+            _version(RuleKind.FLOW, rule, profile="sentinel-java-v1")
+        )
+        go = encoder.encode_rule_version(
+            _version(RuleKind.FLOW, rule, profile="sentinel-go-v1")
+        )
+
+        self.assertEqual(json.loads(java)[0]["count"], 2)
+        self.assertEqual(json.loads(go)[0]["threshold"], 2)
+        self.assertNotIn(b"threshold", java)
+        self.assertNotIn(b"count", go)
+
+        with self.assertRaises(RulePublicationProfileUnsupported):
+            encoder.encode_rule_version(
+                _version(RuleKind.FLOW, rule, profile="sentinel-python-v1")
+            )
+
+    def test_rejects_ambiguous_profile_lists(self) -> None:
+        for value in (
+            "sentinel-java-v1,",
+            ",sentinel-go-v1",
+            "sentinel-go-v1,sentinel-go-v1",
+        ):
+            with self.subTest(profile=value), self.assertRaises(ValueError):
+                SentinelRuleVersionJsonEncoder(value)
+
+    def test_java_and_go_profiles_reject_values_outside_the_runtime_subset(self) -> None:
+        for profile in ("sentinel-java-v1", "sentinel-go-v1"):
+            version = _version(
+                RuleKind.FLOW,
+                RuleRecord(
+                    "console-flow-id",
+                    FlowRuleValue(
+                        resource="GET /api/hello",
+                        limit_app="default",
+                        grade=FlowGrade.QPS,
+                        count=2,
+                        strategy=FlowStrategy.CHAIN,
+                        control_behavior=FlowControlBehavior.REJECT,
+                        cluster_mode=False,
+                        ref_resource="parent",
+                    ),
+                ),
+                profile=profile,
+            )
+            with self.subTest(profile=profile), self.assertRaises(RulePublicationValueUnsupported):
+                SentinelRuleVersionJsonEncoder(profile).encode_rule_version(version)
 
 
 if __name__ == "__main__":

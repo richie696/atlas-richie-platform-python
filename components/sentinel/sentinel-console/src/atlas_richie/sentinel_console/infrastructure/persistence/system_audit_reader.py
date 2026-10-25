@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Callable
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -26,11 +26,25 @@ _ACTION_TO_STORAGE = {
     AuditAction.ACCOUNT_CREATE: "accounts.create",
     AuditAction.ACCOUNT_ROLE: "accounts.role",
     AuditAction.ACCOUNT_STATUS: "accounts.status",
+    AuditAction.ACCOUNT_PASSWORD_RESET: "accounts.reset_password",
+    AuditAction.LOCAL_ADMIN_PASSWORD_RECOVERY: "accounts.local_password_recovery",
+    AuditAction.ACCOUNT_DELETE: "accounts.delete",
     AuditAction.PASSWORD_CHANGE: "auth.password.change",
     AuditAction.SYSTEM_INITIALIZE: "system.bootstrap.initialize",
     AuditAction.RULE_VALIDATE: "rules.validate",
+    AuditAction.RULE_BINDING_CREATE: "rule-binding-create",
     AuditAction.SOURCE_REGISTER: "configuration.source.register",
     AuditAction.SOURCE_UPDATE: "configuration.source.update",
+    AuditAction.SOURCE_DELETE: "configuration.source.delete",
+    AuditAction.DEPLOYMENT_DEPENDENCIES_MIGRATED: "deployment.dependencies_migrated",
+    AuditAction.REPORTER_CERTIFICATE_ROTATED: "deployment.reporter_certificate_rotated",
+    AuditAction.MONITORING_SOURCE_CREATE: "monitoring.source.create",
+    AuditAction.MONITORING_SOURCE_UPDATE: "monitoring.source.update",
+    AuditAction.MONITORING_SOURCE_DELETE: "monitoring.source.delete",
+    AuditAction.MONITORING_SOURCE_ENABLE: "monitoring.source.enable",
+    AuditAction.MONITORING_SOURCE_DISABLE: "monitoring.source.disable",
+    AuditAction.HOST_ASSOCIATION_CREATE: "monitoring.host-association.create",
+    AuditAction.HOST_ASSOCIATION_DELETE: "monitoring.host-association.delete",
     AuditAction.DRAFT_SAVE: "rules.save_draft",
     AuditAction.DRAFT_DELETE: "rules.delete_draft",
     AuditAction.VERSION_FREEZE: "rules.freeze_version",
@@ -39,6 +53,7 @@ _ACTION_TO_STORAGE = {
     AuditAction.PLAN_CANCEL: "rules.cancel_plan",
     AuditAction.PLAN_ACTIVATE: "rules.activation_plan.activate",
     AuditAction.PLAN_RESTORE: "rules.activation_plan.restore",
+    AuditAction.TARGET_CONFIGURE: "rules.configure_target",
 }
 _STORAGE_TO_ACTION = {value: key for key, value in _ACTION_TO_STORAGE.items()}
 _OUTCOME_TO_RESULT = {
@@ -71,15 +86,19 @@ class SqlAlchemySystemAuditReader(SystemAuditReader):
                 )
                 offset = (query.page - 1) * query.page_size
                 rows = (
-                    await connection.execute(
-                        statement.order_by(
-                            AuditEventRecord.created_at.desc(),
-                            AuditEventRecord.event_id.desc(),
+                    (
+                        await connection.execute(
+                            statement.order_by(
+                                AuditEventRecord.created_at.desc(),
+                                AuditEventRecord.event_id.desc(),
+                            )
+                            .offset(offset)
+                            .limit(query.page_size)
                         )
-                        .offset(offset)
-                        .limit(query.page_size)
                     )
-                ).mappings().all()
+                    .mappings()
+                    .all()
+                )
         except SQLAlchemyError:
             raise SystemAuditAuthorityUnavailable(
                 "system audit authority is unavailable"
@@ -158,7 +177,7 @@ def _as_utc(value: datetime) -> datetime:
 def _stored_utc(value: datetime) -> datetime:
     """Interpret naive SQLite DateTime values as UTC, matching writer policy."""
     if not isinstance(value, datetime):
-        raise ValueError("stored audit timestamp is invalid")
+        raise TypeError("stored audit timestamp is invalid")
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)

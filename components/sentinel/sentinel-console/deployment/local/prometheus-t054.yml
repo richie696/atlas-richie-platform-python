@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: sentinel-e2e-node-exporter
+    static_configs:
+      - targets: ["sentinel-t054-node-exporter:9100"]
+        labels:
+          environment: sentinel-e2e
+          app: sentinel-node-exporter
+          host_id: docker-desktop-linux-vm

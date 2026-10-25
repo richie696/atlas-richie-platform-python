@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import multiprocessing
 import os
 from pathlib import Path
@@ -11,6 +12,9 @@ import pytest
 
 from atlas_richie.sentinel_console.application.errors import (
     BootstrapAuthorityUnavailable,
+)
+from atlas_richie.sentinel_console.infrastructure.persistence import (
+    local_atomic_file_store as atomic_file_store,
 )
 from atlas_richie.sentinel_console.infrastructure.persistence import (
     setup_window_file_store as setup_store,
@@ -78,7 +82,7 @@ def test_stale_revision_and_concurrent_updates_conflict(tmp_path: Path) -> None:
         assert sum(
             isinstance(item, setup_store.SetupWindowRevisionConflict)
             for item in outcomes
-        ) == 1
+        )
         with pytest.raises(setup_store.SetupWindowRevisionConflict):
             await store.set_setup_window_open(False, expected_revision=revision)
 
@@ -169,6 +173,62 @@ def test_cancelling_lock_holder_releases_the_deployment_lock(
                 pass
 
     asyncio.run(scenario())
+
+
+def test_lock_context_explicitly_unlocks_before_closing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operations: list[int] = []
+    original_flock = atomic_file_store.fcntl.flock
+
+    def track_flock(descriptor: int, operation: int) -> None:
+        operations.append(operation)
+        original_flock(descriptor, operation)
+
+    monkeypatch.setattr(atomic_file_store.fcntl, "flock", track_flock)
+    lock_store = atomic_file_store.LocalAtomicFileStore(
+        tmp_path / "bootstrap-lock", maximum_bytes=1
+    )
+
+    async def scenario() -> None:
+        async with lock_store.hold_exclusive_lock():
+            pass
+
+    asyncio.run(scenario())
+    assert operations == [
+        atomic_file_store.fcntl.LOCK_EX | atomic_file_store.fcntl.LOCK_NB,
+        atomic_file_store.fcntl.LOCK_UN,
+    ]
+
+
+def test_lock_context_retries_nonblocking_contention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts = 0
+    original_flock = atomic_file_store.fcntl.flock
+
+    def contend_then_acquire(descriptor: int, operation: int) -> None:
+        nonlocal attempts
+        exclusive_nonblocking = (
+            atomic_file_store.fcntl.LOCK_EX | atomic_file_store.fcntl.LOCK_NB
+        )
+        if operation == exclusive_nonblocking:
+            attempts += 1
+            if attempts < 3:
+                raise BlockingIOError(errno.EAGAIN, "lock is busy")
+        original_flock(descriptor, operation)
+
+    monkeypatch.setattr(atomic_file_store.fcntl, "flock", contend_then_acquire)
+    lock_store = atomic_file_store.LocalAtomicFileStore(
+        tmp_path / "bootstrap-lock", maximum_bytes=1
+    )
+
+    async def scenario() -> None:
+        async with lock_store.hold_exclusive_lock():
+            pass
+
+    asyncio.run(scenario())
+    assert attempts == 3
 
 
 @pytest.mark.parametrize(

@@ -10,7 +10,7 @@ from ..application.errors import BootstrapAuthorityUnavailable
 from ..application.issue_csrf_nonce import IssueCsrfNonce
 from ..application.read_bootstrap import ReadBootstrap
 from ..domain.bootstrap import InitializedBootstrap, OpenSetupBootstrap
-from .browser_security import CSRF_COOKIE_NAME
+from .browser_security import CSRF_COOKIE_NAME, SECURE_COOKIES
 from .http_support import error_response, request_id
 
 _OPERATOR_COOKIE_NAME = "sentinel_bootstrap"
@@ -57,7 +57,7 @@ def bootstrap_route(read_bootstrap: ReadBootstrap) -> Route:
             CSRF_COOKIE_NAME,
             csrf_nonce.value,
             path="/",
-            secure=True,
+            secure=SECURE_COOKIES,
             httponly=True,
             samesite="strict",
         )

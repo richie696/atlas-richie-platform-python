@@ -19,16 +19,23 @@ from ..application.change_own_password import (
 )
 from ..application.errors import SessionAuthorityUnavailable
 from ..application.read_session import ReadSession
-from ..domain.account_password import AccountPassword
+from ..domain.account_password import (
+    MAX_ACCOUNT_PASSWORD_UTF16_UNITS,
+    MIN_ACCOUNT_PASSWORD_UTF16_UNITS,
+    AccountPassword,
+)
 from .browser_origin import normalize_browser_origin
 from .browser_security import (
     CSRF_COOKIE_NAME,
+    SECURE_COOKIES,
     SESSION_COOKIE_NAME,
     browser_write_proof,
 )
 from .http_support import error_response, read_json_object, request_id
 
 _MAX_BODY_BYTES = 4096
+MIN_CURRENT_PASSWORD_UTF16_UNITS = 1
+MAX_CURRENT_PASSWORD_UTF16_UNITS = 1024
 
 
 def own_password_route(
@@ -44,9 +51,8 @@ def own_password_route(
         raise ValueError("at least one browser origin must be configured")
 
     async def change_password(request: Request) -> Response:
-        request_ids = request.headers.getlist("x-request-id")
         request_id_value, valid_request_id = request_id(request)
-        if len(request_ids) != 1 or not valid_request_id:
+        if not valid_request_id:
             return error_response(request_id_value, "invalid_request", 400)
 
         proof, failure = browser_write_proof(request, allowed_origins)
@@ -58,8 +64,16 @@ def own_password_route(
         credentials = _passwords(body)
         if credentials is None:
             return error_response(request_id_value, "invalid_request", 400)
-        if not _valid_utf16_length(credentials[0], 1, 1024) or not (
-            _valid_utf16_length(credentials[1], 12, 1024)
+        if not _valid_utf16_length(
+            credentials[0],
+            MIN_CURRENT_PASSWORD_UTF16_UNITS,
+            MAX_CURRENT_PASSWORD_UTF16_UNITS,
+        ) or not (
+            _valid_utf16_length(
+                credentials[1],
+                MIN_ACCOUNT_PASSWORD_UTF16_UNITS,
+                MAX_ACCOUNT_PASSWORD_UTF16_UNITS,
+            )
         ):
             return error_response(request_id_value, "validation_failed", 422)
         try:
@@ -116,14 +130,14 @@ def own_password_route(
         response.delete_cookie(
             SESSION_COOKIE_NAME,
             path="/",
-            secure=True,
+            secure=SECURE_COOKIES,
             httponly=True,
             samesite="lax",
         )
         response.delete_cookie(
             CSRF_COOKIE_NAME,
             path="/",
-            secure=True,
+            secure=SECURE_COOKIES,
             httponly=True,
             samesite="strict",
         )
@@ -137,10 +151,7 @@ def _passwords(body: dict[str, object] | None) -> tuple[str, str] | None:
         return None
     current_password = body["currentPassword"]
     new_password = body["newPassword"]
-    if (
-        not isinstance(current_password, str)
-        or not isinstance(new_password, str)
-    ):
+    if not isinstance(current_password, str) or not isinstance(new_password, str):
         return None
     return current_password, new_password
 

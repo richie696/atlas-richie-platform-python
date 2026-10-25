@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import unittest
+from datetime import UTC, datetime, timedelta
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
 from atlas_richie.sentinel_console.application.system_connections_ports import (
     SystemConnectionsAuthorityUnavailable,
+)
+from atlas_richie.sentinel_console.domain.configuration_source import (
+    ConfigurationSourceProvider,
 )
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
 from atlas_richie.sentinel_console.domain.system_connections import (
@@ -21,10 +26,6 @@ from atlas_richie.sentinel_console.domain.system_connections import (
     ConnectionState,
     SystemConnectionsSnapshot,
 )
-from atlas_richie.sentinel_console.domain.configuration_source import (
-    ConfigurationSourceProvider,
-)
-from session_test_doubles import UnusedSessionRevoker
 
 _REQUEST_HEADERS = {"x-request-id": "connection-read-1"}
 _OPAQUE_COOKIE = "synthetic-session-token-for-console-read-0001"
@@ -133,9 +134,14 @@ def _app(role: str | None, *, reader=None, session_reader=None):
 
 
 class SystemConnectionsApiTest(unittest.IsolatedAsyncioTestCase):
-    async def test_connection_domain_rejects_blank_and_non_scalar_identifiers(self) -> None:
+    async def test_connection_domain_rejects_blank_and_non_scalar_identifiers(
+        self,
+    ) -> None:
         for invalid_identifier in ("\x1c", "\x85", "\ufeff", "\u3000", "\ud800"):
-            with self.subTest(identifier=repr(invalid_identifier)), self.assertRaises(ValueError):
+            with (
+                self.subTest(identifier=repr(invalid_identifier)),
+                self.assertRaises(ValueError),
+            ):
                 ConnectionObservation(
                     invalid_identifier,
                     ConnectionKind.METRICS_BACKEND,
@@ -162,6 +168,7 @@ class SystemConnectionsApiTest(unittest.IsolatedAsyncioTestCase):
                 )
 
             self.assertEqual(response.status_code, 200)
+            assert_openapi_response("readSystemConnections", response)
             self.assertEqual(response.headers["x-request-id"], "connection-read-1")
             self.assertEqual(response.headers["cache-control"], "no-store")
             self.assertEqual(response.headers["vary"], "Cookie")
@@ -207,9 +214,7 @@ class SystemConnectionsApiTest(unittest.IsolatedAsyncioTestCase):
             ({"x-request-id": "invalid\nrequest"}, 400, "invalid_request"),
         ):
             async with AsyncClient(
-                transport=ASGITransport(
-                    app=_app(None, reader=_ConnectionsReader())
-                ),
+                transport=ASGITransport(app=_app(None, reader=_ConnectionsReader())),
                 base_url="http://test",
             ) as client:
                 client.cookies.set("sentinel_session", _OPAQUE_COOKIE)
@@ -217,6 +222,7 @@ class SystemConnectionsApiTest(unittest.IsolatedAsyncioTestCase):
                     "/api/v1/system/connections", headers=headers
                 )
             self.assertEqual(response.status_code, status)
+            assert_openapi_response("readSystemConnections", response)
             self.assertEqual(response.json()["error"]["code"], code)
 
     async def test_missing_and_failed_authorities_return_bounded_503(self) -> None:
@@ -230,6 +236,7 @@ class SystemConnectionsApiTest(unittest.IsolatedAsyncioTestCase):
                     "/api/v1/system/connections", headers=_REQUEST_HEADERS
                 )
             self.assertEqual(response.status_code, 503)
+            assert_openapi_response("readSystemConnections", response)
             self.assertEqual(response.json()["error"]["code"], "service_unavailable")
             self.assertNotIn("private probe detail", response.text)
 
@@ -244,6 +251,7 @@ class SystemConnectionsApiTest(unittest.IsolatedAsyncioTestCase):
                 "/api/v1/system/connections", headers=_REQUEST_HEADERS
             )
         self.assertEqual(response.status_code, 503)
+        assert_openapi_response("readSystemConnections", response)
         self.assertEqual(response.json()["error"]["code"], "service_unavailable")
 
     async def test_invalid_session_or_probe_authority_fails_closed(self) -> None:

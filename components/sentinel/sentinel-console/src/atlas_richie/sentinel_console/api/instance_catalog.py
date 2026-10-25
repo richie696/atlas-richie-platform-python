@@ -22,7 +22,14 @@ from ..domain.instance_catalog import (
 from ..domain.session import SessionCapability
 from .http_support import error_response
 from .instance_serializers import coverage_body, instance_body
-from .query_parsing import parse_integer, parse_utc_timestamp
+from .query_parsing import (
+    MAX_QUERY_PAGE_NUMBER,
+    MAX_QUERY_PAGE_SIZE,
+    MIN_QUERY_INTEGER,
+    parse_integer,
+    parse_query_values,
+    parse_utc_timestamp,
+)
 from .system_observation_access import (
     authorize_system_read,
     system_read_headers,
@@ -42,6 +49,8 @@ _REQUIRED_QUERY_FIELDS = frozenset(
     }
 )
 _OPTIONAL_QUERY_FIELDS = frozenset({"appId"})
+
+
 def instance_catalog_route(
     read_session: ReadSession,
     read_catalog: ReadInstanceCatalog | None,
@@ -86,22 +95,17 @@ def instance_catalog_route(
 
 
 def _parse_query(request: Request) -> InstanceCatalogQuery:
-    supplied: dict[str, str] = {}
-    for name, value in request.query_params.multi_items():
-        if (
-            name not in _REQUIRED_QUERY_FIELDS | _OPTIONAL_QUERY_FIELDS
-            or name in supplied
-        ):
-            raise ValueError("query parameters must be known and unique")
-        supplied[name] = value
-    if not _REQUIRED_QUERY_FIELDS.issubset(supplied):
-        raise ValueError("required instance catalog query field is missing")
+    supplied = parse_query_values(
+        request, _REQUIRED_QUERY_FIELDS, _OPTIONAL_QUERY_FIELDS
+    )
 
     scope = ObservationScope(supplied["scope"])
     starts_at = parse_utc_timestamp(supplied["from"])
     ends_at = parse_utc_timestamp(supplied["to"])
-    page = parse_integer(supplied["page"], 1, 1_000_000)
-    page_size = parse_integer(supplied["pageSize"], 1, 100)
+    page = parse_integer(supplied["page"], MIN_QUERY_INTEGER, MAX_QUERY_PAGE_NUMBER)
+    page_size = parse_integer(
+        supplied["pageSize"], MIN_QUERY_INTEGER, MAX_QUERY_PAGE_SIZE
+    )
     attention_only = supplied["attentionOnly"]
     if attention_only not in ("true", "false"):
         raise ValueError("attentionOnly must be a boolean")

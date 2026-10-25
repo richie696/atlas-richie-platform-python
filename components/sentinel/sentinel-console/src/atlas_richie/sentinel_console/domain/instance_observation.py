@@ -2,23 +2,34 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-import math
 
+from .instance_catalog import (
+    METRIC_DENOMINATORS as _METRIC_DENOMINATORS,
+)
+from .instance_catalog import (
+    METRIC_UNITS as _METRIC_UNITS,
+)
+from .instance_catalog import (
+    OPERATIONAL_METRICS as _OPERATIONAL_METRICS,
+)
 from .instance_catalog import (
     InstanceLayer,
     MetricDenominator,
     MetricQuality,
     MetricReading,
-    METRIC_UNITS as _METRIC_UNITS,
-    OPERATIONAL_METRICS as _OPERATIONAL_METRICS,
     ObservationCoverage,
     ObservationScope,
     ObservationWindow,
     ObservedInstance,
+)
+from .instance_catalog import (
     is_aware_instant as _is_aware_instant,
+)
+from .instance_catalog import (
     is_observation_identifier as _is_identifier,
 )
 from .observation_limits import (
@@ -151,7 +162,7 @@ class MetricSeries:
             raise ValueError("metric series coverage is invalid")
         if not isinstance(self.quality, MetricQuality):
             raise ValueError("metric series quality is unsupported")
-        _validate_metric_identity(self.metric, self.unit)
+        _validate_metric_identity(self.metric, self.unit, self.denominator)
         if (
             not isinstance(self.samples, tuple)
             or len(self.samples) > MAX_OBSERVATION_POINTS
@@ -274,6 +285,12 @@ class MetricBundle:
             or len(self.series) != len(requested)
         ):
             raise ValueError("metric bundle does not match the metric selection")
+        series_by_metric = {item.metric: item for item in self.series}
+        if any(
+            not _same_metric_metadata(reading, series_by_metric[reading.metric])
+            for reading in self.summary
+        ):
+            raise ValueError("metric summary and series metadata must match")
         if any(
             not self.query.context.window.contains(item.sampled_at)
             for item in self.summary
@@ -335,9 +352,28 @@ class InstanceObservation:
                 raise ValueError("metric bundle does not match the instance query")
 
 
-def _validate_metric_identity(metric: str, unit: str) -> None:
-    if metric not in _METRIC_UNITS or unit != _METRIC_UNITS[metric]:
-        raise ValueError("metric unit does not match the metric")
+def _validate_metric_identity(
+    metric: str,
+    unit: str,
+    denominator: MetricDenominator,
+) -> None:
+    if (
+        metric not in _METRIC_UNITS
+        or unit != _METRIC_UNITS[metric]
+        or denominator != _METRIC_DENOMINATORS[metric]
+    ):
+        raise ValueError("metric unit or denominator does not match the metric")
+
+
+def _same_metric_metadata(reading: MetricReading, series: MetricSeries) -> bool:
+    return (
+        reading.metric == series.metric
+        and reading.unit == series.unit
+        and reading.source == series.source
+        and reading.denominator == series.denominator
+        and reading.coverage == series.coverage
+        and reading.quality == series.quality
+    )
 
 
 def _validate_metric_value(metric: str, value: int | float | None) -> None:

@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import hashlib
 import unittest
-
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, insert, select, update
-from sqlalchemy.ext.asyncio import create_async_engine
+from datetime import UTC, datetime, timedelta
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.change_own_password import (
     ChangeOwnPassword,
+)
+from atlas_richie.sentinel_console.infrastructure.persistence.current_session_reader import (
+    SqlAlchemyCurrentSessionReader,
+)
+from atlas_richie.sentinel_console.infrastructure.persistence.login_attempt_limiter import (
+    LoginAttemptLimitPolicy,
+    SqlAlchemyLoginAttemptLimiter,
 )
 from atlas_richie.sentinel_console.infrastructure.persistence.migration_runner import (
     upgrade_database,
@@ -29,16 +32,13 @@ from atlas_richie.sentinel_console.infrastructure.persistence.own_password_crede
 from atlas_richie.sentinel_console.infrastructure.persistence.own_password_writer import (
     SqlAlchemyOwnPasswordWriter,
 )
-from atlas_richie.sentinel_console.infrastructure.persistence.login_attempt_limiter import (
-    LoginAttemptLimitPolicy,
-    SqlAlchemyLoginAttemptLimiter,
-)
-from atlas_richie.sentinel_console.infrastructure.persistence.current_session_reader import (
-    SqlAlchemyCurrentSessionReader,
-)
 from atlas_richie.sentinel_console.infrastructure.security.password_hash import (
     PasswordHashService,
 )
+from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from sqlalchemy import func, insert, select, update
+from sqlalchemy.ext.asyncio import create_async_engine
 
 _ORIGIN = "https://console.test"
 _NOW = datetime.now(UTC)
@@ -109,12 +109,8 @@ class OwnPasswordApiTest(unittest.IsolatedAsyncioTestCase):
                     updated_at=_NOW,
                 )
             )
-            await self._insert_session(
-                connection, _ADMIN_COOKIE, _ADMIN_CSRF
-            )
-            await self._insert_session(
-                connection, _SECOND_COOKIE, _SECOND_CSRF
-            )
+            await self._insert_session(connection, _ADMIN_COOKIE, _ADMIN_CSRF)
+            await self._insert_session(connection, _SECOND_COOKIE, _SECOND_CSRF)
             await connection.execute(
                 insert(AccountRecord).values(
                     account_id="view-1",
@@ -187,9 +183,7 @@ class OwnPasswordApiTest(unittest.IsolatedAsyncioTestCase):
         await self.engine.dispose()
 
     def _client(self, token: str, csrf: str) -> AsyncClient:
-        client = AsyncClient(
-            transport=ASGITransport(app=self.app), base_url=_ORIGIN
-        )
+        client = AsyncClient(transport=ASGITransport(app=self.app), base_url=_ORIGIN)
         client.cookies.set("sentinel_session", token)
         client.cookies.set("__Host-sentinel_csrf", csrf)
         return client
@@ -228,6 +222,7 @@ class OwnPasswordApiTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("changeOwnPassword", response)
         self.assertEqual(response.json(), {"sessionDisposition": "reauthenticate"})
         self.assertEqual(identity.json(), None)
         self.assertIn('sentinel_session="";', response.headers["set-cookie"])
@@ -274,9 +269,8 @@ class OwnPasswordApiTest(unittest.IsolatedAsyncioTestCase):
                 client, current_password="synthetic-wrong-password-00001"
             )
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(
-            response.json()["error"]["code"], "current_password_invalid"
-        )
+        assert_openapi_response("changeOwnPassword", response)
+        self.assertEqual(response.json()["error"]["code"], "current_password_invalid")
         async with self.engine.connect() as connection:
             stored_hash = await connection.scalar(
                 select(AccountRecord.password_hash).where(
@@ -347,7 +341,9 @@ class OwnPasswordApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.hasher.hash_calls, 1)
 
     async def test_missing_session_remains_unauthenticated(self) -> None:
-        async with self._client("unknown-own-password-session-0001", _ADMIN_CSRF) as client:
+        async with self._client(
+            "unknown-own-password-session-0001", _ADMIN_CSRF
+        ) as client:
             response = await self._change(client)
 
         self.assertEqual(response.status_code, 401)
@@ -388,9 +384,7 @@ class OwnPasswordApiTest(unittest.IsolatedAsyncioTestCase):
                     "newPassword": "synthetic-new-password-00001",
                 },
             )
-            invalid_new_password = await self._change(
-                client, new_password="too-short"
-            )
+            invalid_new_password = await self._change(client, new_password="too-short")
             extra_field = await client.post(
                 "/api/v1/auth/password",
                 headers=self._headers(_ADMIN_CSRF, "password-extra-field"),
@@ -412,6 +406,50 @@ class OwnPasswordApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(invalid_new_password.status_code, 422)
         self.assertEqual(extra_field.status_code, 400)
         self.assertEqual(duplicate_json.status_code, 400)
+        self.assertEqual(self.hasher.verify_calls, 0)
+        self.assertEqual(self.hasher.hash_calls, 1)
+
+    async def test_password_utf16_limit_accepts_exact_supplementary_boundary(self):
+        new_password = "😀" * 512
+        async with self._client(_ADMIN_COOKIE, _ADMIN_CSRF) as client:
+            response = await self._change(client, new_password=new_password)
+
+        self.assertEqual(response.status_code, 200)
+        assert_openapi_response("changeOwnPassword", response)
+        async with self.engine.connect() as connection:
+            stored_hash = await connection.scalar(
+                select(AccountRecord.password_hash).where(
+                    AccountRecord.account_id == "admin-1"
+                )
+            )
+        self.assertTrue(
+            self.hasher._delegate.verify_password(stored_hash, new_password)
+        )
+
+    async def test_password_utf16_overflow_and_unpaired_surrogate_fail_before_hashing(
+        self,
+    ):
+        async with self._client(_ADMIN_COOKIE, _ADMIN_CSRF) as client:
+            overflow = await self._change(
+                client,
+                request_id="password-utf16-overflow",
+                new_password=("😀" * 512) + "a",
+            )
+            unpaired_surrogate = await client.post(
+                "/api/v1/auth/password",
+                headers=self._headers(_ADMIN_CSRF, "password-unpaired-surrogate"),
+                content=(
+                    b'{"currentPassword":"synthetic-initial-password-00001",'
+                    b'"newPassword":"synthetic-password-\\ud800"}'
+                ),
+            )
+
+        self.assertEqual(overflow.status_code, 422)
+        self.assertEqual(overflow.json()["error"]["code"], "validation_failed")
+        assert_openapi_response("changeOwnPassword", overflow)
+        self.assertEqual(unpaired_surrogate.status_code, 400)
+        self.assertEqual(unpaired_surrogate.json()["error"]["code"], "invalid_request")
+        assert_openapi_response("changeOwnPassword", unpaired_surrogate)
         self.assertEqual(self.hasher.verify_calls, 0)
         self.assertEqual(self.hasher.hash_calls, 1)
 

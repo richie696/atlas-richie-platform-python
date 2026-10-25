@@ -30,7 +30,7 @@ class SqlAlchemyLoginCredentialReader:
                         AccountRecord.role_id,
                         AccountRecord.status,
                         AccountRecord.password_hash,
-                    ).where(AccountRecord.username_key == username_key)
+                    ).where(AccountRecord.username_key == username_key, AccountRecord.deleted_at.is_(None))
                 )
                 row = result.mappings().one_or_none()
         except SQLAlchemyError:

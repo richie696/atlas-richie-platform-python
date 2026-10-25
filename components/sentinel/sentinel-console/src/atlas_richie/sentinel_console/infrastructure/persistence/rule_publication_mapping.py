@@ -19,6 +19,7 @@ def publication_from_row(row) -> RulePublication:
         binding_id=str(row["binding_id"]),
         target_version_id=str(row["target_version_id"]),
         target_checksum=str(row["target_checksum"]),
+        publication_sequence=int(row["publication_sequence"]),
         base_version_id=_optional_string(row["base_version_id"]),
         created_at=_utc(row["created_at"]),
         validation=_phase(
@@ -117,9 +118,7 @@ def _phase_from_body(value: object) -> PublicationPhase:
     ):
         raise ValueError("stored publication phase value is invalid")
     observed_at = (
-        _wire_datetime(value["observedAt"])
-        if value["observedAt"] is not None
-        else None
+        _wire_datetime(value["observedAt"]) if value["observedAt"] is not None else None
     )
     return PublicationPhase(
         state=PublicationStage(state),

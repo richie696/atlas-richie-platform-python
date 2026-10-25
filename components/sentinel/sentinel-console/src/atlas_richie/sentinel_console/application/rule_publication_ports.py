@@ -8,6 +8,12 @@ from typing import Protocol
 
 from ..domain.configuration_source import ConfigurationSourceProvider
 from ..domain.rule_activation_plans import RuleActivationPlanPhase
+from ..domain.rule_publication_targets import (
+    ConsulRulePublicationTarget,
+    NacosRulePublicationTarget,
+    RulePublicationTarget,
+    VersionedRulePublicationTarget,
+)
 from ..domain.rule_publications import (
     PublicationPhase,
     PublicationPhaseName,
@@ -16,12 +22,6 @@ from ..domain.rule_publications import (
     RulePublicationCollection,
     RulePublicationReceipt,
     RulePublicationReceiptPage,
-)
-from ..domain.rule_publication_targets import (
-    ConsulRulePublicationTarget,
-    NacosRulePublicationTarget,
-    RulePublicationTarget,
-    VersionedRulePublicationTarget,
 )
 from ..domain.rule_versions import RuleSetVersion
 from ..domain.utc_time import is_wire_utc_millisecond_instant
@@ -104,6 +104,15 @@ class RulePublicationPayloadEncoder(Protocol):
 
     def encode_rule_version(self, version: RuleSetVersion) -> bytes:
         """Return complete provider-neutral UTF-8 bytes or reject unsupported data."""
+
+
+class RulePublicationPayloadChecksumWriter(Protocol):
+    """Persist the exact encoded target digest before the provider side effect."""
+
+    async def ensure_rule_publication_payload_checksum(
+        self, binding_id: str, publication_id: str, payload_sha256: str
+    ) -> None:
+        """Persist once; accept exact retries and reject a changed digest."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,10 +229,16 @@ class RulePublishOutbox(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class RuleConfigurationSnapshot:
-    """Exact provider value and CAS revision, or both absent for create-only."""
+    """Provider value/revision plus the consistency guarantee of that read.
+
+    ``conditional_replay_safe`` is true only when the provider performed a
+    strongly consistent read suitable for deciding whether the original CAS
+    baseline is still current. It never authorizes an unconditional write.
+    """
 
     revision: str | None
     value: bytes | None
+    conditional_replay_safe: bool = False
 
     def __post_init__(self) -> None:
         if (self.revision is None) != (self.value is None):
@@ -234,6 +249,8 @@ class RuleConfigurationSnapshot:
             raise ValueError("provider snapshot revision is invalid")
         if self.value is not None and not isinstance(self.value, bytes):
             raise ValueError("provider snapshot value is invalid")
+        if type(self.conditional_replay_safe) is not bool:
+            raise ValueError("provider snapshot consistency is invalid")
 
 
 class RulePublicationProvider(Protocol):

@@ -5,6 +5,8 @@ from __future__ import annotations
 import unittest
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.account_commands import (
@@ -15,7 +17,6 @@ from atlas_richie.sentinel_console.application.account_commands import (
 )
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from session_test_doubles import UnusedSessionRevoker
 
 _ORIGIN = "https://console.test"
 _SESSION = "synthetic-account-command-session-token-0001"
@@ -70,7 +71,6 @@ class _AccountCommandService:
         if self.unavailable:
             raise AccountCommandUnavailable("private operation reader detail")
         self.lookups.append((request_key, actor))
-        return None
 
 
 class AccountCommandsApiTest(unittest.IsolatedAsyncioTestCase):
@@ -125,6 +125,7 @@ class AccountCommandsApiTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("mutateAccount", response)
         self.assertEqual(
             response.json(),
             {
@@ -168,19 +169,38 @@ class AccountCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 json=self._create_body(),
                 headers=self._headers(),
             )
+            viewer_role_change = await client.post(
+                "/api/v1/accounts/commands",
+                json={
+                    "kind": "role",
+                    "requestKey": _REQUEST_KEY,
+                    "accountId": "account-target",
+                    "revision": "3",
+                    "roleId": "view",
+                },
+                headers=self._headers(),
+            )
 
         self.assertEqual(
             (missing_csrf.status_code, missing_csrf.json()["error"]["code"]),
             (403, "csrf_failed"),
         )
+        assert_openapi_response("mutateAccount", missing_csrf)
         self.assertEqual(
             (viewer.status_code, viewer.json()["error"]["code"]),
             (403, "forbidden"),
         )
+        assert_openapi_response("mutateAccount", viewer)
+        self.assertEqual(
+            (viewer_role_change.status_code, viewer_role_change.json()["error"]["code"]),
+            (403, "forbidden"),
+        )
+        assert_openapi_response("mutateAccount", viewer_role_change)
         self.assertEqual(
             (mismatch.status_code, mismatch.json()["error"]["code"]),
             (409, "idempotency_conflict"),
         )
+        assert_openapi_response("mutateAccount", mismatch)
         self.assertEqual(service.commands, [])
 
     async def test_invalid_role_command_is_rejected_before_execution(self) -> None:
@@ -199,6 +219,7 @@ class AccountCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                 headers=self._headers(),
             )
             self.assertEqual(accepted.status_code, 200)
+            assert_openapi_response("mutateAccount", accepted)
             self.assertEqual(
                 service.commands[0][1].expected_revision, int(maximum_revision)
             )
@@ -226,6 +247,7 @@ class AccountCommandsApiTest(unittest.IsolatedAsyncioTestCase):
                         (response.status_code, response.json()["error"]["code"]),
                         (400, "invalid_request"),
                     )
+                    assert_openapi_response("mutateAccount", response)
 
         self.assertEqual(len(service.commands), 1)
         self.assertEqual(
@@ -253,10 +275,12 @@ class AccountCommandsApiTest(unittest.IsolatedAsyncioTestCase):
             (missing.status_code, missing.json()),
             (200, {"status": "not-found", "requestKey": "original-request-1"}),
         )
+        assert_openapi_response("readAccountOperation", missing)
         self.assertEqual(
             (forbidden.status_code, forbidden.json()["error"]["code"]),
             (403, "forbidden"),
         )
+        assert_openapi_response("readAccountOperation", forbidden)
         self.assertEqual(len(service.lookups), 1)
 
     async def test_command_authority_failure_is_sanitized(self) -> None:
@@ -273,6 +297,6 @@ class AccountCommandsApiTest(unittest.IsolatedAsyncioTestCase):
             (response.status_code, response.json()["error"]["code"]),
             (503, "service_unavailable"),
         )
+        assert_openapi_response("mutateAccount", response)
         self.assertNotIn("private command authority detail", response.text)
         self.assertNotIn("synthetic-new-password", response.text)
-

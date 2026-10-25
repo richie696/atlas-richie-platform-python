@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from dataclasses import replace
+
 from sqlalchemy import insert, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -20,6 +23,7 @@ from ...domain.rule_publications import (
     advance_publication_phase,
 )
 from .models import RulePublicationRecord, RuleSetVersionRecord
+from .publication_sequence_allocator import SqlAlchemyPublicationSequenceAllocator
 from .rule_publication_mapping import publication_from_row
 
 
@@ -28,6 +32,63 @@ class SqlAlchemyRulePublicationStore(RulePublicationRecorder):
 
     def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine
+        self._publication_sequences = SqlAlchemyPublicationSequenceAllocator()
+
+    async def ensure_rule_publication_payload_checksum(
+        self, binding_id: str, publication_id: str, payload_sha256: str
+    ) -> None:
+        """Persist a checksum once and fence retries to the same encoded bytes."""
+        if (
+            not isinstance(binding_id, str)
+            or not binding_id.strip()
+            or not isinstance(publication_id, str)
+            or not publication_id.strip()
+            or not isinstance(payload_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", payload_sha256) is None
+        ):
+            raise ValueError("publication payload checksum input is invalid")
+        try:
+            async with self._engine.begin() as connection:
+                result = await connection.execute(
+                    select(RulePublicationRecord.target_payload_checksum)
+                    .where(
+                        RulePublicationRecord.binding_id == binding_id,
+                        RulePublicationRecord.publication_id == publication_id,
+                    )
+                    .with_for_update()
+                )
+                current = result.scalar_one_or_none()
+                if current is None:
+                    changed = await connection.execute(
+                        update(RulePublicationRecord)
+                        .where(
+                            RulePublicationRecord.binding_id == binding_id,
+                            RulePublicationRecord.publication_id == publication_id,
+                            RulePublicationRecord.target_payload_checksum.is_(None),
+                        )
+                        .values(target_payload_checksum=payload_sha256)
+                    )
+                    if changed.rowcount == 1:
+                        return
+                    result = await connection.execute(
+                        select(RulePublicationRecord.target_payload_checksum).where(
+                            RulePublicationRecord.binding_id == binding_id,
+                            RulePublicationRecord.publication_id == publication_id,
+                        )
+                    )
+                    current = result.scalar_one_or_none()
+                if current is None:
+                    raise RulePublicationNotFound("rule publication does not exist")
+                if current != payload_sha256:
+                    raise RulePublicationConflict(
+                        "publication payload checksum changed"
+                    )
+        except (RulePublicationNotFound, RulePublicationConflict):
+            raise
+        except SQLAlchemyError:
+            raise RulePublicationAuthorityUnavailable(
+                "publication payload checksum could not be persisted"
+            ) from None
 
     async def create_rule_publication(self, publication: RulePublication) -> None:
         """Create a clean awaiting attempt tied to versions in the same binding."""
@@ -47,8 +108,12 @@ class SqlAlchemyRulePublicationStore(RulePublicationRecorder):
         try:
             async with self._engine.begin() as connection:
                 target = await connection.execute(
-                    select(RuleSetVersionRecord.binding_id, RuleSetVersionRecord.checksum)
-                    .where(RuleSetVersionRecord.version_id == publication.target_version_id)
+                    select(
+                        RuleSetVersionRecord.binding_id, RuleSetVersionRecord.checksum
+                    )
+                    .where(
+                        RuleSetVersionRecord.version_id == publication.target_version_id
+                    )
                     .with_for_update()
                 )
                 target_row = target.one_or_none()
@@ -64,15 +129,30 @@ class SqlAlchemyRulePublicationStore(RulePublicationRecorder):
                     base = await connection.execute(
                         select(RuleSetVersionRecord.binding_id)
                         .where(
-                            RuleSetVersionRecord.version_id == publication.base_version_id
+                            RuleSetVersionRecord.version_id
+                            == publication.base_version_id
                         )
                         .with_for_update()
                     )
                     base_row = base.one_or_none()
-                    if base_row is None or base_row.binding_id != publication.binding_id:
+                    if (
+                        base_row is None
+                        or base_row.binding_id != publication.binding_id
+                    ):
                         raise RulePublicationConflict(
                             "publication baseline version no longer matches"
                         )
+                try:
+                    publication = replace(
+                        publication,
+                        publication_sequence=await self._publication_sequences.next(
+                            connection, publication.binding_id
+                        ),
+                    )
+                except (RuntimeError, ValueError):
+                    raise RulePublicationAuthorityUnavailable(
+                        "publication sequence authority is unavailable"
+                    ) from None
                 await connection.execute(
                     insert(RulePublicationRecord).values(
                         **_publication_values(publication)
@@ -111,9 +191,7 @@ class SqlAlchemyRulePublicationStore(RulePublicationRecorder):
                 )
                 row = result.mappings().one_or_none()
                 if row is None:
-                    raise RulePublicationNotFound(
-                        "rule publication does not exist"
-                    )
+                    raise RulePublicationNotFound("rule publication does not exist")
                 current = publication_from_row(row)
                 updated = advance_publication_phase(
                     current,
@@ -154,6 +232,7 @@ def _publication_values(publication: RulePublication) -> dict[str, object]:
         "binding_id": publication.binding_id,
         "target_version_id": publication.target_version_id,
         "target_checksum": publication.target_checksum,
+        "publication_sequence": publication.publication_sequence,
         "base_version_id": publication.base_version_id,
         "created_at": publication.created_at,
         **_phase_values(PublicationPhaseName.VALIDATION, publication.validation),

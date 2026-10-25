@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from .registered_source_checker import PinnedSourceTarget
@@ -32,6 +33,34 @@ class NacosGrpcOutcomeUnknown(RuntimeError):
     """A request was sent but the server result could not be verified."""
 
 
+@dataclass(frozen=True, slots=True)
+class NacosGrpcTlsCredentials:
+    """Deployment-owned trust and optional mutual-TLS material for Nacos gRPC.
+
+    Certificate and private-key bytes are intentionally excluded from repr so
+    configuration diagnostics cannot disclose private material.
+    """
+
+    root_certificates: bytes | None = field(default=None, repr=False)
+    private_key: bytes | None = field(default=None, repr=False)
+    certificate_chain: bytes | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        values = (self.root_certificates, self.private_key, self.certificate_chain)
+        if any(value is not None and not isinstance(value, bytes) for value in values):
+            raise TypeError("Nacos gRPC TLS material must be bytes")
+        if any(value == b"" for value in values if value is not None):
+            raise ValueError("Nacos gRPC TLS material must be non-empty bytes")
+        if (self.private_key is None) != (self.certificate_chain is None):
+            raise ValueError(
+                "Nacos gRPC client key and certificate must be configured together"
+            )
+        if self.root_certificates is None and self.private_key is None:
+            raise ValueError(
+                "Nacos gRPC TLS credentials require trust or client identity material"
+            )
+
+
 class NacosGrpcRequestClient(Protocol):
     """Consumer-owned seam for one typed Nacos unary request."""
 
@@ -48,6 +77,13 @@ class NacosGrpcRequestClient(Protocol):
 
 class NacosGrpcTransport:
     """Send Nacos SDK payloads without importing its private client machinery."""
+
+    def __init__(self, tls_credentials: NacosGrpcTlsCredentials | None = None) -> None:
+        if tls_credentials is not None and not isinstance(
+            tls_credentials, NacosGrpcTlsCredentials
+        ):
+            raise TypeError("Nacos gRPC TLS credentials are invalid")
+        self._tls_credentials = tls_credentials
 
     async def request(
         self,
@@ -67,6 +103,8 @@ class NacosGrpcTransport:
 
         if len(target.addresses) == 0 or not 1 <= target.port <= 65535:
             raise NacosGrpcUnavailable
+        if not _is_tls_target(target) and self._tls_credentials is not None:
+            raise NacosGrpcUnavailable
         payload_type = _payload_message_class(
             descriptor_pb2, descriptor_pool, GetMessageClass
         )
@@ -81,9 +119,26 @@ class NacosGrpcTransport:
             ("grpc.default_authority", target.hostname),
         )
         if _is_tls_target(target):
+            tls_credentials = self._tls_credentials
             channel = grpc.aio.secure_channel(
                 address,
-                grpc.ssl_channel_credentials(),
+                grpc.ssl_channel_credentials(
+                    root_certificates=(
+                        tls_credentials.root_certificates
+                        if tls_credentials is not None
+                        else None
+                    ),
+                    private_key=(
+                        tls_credentials.private_key
+                        if tls_credentials is not None
+                        else None
+                    ),
+                    certificate_chain=(
+                        tls_credentials.certificate_chain
+                        if tls_credentials is not None
+                        else None
+                    ),
+                ),
                 options=channel_options,
             )
         else:
@@ -151,11 +206,15 @@ class NacosGrpcTransport:
             check = _payload(payload_type, "ServerCheckRequest", {}, {})
             check_response = await unary(check, timeout=_REQUEST_TIMEOUT_SECONDS)
             check_type, check_body = _decode_payload(check_response)
-            if check_type != "ServerCheckResponse" or check_body.get("resultCode") != 200:
+            if (
+                check_type != "ServerCheckResponse"
+                or check_body.get("resultCode") != 200
+            ):
                 raise NacosGrpcUnavailable
-            if not isinstance(check_body.get("connectionId"), str) or not check_body[
-                "connectionId"
-            ]:
+            if (
+                not isinstance(check_body.get("connectionId"), str)
+                or not check_body["connectionId"]
+            ):
                 raise NacosGrpcUnavailable
         except NacosGrpcUnavailable:
             await channel.close()
@@ -236,6 +295,7 @@ async def _wait_for_setup_ack(
     timeout_seconds: float,
 ) -> None:
     """Complete both halves of the negotiated setup ack before unary dispatch."""
+
     async def wait_for_ack_exchange() -> None:
         await acknowledged.wait()
         await response_sent.wait()
@@ -333,9 +393,7 @@ def _payload_message_class(descriptor_pb2, descriptor_pool, get_message_class):
         descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
         type_name=".google.protobuf.Any",
     )
-    descriptor = pool.AddSerializedFile(
-        file_descriptor.SerializeToString()
-    )
+    descriptor = pool.AddSerializedFile(file_descriptor.SerializeToString())
     return get_message_class(descriptor.message_types_by_name["Payload"])
 
 

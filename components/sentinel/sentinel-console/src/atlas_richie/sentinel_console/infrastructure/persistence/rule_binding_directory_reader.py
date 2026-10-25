@@ -3,20 +3,28 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from ...application.mutate_rule_set import RuleMutationBindingReader
 from ...application.rule_binding_ports import (
     RuleBindingAuthorityUnavailable,
     RuleBindingDirectoryReader,
+    RuleBindingScopeAuthorityUnavailable,
+    RuleBindingScopeReader,
 )
-from ...application.mutate_rule_set import RuleMutationBindingReader
 from ...domain.rule_bindings import (
+    MAX_RULE_BINDING_SCOPE_ITEMS,
+    MAX_RULE_BINDING_SCOPE_ROWS,
     RuleBinding,
     RuleBindingPage,
     RuleBindingQuery,
+    RuleBindingScopeApplication,
+    RuleBindingScopeCatalog,
+    RuleBindingScopeEnvironment,
     RuleKind,
 )
 from .models import (
@@ -28,7 +36,7 @@ from .rule_publication_target_mapping import target_from_body, target_location
 
 
 class SqlAlchemyRuleBindingDirectoryReader(
-    RuleBindingDirectoryReader, RuleMutationBindingReader
+    RuleBindingDirectoryReader, RuleBindingScopeReader, RuleMutationBindingReader
 ):
     """Resolve exact bindings from metadata, registered sources, and targets.
 
@@ -70,6 +78,45 @@ class SqlAlchemyRuleBindingDirectoryReader(
         bindings = await self._read_bindings(binding_id=binding_id)
         return bindings[0] if bindings else None
 
+    async def read_rule_binding_scopes(self) -> RuleBindingScopeCatalog:
+        """Project selector scopes only from complete persisted binding joins."""
+        try:
+            bindings = await self._read_bindings(limit=MAX_RULE_BINDING_SCOPE_ROWS + 1)
+            if len(bindings) > MAX_RULE_BINDING_SCOPE_ROWS:
+                raise RuleBindingScopeAuthorityUnavailable(
+                    "rule binding scope authority exceeds its configured bound"
+                )
+            environment_ids = tuple(sorted({item.environment_id for item in bindings}))
+            applications = tuple(
+                sorted({(item.environment_id, item.app_id) for item in bindings})
+            )
+            if (
+                len(environment_ids) > MAX_RULE_BINDING_SCOPE_ITEMS
+                or len(applications) > MAX_RULE_BINDING_SCOPE_ITEMS
+            ):
+                raise RuleBindingScopeAuthorityUnavailable(
+                    "rule binding scope catalog exceeds its configured bound"
+                )
+            return RuleBindingScopeCatalog(
+                as_of=datetime.now(UTC),
+                environments=tuple(
+                    RuleBindingScopeEnvironment(id=item, name=item)
+                    for item in environment_ids
+                ),
+                applications=tuple(
+                    RuleBindingScopeApplication(
+                        id=app_id,
+                        environment_id=environment_id,
+                        name=app_id,
+                    )
+                    for environment_id, app_id in applications
+                ),
+            )
+        except (RuleBindingAuthorityUnavailable, ValueError):
+            raise RuleBindingScopeAuthorityUnavailable(
+                "rule binding scope authority is unavailable"
+            ) from None
+
     async def _read_bindings(
         self,
         *,
@@ -77,6 +124,7 @@ class SqlAlchemyRuleBindingDirectoryReader(
         app_id: str | None = None,
         kind: RuleKind | None = None,
         binding_id: str | None = None,
+        limit: int | None = None,
     ) -> tuple[RuleBinding, ...]:
         metadata = RuleBindingRecord.__table__
         sources = RegisteredConfigurationSourceRecord.__table__
@@ -98,9 +146,7 @@ class SqlAlchemyRuleBindingDirectoryReader(
             .select_from(
                 metadata.outerjoin(
                     sources, metadata.c.source_id == sources.c.source_id
-                ).outerjoin(
-                    targets, metadata.c.binding_id == targets.c.binding_id
-                )
+                ).outerjoin(targets, metadata.c.binding_id == targets.c.binding_id)
             )
             .order_by(metadata.c.binding_id.asc())
         )
@@ -112,6 +158,10 @@ class SqlAlchemyRuleBindingDirectoryReader(
             statement = statement.where(metadata.c.kind == kind.value)
         if binding_id is not None:
             statement = statement.where(metadata.c.binding_id == binding_id)
+        if limit is not None:
+            if type(limit) is not int or limit < 1:
+                raise ValueError("rule binding authority limit is invalid")
+            statement = statement.limit(limit)
         try:
             async with self._engine.connect() as connection:
                 rows = (await connection.execute(statement)).mappings().all()

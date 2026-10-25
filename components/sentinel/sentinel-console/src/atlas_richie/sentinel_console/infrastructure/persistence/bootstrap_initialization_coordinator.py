@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from collections.abc import Callable
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -11,20 +12,25 @@ from ...application.bootstrap_initialization import (
     BootstrapInitializationForbidden,
     BootstrapInitializationInput,
     BootstrapInitializationOperationReader,
-    BootstrapInitializationReceipt,
     BootstrapInitializationReason,
+    BootstrapInitializationReceipt,
     BootstrapInitializationStatus,
     BootstrapInitializer,
 )
 from ...application.bootstrap_ports import (
     BootstrapInitializationLock,
-    BootstrapOperatorSessionVerifier,
     BootstrapInitializationReader,
+    BootstrapOperatorSessionVerifier,
     SetupWindowController,
     SetupWindowReader,
 )
 from ...application.errors import BootstrapAuthorityUnavailable
-from ...application.runtime_database_locator import RuntimeDatabaseLocatorStore
+from ...application.runtime_database_locator import (
+    RuntimeDatabaseLocator,
+    RuntimeDatabaseLocatorError,
+    RuntimeDatabaseLocatorStore,
+    RuntimeDatabaseTarget,
+)
 from ..bootstrap_database_engine import BootstrapDatabaseEngineFactory
 from ..security.secret_cipher import AesGcmSecretCipher
 from .bootstrap_initialization_reader import SqlAlchemyBootstrapInitializationReader
@@ -32,10 +38,12 @@ from .bootstrap_initialization_transaction import (
     SqlAlchemyBootstrapInitializationTransaction,
 )
 from .database_runtime import (
-    ConsoleDatabaseConfiguration,
     create_database_engine_from_locator,
 )
+from .migration_dialect_adapters import MigrationDialectAdapter
 from .migration_runner import upgrade_database
+
+RuntimeDatabaseEngineFactory = Callable[[RuntimeDatabaseLocator], AsyncEngine]
 
 
 class SqlAlchemyBootstrapInitializationCoordinator(
@@ -64,6 +72,8 @@ class SqlAlchemyBootstrapInitializationCoordinator(
         initialization_lock: BootstrapInitializationLock,
         source_secret_cipher: AesGcmSecretCipher,
         idempotency_key: bytes,
+        runtime_database_engine_factory: RuntimeDatabaseEngineFactory | None = None,
+        migration_dialect_adapters: tuple[MigrationDialectAdapter, ...] = (),
     ) -> None:
         if not isinstance(source_secret_cipher, AesGcmSecretCipher):
             raise TypeError("registered-source secret cipher is required")
@@ -77,6 +87,8 @@ class SqlAlchemyBootstrapInitializationCoordinator(
         self._initialization_lock = initialization_lock
         self._source_secret_cipher = source_secret_cipher
         self._idempotency_key = bytes(idempotency_key)
+        self._runtime_database_engine_factory = runtime_database_engine_factory
+        self._migration_dialect_adapters = migration_dialect_adapters
 
     async def initialize(
         self,
@@ -87,9 +99,7 @@ class SqlAlchemyBootstrapInitializationCoordinator(
     ) -> BootstrapInitializationReceipt:
         """Run one serialized initialization attempt and release every engine."""
         async with self._initialization_lock.acquire():
-            if not await self._operator_verifier.is_current_operator(
-                operator_session
-            ):
+            if not await self._operator_verifier.is_current_operator(operator_session):
                 raise BootstrapInitializationForbidden
             if not await self._setup_window_reader.is_setup_window_open():
                 raise BootstrapInitializationForbidden
@@ -114,10 +124,10 @@ class SqlAlchemyBootstrapInitializationCoordinator(
     async def is_initialized(self) -> bool:
         """Read the target guard and finish a committed-but-not-closed setup."""
         async with self._initialization_lock.acquire():
-            locator = await self._runtime_database_locator_store.read()
+            locator = await self._read_runtime_database_locator()
             if locator is None:
                 return False
-            engine = create_database_engine_from_locator(locator)
+            engine = self._create_runtime_database_engine(locator)
             try:
                 initialized = await SqlAlchemyBootstrapInitializationReader(
                     engine
@@ -133,10 +143,10 @@ class SqlAlchemyBootstrapInitializationCoordinator(
     ) -> BootstrapInitializationReceipt | None:
         """Recover the original operator's receipt from the pinned target DB."""
         async with self._initialization_lock.acquire():
-            locator = await self._runtime_database_locator_store.read()
+            locator = await self._read_runtime_database_locator()
             if locator is None:
                 return None
-            engine = create_database_engine_from_locator(locator)
+            engine = self._create_runtime_database_engine(locator)
             try:
                 return await self._transaction(engine).read(
                     operator_session, request_key
@@ -147,26 +157,27 @@ class SqlAlchemyBootstrapInitializationCoordinator(
     async def _open_selected_database(
         self, input: BootstrapInitializationInput
     ) -> AsyncEngine:
-        locator = await self._runtime_database_locator_store.read()
-        expected_url = ConsoleDatabaseConfiguration.from_bootstrap_candidate(
+        locator = await self._read_runtime_database_locator()
+        database_configuration = self._database_engine_factory.configuration_for(
             input.database
-        ).secret_url_for_storage()
+        )
+        expected_url = database_configuration.secret_url_for_storage()
 
         if (
             locator is not None
-            and locator.target is not None
+            and (locator.target is not None or not database_configuration.requires_remote_target)
             and _same_secret(locator.database_url, expected_url)
         ):
-            engine = create_database_engine_from_locator(locator)
+            engine = self._create_runtime_database_engine(locator)
             try:
-                await upgrade_database(engine)
+                await self._upgrade_database(engine)
             except BaseException:
                 await engine.dispose()
                 raise
             return engine
 
         if locator is not None:
-            previous_engine = create_database_engine_from_locator(locator)
+            previous_engine = self._create_runtime_database_engine(locator)
             try:
                 initialized = await SqlAlchemyBootstrapInitializationReader(
                     previous_engine
@@ -179,8 +190,8 @@ class SqlAlchemyBootstrapInitializationCoordinator(
 
         prepared = await self._database_engine_factory.create(input.database)
         try:
-            await upgrade_database(prepared.engine)
-            await self._runtime_database_locator_store.write(
+            await self._upgrade_database(prepared.engine)
+            await self._write_runtime_database_locator(
                 prepared.locator_database_url,
                 expected_revision=(locator.revision if locator is not None else None),
                 target=prepared.locator_target,
@@ -189,6 +200,48 @@ class SqlAlchemyBootstrapInitializationCoordinator(
         except BaseException:
             await prepared.engine.dispose()
             raise
+
+    async def _read_runtime_database_locator(
+        self,
+    ) -> RuntimeDatabaseLocator | None:
+        try:
+            return await self._runtime_database_locator_store.read()
+        except RuntimeDatabaseLocatorError:
+            raise BootstrapAuthorityUnavailable(
+                "runtime database locator is unavailable"
+            ) from None
+
+    def _create_runtime_database_engine(
+        self, locator: RuntimeDatabaseLocator
+    ) -> AsyncEngine:
+        factory = self._runtime_database_engine_factory
+        if factory is None:
+            return create_database_engine_from_locator(locator)
+        return factory(locator)
+
+    async def _upgrade_database(self, engine: AsyncEngine) -> None:
+        await upgrade_database(
+            engine,
+            additional_dialect_adapters=self._migration_dialect_adapters,
+        )
+
+    async def _write_runtime_database_locator(
+        self,
+        database_url: str,
+        *,
+        expected_revision: str | None,
+        target: RuntimeDatabaseTarget | None,
+    ) -> RuntimeDatabaseLocator:
+        try:
+            return await self._runtime_database_locator_store.write(
+                database_url,
+                expected_revision=expected_revision,
+                target=target,
+            )
+        except RuntimeDatabaseLocatorError:
+            raise BootstrapAuthorityUnavailable(
+                "runtime database locator is unavailable"
+            ) from None
 
     def _transaction(
         self, engine: AsyncEngine

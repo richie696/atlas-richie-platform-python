@@ -16,6 +16,7 @@ from ..domain.rule_publication_targets import (
     RulePublicationTarget,
 )
 from .nacos_rule_source_reader import (
+    NacosRuleSourceAbsent,
     NacosRuleSourceReadRejected,
     NacosRuleSourceReadUnavailable,
     NacosRuleSourceReader,
@@ -52,6 +53,8 @@ class NacosRulePublicationProvider:
         nacos_target = _nacos_target(target)
         try:
             snapshot = await self._reader.read(connection, nacos_target)
+        except NacosRuleSourceAbsent:
+            return RuleConfigurationSnapshot(revision=None, value=None)
         except NacosRuleSourceReadRejected:
             raise RulePublicationProviderRejected from None
         except NacosRuleSourceReadUnavailable:
@@ -70,9 +73,6 @@ class NacosRulePublicationProvider:
         value: bytes,
     ) -> str:
         nacos_target = _nacos_target(target)
-        if expected_revision is None:
-            # Nacos 3.2.3 treats blank casMd5 as a non-CAS publish, not create-only CAS.
-            raise RulePublicationProviderRejected
         command = NacosRuleSourceWrite(
             connection=connection,
             target=nacos_target,

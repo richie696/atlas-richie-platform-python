@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import unittest
 from datetime import UTC, datetime
 
 from httpx import ASGITransport, AsyncClient
+from openapi_contract_support import assert_openapi_response
+from session_test_doubles import UnusedSessionRevoker
 
+from atlas_richie.sentinel_console.api.rule_candidate_parsing import (
+    parse_rule_candidate,
+)
 from atlas_richie.sentinel_console.app import build_app
 from atlas_richie.sentinel_console.application.errors import SessionAuthorityUnavailable
 from atlas_richie.sentinel_console.application.rule_validation_ports import (
     RuleValidationAuthorityUnavailable,
-)
-from atlas_richie.sentinel_console.api.rule_candidate_parsing import (
-    parse_rule_candidate,
 )
 from atlas_richie.sentinel_console.domain.rule_bindings import RuleBinding, RuleKind
 from atlas_richie.sentinel_console.domain.rule_candidates import candidate_checksum
@@ -32,7 +33,6 @@ from atlas_richie.sentinel_console.domain.rule_validation import (
     RuleValidationIssueCode,
 )
 from atlas_richie.sentinel_console.domain.session import ActiveAccountSession
-from session_test_doubles import UnusedSessionRevoker
 
 _REQUEST_ID = "rule-candidate-validation-1"
 _SESSION = "synthetic-session-token-for-candidate-validation-0001"
@@ -128,13 +128,23 @@ class _ReceiptWriter:
 
 def _snapshot(*, stale: bool = False) -> RuleSetSnapshot:
     binding = RuleBinding(
-        "binding-1", "prod", "checkout", RuleKind.FLOW,
-        "sentinel-rule-profile-v1", "nacos-main", "Primary Nacos",
+        "binding-1",
+        "prod",
+        "checkout",
+        RuleKind.FLOW,
+        "sentinel-rule-profile-v1",
+        "nacos-main",
+        "Primary Nacos",
         "sentinel/prod/rules",
     )
     rule = FlowRuleValue(
-        "POST /api/orders", "default", FlowGrade.QPS, 50,
-        FlowStrategy.DIRECT, FlowControlBehavior.REJECT, False,
+        "POST /api/orders",
+        "default",
+        FlowGrade.QPS,
+        50,
+        FlowStrategy.DIRECT,
+        FlowControlBehavior.REJECT,
+        False,
     )
     return RuleSetSnapshot(
         binding,
@@ -270,6 +280,7 @@ class RuleCandidateValidationApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self._post("admin", _candidate(), validator, writer=writer)
 
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("validateRuleCandidate", response)
         body = response.json()
         self.assertEqual(body["bindingId"], "binding-1")
         self.assertEqual(body["profile"], "sentinel-rule-profile-v1")
@@ -295,7 +306,29 @@ class RuleCandidateValidationApiTests(unittest.IsolatedAsyncioTestCase):
                 validator = _ProfileValidator()
                 response = await self._post("admin", body, validator)
                 self.assertEqual(response.status_code, 422)
+                assert_openapi_response("validateRuleCandidate", response)
                 self.assertEqual(response.json()["error"]["code"], "validation_failed")
+                self.assertEqual(validator.calls, [])
+
+    async def test_boolean_cannot_impersonate_numeric_or_enum_candidate_fields(self):
+        malformed_fields = ("grade", "count", "warmUpPeriodSec")
+        for field in malformed_fields:
+            with self.subTest(field=field):
+                body = _candidate()
+                body["rules"][0]["rule"]["value"][field] = True
+                validator = _ProfileValidator()
+                snapshot_reader = _SnapshotReader()
+                response = await self._post(
+                    "admin",
+                    body,
+                    validator,
+                    snapshot_reader=snapshot_reader,
+                )
+
+                self.assertEqual(response.status_code, 400)
+                assert_openapi_response("validateRuleCandidate", response)
+                self.assertEqual(response.json()["error"]["code"], "invalid_request")
+                self.assertEqual(snapshot_reader.calls, [])
                 self.assertEqual(validator.calls, [])
 
     async def test_validation_issue_is_a_safe_non_publishable_receipt(self):
@@ -304,6 +337,7 @@ class RuleCandidateValidationApiTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        assert_openapi_response("validateRuleCandidate", response)
         body = response.json()
         self.assertFalse(body["isPublishable"])
         self.assertEqual(
@@ -330,6 +364,7 @@ class RuleCandidateValidationApiTests(unittest.IsolatedAsyncioTestCase):
                     role, _candidate(), validator, headers=headers
                 )
                 self.assertEqual(response.status_code, status)
+                assert_openapi_response("validateRuleCandidate", response)
         self.assertEqual(validator.calls, [])
 
     async def test_unconfigured_and_unavailable_authority_fail_closed(self):
@@ -347,6 +382,9 @@ class RuleCandidateValidationApiTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(missing.status_code, 503)
+        assert_openapi_response("validateRuleCandidate", missing)
+        assert_openapi_response("validateRuleCandidate", unavailable)
+        assert_openapi_response("validateRuleCandidate", writer_unavailable)
         self.assertEqual(unavailable.status_code, 503)
         self.assertEqual(writer_unavailable.status_code, 503)
         self.assertEqual(missing.json()["error"]["code"], "service_unavailable")
@@ -359,6 +397,7 @@ class RuleCandidateValidationApiTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(response.status_code, 409)
+        assert_openapi_response("validateRuleCandidate", response)
         self.assertEqual(response.json()["error"]["code"], "conflict")
 
     async def test_stale_snapshot_conflict_precedes_profile_validation(self):
@@ -370,6 +409,7 @@ class RuleCandidateValidationApiTests(unittest.IsolatedAsyncioTestCase):
             snapshot_reader=_SnapshotReader(stale=True),
         )
         self.assertEqual(response.status_code, 409)
+        assert_openapi_response("validateRuleCandidate", response)
         self.assertEqual(validator.calls, [])
 
     async def test_session_authority_error_fails_before_validation(self):
@@ -382,6 +422,7 @@ class RuleCandidateValidationApiTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(response.status_code, 503)
+        assert_openapi_response("validateRuleCandidate", response)
         self.assertEqual(validator.calls, [])
 
 
