@@ -28,7 +28,9 @@ Agent Reporting Envelope 与 Managed Rule Publication Envelope 是两种不同�
 0.19.0。完整恢复需要当时的 Git 对象、CI artifact 或其他有可核验来源的原始文件。
 不能复制新版、删除路径或重写版本号后冒充历史快照。该缺口仍未关闭。
 
-`test_historical_contract_compatibility.py` 检查所有实际存在的归档。旧字段、响应状态、
-请求变体、参数、枚举项、语义规则和约束必须保留；缺失时立即失败。已批准的例外由
-operation ID + 精确 schema 路径 + 精确值白名单限定：§23 的新口令边界和账号生命周期、
-已存在的审计动作扩展，以及 §22 的 `source_in_use`。不能把所有新增内容一律投影掉。
+`test_historical_contract_compatibility.py` 按本目录声明的归档清单逐个检查，而不是扫描
+"当前碰巧存在"的文件：清单里的归档在磁盘缺失、或磁盘多出未声明的快照，门禁都立即失败，
+不会因为可检查的文件变少而静默降低兼容保证。旧字段、响应状态、请求变体、参数、枚举项、
+语义规则和约束必须保留；缺失时立即失败。已批准的例外由 operation ID + 精确 schema 路径 +
+精确值白名单限定：§23 的新口令边界和账号生命周期、已存在的审计动作扩展，以及 §22 的
+`source_in_use`。不能把所有新增内容一律投影掉。
