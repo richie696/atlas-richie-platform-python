@@ -20,5 +20,6 @@ jobs:
       - run: uv sync --all-packages --all-groups
       - run: uv lock --check
       - run: uv build --all-packages
+      - run: uv run python tools/release/prepare_wheelhouse.py
       - run: uv run python tools/release/verify_isolated_wheels.py
       - uses: pypa/gh-action-pypi-publish@release/v1

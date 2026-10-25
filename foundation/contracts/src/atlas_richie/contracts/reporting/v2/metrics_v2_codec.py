@@ -277,7 +277,12 @@ def _require_object(
     keys = set(object_value)
     optional_keys = optional or set()
     if keys - allowed or (allowed - optional_keys) - keys:
-        raise MetricsV2ProtocolError(f"invalid_{context}_fields")
+        # Nested record field failures use their already-frozen generic code.
+        # Only the snapshot has a separate *_fields code in MetricsV2ErrorCode.
+        code = (
+            "invalid_snapshot_fields" if context == "snapshot" else f"invalid_{context}"
+        )
+        raise MetricsV2ProtocolError(code)
     return object_value
 
 

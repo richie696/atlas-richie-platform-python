@@ -11,31 +11,9 @@ from atlas_richie.contracts.reporting.v2.metrics_v2_codec import (
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 _SCHEMA = Path(__file__).parents[3] / "schemas" / "reporting" / "metrics-v2.schema.json"
-_INVALID_FIXTURE_EXPECTATIONS = {
-    "invalid_duplicate_key.json": "duplicate_json_key",
-    "invalid_unknown_field.json": "invalid_snapshot_fields",
-    "invalid_wrong_type.json": "invalid_startup_epoch",
-    "invalid_wrong_protocol_version.json": "unsupported_protocol",
-    "invalid_http_histogram_profile.json": "invalid_histogram_boundaries",
-    "invalid_too_many_records.json": "too_many_records",
-    "invalid_payload_too_large.json": "payload_too_large",
-    "invalid_unknown_enum.json": "invalid_counter_name",
-    "invalid_explicit_null_resource.json": "invalid_resource",
-    "invalid_histogram_counts.json": "invalid_histogram",
-    "invalid_histogram_total_noncanonical.json": "invalid_histogram",
-    "invalid_surrogate_resource.json": "invalid_resource",
-    "invalid_gauge_float_overflow.json": "invalid_gauge_value",
-    "invalid_gauge_unavailable_has_value.json": "invalid_gauge",
-    "invalid_empty_histogram_statistics.json": "invalid_histogram",
-    "invalid_impossible_timestamp.json": "invalid_captured_at",
-    "invalid_capture_elapsed_noncanonical.json": "invalid_capture_elapsed_ns",
-    "invalid_safe_integer_overflow.json": "invalid_startup_epoch",
-    "invalid_duplicate_counter_identity.json": "duplicate_counter",
-    "invalid_duplicate_histogram_identity.json": "duplicate_histogram",
-    "invalid_duplicate_gauge_identity.json": "duplicate_gauge",
-    "invalid_unsorted_histogram_boundaries.json": "invalid_histogram",
-    "invalid_trailing_json_value.json": "invalid_json",
-}
+_INVALID_FIXTURE_EXPECTATIONS = json.loads(
+    (Path(__file__).parent / "fixture-rejections.json").read_text()
+)
 
 
 @pytest.mark.parametrize(
@@ -57,8 +35,9 @@ def test_valid_frozen_fixture_decodes(name: str) -> None:
     ("name", "error_code"), sorted(_INVALID_FIXTURE_EXPECTATIONS.items())
 )
 def test_invalid_frozen_fixture_is_rejected(name: str, error_code: str) -> None:
-    with pytest.raises(MetricsV2ProtocolError, match=error_code):
+    with pytest.raises(MetricsV2ProtocolError) as caught:
         decode_metrics_snapshot((_FIXTURES / name).read_bytes())
+    assert caught.value.code.value == error_code
 
 
 def test_every_invalid_json_fixture_has_an_explicit_python_assertion() -> None:
@@ -93,3 +72,23 @@ def test_machine_schema_freezes_protocol_epoch_and_http_histogram_profile() -> N
     ]
     assert histogram["bucket_counts"]["minItems"] == 13
     assert histogram["bucket_counts"]["maxItems"] == 13
+
+
+@pytest.mark.parametrize(
+    ("field", "code"),
+    [
+        ("counters", "invalid_counter"),
+        ("histograms", "invalid_histogram"),
+        ("gauges", "invalid_gauge"),
+    ],
+)
+@pytest.mark.parametrize("mutation", ["unknown", "missing"])
+def test_nested_field_failures_use_registered_codes(field, code, mutation):
+    value = json.loads((_FIXTURES / "valid_full.json").read_text())
+    if mutation == "unknown":
+        value[field][0]["unapproved"] = True
+    else:
+        del value[field][0]["name"]
+    with pytest.raises(MetricsV2ProtocolError) as caught:
+        decode_metrics_snapshot(json.dumps(value))
+    assert caught.value.code.value == code

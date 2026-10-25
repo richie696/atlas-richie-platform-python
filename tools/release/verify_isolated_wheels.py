@@ -7,98 +7,123 @@ this check cannot accidentally use the editable workspace environment or an inde
 
 from __future__ import annotations
 
-import re
+import argparse
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 
-def _read_platform_version() -> str:
-    """Read the canonical version from the repo-root ``versions.toml``.
+def discover_packages(repository: Path) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Read each workspace distribution's exact version and declared import roots.
 
-    The release script must agree with the rest of the toolchain about
-    which wheel version is in flight, otherwise ``pip install`` would
-    silently resolve the latest published (older) release and the check
-    would pass against the wrong artifact.  Falls back to ``"0.0.0"`` if
-    the file is unreadable so the test still reports a clear failure.
+    Do not scan dist/: it can contain obsolete packages and versions from older
+    releases. A missing manifest or module declaration is a failed release gate.
     """
-
-    versions_path = Path(__file__).resolve().parents[2] / "versions.toml"
-    try:
-        text = versions_path.read_text(encoding="utf-8")
-    except OSError:
-        return "0.0.0"
-    match = re.search(r'^\s*platform-version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-    return match.group(1) if match else "0.0.0"
-
-
-_VERSION = _read_platform_version()
-
-PACKAGES = (
-    (f"atlas-richie-contracts=={_VERSION}", "atlas_richie.contracts"),
-    (f"atlas-richie-testing=={_VERSION}", "atlas_richie.testing"),
-    (f"atlas-richie-http=={_VERSION}", "atlas_richie.http"),
-    (f"atlas-richie-mcp=={_VERSION}", "atlas_richie.mcp"),
-    (f"atlas-richie-cache-core=={_VERSION}", "atlas_richie.cache_core"),
-    (f"atlas-richie-cache-redis=={_VERSION}", "atlas_richie.cache_redis"),
-    (f"atlas-richie-secret-core=={_VERSION}", "atlas_richie.secret"),
-    (f"atlas-richie-secret-redis=={_VERSION}", "atlas_richie.secret_redis"),
-    (f"atlas-richie-secret-vault=={_VERSION}", "atlas_richie.secret_vault"),
-    (f"atlas-richie-secret-openbao=={_VERSION}", "atlas_richie.secret_openbao"),
-    (f"atlas-richie-secret-aws-kms=={_VERSION}", "atlas_richie.secret_aws_kms"),
-    (f"atlas-richie-secret-azure-keyvault=={_VERSION}", "atlas_richie.secret_azure_keyvault"),
-    (f"atlas-richie-secret-gcp-kms=={_VERSION}", "atlas_richie.secret_gcp_kms"),
-    (f"atlas-richie-secret-pkcs11=={_VERSION}", "atlas_richie.secret_pkcs11"),
-    (f"atlas-richie-secret-rotation-daemon=={_VERSION}", "atlas_richie.secret_rotation_daemon"),
-    (f"atlas-richie-secret-aliyun-kms=={_VERSION}", "atlas_richie.secret_aliyun_kms"),
-    (f"atlas-richie-secret-kmip=={_VERSION}", "atlas_richie.secret_kmip"),
-    (f"atlas-richie-secret-barbican=={_VERSION}", "atlas_richie.secret_barbican"),
-    (f"atlas-richie-secret-tencent-ssm-kms=={_VERSION}", "atlas_richie.secret_tencent_ssm_kms"),
-    (f"atlas-richie-secret-huawei-csms-kms=={_VERSION}", "atlas_richie.secret_huawei_csms_kms"),
-    (f"atlas-richie-secret-volcengine-kms=={_VERSION}", "atlas_richie.secret_volcengine_kms"),
-    (f"atlas-richie-secret-oci-vault-kms=={_VERSION}", "atlas_richie.secret_oci_vault_kms"),
-    (f"atlas-richie-secret-ibm-key-protect=={_VERSION}", "atlas_richie.secret_ibm_key_protect"),
-    (f"atlas-richie-secret-baidu-kms=={_VERSION}", "atlas_richie.secret_baidu_kms"),
-    (f"atlas-richie-sentinel-primitives=={_VERSION}", "atlas_richie.sentinel_primitives"),
-    (f"atlas-richie-sentinel-core=={_VERSION}", "atlas_richie.sentinel_core"),
-    (f"atlas-richie-sentinel-rules=={_VERSION}", "atlas_richie.sentinel_rules"),
-    (f"atlas-richie-sentinel-source-file=={_VERSION}", "atlas_richie.sentinel_source_file"),
-    (f"atlas-richie-sentinel-adapter-asgi=={_VERSION}", "atlas_richie.sentinel_adapter_asgi"),
-    (f"atlas-richie-sentinel-dashboard=={_VERSION}", "atlas_richie.sentinel_dashboard"),
-    (f"atlas-richie-oauth=={_VERSION}", "atlas_richie.oauth"),
-    (f"atlas-richie-platform=={_VERSION}", "atlas_richie.platform"),
-)
+    manifest = tomllib.loads((repository / "pyproject.toml").read_text())
+    packages = []
+    for member in manifest["tool"]["uv"]["workspace"]["members"]:
+        metadata = tomllib.loads((repository / member / "pyproject.toml").read_text())
+        project = metadata["project"]
+        modules = metadata["tool"]["uv"]["build-backend"]["module-name"]
+        if isinstance(modules, str):
+            modules = [modules]
+        if not modules or not all(isinstance(module, str) for module in modules):
+            raise ValueError(f"Invalid import roots for {member}")
+        packages.append((f"{project['name']}=={project['version']}", tuple(modules)))
+    if not packages:
+        raise ValueError("Workspace contains no distributions to verify")
+    return tuple(packages)
 
 
-def run(*args: str) -> None:
-    subprocess.run(args, check=True)
+def run(*args: str, cwd: Path) -> None:
+    subprocess.run(args, check=True, cwd=cwd)
 
 
 def main() -> int:
     repository = Path(__file__).resolve().parents[2]
-    wheelhouse = repository / "dist"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--wheel-dir", type=Path, default=repository / "dist")
+    parser.add_argument(
+        "--package",
+        action="append",
+        help="Recheck a changed workspace distribution by name; repeatable",
+    )
+    arguments = parser.parse_args()
+    wheelhouse = arguments.wheel_dir.resolve()
     dependency_wheelhouse = wheelhouse / "wheelhouse"
-    for package, module in PACKAGES:
-        with tempfile.TemporaryDirectory(prefix="atlas-richie-wheel-") as temporary:
-            environment = Path(temporary) / "venv"
-            run(sys.executable, "-m", "venv", str(environment))
-            python = environment / "bin" / "python"
-            run(
-                str(python),
-                "-m",
-                "pip",
-                "install",
-                "--no-cache-dir",
-                "--no-index",
-                "--find-links",
-                str(wheelhouse),
-                "--find-links",
-                str(dependency_wheelhouse),
-                package,
+    packages = discover_packages(repository)
+    selected = packages
+    if arguments.package:
+        names = {package.split("==")[0] for package, _ in packages}
+        unknown = set(arguments.package) - names
+        if unknown:
+            parser.error(
+                f"Unknown workspace distributions: {', '.join(sorted(unknown))}"
             )
-            run(str(python), "-m", "pip", "check")
-            run(str(python), "-c", f"import {module}; print({module}.__name__)")
+        selected = tuple(
+            item for item in packages if item[0].split("==")[0] in arguments.package
+        )
+    with tempfile.TemporaryDirectory(prefix="atlas-richie-wheel-") as temporary:
+        temporary_path = Path(temporary)
+        constraints = temporary_path / "workspace-constraints.txt"
+        constraints.write_text("".join(f"{package}\n" for package, _ in packages))
+        for index, (package, modules) in enumerate(selected, start=1):
+            print(f"[{index}/{len(selected)}] Isolated wheel: {package}", flush=True)
+            with tempfile.TemporaryDirectory(dir=temporary, prefix="package-") as check:
+                working_directory = Path(check)
+                environment = working_directory / "venv"
+                run(
+                    sys.executable,
+                    "-m",
+                    "venv",
+                    str(environment),
+                    cwd=working_directory,
+                )
+                python = environment / "bin" / "python"
+                run(
+                    str(python),
+                    "-I",
+                    "-m",
+                    "pip",
+                    "--isolated",
+                    "install",
+                    "--no-cache-dir",
+                    "--no-index",
+                    "--no-compile",
+                    "--find-links",
+                    str(wheelhouse),
+                    "--find-links",
+                    str(dependency_wheelhouse),
+                    "--constraint",
+                    str(constraints),
+                    package,
+                    cwd=working_directory,
+                )
+                run(
+                    str(python),
+                    "-I",
+                    "-m",
+                    "pip",
+                    "--isolated",
+                    "check",
+                    cwd=working_directory,
+                )
+                name, version = package.split("==")
+                run(
+                    str(python),
+                    "-I",
+                    "-c",
+                    "import importlib, importlib.metadata, pathlib, sys; "
+                    f"assert importlib.metadata.version({name!r}) == {version!r}; "
+                    f"modules = [importlib.import_module(name) for name in {modules!r}]; "
+                    "assert all(module.__file__ and pathlib.Path(module.__file__).resolve()"
+                    ".is_relative_to(pathlib.Path(sys.prefix).resolve()) for module in modules); "
+                    "print(', '.join(module.__name__ for module in modules))",
+                    cwd=working_directory,
+                )
+    print(f"Isolated wheel verification passed: {len(selected)} distributions")
     return 0
 
 

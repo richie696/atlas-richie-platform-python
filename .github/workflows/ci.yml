@@ -25,4 +25,5 @@ jobs:
       - run: uv run python -m unittest discover -s components/mcp/tests -v
       - run: uv run python -m unittest discover -s adapters -p 'test_*.py' -v
       - run: uv build --all-packages
+      - run: uv run python tools/release/prepare_wheelhouse.py
       - run: uv run python tools/release/verify_isolated_wheels.py

@@ -1,20 +1,30 @@
-"""Materialize locked third-party runtime wheels for offline installation checks."""
+"""Materialize hash-verified runtime wheels for offline installation checks.
+
+Some locked dependencies publish only source distributions. pip verifies their
+locked source hashes and builds wheels in isolation during this online preparation
+step; the subsequent installation check remains strictly offline. Build-system
+dependencies follow each upstream sdist's build requirements, not the runtime lock.
+"""
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 
-def run(*args: str) -> None:
-    subprocess.run(args, check=True)
+def run(*args: str, cwd: Path) -> None:
+    subprocess.run(args, check=True, cwd=cwd)
 
 
 def main() -> int:
     repository = Path(__file__).resolve().parents[2]
-    wheelhouse = repository / "dist" / "wheelhouse"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--wheel-dir", type=Path, default=repository / "dist")
+    arguments = parser.parse_args()
+    wheelhouse = arguments.wheel_dir.resolve() / "wheelhouse"
     wheelhouse.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="atlas-richie-lock-") as temporary:
         requirements = Path(temporary) / "runtime-requirements.txt"
@@ -29,19 +39,27 @@ def main() -> int:
             "--output-file",
             str(requirements),
             "--locked",
+            cwd=repository,
         )
+        # uv workspace environments deliberately need not contain pip. Keep the
+        # downloader in a disposable stdlib venv, outside the editable workspace.
+        downloader = Path(temporary) / "downloader"
+        run(sys.executable, "-m", "venv", str(downloader), cwd=repository)
         run(
-            sys.executable,
+            str(downloader / "bin" / "python"),
+            "-I",
             "-m",
             "pip",
-            "download",
+            "--isolated",
+            "wheel",
             "--no-cache-dir",
             "--require-hashes",
-            "--only-binary=:all:",
-            "--dest",
+            "--no-deps",
+            "--wheel-dir",
             str(wheelhouse),
             "--requirement",
             str(requirements),
+            cwd=repository,
         )
     return 0
 

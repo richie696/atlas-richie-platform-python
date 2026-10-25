@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"math/big"
@@ -38,44 +37,33 @@ func ValidateSnapshot(payload []byte) error {
 		return errors.New("payload_too_large")
 	}
 	if !utf8.Valid(payload) {
-		return errors.New("invalid_utf8")
-	}
-	if hasUnpairedSurrogateEscape(payload) {
-		return errors.New("invalid_unicode_scalar")
+		return errors.New("invalid_json")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.UseNumber()
-	value, err := decodeUniqueValue(decoder)
+	value, err := decodeUniqueValue(decoder, payload)
 	if err != nil {
-		return err
+		if err.Error() == "duplicate_json_key" {
+			return err
+		}
+		return errors.New("invalid_json")
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return errors.New("invalid_json_trailing_data")
+		return errors.New("invalid_json")
 	}
 	root, ok := value.(map[string]any)
 	if !ok {
 		return errors.New("invalid_snapshot_object")
 	}
-	if err := exactFields(root, []string{"protocol_version", "reporter_id", "startup_epoch", "sequence", "captured_at", "capture_elapsed_ns", "counters", "histograms", "gauges"}); err != nil {
-		return err
-	}
 	version, ok := root["protocol_version"].(string)
-	if !ok || version != protocolVersion {
+	if !ok {
+		return errors.New("invalid_protocol_version")
+	}
+	if version != protocolVersion {
 		return errors.New("unsupported_protocol")
 	}
-	epoch, epochOK := root["startup_epoch"].(string)
-	if !identifier(root["reporter_id"]) || !epochOK || !uuidPattern.MatchString(epoch) || !positiveInteger(root["sequence"]) {
-		return errors.New("invalid_snapshot_identity")
-	}
-	timestamp, ok := root["captured_at"].(string)
-	if !ok || !timestampPattern.MatchString(timestamp) {
-		return errors.New("invalid_captured_at")
-	}
-	if _, err := time.Parse("2006-01-02T15:04:05.000000Z", timestamp); err != nil {
-		return errors.New("invalid_captured_at")
-	}
-	if _, ok := decimalInteger(root["capture_elapsed_ns"]); !ok {
-		return errors.New("invalid_capture_elapsed_ns")
+	if exactFields(root, []string{"protocol_version", "reporter_id", "startup_epoch", "sequence", "captured_at", "capture_elapsed_ns", "counters", "histograms", "gauges"}) != nil {
+		return errors.New("invalid_snapshot_fields")
 	}
 
 	counters, err := array(root["counters"])
@@ -90,18 +78,21 @@ func ValidateSnapshot(payload []byte) error {
 	if err != nil {
 		return err
 	}
-	if len(counters)+len(histograms)+len(gauges) > maxRecords {
-		return errors.New("too_many_records")
-	}
 	seen := map[string]struct{}{}
 	for _, item := range counters {
 		counter, ok := item.(map[string]any)
-		if !ok || exactFields(counter, []string{"name", "value"}, []string{"resource"}) != nil {
+		if !ok {
+			return errors.New("invalid_counter_object")
+		}
+		if exactFields(counter, []string{"name", "value"}, []string{"resource"}) != nil {
 			return errors.New("invalid_counter")
 		}
 		name, nameOK := counter["name"].(string)
-		if !nameOK || !oneOf(name, "http_requests_completed_total", "sentinel_entries_admitted_total", "sentinel_entries_blocked_total", "business_transactions_completed_total") || !safeInteger(counter["value"]) {
-			return errors.New("invalid_counter")
+		if !nameOK || !oneOf(name, "http_requests_completed_total", "sentinel_entries_admitted_total", "sentinel_entries_blocked_total", "business_transactions_completed_total") {
+			return errors.New("invalid_counter_name")
+		}
+		if !safeInteger(counter["value"]) {
+			return errors.New("invalid_counter_value")
 		}
 		resource := ""
 		if raw, exists := counter["resource"]; exists {
@@ -119,19 +110,58 @@ func ValidateSnapshot(payload []byte) error {
 	seen = map[string]struct{}{}
 	for _, item := range histograms {
 		histogram, ok := item.(map[string]any)
-		if !ok || exactFields(histogram, []string{"name", "boundaries_ns", "bucket_counts", "sample_count", "total_ns", "min_ns", "max_ns"}, []string{"resource"}) != nil {
+		if !ok {
+			return errors.New("invalid_histogram_object")
+		}
+		if exactFields(histogram, []string{"name", "boundaries_ns", "bucket_counts", "sample_count", "total_ns", "min_ns", "max_ns"}, []string{"resource"}) != nil {
 			return errors.New("invalid_histogram")
+		}
+		rawBoundaries, err := array(histogram["boundaries_ns"])
+		if err != nil {
+			return err
+		}
+		if len(rawBoundaries) > 64 {
+			return errors.New("too_many_histogram_boundaries")
+		}
+		boundaries, boundariesOK := intArray(rawBoundaries, true)
+		if !boundariesOK {
+			return errors.New("invalid_histogram_boundary")
+		}
+		if !equalInt64s(boundaries, httpDurationBoundariesNs) {
+			return errors.New("invalid_histogram_boundaries")
 		}
 		name, nameOK := histogram["name"].(string)
-		boundaries, boundariesOK := intArray(histogram["boundaries_ns"], true)
-		buckets, bucketsOK := intArray(histogram["bucket_counts"], false)
+		if !nameOK || name != "http_request_duration" {
+			return errors.New("invalid_histogram_name")
+		}
+		rawBuckets, err := array(histogram["bucket_counts"])
+		if err != nil {
+			return err
+		}
+		buckets, bucketsOK := intArray(rawBuckets, false)
+		if !bucketsOK {
+			return errors.New("invalid_histogram_bucket_count")
+		}
 		sampleCount, sampleOK := integer(histogram["sample_count"])
+		if !sampleOK {
+			return errors.New("invalid_sample_count")
+		}
 		total, totalOK := decimalInteger(histogram["total_ns"])
+		if !totalOK {
+			return errors.New("invalid_histogram_total")
+		}
 		minimum, minOK := optionalInteger(histogram["min_ns"])
+		if !minOK {
+			return errors.New("invalid_histogram_minimum")
+		}
 		maximum, maxOK := optionalInteger(histogram["max_ns"])
-		if !nameOK || name != "http_request_duration" || !boundariesOK || !equalInt64s(boundaries, httpDurationBoundariesNs) || !bucketsOK || len(buckets) != len(httpDurationBoundariesNs)+1 || !sampleOK || !totalOK || !minOK || !maxOK || !validHistogram(boundaries, buckets, sampleCount, total, minimum, maximum, histogram["min_ns"] != nil, histogram["max_ns"] != nil) {
+		if !maxOK {
+			return errors.New("invalid_histogram_maximum")
+		}
+		if len(buckets) != len(httpDurationBoundariesNs)+1 || !validHistogram(boundaries, buckets, sampleCount, total, minimum, maximum, histogram["min_ns"] != nil, histogram["max_ns"] != nil) {
 			return errors.New("invalid_histogram")
 		}
+
 		resource := ""
 		if raw, exists := histogram["resource"]; exists {
 			if !identifier(raw) {
@@ -148,66 +178,124 @@ func ValidateSnapshot(payload []byte) error {
 	seen = map[string]struct{}{}
 	for _, item := range gauges {
 		gauge, ok := item.(map[string]any)
-		if !ok || exactFields(gauge, []string{"name", "value", "quality"}) != nil {
+		if !ok {
+			return errors.New("invalid_gauge_object")
+		}
+		if exactFields(gauge, []string{"name", "value", "quality"}) != nil {
 			return errors.New("invalid_gauge")
 		}
 		name, nameOK := gauge["name"].(string)
+		if !nameOK || !oneOf(name, "process_cpu_ratio", "process_rss_bytes", "process_memory_ratio", "event_loop_lag_ns") {
+			return errors.New("invalid_gauge_name")
+		}
 		quality, qualityOK := gauge["quality"].(string)
-		if !nameOK || !oneOf(name, "process_cpu_ratio", "process_rss_bytes", "process_memory_ratio", "event_loop_lag_ns") || !qualityOK || !oneOf(quality, "available", "unavailable") {
+		if !qualityOK || !oneOf(quality, "available", "unavailable") {
+			return errors.New("invalid_gauge_quality")
+		}
+		value := gauge["value"]
+		if value != nil && !nonnegativeNumber(value) {
+			return errors.New("invalid_gauge_value")
+		}
+		if quality == "unavailable" && value != nil || quality == "available" && value == nil {
 			return errors.New("invalid_gauge")
 		}
-		value, hasValue := gauge["value"]
-		if quality == "unavailable" && value != nil || quality == "available" && (!hasValue || !nonnegativeNumber(value)) {
-			return errors.New("invalid_gauge")
-		}
+
 		if _, exists := seen[name]; exists {
 			return errors.New("duplicate_gauge")
 		}
 		seen[name] = struct{}{}
 	}
+	if _, ok := root["reporter_id"].(string); !ok {
+		return errors.New("invalid_reporter_id")
+	}
+	epoch, epochOK := root["startup_epoch"].(string)
+	if !epochOK || !uuidPattern.MatchString(epoch) {
+		return errors.New("invalid_startup_epoch")
+	}
+	if !positiveInteger(root["sequence"]) {
+		return errors.New("invalid_sequence")
+	}
+	timestamp, ok := root["captured_at"].(string)
+	if !ok || !timestampPattern.MatchString(timestamp) || strings.HasPrefix(timestamp, "0000-") {
+		return errors.New("invalid_captured_at")
+	}
+	if _, err := time.Parse("2006-01-02T15:04:05.000000Z", timestamp); err != nil {
+		return errors.New("invalid_captured_at")
+	}
+	if _, ok := decimalInteger(root["capture_elapsed_ns"]); !ok {
+		return errors.New("invalid_capture_elapsed_ns")
+	}
+	if !identifier(root["reporter_id"]) {
+		return errors.New("invalid_snapshot")
+	}
+	if len(counters)+len(histograms)+len(gauges) > maxRecords {
+		return errors.New("too_many_records")
+	}
+
 	return nil
 }
 
 // ValidateReceipt accepts only the frozen durable Metrics V2 ACK value.
 func ValidateReceipt(payload []byte) error {
-	if len(payload) > maxPayloadBytes || !utf8.Valid(payload) {
-		return errors.New("invalid_receipt_payload")
+	if len(payload) > maxPayloadBytes {
+		return errors.New("receipt_too_large")
+	}
+	if !utf8.Valid(payload) {
+		return errors.New("invalid_receipt_json")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.UseNumber()
-	value, err := decodeUniqueValue(decoder)
+	value, err := decodeUniqueValue(decoder, payload)
 	if err != nil {
-		return err
+		if err.Error() == "duplicate_json_key" {
+			return errors.New("duplicate_receipt_key")
+		}
+		return errors.New("invalid_receipt_json")
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return errors.New("invalid_receipt_json_trailing_data")
+		return errors.New("invalid_receipt_json")
 	}
+
 	root, ok := value.(map[string]any)
 	if !ok || exactFields(root, []string{"protocol_version", "reporter_id", "startup_epoch", "sequence", "body_sha256", "received_at"}) != nil {
 		return errors.New("invalid_receipt_fields")
 	}
 	version, versionOK := root["protocol_version"].(string)
-	reporter, reporterOK := root["reporter_id"].(string)
-	epoch, epochOK := root["startup_epoch"].(string)
-	digest, digestOK := root["body_sha256"].(string)
-	receivedAt, receivedAtOK := root["received_at"].(string)
-	sequence, sequenceOK := root["sequence"]
-	if !versionOK || version != protocolVersion || !reporterOK || !identifier(reporter) ||
-		!epochOK || !uuidPattern.MatchString(epoch) || !sequenceOK || !positiveInteger(sequence) ||
-		!digestOK || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(digest) || !receivedAtOK ||
-		!timestampPattern.MatchString(receivedAt) {
-		return errors.New("invalid_receipt")
+	if !versionOK || version != protocolVersion {
+		return errors.New("unsupported_receipt_protocol")
 	}
-	if _, err := time.Parse("2006-01-02T15:04:05.000000Z", receivedAt); err != nil {
+	epoch, epochOK := root["startup_epoch"].(string)
+	if !epochOK {
+		return errors.New("invalid_receipt_epoch")
+	}
+	if _, ok := root["sequence"].(json.Number); !ok {
+		return errors.New("invalid_receipt_sequence")
+	}
+	receivedAt, receivedAtOK := root["received_at"].(string)
+	if !receivedAtOK || !timestampPattern.MatchString(receivedAt) {
 		return errors.New("invalid_receipt_time")
 	}
+	if _, err := time.Parse("2006-01-02T15:04:05.000000Z", receivedAt); err != nil || strings.HasPrefix(receivedAt, "0000-") {
+		return errors.New("invalid_receipt")
+	}
+	digest, digestOK := root["body_sha256"].(string)
+	if !identifier(root["reporter_id"]) || !uuidPattern.MatchString(epoch) || !positiveInteger(root["sequence"]) || !digestOK || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(digest) {
+		return errors.New("invalid_receipt")
+	}
+
 	return nil
 }
 
-func decodeUniqueValue(decoder *json.Decoder) (any, error) {
+type invalidScalar struct{}
+
+func decodeUniqueValue(decoder *json.Decoder, payload []byte) (any, error) {
+	start := decoder.InputOffset()
 	token, err := decoder.Token()
 	if err != nil {
-		return nil, fmt.Errorf("invalid_json: %w", err)
+		return nil, errors.New("invalid_json")
+	}
+	if _, ok := token.(string); ok && hasUnpairedSurrogateEscape(payload[start:decoder.InputOffset()]) {
+		return invalidScalar{}, nil
 	}
 	delimiter, ok := token.(json.Delim)
 	if !ok {
@@ -228,7 +316,7 @@ func decodeUniqueValue(decoder *json.Decoder) (any, error) {
 			if _, exists := result[key]; exists {
 				return nil, errors.New("duplicate_json_key")
 			}
-			value, err := decodeUniqueValue(decoder)
+			value, err := decodeUniqueValue(decoder, payload)
 			if err != nil {
 				return nil, err
 			}
@@ -239,7 +327,7 @@ func decodeUniqueValue(decoder *json.Decoder) (any, error) {
 	case '[':
 		result := []any{}
 		for decoder.More() {
-			value, err := decodeUniqueValue(decoder)
+			value, err := decodeUniqueValue(decoder, payload)
 			if err != nil {
 				return nil, err
 			}
