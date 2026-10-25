@@ -27,3 +27,17 @@ jobs:
       - run: uv build --all-packages
       - run: uv run python tools/release/prepare_wheelhouse.py
       - run: uv run python tools/release/verify_isolated_wheels.py
+
+  sentinel-contracts:
+    name: sentinel-contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-packages --all-groups
+      - run: uv run --locked --package atlas-richie-sentinel --extra test python -m pytest components/sentinel/sentinel/tests -q
+      - run: uv run --locked --package atlas-richie-contracts --extra test python -m pytest foundation/contracts/tests -q
+      - run: uv run --locked --extra test python -m pytest -q
+        working-directory: components/sentinel/sentinel-console
