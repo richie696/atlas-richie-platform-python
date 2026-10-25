@@ -28,6 +28,16 @@ export const SYSTEM_SETTINGS_HTTP_CONTRACT: readonly ConsoleOperationContract[] 
         request: {},
         response: { status: 200, body: { timeZone: "Asia/Shanghai", revision: 1 } },
       },
+      {
+        name: "settingsRequireSession",
+        summary: "匿名会话不能读取控制台全局展示设置",
+        kind: "negative",
+        request: {},
+        response: {
+          status: 401,
+          body: { error: { code: "unauthenticated", requestId: "settings-anonymous" } },
+        },
+      },
     ],
   },
   {
@@ -50,6 +60,16 @@ export const SYSTEM_SETTINGS_HTTP_CONTRACT: readonly ConsoleOperationContract[] 
         kind: "positive",
         request: { body: { timeZone: "Asia/Shanghai" } },
         response: { status: 200, body: { timeZone: "Asia/Shanghai", revision: 2 } },
+      },
+      {
+        name: "nonAdminCannotChangeTimeZone",
+        summary: "非管理员不能修改控制台全局展示时区",
+        kind: "negative",
+        request: { body: { timeZone: "Asia/Shanghai" } },
+        response: {
+          status: 403,
+          body: { error: { code: "forbidden", requestId: "settings-denied" } },
+        },
       },
     ],
   },

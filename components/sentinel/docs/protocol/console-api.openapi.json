@@ -11037,14 +11037,14 @@
                   "summary": "当前账号使用旧密码设置新密码，服务端要求重新登录",
                   "value": {
                     "currentPassword": "synthetic-current-password-012345",
-                    "newPassword": "synthetic-new-password-0123456789"
+                    "newPassword": "synthetic-new-password-0123"
                   }
                 },
                 "change_own_password_rejects_wrong_current_password": {
                   "summary": "旧密码不正确时拒绝变更且不会回显任何凭证",
                   "value": {
                     "currentPassword": "synthetic-incorrect-current-012345",
-                    "newPassword": "synthetic-new-password-0123456789"
+                    "newPassword": "synthetic-new-password-0123"
                   }
                 }
               }
@@ -11822,7 +11822,7 @@
             "request": {
               "body": {
                 "currentPassword": "synthetic-current-password-012345",
-                "newPassword": "synthetic-new-password-0123456789"
+                "newPassword": "synthetic-new-password-0123"
               }
             },
             "response": {
@@ -11839,7 +11839,7 @@
             "request": {
               "body": {
                 "currentPassword": "synthetic-incorrect-current-012345",
-                "newPassword": "synthetic-new-password-0123456789"
+                "newPassword": "synthetic-new-password-0123"
               }
             },
             "response": {
@@ -35501,6 +35501,17 @@
                     "error"
                   ],
                   "additionalProperties": false
+                },
+                "examples": {
+                  "settingsRequireSession": {
+                    "summary": "匿名会话不能读取控制台全局展示设置",
+                    "value": {
+                      "error": {
+                        "code": "unauthenticated",
+                        "requestId": "settings-anonymous"
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -35640,6 +35651,21 @@
                 "revision": 1
               }
             }
+          },
+          {
+            "name": "settingsRequireSession",
+            "summary": "匿名会话不能读取控制台全局展示设置",
+            "kind": "negative",
+            "request": {},
+            "response": {
+              "status": 401,
+              "body": {
+                "error": {
+                  "code": "unauthenticated",
+                  "requestId": "settings-anonymous"
+                }
+              }
+            }
           }
         ]
       },
@@ -35711,6 +35737,12 @@
               "examples": {
                 "setShanghai": {
                   "summary": "Save the Shanghai display time zone.",
+                  "value": {
+                    "timeZone": "Asia/Shanghai"
+                  }
+                },
+                "nonAdminCannotChangeTimeZone": {
+                  "summary": "非管理员不能修改控制台全局展示时区",
                   "value": {
                     "timeZone": "Asia/Shanghai"
                   }
@@ -36123,6 +36155,17 @@
                     "error"
                   ],
                   "additionalProperties": false
+                },
+                "examples": {
+                  "nonAdminCannotChangeTimeZone": {
+                    "summary": "非管理员不能修改控制台全局展示时区",
+                    "value": {
+                      "error": {
+                        "code": "forbidden",
+                        "requestId": "settings-denied"
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -36265,6 +36308,25 @@
               "body": {
                 "timeZone": "Asia/Shanghai",
                 "revision": 2
+              }
+            }
+          },
+          {
+            "name": "nonAdminCannotChangeTimeZone",
+            "summary": "非管理员不能修改控制台全局展示时区",
+            "kind": "negative",
+            "request": {
+              "body": {
+                "timeZone": "Asia/Shanghai"
+              }
+            },
+            "response": {
+              "status": 403,
+              "body": {
+                "error": {
+                  "code": "forbidden",
+                  "requestId": "settings-denied"
+                }
               }
             }
           }

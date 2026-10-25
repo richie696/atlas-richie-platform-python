@@ -201,6 +201,7 @@ _NEW_PASSWORD_MIN_UTF16_UNITS = 8
 _NEW_PASSWORD_MAX_UTF16_UNITS = 32
 _LEGACY_PASSWORD_MIN_UTF16_UNITS = 12
 _LEGACY_PASSWORD_MAX_UTF16_UNITS = 1024
+_NEW_PASSWORD_SAMPLE_PLACEHOLDER = "<approved-new-password-sample>"
 
 # summary / description 是文档字段，不是 wire 形状的一部分。
 _DOCUMENTATION_OPERATION_FIELDS = ("summary", "description")
@@ -227,6 +228,26 @@ def _widen_new_password_fields(node: object) -> object:
     elif isinstance(node, list):
         for value in node:
             _widen_new_password_fields(value)
+    return node
+
+
+def _normalize_new_password_sample_values(node: object) -> object:
+    """Neutralize narrowed new-password sample values so the approved 0.19.0 delta may change them.
+
+    0.19.0 把新口令从 12–1024 收窄到 8–32 UTF-16 码元，冻结样例里的口令值必须随之收窄，
+    否则样例自身不再满足现行 schema。样例值不是 wire 形状：只要求该字段仍然存在且仍是口令字段，
+    因此把两侧的样例值统一成占位符后再比较（契约 §23：历史兼容门禁按精确路径/值白名单
+    允许本节已批准增量）。
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "newPassword" and isinstance(value, str):
+                node[key] = _NEW_PASSWORD_SAMPLE_PLACEHOLDER
+            else:
+                _normalize_new_password_sample_values(value)
+    elif isinstance(node, list):
+        for item in node:
+            _normalize_new_password_sample_values(item)
     return node
 
 
@@ -310,6 +331,8 @@ def _assert_historical_operation_compatible(
     schema 形状都必须还在；任何丢失或形状变化都判失败。
     """
     comparable = _widen_new_password_fields(copy.deepcopy(current))
+    comparable = _normalize_new_password_sample_values(comparable)
+    previous = _normalize_new_password_sample_values(copy.deepcopy(previous))
     declared = {
         key: value
         for key, value in previous.items()

@@ -60,7 +60,10 @@ import {
 
 test("CONSOLE-DOC: published contract counts match the runtime registry and generated OpenAPI", () => {
   const document = createConsoleOpenApi();
-  const contract = readFileSync(resolve(process.cwd(), "../docs/contract/Console-API-契约.md"), "utf8");
+  const contract = readFileSync(
+    resolve(process.cwd(), "../docs/contract/Console-API-契约.md"),
+    "utf8",
+  );
   const operations = CONSOLE_OPERATIONS;
   const exchangeExamples = operations.reduce(
     (count, operation) => count + (operation.examples?.length ?? 0),
@@ -95,7 +98,10 @@ test("CONSOLE-DOC: published contract counts match the runtime registry and gene
 });
 
 test("CONSOLE-DOC: source credential input supports explicit modes without browser provider access", () => {
-  const contract = readFileSync(resolve(process.cwd(), "../docs/contract/Console-API-契约.md"), "utf8");
+  const contract = readFileSync(
+    resolve(process.cwd(), "../docs/contract/Console-API-契约.md"),
+    "utf8",
+  );
   assert.doesNotMatch(contract, /不做连接凭证的网页写入/);
   assert.match(contract, /不让浏览器直连 Nacos\/Consul/);
   assert.match(contract, /显式选择 `none`、`reference` 或 `direct`/);
@@ -104,7 +110,10 @@ test("CONSOLE-DOC: source credential input supports explicit modes without brows
 });
 
 test("CONSOLE-DOC: synchronous fixture gateway is historical, not current integration guidance", () => {
-  const contract = readFileSync(resolve(process.cwd(), "../docs/contract/Console-API-契约.md"), "utf8");
+  const contract = readFileSync(
+    resolve(process.cwd(), "../docs/contract/Console-API-契约.md"),
+    "utf8",
+  );
   assert.doesNotMatch(contract, /默认是 `fixtureGateway`/);
   assert.match(contract, /已作废的历史接线说明/);
   assert.match(contract, /feature-owned HTTP adapters 与共享 Console transport/);
@@ -113,27 +122,30 @@ test("CONSOLE-DOC: synchronous fixture gateway is historical, not current integr
   assert.match(contract, /不保留[\s\S]*?`FixtureGateway` 兼容路径/);
 });
 
-test("CONSOLE-MACHINE: same runtime registry yields 66 operations across 63 unique paths, finite endpoint/status errors, CSRF/security and bodyless logout", () => {
+test("CONSOLE-MACHINE: same runtime registry yields 68 operations across 64 unique paths, finite endpoint/status errors, CSRF/security and bodyless logout", () => {
   const document = createConsoleOpenApi();
   assert.equal(document.openapi, "3.1.0");
-  assert.equal(document.info.version, "0.18.0");
+  assert.equal(document.info.version, "0.19.0");
   assert.equal(document["x-contract-status"], "frozen");
-  assert.match(document.info.description, /0\.18\.0 baseline \(2026-10-17\)/);
+  assert.match(document.info.description, /0\.19\.0 baseline \(2026-10-24\)/);
   const frozenArtifact = readFileSync(
     resolve(process.cwd(), "../docs/protocol/console-api.openapi.json"),
   );
   assert.equal(
     createHash("sha256").update(frozenArtifact).digest("hex"),
-    "d6e523cb0ef67f5ebcdba118af937f8c7d3c4cf7fb9f34d74bb8b9cd2d79cd41",
-    "Console API 0.18.0 wire changed; review and advance the contract version explicitly",
+    "7dd8b29d722cb18c65735997d5f11bdfe8890a1b7c7c3069448a8d0e62bceea7",
+    "Console API 0.19.0 wire changed; review and advance the contract version explicitly",
   );
-  const contract = readFileSync(resolve(process.cwd(), "../docs/contract/Console-API-契约.md"), "utf8");
+  const contract = readFileSync(
+    resolve(process.cwd(), "../docs/contract/Console-API-契约.md"),
+    "utf8",
+  );
   assert.match(
     contract,
     /0\.8\.0 于 2026-10-16 按已批准的规则目录设计增加配置中心规则读取与有界刷新/,
   );
-  assert.equal(CONSOLE_OPERATIONS.length, 66);
-  assert.equal(Object.keys(document.paths).length, 63);
+  assert.equal(CONSOLE_OPERATIONS.length, 68);
+  assert.equal(Object.keys(document.paths).length, 64);
   assert.deepEqual(document["x-pending-capabilities"], []);
   for (const operation of CONSOLE_OPERATIONS) {
     const endpoint = operation.endpoint,
@@ -625,7 +637,7 @@ test("F6.1/F7.4: shared design summary defers to current endpoint wire contracts
     /`410 target_retired` 由 instance HTTP adapter 映射为本地 `instance_incarnation_changed`/,
   );
   assert.match(pageDesign, /身份需求的历史草案，非规范 API/);
-  assert.equal(CONSOLE_OPERATIONS.length, 66);
+  assert.equal(CONSOLE_OPERATIONS.length, 68);
   assert.equal(CONSOLE_ERROR_STATUS.bootstrap_unauthorized, 403);
   assert.equal(CONSOLE_ERROR_STATUS.idempotency_conflict, 409);
 });
@@ -659,7 +671,7 @@ test("F7.4: setup and login chapters document current runtime input bounds", () 
     ["checkBootstrapSource", ["authentication", "password"], { minLength: 1, maxLength: 1024 }, 8],
     ["checkBootstrapSource", ["authentication", "aclToken"], { minLength: 1, maxLength: 1024 }, 8],
     ["initializeConsole", ["input", "admin", "username"], { minLength: 1, maxLength: 200 }, 8],
-    ["initializeConsole", ["input", "admin", "password"], { minLength: 12, maxLength: 1024 }, 8],
+    ["initializeConsole", ["input", "admin", "password"], { minLength: 8, maxLength: 32 }, 8],
   ];
 
   for (const [operationId, path, expectedBounds, chapterNumber] of cases) {
@@ -1584,6 +1596,8 @@ test("CONSOLE-MACHINE: all operation positive/negative examples validate against
       "readAgentReportingProtocolObservations",
       "readIncidentEventProtocolObservations",
       "readSystemAudit",
+      "readSystemSettings",
+      "updateSystemTimeZone",
       "checkMonitoringSource",
       "readRegisteredSources",
       "checkRegisteredSource",

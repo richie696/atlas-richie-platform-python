@@ -33,7 +33,7 @@ export const OWN_PASSWORD_HTTP_CONTRACT = Object.freeze([
         request: {
           body: {
             currentPassword: "synthetic-current-password-012345",
-            newPassword: "synthetic-new-password-0123456789",
+            newPassword: "synthetic-new-password-0123",
           },
         },
         response: { status: 200, body: { sessionDisposition: "reauthenticate" } },
@@ -45,7 +45,7 @@ export const OWN_PASSWORD_HTTP_CONTRACT = Object.freeze([
         request: {
           body: {
             currentPassword: "synthetic-incorrect-current-012345",
-            newPassword: "synthetic-new-password-0123456789",
+            newPassword: "synthetic-new-password-0123",
           },
         },
         response: {
