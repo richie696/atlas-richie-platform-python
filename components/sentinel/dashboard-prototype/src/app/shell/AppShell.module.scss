@@ -3,10 +3,19 @@
   min-height: 100vh;
 }
 .topbar {
-  height: 60px;
+  /*
+   * Two-row application chrome, identical in every interface language: the
+   * brand and the account controls share the first row, the main navigation
+   * keeps its own full-width row.  One layout for all languages, so switching
+   * the interface language never reflows the chrome.
+   */
+  height: auto;
+  min-height: 60px;
   display: flex;
   align-items: stretch;
-  gap: 25px;
+  flex-wrap: wrap;
+  column-gap: 16px;
+  row-gap: 0;
   padding: 0 28px;
   border-bottom: 1px solid var(--sentinel-color-border);
   background: var(--sentinel-color-header-background);
@@ -18,6 +27,7 @@
 }
 .pending-header {
   align-items: center;
+  align-content: flex-start;
 }
 .pending-brand,
 .pending-info i,
@@ -39,6 +49,7 @@
   justify-content: flex-end;
   gap: 16px;
   margin-left: auto;
+  min-height: 56px;
   min-width: 0;
   i:nth-child(1) {
     width: 84px;
@@ -56,7 +67,10 @@
   display: flex;
   align-items: center;
   gap: 20px;
-  margin-left: 24px;
+  order: 3;
+  width: 100%;
+  height: 44px;
+  margin: 0;
   min-width: 0;
   i:nth-child(1) {
     width: 42px;
@@ -83,6 +97,7 @@
   display: flex;
   align-items: center;
   gap: 9px;
+  min-height: 56px;
   font-size: 20px;
   font-weight: 650;
   white-space: nowrap;
@@ -100,15 +115,17 @@
 .main-nav {
   display: flex;
   align-items: stretch;
-  gap: 11px;
-  margin-left: 24px;
+  order: 3;
+  width: 100%;
+  height: 44px;
+  margin-left: 0;
+  gap: 6px;
   min-width: 0;
   /*
-   * The navigation is clipped inside its own box.  The breakpoints below give
-   * the translated labels a row of their own when they do not fit beside the
-   * brand and the account controls; this clip is the last line of defence for
-   * any label set that still does not fit, so a navigation can never paint
-   * over the account controls.
+   * The navigation keeps its own row, so it never sits beside the account
+   * controls.  The clip keeps the labels inside that row: a label set that is
+   * still too wide scrolls inside its own row instead of pushing the account
+   * action out of the viewport.
    */
   overflow-x: auto;
 }
@@ -121,15 +138,11 @@
    */
   height: 100%;
   min-height: 0;
+  /* The navigation row scrolls as a whole; every tab keeps its own width. */
+  flex: none;
   gap: 7px;
   align-items: center;
-  /*
-   * 12px, not 13px: the one-row budget has to fit the layout width that is
-   * left after the vertical scrollbar takes its 15px.  The labels are centred
-   * in the button, so the tighter padding is not visible, but it keeps the
-   * 1500px breakpoint honest for the short translation.
-   */
-  padding: 0 12px;
+  padding: 0 13px;
   color: var(--sentinel-color-nav-text);
   background: transparent;
   border: 0;
@@ -153,6 +166,7 @@
   display: flex;
   align-items: center;
   gap: 19px;
+  min-height: 56px;
   font-size: 12px;
   color: var(--sentinel-color-header-text);
   white-space: nowrap;
@@ -263,71 +277,11 @@
   gap: 8px;
 }
 
-/*
- * Two-row top bar: the navigation keeps its own full-width row.
- *
- * The brand and the account controls stay on the first row, the navigation
- * moves to the second one.  The layout is shared by narrow viewports and by
- * translations whose labels do not fit on one row.
- */
-@mixin navigation-on-own-row {
-  height: auto;
-  min-height: 60px;
-  flex-wrap: wrap;
-  column-gap: 16px;
-  row-gap: 0;
-
-  .brand,
-  .header-info {
-    min-height: 56px;
-  }
-  .pending-header {
-    align-content: flex-start;
-  }
-  .pending-info {
-    min-height: 56px;
-  }
-  .pending-navigation {
-    order: 3;
-    width: 100%;
-    height: 44px;
-    margin: 0;
-  }
-  .main-nav {
-    order: 3;
-    width: 100%;
-    height: 44px;
-    margin-left: 0;
-    gap: 6px;
-  }
-  .main-nav button {
-    flex: none;
-  }
-}
-
-// Do not clip translated navigation or push the account action outside the viewport.
-//
-// The top bar keeps the brand, the translated navigation and the account
-// controls on one row only while the navigation fits beside them.  Measured
-// one-row budgets (layout width, after the vertical scrollbar): zh-CN 1484px,
-// en-US 1783px, ja-JP 1790px.  Narrow viewports therefore use the two-row
-// layout, and so do the long translations between 1501px and their own
-// budget.  The band starts above the narrow breakpoint on purpose: below it
-// the two-row layout already applies and the compact rules own their own
-// geometry.
+// The sample clock does not fit the narrow layouts; the compact
+// breakpoints below hide it as well.
 @media (max-width: 1500px) {
-  .topbar {
-    @include navigation-on-own-row;
-  }
-  // Narrow rows have no room for the sample clock.
   .clock {
     display: none;
-  }
-}
-@media (min-width: 1501px) and (max-width: 1900px) {
-  .topbar[data-locale="en-US"],
-  .topbar[data-locale="ja-JP"] {
-    @include navigation-on-own-row;
   }
 }
 

@@ -102,7 +102,7 @@ for (const { width, height, scale, name } of [
       }
     });
   });
-test("响应式: 1920px 保留单排导航，1280px 长文案换行，320px 末个导航键盘可达", async () => {
+test("响应式: 1920px 导航仍独占一行，1280px 长文案换行，320px 末个导航键盘可达", async () => {
   await withPage(async (page) => {
     await page.send("Emulation.setDeviceMetricsOverride", {
       width: 1920,
@@ -111,8 +111,14 @@ test("响应式: 1920px 保留单排导航，1280px 长文案换行，320px 末�
       mobile: false,
     });
     await goto(page, "overview", "en-US");
+    // The navigation keeps its own row in every language, at every width.
     assert.ok(
-      await page.eval(`document.querySelector('.topbar').getBoundingClientRect().height<=61`),
+      await page.eval(`document.querySelector('.topbar').getBoundingClientRect().height>80`),
+    );
+    assert.ok(
+      await page.eval(
+        `(()=>{const brand=document.querySelector('.brand').getBoundingClientRect();const nav=document.querySelector('.main-nav').getBoundingClientRect();return nav.top>=brand.bottom-1;})()`,
+      ),
     );
     await page.send("Emulation.setDeviceMetricsOverride", {
       width: 1280,
@@ -146,10 +152,10 @@ test("响应式: 1920px 保留单排导航，1280px 长文案换行，320px 末�
       code: "Enter",
       windowsVirtualKeyCode: 13,
     });
-    await page.waitFor(`location.hash.startsWith('#/system')`);
+    await page.waitFor(`location.hash.startsWith('#/docs')`);
   });
 });
-test("响应式: 多语言顶栏导航不被账号控件遮挡，导航项不裁剪", async () => {
+test("响应式: 多语言顶栏导航独占一行，不被账号控件遮挡，导航项不裁剪", async () => {
   await withPage(async (page) => {
     for (const width of [1512, 1728, 1920]) {
       for (const locale of ["zh-CN", "en-US", "ja-JP"]) {
@@ -161,9 +167,9 @@ test("响应式: 多语言顶栏导航不被账号控件遮挡，导航项不裁
         });
         await goto(page, "overview", locale);
         const result = await page.eval(
-          `(()=>{const topbar=document.querySelector(".topbar"),nav=document.querySelector(".main-nav"),info=document.querySelector(".header-info");const navRect=nav.getBoundingClientRect(),infoRect=info.getBoundingClientRect();const buttons=[...nav.querySelectorAll("button")].map(b=>{const r=b.getBoundingClientRect();return{text:(b.textContent??"").trim(),left:r.left,right:r.right,top:r.top,bottom:r.bottom};});return{locale:topbar.getAttribute("data-locale"),covered:buttons.filter(r=>r.right>infoRect.left+1&&r.bottom>infoRect.top&&r.top<infoRect.bottom).map(r=>r.text),clipped:buttons.filter(r=>r.right>navRect.right+1||r.left<navRect.left-1).map(r=>r.text),scrollWidth:nav.scrollWidth,clientWidth:nav.clientWidth};})()`,
+          `(()=>{const nav=document.querySelector(".main-nav"),info=document.querySelector(".header-info"),brand=document.querySelector(".brand");const navRect=nav.getBoundingClientRect(),infoRect=info.getBoundingClientRect(),brandRect=brand.getBoundingClientRect();const buttons=[...nav.querySelectorAll("button")].map(b=>{const r=b.getBoundingClientRect();return{text:(b.textContent??"").trim(),left:r.left,right:r.right,top:r.top,bottom:r.bottom};});return{ownRow:navRect.top>=brandRect.bottom-1,covered:buttons.filter(r=>r.right>infoRect.left+1&&r.bottom>infoRect.top&&r.top<infoRect.bottom).map(r=>r.text),clipped:buttons.filter(r=>r.right>navRect.right+1||r.left<navRect.left-1).map(r=>r.text),scrollWidth:nav.scrollWidth,clientWidth:nav.clientWidth};})()`,
         );
-        assert.equal(result.locale, locale, width + ": top bar did not expose the active locale");
+        assert.ok(result.ownRow, width + " " + locale + ": the navigation does not keep its own row");
         assert.deepEqual(result.covered, [], width + " " + locale + ": navigation is covered by the account controls");
         assert.deepEqual(result.clipped, [], width + " " + locale + ": navigation is clipped");
         assert.ok(
