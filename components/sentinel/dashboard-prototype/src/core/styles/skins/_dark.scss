@@ -23,9 +23,6 @@
   --sentinel-color-locale-label: #9eb5c3;
   --sentinel-color-avatar-background: #263a48;
   --sentinel-color-avatar-border: #3b5665;
-  --sentinel-color-demo-background: #142b3a;
-  --sentinel-color-demo-border: #265072;
-  --sentinel-color-demo-text: #b3d9f1;
   --sentinel-color-footer-text: #8099a8;
   --sentinel-page-background-image: radial-gradient(circle at 80% -10%, #1a3040 0, transparent 37%);
 
@@ -53,7 +50,7 @@
   --chart-series-secondary: #ffbd59;
   --chart-series-danger: #ff7778;
 
-  // Semantic roles migrated from the prototype; identical colors may serve independent roles.
+  // Semantic roles that share one color may still serve independent roles.
   --sentinel-color-live-dot-box-shadow: #56d6a17a;
   --sentinel-color-eyebrow-color: #6fa5c8;
   --sentinel-color-intro-color: #acbdc9;

@@ -1,4 +1,4 @@
-/** Connection identity/state, supported tabs and capability values. Labels, formatted cells and prototype product explanations belong to presentation/systemPresentation. */
+/** Connection identity/state, supported tabs and capability values. Labels, formatted cells and product explanations belong to presentation/systemPresentation. */
 
 /**
  * 连接类别。
@@ -37,7 +37,7 @@ export const CONNECTION_STATE = Object.freeze({
   /** 真实探测到连通。 */
   Available: "available",
   /**
-   * 原型未接入采集器。
+   * 演示模式未接入采集器。
    *
    * 这是**产品事实**不是故障：演示阶段「未接入」用中性蓝而不是红色，
    * 不得为了让页面「看起来健康」而把它写成 `Available`。

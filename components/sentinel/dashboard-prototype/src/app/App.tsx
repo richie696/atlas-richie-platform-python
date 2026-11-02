@@ -1,6 +1,5 @@
 import { AppShell } from "./shell/AppShell";
 import { Header } from "./shell/Header";
-import { StatusBanner } from "./shell/StatusBanner";
 import { Footer } from "./shell/Footer";
 import { AccessPendingHeader } from "./shell/AccessPendingHeader";
 import { accessFor, ROUTE } from "./router/route.constants";
@@ -227,7 +226,6 @@ export function App() {
           />
         )
       }
-      banner={runtime.mode === "mock" ? <StatusBanner /> : undefined}
       contentClassName={`page-${currentRoute}`}
       footer={runtime.mode === "mock" ? <Footer /> : undefined}
     >

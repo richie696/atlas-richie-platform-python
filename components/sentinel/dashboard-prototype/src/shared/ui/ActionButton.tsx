@@ -6,7 +6,7 @@ import { isValidElement, type ButtonHTMLAttributes, type ReactNode } from "react
 
 const styleModules = [actionButtonStyles, linkButtonStyles] as const;
 
-/** Shared button contract that maps the prototype's semantic classes to Astryx. */
+/** Shared button contract that maps the semantic classes to Astryx. */
 export type ActionButtonProps = Omit<
   ButtonHTMLAttributes<HTMLButtonElement>,
   "disabled" | "children"

@@ -1,4 +1,4 @@
-/** Formal internal system read entry; no prototype fixture or synchronous gateway. */
+/** Formal internal system read entry; no demo fixture or synchronous gateway. */
 export { createSystemObservationResources } from "./application/systemObservationResources";
 export { ObservedConnectionsPanel } from "./ui/ObservedConnectionsPanel";
 export { ObservedProtocolsPanel } from "./ui/ObservedProtocolsPanel";

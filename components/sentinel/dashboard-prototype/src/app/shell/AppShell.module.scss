@@ -212,21 +212,6 @@
   justify-content: flex-start;
   gap: 8px;
 }
-.demo-banner {
-  min-height: 34px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 32px;
-  background: var(--sentinel-color-demo-background);
-  border-bottom: 1px solid var(--sentinel-color-demo-border);
-  color: var(--sentinel-color-demo-text);
-  font-size: 12px;
-}
-.demo-banner svg {
-  flex: none;
-  color: var(--sentinel-color-accent);
-}
 .content {
   max-width: 1600px;
   margin: 0 auto;
@@ -380,9 +365,6 @@
   .main-nav button svg {
     display: inline;
   }
-  .demo-banner {
-    padding: 8px 18px;
-  }
 }
 
 @media (max-width: 560px) {
@@ -416,9 +398,6 @@
   }
   .main-nav button svg {
     display: none;
-  }
-  .demo-banner {
-    font-size: 11px;
   }
   .content {
     padding: 16px 12px 30px;

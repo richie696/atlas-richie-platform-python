@@ -17,7 +17,7 @@
   "applications.detail.http": "HTTP QPS / リクエスト遮断率",
   "applications.detail.memory": "メモリ",
   "applications.detail.ruleThreshold": "QPS 閾値 2,000 · スローコール比率 20%",
-  "applications.detail.scopeNote": "このプロトタイプが提供するのはコンテナ単位のサンプル曲線のみです。ホストとプロセスの指標には対応する収集源が必要です。",
+  "applications.detail.scopeNote": "デモモードが提供するのはコンテナ単位のサンプル曲線のみです。ホストとプロセスの指標には対応する収集源が必要です。",
   "applications.detail.subtitle": "{{host}} · container: {{id}} · サンプル",
   "applications.detail.title": "インスタンス詳細",
   "applications.detail.usage": "CPU / メモリ使用率",

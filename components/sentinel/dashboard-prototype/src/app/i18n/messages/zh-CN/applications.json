@@ -17,7 +17,7 @@
   "applications.detail.http": "HTTP QPS / 请求拦截率",
   "applications.detail.memory": "内存",
   "applications.detail.ruleThreshold": "QPS 阈值 2,000 · 慢调用比例 20%",
-  "applications.detail.scopeNote": "当前原型只提供容器级示例曲线；宿主机和进程指标需接入对应采集源。",
+  "applications.detail.scopeNote": "当前演示模式只提供容器级示例曲线；宿主机和进程指标需接入对应采集源。",
   "applications.detail.subtitle": "{{host}} · container: {{id}} · 示例",
   "applications.detail.title": "实例详情",
   "applications.detail.usage": "CPU / 内存使用率",

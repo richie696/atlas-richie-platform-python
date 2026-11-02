@@ -49,7 +49,7 @@ export interface ConnectionStatus {
  * ----
  * 旧实现写的是 `item.state === "可用" ? "healthy" : "blue"`，规则只存在于 JSX 里。
  * 这里是它唯一的归属：未连通的链路用 `blue`（中性提示），不是 `critical`——
- * 原型阶段「未接入」是产品事实，不是故障。
+ * 演示阶段「未接入」是产品事实，不是故障。
  */
 export function connectionStatusTone(state: ConnectionState): "healthy" | "blue" {
   return state === CONNECTION_STATE.Available ? "healthy" : "blue";
@@ -138,7 +138,7 @@ export const RULE_MAINTAINER_PERMISSION: PermissionDeclaration = Object.freeze({
   statusLabelKey: "system.permissions.maintainer.status",
 });
 
-/** 发布审计链的一步。原型不产生真实记录，只声明链路顺序。 */
+/** 发布审计链的一步。演示模式不产生真实记录，只声明链路顺序。 */
 export interface AuditChainStep {
   /** 步骤序号（协议值，非文案）。 */
   readonly step: string;

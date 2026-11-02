@@ -17,7 +17,7 @@
   "applications.detail.http": "HTTP QPS / request block rate",
   "applications.detail.memory": "Memory",
   "applications.detail.ruleThreshold": "QPS threshold 2,000 · slow-call ratio 20%",
-  "applications.detail.scopeNote": "This prototype only provides container-level sample curves; host and process metrics need their own collection sources.",
+  "applications.detail.scopeNote": "Demo mode only provides container-level sample curves; host and process metrics need their own collection sources.",
   "applications.detail.subtitle": "{{host}} · container: {{id}} · sample",
   "applications.detail.title": "Instance details",
   "applications.detail.usage": "CPU / memory usage",
