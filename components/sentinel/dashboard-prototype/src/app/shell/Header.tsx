@@ -40,7 +40,7 @@ export function Header({
     void setLocale(next).catch(() => setLocaleLoadFailed(true));
   };
   return (
-    <header className={`topbar ${styles["topbar"]}`}>
+    <header className={`topbar ${styles["topbar"]}`} data-locale={locale}>
       <div className={`brand ${styles["brand"]}`}>
         <span className={`brand-mark ${styles["brand-mark"]}`}>
           <ChartLineUpIcon size={23} weight="bold" />

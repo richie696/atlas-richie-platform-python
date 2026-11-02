@@ -149,6 +149,31 @@ test("响应式: 1920px 保留单排导航，1280px 长文案换行，320px 末�
     await page.waitFor(`location.hash.startsWith('#/system')`);
   });
 });
+test("响应式: 多语言顶栏导航不被账号控件遮挡，导航项不裁剪", async () => {
+  await withPage(async (page) => {
+    for (const width of [1512, 1728, 1920]) {
+      for (const locale of ["zh-CN", "en-US", "ja-JP"]) {
+        await page.send("Emulation.setDeviceMetricsOverride", {
+          width,
+          height: 900,
+          deviceScaleFactor: 1,
+          mobile: false,
+        });
+        await goto(page, "overview", locale);
+        const result = await page.eval(
+          `(()=>{const topbar=document.querySelector(".topbar"),nav=document.querySelector(".main-nav"),info=document.querySelector(".header-info");const navRect=nav.getBoundingClientRect(),infoRect=info.getBoundingClientRect();const buttons=[...nav.querySelectorAll("button")].map(b=>{const r=b.getBoundingClientRect();return{text:(b.textContent??"").trim(),left:r.left,right:r.right,top:r.top,bottom:r.bottom};});return{locale:topbar.getAttribute("data-locale"),covered:buttons.filter(r=>r.right>infoRect.left+1&&r.bottom>infoRect.top&&r.top<infoRect.bottom).map(r=>r.text),clipped:buttons.filter(r=>r.right>navRect.right+1||r.left<navRect.left-1).map(r=>r.text),scrollWidth:nav.scrollWidth,clientWidth:nav.clientWidth};})()`,
+        );
+        assert.equal(result.locale, locale, width + ": top bar did not expose the active locale");
+        assert.deepEqual(result.covered, [], width + " " + locale + ": navigation is covered by the account controls");
+        assert.deepEqual(result.clipped, [], width + " " + locale + ": navigation is clipped");
+        assert.ok(
+          result.scrollWidth <= result.clientWidth + 1,
+          width + " " + locale + ": navigation overflows its own box " + JSON.stringify(result),
+        );
+      }
+    }
+  });
+});
 test("响应式: 表格滚动区可键盘聚焦，实例与详情不因窄屏丢失", async () => {
   await withPage(async (page) => {
     await page.send("Emulation.setDeviceMetricsOverride", {
