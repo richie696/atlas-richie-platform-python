@@ -1,5 +1,6 @@
 import rulesStyles from "../Rules.module.scss";
 import { scopedClasses } from "../../../../shared/ui/styles/scopedClasses";
+import { randomUuid } from "../../../../core/crypto/randomUuid";
 /**
  * ParamFlowRule 表单。
  *
@@ -123,7 +124,7 @@ export function ParamFlowRuleForm({
                 paramFlowItemList: [
                   ...items,
                   {
-                    formKey: crypto.randomUUID(),
+                    formKey: randomUuid(),
                     classType: "java.lang.String",
                     object: "",
                     count: draft.count,

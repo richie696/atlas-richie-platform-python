@@ -39,4 +39,5 @@ import "./security-contracts.test.mjs";
 import "./locale-switching.test.mjs";
 import "./locale-formatting.test.mjs";
 import "./mock-role.test.mjs";
+import "./random-uuid.test.mjs";
 import "./documentation.test.mjs";

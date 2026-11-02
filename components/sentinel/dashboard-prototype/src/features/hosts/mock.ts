@@ -2,6 +2,7 @@ import { http, HttpResponse } from "msw";
 import { CONSOLE_HEADER, parseIdempotencyKeyHeader } from "../../core/api/protocol/common";
 import { readMockPrincipal } from "../../core/api/mock/mockRole";
 import { HOST_ASSOCIATION_WIRE_SCHEMAS } from "./api/hostAssociationHttp";
+import { randomUuid } from "../../core/crypto/randomUuid";
 
 type Association = ReturnType<typeof HOST_ASSOCIATION_WIRE_SCHEMAS.association.parse>;
 type MutationResult = Association | { readonly removed: true };
@@ -120,7 +121,7 @@ export function createHostAssociationMockHandlers(now: () => number = Date.now) 
         appId: input.data.appId,
         instanceId: input.data.instanceId,
         processId: `mock-process-${input.data.instanceId}`,
-        revision: crypto.randomUUID(),
+        revision: randomUuid(),
         provenance: "operator_confirmed",
         currentEpoch: null,
         lastReceivedAt: null,

@@ -6,6 +6,7 @@ import {
   MonitoringSourceMutationInputSchema,
 } from "../api/monitoringSourceHttp";
 import type { MonitoringSourceCandidate } from "../model/monitoringSource";
+import { randomUuid } from "../../../core/crypto/randomUuid";
 
 type StoredSource = {
   source: MonitoringSourceCandidate;
@@ -114,7 +115,7 @@ export function createMonitoringSourceMockHandlers(now: () => number = Date.now)
         await request.json().catch(() => null),
       );
       if (!parsed.success) return error(request, "validation_failed", 422);
-      const id = crypto.randomUUID();
+      const id = randomUuid();
       const ownerId = await owner(request);
       const digest = await fingerprint(parsed.data.source, parsed.data.credentials);
       const checkedAt = now();

@@ -56,6 +56,7 @@ import {
   resolveRulePageSection,
   type RulePageSection,
 } from "../model/rulePageSection";
+import { randomUuid } from "../../../core/crypto/randomUuid";
 
 type PageContext = DashboardPageProps & {
   readonly scopePort: RuleBindingScopePort;
@@ -684,7 +685,7 @@ function RuleWorkspaceOwner({
   readonly versionId?: string;
 }) {
   const operation = useMemo(
-    () => createRuleOperation(binding.id, port, writeAccess, () => crypto.randomUUID()),
+    () => createRuleOperation(binding.id, port, writeAccess, () => randomUuid()),
     [binding.id, port, writeAccess],
   );
   const draft = useMemo(
@@ -733,11 +734,7 @@ function RuleWorkspaceOwner({
         />
       )}
       {section === RULE_PAGE_SECTION.Editor && (
-        <RuleSetWorkbenchPage
-          workflow={draft}
-          binding={binding}
-          newFormKey={() => crypto.randomUUID()}
-        />
+        <RuleSetWorkbenchPage workflow={draft} binding={binding} newFormKey={() => randomUuid()} />
       )}
       {(section === RULE_PAGE_SECTION.Publications || section === RULE_PAGE_SECTION.Recovery) && (
         <RuleDeploymentPanel

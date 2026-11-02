@@ -15,6 +15,7 @@ import {
 } from "../protocol/common";
 import type { ConsoleCallOptions, ConsoleEndpoint, ConsoleTransport } from "./consoleEndpoint";
 import { boundedResponse, withinJsonDepth } from "./boundedResponse";
+import { randomUuid } from "../../crypto/randomUuid";
 
 const CSRF_HEADER = CONSOLE_HEADER.Csrf;
 const CORRELATION_HEADER = CONSOLE_HEADER.RequestId;
@@ -70,7 +71,7 @@ export function createConsoleTransport(options: ConsoleTransportOptions): Consol
   const requests = new Map<string, RequestObservation>();
   const lifetime = new AbortController();
   const fetcher = options.fetch ?? globalThis.fetch;
-  const makeRequestId = options.requestId ?? (() => crypto.randomUUID());
+  const makeRequestId = options.requestId ?? randomUuid;
   const timeoutMs = options.timeoutMs ?? 10_000;
   let csrf: { owner: string; value: string } | null = null,
     disposed = false;

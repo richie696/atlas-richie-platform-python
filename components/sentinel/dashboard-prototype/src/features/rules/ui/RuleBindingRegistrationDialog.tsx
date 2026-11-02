@@ -24,6 +24,7 @@ import { FormGrid } from "../../../shared/ui/FormGrid";
 import { Select } from "../../../shared/ui/Select";
 import { TextField } from "../../../shared/ui/TextField";
 import styles from "./RuleSetWorkspace.module.scss";
+import { randomUuid } from "../../../core/crypto/randomUuid";
 
 type SourceCatalogResource = ReturnType<typeof createRuleSourceCatalogResource>;
 type RegistrationCommand = ReturnType<typeof createRuleBindingRegistrationCommand>;
@@ -151,7 +152,7 @@ export function RuleBindingRegistrationDialog({
       setInvalid(true);
       return;
     }
-    const registration = prepareRuleBindingRegistration(draft, selectedSource, crypto.randomUUID());
+    const registration = prepareRuleBindingRegistration(draft, selectedSource, randomUuid());
     if (!registration) {
       setInvalid(true);
       return;

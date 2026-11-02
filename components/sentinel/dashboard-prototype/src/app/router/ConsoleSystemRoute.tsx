@@ -21,9 +21,10 @@ import type { RoutePageContext } from "./routes";
 import { FeedbackPanel } from "../../shared/ui/FeedbackPanel";
 import { useTranslation } from "react-i18next";
 import { useOwnedDisposal } from "../../shared/state/useOwnedDisposal";
+import { randomUuid } from "../../core/crypto/randomUuid";
 
 const EMPTY_DIRECTORY: AccountListQuery = Object.freeze({ page: 1, pageSize: 20, search: "" });
-const newRequestKey = () => crypto.randomUUID();
+const newRequestKey = () => randomUuid();
 
 /** App owner joining system observations and the existing session-bound identity workflows. */
 export function ConsoleSystemRoute(props: RoutePageContext) {

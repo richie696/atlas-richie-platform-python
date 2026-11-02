@@ -17,6 +17,7 @@ import { Select } from "../../../shared/ui/Select";
 import { TextField } from "../../../shared/ui/TextField";
 import { useBeforeUnloadGuard } from "../../../shared/state/useBeforeUnloadGuard";
 import styles from "./SystemObservation.module.scss";
+import { randomUuid } from "../../../core/crypto/randomUuid";
 
 type Workflow = ReturnType<typeof createMonitoringSourceWorkflow>;
 const authenticationModeLabelKey: Record<
@@ -53,8 +54,8 @@ type Draft = {
 };
 
 const emptyDraft = (): Draft => ({
-  sourceId: crypto.randomUUID(),
-  revision: `candidate-${crypto.randomUUID()}`,
+  sourceId: randomUuid(),
+  revision: `candidate-${randomUuid()}`,
   displayName: "",
   environmentId: "",
   endpoint: "",

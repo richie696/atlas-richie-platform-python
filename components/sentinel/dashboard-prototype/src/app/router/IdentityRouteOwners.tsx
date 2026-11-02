@@ -23,8 +23,9 @@ import { routeAfterAuthentication } from "./navigation";
 import { useOwnedDisposal } from "../../shared/state/useOwnedDisposal";
 import { useConsoleRuntime } from "../../core/api/runtime/ConsoleRuntimeProvider";
 import { PublicLocaleControl } from "../shell/PublicLocaleControl";
+import { randomUuid } from "../../core/crypto/randomUuid";
 
-const newRequestKey = () => crypto.randomUUID();
+const newRequestKey = () => randomUuid();
 const EMPTY_DIRECTORY: AccountListQuery = Object.freeze({ page: 1, pageSize: 20, search: "" });
 
 function useCurrentIdentity() {

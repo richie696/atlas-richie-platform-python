@@ -15,8 +15,9 @@ import {
 import { ROUTE } from "./route.constants";
 import type { DashboardPageProps } from "../../shared/types/dashboard";
 import { useOwnedDisposal } from "../../shared/state/useOwnedDisposal";
+import { randomUuid } from "../../core/crypto/randomUuid";
 
-const newRequestKey = () => crypto.randomUUID();
+const newRequestKey = () => randomUuid();
 
 /** Assemble one-use bootstrap authorization and initialization around the shared Console transport. */
 export function SetupRouteOwner({ navigate }: DashboardPageProps) {

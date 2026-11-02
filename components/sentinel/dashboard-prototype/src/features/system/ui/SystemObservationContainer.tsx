@@ -13,6 +13,7 @@ import type { AuditQuery } from "../model/systemObservation";
 import type { ControlPlaneAccessState } from "../../identity";
 import { SystemPage } from "./SystemPage";
 import type { SystemSettingsPort } from "../api/systemSettingsPort";
+import { randomUuid } from "../../../core/crypto/randomUuid";
 
 type PageContext = DashboardPageProps & {
   readonly observationPorts: SystemObservationPorts;
@@ -64,17 +65,12 @@ export function SystemObservationContainer({
   );
   const sourceWorkflow = useMemo(
     () =>
-      createSourceRegistrationWorkflow(sourceRegistrationPort, access.sources, () =>
-        crypto.randomUUID(),
-      ),
+      createSourceRegistrationWorkflow(sourceRegistrationPort, access.sources, () => randomUuid()),
     [access.sources, sourceRegistrationPort],
   );
   useOwnedDisposal(sourceWorkflow);
   const monitoringSourceWorkflow = useMemo(
-    () =>
-      createMonitoringSourceWorkflow(monitoringSourcePort, access.system, () =>
-        crypto.randomUUID(),
-      ),
+    () => createMonitoringSourceWorkflow(monitoringSourcePort, access.system, () => randomUuid()),
     [access.system, monitoringSourcePort],
   );
   useOwnedDisposal(monitoringSourceWorkflow);

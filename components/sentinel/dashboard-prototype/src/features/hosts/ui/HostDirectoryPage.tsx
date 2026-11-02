@@ -15,6 +15,7 @@ import type { HostAssociation, HostAssociationPort } from "../application/hostAs
 import { HOST_METRIC_CHART_KEY, type HostMetricName } from "../presentation/hostMetricChartKey";
 import { reporterFreshness, type ReporterFreshness } from "../presentation/reporterStatus";
 import styles from "./HostDirectoryPage.module.scss";
+import { randomUuid } from "../../../core/crypto/randomUuid";
 
 type Source = {
   readonly id: string;
@@ -105,7 +106,7 @@ export function HostDirectoryPage({
   const requestKeyFor = (intent: string) => {
     const existing = pendingRequestKeys.current.get(intent);
     if (existing) return existing;
-    const requestKey = crypto.randomUUID();
+    const requestKey = randomUuid();
     pendingRequestKeys.current.set(intent, requestKey);
     return requestKey;
   };
