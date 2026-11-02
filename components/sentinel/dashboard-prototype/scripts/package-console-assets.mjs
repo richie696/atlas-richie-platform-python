@@ -11,11 +11,11 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const prototypeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const dashboardRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const clientRoot = path.resolve(
-  process.env.SENTINEL_DASHBOARD_CLIENT_BUILD_DIR ?? path.join(prototypeRoot, "dist", "client"),
+  process.env.SENTINEL_DASHBOARD_CLIENT_BUILD_DIR ?? path.join(dashboardRoot, "dist", "client"),
 );
-const packageRoot = path.resolve(prototypeRoot, "..", "sentinel-console");
+const packageRoot = path.resolve(dashboardRoot, "..", "sentinel-console");
 const isolatedWebRoot = process.env.SENTINEL_CONSOLE_WEB_OUTPUT_DIR;
 const webRoot = path.resolve(
   isolatedWebRoot ?? path.join(packageRoot, "src", "atlas_richie", "sentinel_console", "web"),

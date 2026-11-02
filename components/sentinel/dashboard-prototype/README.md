@@ -51,12 +51,12 @@ UI 组件库采用 **Astryx Core + Nivo Line**：两者使用 MIT 许可、React
 
 前端通过公共 npm registry 使用已发布的 React 底座：`@richie696/react-framework@^1.0.2` 与 `@richie696/react-framework-react@^1.0.2`，锁文件固定解析版本。`ReactFrameworkProvider` 注入底座运行时；`useOnlineStatus` 只说明浏览器在线/离线，不代表配置中心或 Console 健康。读取/命令状态使用明确 owner；统一 HTTP transport 位于应用级 Console 服务，feature adapters 复用底座 `Url` / `HttpClient`，Mock 通过 MSW 拦截同一路径。具体现状与尚缺边界以本节描述与 `src/` 实际结构为准。
 
-后续 React 工程遵循 `richie696-react-library/docs/REACT_ENGINEERING_STANDARD.md` 索引下的通用 UI/UE、编码与项目骨架规范；底座 API 的具体场景见其 `RICHIE_FOUNDATION_USAGE.md`。本原型的逐页拆分清单属过程材料，已随其它过程文档一并清理，未并入正式文档。
+后续 React 工程遵循 `richie696-react-library/docs/REACT_ENGINEERING_STANDARD.md` 索引下的通用 UI/UE、编码与项目骨架规范；底座 API 的具体场景见其 `RICHIE_FOUNDATION_USAGE.md`。本工程的逐页拆分清单属过程材料，已随其它过程文档一并清理，未并入正式文档。
 
-规则页采用 Sentinel 的五类规则字段作为配置输入兼容格式：`FlowRule`、`DegradeRule`、`SystemRule`、`AuthorityRule`、`ParamFlowRule`。同一规则类型的配置中心内容预览为 JSON array；它不包含额外的 `ruleType` 包装字段。`ParamFlowRule` 的 `classType` / `object` 仍须在真实的跨语言 codec 中按目标 runtime 校验，原型不把它承诺为通用类型系统。
+规则页采用 Sentinel 的五类规则字段作为配置输入兼容格式：`FlowRule`、`DegradeRule`、`SystemRule`、`AuthorityRule`、`ParamFlowRule`。同一规则类型的配置中心内容预览为 JSON array；它不包含额外的 `ruleType` 包装字段。`ParamFlowRule` 的 `classType` / `object` 仍须在真实的跨语言 codec 中按目标 runtime 校验，前端不把它承诺为通用类型系统。
 
 Dashboard 文案使用简体中文、English、日文 JSON 资源和 i18next；规则表单使用本地化业务名称，协议字段名只保留在 JSON 配置预览中。语言切换不修改草稿、版本或协议值。三语资源/key 门禁已接入工程检查；全部路由的真实渲染、长文案、交互及格式表现仍按推进清单验收，不能仅凭 key 完整就称视觉国际化全部完成。
 
-版本区展示的是**完整规则集快照**，不是单条规则的独立开关。活动版本必须有明确的开始时间、结束时间、IANA 时区和回退目标版本；控制台原型只展示这套计划模型，不会创建版本、不调度任务、更不会写回配置中心。
+版本区展示的是**完整规则集快照**，不是单条规则的独立开关。活动版本必须有明确的开始时间、结束时间、IANA 时区和回退目标版本；演示模式只展示这套计划模型，不会创建版本、不调度任务、更不会写回配置中心。
 
-正式管理控制台的数据口径、权限和 Nacos/Consul 写回边界见 [Dashboard 控制面设计](../docs/design/规则控制台与运行观测设计.md)。现有 `sentinel-dashboard` 仍是 per-process 诊断产品，不能把本原型视为其已实现能力。
+正式管理控制台的数据口径、权限和 Nacos/Consul 写回边界见 [Dashboard 控制面设计](../docs/design/规则控制台与运行观测设计.md)。现有 `sentinel-dashboard` 仍是 per-process 诊断产品，不能把本工程视为其已实现能力。

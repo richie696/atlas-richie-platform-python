@@ -422,7 +422,7 @@ deployment acceptance remain separate operational requirements.
 ## Dashboard assets
 
 The React production build is copied into
-`src/atlas_richie/sentinel_console/web/` by the dashboard prototype's
+`src/atlas_richie/sentinel_console/web/` by `components/sentinel/dashboard-prototype`'s
 `npm run build:console-assets` command before building the Console wheel.
 `uv_build` includes those package-local files in the wheel; the installed
 Console serves `/`, `/assets/*`, and client-side GET routes from the same ASGI
