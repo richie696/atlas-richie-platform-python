@@ -48,14 +48,13 @@ from .infrastructure.persistence.runtime_database_locator_configuration import (
 from .infrastructure.persistence.setup_window_configuration import (
     SetupWindowConfiguration,
 )
+from .infrastructure.serving_file_configuration import (
+    export_resolved_bind_host,
+    parse_port_text,
+    resolve_serving_configuration,
+)
 from .operator_documentation import available_documents, read_document
 
-_BIND_HOST_ENV = "SENTINEL_CONSOLE_BIND_HOST"
-_PORT_ENV = "SENTINEL_CONSOLE_PORT"
-_WORKERS_ENV = "SENTINEL_CONSOLE_WORKERS"
-_DEFAULT_BIND_HOST = "127.0.0.1"
-_DEFAULT_PORT = 8000
-_DEFAULT_WORKERS = 1
 _WORKER_HEALTHCHECK_TIMEOUT_SECONDS = 30
 _METRICS_BIND_HOST_ENV = "SENTINEL_CONSOLE_METRICS_BIND_HOST"
 _METRICS_PORT_ENV = "SENTINEL_CONSOLE_METRICS_PORT"
@@ -72,7 +71,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "serve":
-            return _serve()
+            return _serve(arguments)
         if arguments.command == "serve-metrics":
             return _serve_metrics()
         if arguments.command == "metrics-reporter":
@@ -83,7 +82,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _expire_incident_history()
         if arguments.command == "docs":
             return _show_documentation(arguments.document)
-        return _operate_setup_window(arguments.action)
+        return _operate_setup_window(arguments)
     except Exception as error:  # noqa: BLE001 - CLI boundary converts startup errors to exit status.
         print(f"sentinel-console: {error}", file=sys.stderr)
         return 2
@@ -92,7 +91,24 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sentinel-console")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("serve", help="run the Console ASGI service")
+    serve = commands.add_parser("serve", help="run the Console ASGI service")
+    serve.add_argument(
+        "--config",
+        type=Path,
+        metavar="PATH",
+        help="TOML file with non-secret serve parameters (bind_host, port, workers)",
+    )
+    serve.add_argument(
+        "--host",
+        metavar="ADDRESS",
+        help="bind address override; the resolved value also feeds the loopback gates",
+    )
+    serve.add_argument(
+        "--port", type=int, metavar="NUMBER", help="HTTP port override"
+    )
+    serve.add_argument(
+        "--workers", type=int, metavar="COUNT", help="Uvicorn worker count override"
+    )
     commands.add_parser(
         "serve-metrics", help="run the isolated mutual-TLS Metrics V2 Collector"
     )
@@ -142,6 +158,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "setup-window", help="inspect or explicitly change first-run availability"
     )
     setup.add_argument("action", choices=("status", "open", "close"))
+    setup.add_argument(
+        "--config",
+        type=Path,
+        metavar="PATH",
+        help="TOML serving file so the code-free loopback gate sees the real bind",
+    )
     return parser
 
 
@@ -158,12 +180,17 @@ def _show_documentation(document: str | None) -> int:
     return 0
 
 
-def _serve() -> int:
-    host = os.environ.get(_BIND_HOST_ENV, _DEFAULT_BIND_HOST)
-    port = _parse_port(os.environ.get(_PORT_ENV, str(_DEFAULT_PORT)))
-    workers = _parse_worker_count(os.environ.get(_WORKERS_ENV, str(_DEFAULT_WORKERS)))
-    if not host or host != host.strip():
-        raise ValueError("Console bind host is invalid")
+def _serve(arguments: argparse.Namespace) -> int:
+    configuration = resolve_serving_configuration(
+        cli_bind_host=arguments.host,
+        cli_port=arguments.port,
+        cli_workers=arguments.workers,
+        config_path=arguments.config,
+        environ=os.environ,
+    )
+    # The import-time loopback gates read the binding from the environment;
+    # publish the resolved decision before Uvicorn imports the app modules.
+    export_resolved_bind_host(configuration, os.environ)
 
     # Validate deployment configuration before Uvicorn starts or forks workers.
     FirstRunSqlIdentityConfiguration.from_environment()
@@ -180,9 +207,9 @@ def _serve() -> int:
     uvicorn.run(
         "atlas_richie.sentinel_console.cli:create_application",
         factory=True,
-        host=host,
-        port=port,
-        workers=workers,
+        host=configuration.bind_host,
+        port=configuration.port,
+        workers=configuration.workers,
         proxy_headers=False,
         # First-run requests perform network policy checks and database schema
         # migrations before a selected runtime engine exists. Uvicorn's short
@@ -208,7 +235,9 @@ def create_application() -> Starlette:
 def _serve_metrics() -> int:
     """Run an isolated ASGI Collector whose listener requires client TLS."""
     host = os.environ.get(_METRICS_BIND_HOST_ENV, _DEFAULT_METRICS_BIND_HOST)
-    port = _parse_port(os.environ.get(_METRICS_PORT_ENV, str(_DEFAULT_METRICS_PORT)))
+    port = parse_port_text(
+        os.environ.get(_METRICS_PORT_ENV, str(_DEFAULT_METRICS_PORT))
+    )
     if not host or host != host.strip():
         raise ValueError("Metrics Collector bind host is invalid")
 
@@ -468,7 +497,15 @@ def _optional_absolute_file(environment_name: str) -> Path | None:
     return path
 
 
-def _operate_setup_window(action: str) -> int:
+def _operate_setup_window(arguments: argparse.Namespace) -> int:
+    action = arguments.action
+    if arguments.config is not None:
+        # The code-free loopback gate below reads the bind from the
+        # environment; a file-configured binding must stay truthful here too.
+        serving = resolve_serving_configuration(
+            config_path=arguments.config, environ=os.environ
+        )
+        export_resolved_bind_host(serving, os.environ)
     configuration = SetupWindowConfiguration.from_environment()
     store = configuration.create_store()
     snapshot = asyncio.run(store.read_snapshot())
@@ -495,24 +532,6 @@ def _operate_setup_window(action: str) -> int:
     asyncio.run(store.close_setup_window_if_open())
     print("setup-window=closed")
     return 0
-
-
-def _parse_port(value: str) -> int:
-    if not value.isascii() or not value.isdecimal() or len(value) > 5:
-        raise ValueError("Console port is invalid")
-    port = int(value)
-    if not 1 <= port <= 65_535:
-        raise ValueError("Console port is invalid")
-    return port
-
-
-def _parse_worker_count(value: str) -> int:
-    if not value.isascii() or not value.isdecimal() or len(value) > 5:
-        raise ValueError("Console worker count is invalid")
-    workers = int(value)
-    if workers < 1:
-        raise ValueError("Console worker count is invalid")
-    return workers
 
 
 def main_entry() -> None:

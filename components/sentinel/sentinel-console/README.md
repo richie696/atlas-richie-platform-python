@@ -239,6 +239,44 @@ per-replica state are not covered by this contract; do not scale replicas until
 the setup-window/runtime-locator authority has a distributed coordination
 design and deployment acceptance.
 
+### Serve configuration file and flags
+
+`serve` also accepts an explicit TOML configuration file and one-off flags:
+
+```bash
+sentinel-console serve --config /etc/sentinel-console/sentinel-console.toml
+sentinel-console serve --host 0.0.0.0 --port 8100 --workers 2
+```
+
+The file carries only the three non-secret operational parameters:
+
+| TOML key | Type | Default | Environment variable |
+| --- | --- | --- | --- |
+| `bind_host` | string | `"127.0.0.1"` | `SENTINEL_CONSOLE_BIND_HOST` |
+| `port` | integer, 1-65535 | `8000` | `SENTINEL_CONSOLE_PORT` |
+| `workers` | positive integer | `1` | `SENTINEL_CONSOLE_WORKERS` |
+
+The precedence is frozen: **command line > environment > file > default**. The
+environment stays the deployment injection channel, so `EnvironmentFile=` or a
+container environment can always override the file; the flags are for one-off
+operator overrides. Unknown keys, wrong types and out-of-range values fail
+startup with the file path in the error message — a typo such as `potr = 8100`
+must never silently fall back to a default. Secrets and deployment-injected
+values (database locators, key rings, operator code, allowed origins) remain
+environment-only; the file must not widen what a deployment exposes.
+
+The resolved bind address is exported to the process environment before the
+ASGI app is composed. The loopback security gates (the non-`Secure` cookie
+policy and the code-free bootstrap authorization) read
+`SENTINEL_CONSOLE_BIND_HOST` when route modules import, so they must see the
+binding that Uvicorn actually uses. A file that binds a non-loopback address
+therefore keeps those gates truthful: combining
+`SENTINEL_CONSOLE_ALLOW_INSECURE_LOOPBACK_COOKIES=true` with a non-loopback
+file bind fails startup instead of silently weakening session cookies. For
+the same reason, when `bind_host` comes from a file, run `setup-window`
+commands with the same `--config` so the code-free bootstrap gate evaluates
+the real binding.
+
 Metrics V2 ingest runs as a separate, mTLS-only process:
 
 ```text

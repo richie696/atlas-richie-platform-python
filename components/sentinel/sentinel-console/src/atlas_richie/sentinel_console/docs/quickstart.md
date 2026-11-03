@@ -54,6 +54,13 @@ sentinel-console serve
 
 服务默认监听 `127.0.0.1:8000`。`GET /healthz` 是不依赖数据库、配置中心或指标服务的进程健康检查；健康检查通过不代表这些依赖已配置成功。
 
+`serve` 可用 `--config` 指定一个 TOML 配置文件，仅承载 `bind_host`、`port`、
+`workers` 三个非密钥参数，也支持 `--host` / `--port` / `--workers` 一次性旗标；
+优先级为命令行 > 环境变量 > 文件 > 默认。写错键名或类型会在启动时带文件路径
+报错，不会静默回落默认值；密钥与部署注入值不进文件。当 `bind_host` 来自文件时，
+`setup-window` 命令需带同一份 `--config`，免 operator code 的 loopback 判定才能
+看到真实绑定。完整键表、优先级与安全耦合说明见 `sentinel-console docs reference`。
+
 若确需远程访问，应先配置受信 TLS 入口和明确的可信代理 CIDR，并让最靠近客户端的代理覆盖而不是透传用户提供的 `X-Forwarded-For`。不要直接将无 TLS 的 Console 端口暴露到公网。
 
 ## 5. 配置中心与主机监控
