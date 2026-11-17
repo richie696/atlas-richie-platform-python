@@ -75,8 +75,11 @@ Private internals:
 
 from __future__ import annotations
 
+import ipaddress
+import os
 from codecs import getincrementaldecoder
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
+from contextlib import contextmanager
 from typing import TypeVar
 
 import httpx
@@ -149,6 +152,48 @@ class _AsyncInvocation:
         return await self._interceptor.intercept(request, self._next_step)
 
 
+_NO_PROXY_ENV_KEYS = ("NO_PROXY", "no_proxy")
+
+
+def _unbracket_ipv6_hosts(value: str) -> str:
+    hosts: list[str] = []
+    for entry in value.split(","):
+        host = entry.strip()
+        if host.startswith("[") and host.endswith("]"):
+            try:
+                ipaddress.IPv6Address(host[1:-1])
+            except ipaddress.AddressValueError:
+                pass
+            else:
+                host = host[1:-1]
+        hosts.append(host)
+    return ",".join(hosts)
+
+
+@contextmanager
+def _no_proxy_ipv6_guard() -> Iterator[None]:
+    """规避 httpx 0.28.1 对带方括号 IPv6 NO_PROXY 条目的解析崩溃。
+
+    httpx 不把 `[::1]` 认作 IPv6，该条目落入域名通配分支生成 `all://*[::1]`，
+    URL 解析抛 InvalidURL，任何 client 都构造不出来。方括号对主机分类是冗余的，
+    去掉后 bypass 语义不变。变换幂等且语义保持，故并发构造看到归一化值也无影响。
+    """
+    saved: dict[str, str] = {}
+    for key in _NO_PROXY_ENV_KEYS:
+        value = os.environ.get(key)
+        if value is None:
+            continue
+        normalized = _unbracket_ipv6_hosts(value)
+        if normalized != value:
+            saved[key] = value
+            os.environ[key] = normalized
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            os.environ[key] = value
+
+
 class _HttpxClientFactory:
     """唯一的内部 HTTPX 客户端构造点；不是 provider SPI。
 
@@ -160,37 +205,39 @@ class _HttpxClientFactory:
 
     @staticmethod
     def create_sync(options: HttpClientOptions) -> httpx.Client:
-        return httpx.Client(
-            headers=dict(options.headers),
-            timeout=_httpx_timeout(options.timeout),
-            limits=httpx.Limits(
-                max_connections=options.max_connections,
-                max_keepalive_connections=options.max_keepalive_connections,
-            ),
-            follow_redirects=options.follow_redirects,
-            verify=(
-                options.ssl_context
-                if options.ssl_context is not None
-                else True
-            ),
-        )
+        with _no_proxy_ipv6_guard():
+            return httpx.Client(
+                headers=dict(options.headers),
+                timeout=_httpx_timeout(options.timeout),
+                limits=httpx.Limits(
+                    max_connections=options.max_connections,
+                    max_keepalive_connections=options.max_keepalive_connections,
+                ),
+                follow_redirects=options.follow_redirects,
+                verify=(
+                    options.ssl_context
+                    if options.ssl_context is not None
+                    else True
+                ),
+            )
 
     @staticmethod
     def create_async(options: HttpClientOptions) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
-            headers=dict(options.headers),
-            timeout=_httpx_timeout(options.timeout),
-            limits=httpx.Limits(
-                max_connections=options.max_connections,
-                max_keepalive_connections=options.max_keepalive_connections,
-            ),
-            follow_redirects=options.follow_redirects,
-            verify=(
-                options.ssl_context
-                if options.ssl_context is not None
-                else True
-            ),
-        )
+        with _no_proxy_ipv6_guard():
+            return httpx.AsyncClient(
+                headers=dict(options.headers),
+                timeout=_httpx_timeout(options.timeout),
+                limits=httpx.Limits(
+                    max_connections=options.max_connections,
+                    max_keepalive_connections=options.max_keepalive_connections,
+                ),
+                follow_redirects=options.follow_redirects,
+                verify=(
+                    options.ssl_context
+                    if options.ssl_context is not None
+                    else True
+                ),
+            )
 
 
 class HttpClient:

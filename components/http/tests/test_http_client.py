@@ -1,3 +1,5 @@
+import asyncio
+import os
 import ssl
 import unittest
 from unittest.mock import patch
@@ -21,7 +23,7 @@ from atlas_richie.http import (
     MultipartPart,
     SseEventParser,
 )
-from atlas_richie.http.client import _HttpxClientFactory
+from atlas_richie.http.client import _HttpxClientFactory, _unbracket_ipv6_hosts
 
 
 class _Events:
@@ -302,6 +304,51 @@ class AsyncHttpClientContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(["notice"], [event.event for event in events])
         self.assertEqual(["ready"], [event.data for event in events])
+
+
+class NoProxyIpv6Tests(unittest.TestCase):
+    """httpx 0.28.1 把 NO_PROXY 里的 `[::1]` 当域名通配，生成非法 URL 直接崩溃。"""
+
+    def test_bracketed_ipv6_no_proxy_still_constructs_both_clients(self) -> None:
+        env = {"NO_PROXY": "localhost,[::1],::1", "no_proxy": "localhost,[::1],::1"}
+        with patch.dict(os.environ, env):
+            sync = _HttpxClientFactory.create_sync(HttpClientOptions())
+            asynchronous = _HttpxClientFactory.create_async(HttpClientOptions())
+        self.addCleanup(sync.close)
+        self.addCleanup(lambda: asyncio.run(asynchronous.aclose()))
+
+    def test_bracketed_and_plain_ipv6_bypass_the_same_hosts(self) -> None:
+        with patch.dict(os.environ, {"NO_PROXY": "[::1]", "no_proxy": "[::1]"}):
+            bracketed = _HttpxClientFactory.create_sync(HttpClientOptions())
+        with patch.dict(os.environ, {"NO_PROXY": "::1", "no_proxy": "::1"}):
+            plain = _HttpxClientFactory.create_sync(HttpClientOptions())
+        self.addCleanup(bracketed.close)
+        self.addCleanup(plain.close)
+
+        self.assertEqual(
+            sorted(pattern.pattern for pattern in bracketed._mounts),
+            sorted(pattern.pattern for pattern in plain._mounts),
+        )
+        self.assertTrue(
+            any(
+                pattern.matches(httpx.URL("http://[::1]:8080/mcp"))
+                for pattern in bracketed._mounts
+            )
+        )
+
+    def test_environment_is_restored_after_construction(self) -> None:
+        original = "localhost,[::1],::1"
+        with patch.dict(os.environ, {"NO_PROXY": original, "no_proxy": original}):
+            client = _HttpxClientFactory.create_sync(HttpClientOptions())
+            self.addCleanup(client.close)
+            self.assertEqual(os.environ["NO_PROXY"], original)
+            self.assertEqual(os.environ["no_proxy"], original)
+
+    def test_only_ipv6_brackets_are_removed(self) -> None:
+        self.assertEqual(
+            _unbracket_ipv6_hosts("example.com,[::1],127.0.0.0/8,[2001:db8::1],*"),
+            "example.com,::1,127.0.0.0/8,2001:db8::1,*",
+        )
 
 
 if __name__ == "__main__":

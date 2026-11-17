@@ -17,15 +17,18 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python }}
-      # --all-extras so the optional `jose` (joserfc) and `test` (pytest) dependencies
-      # exist for `unittest discover`, which imports every flat tests/test_*.py module.
+      # --all-extras: the pytest suites need optional dependencies (`jose` → joserfc,
+      # `test` → pytest/fastapi/uvicorn) that a plain sync does not install.
       - run: uv sync --all-packages --all-groups --all-extras
       - run: uv lock --check
       - run: uv run python tools/dependency-check/check_core_imports.py
-      - run: uv run python -m unittest discover -s components/http/tests -v
-      - run: uv run python -m unittest discover -s components/oauth/tests -v
-      - run: uv run python -m unittest discover -s components/mcp/tests -v
-      - run: uv run python -m unittest discover -s adapters -p 'test_*.py' -v
+      # pytest, not `unittest discover`: these suites mix unittest.TestCase with
+      # pytest-style modules (fixtures, importorskip, package-relative imports).
+      # unittest silently ran none of the pytest-style tests and could not even
+      # import the ones using relative imports.
+      - run: uv run python -m pytest components/http/tests -q
+      - run: uv run python -m pytest components/oauth/tests -q
+      - run: uv run python -m pytest components/mcp/tests -q
       - run: uv build --all-packages
       - run: uv run python tools/release/prepare_wheelhouse.py
       - run: uv run python tools/release/verify_isolated_wheels.py
