@@ -76,7 +76,7 @@ REDIS_URL = os.environ.get(
 
 
 @pytest.fixture(scope="module")
-def registrar() -> RedisProviderRegistrar:
+def registrar(requires_redis_session: None) -> RedisProviderRegistrar:
     """One registrar per test module — every test uses a unique key
     so concurrent tests can't collide on the underlying Redis
     namespace."""

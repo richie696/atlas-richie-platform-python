@@ -219,7 +219,7 @@ def test_from_properties_rejects_non_redisproperties() -> None:
         RedisProviderRegistrar.from_properties({"url": "redis://..."})  # type: ignore[arg-type]
 
 
-def test_from_properties_constructs_registrar(clean_env: None) -> None:
+def test_from_properties_constructs_registrar(clean_env: None, requires_redis: None) -> None:
     """`from_properties` returns a working registrar with the given
     namespace, and the underlying `ConnectionPool` reflects
     `max_connections`."""

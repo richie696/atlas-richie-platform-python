@@ -52,7 +52,7 @@ REDIS_URL = os.environ.get(
 
 
 @pytest.fixture(scope="module")
-def registrar() -> RedisProviderRegistrar:
+def registrar(requires_redis_session: None) -> RedisProviderRegistrar:
     return RedisProviderRegistrar.from_url(
         REDIS_URL, namespace="atlas-richie-test"
     )

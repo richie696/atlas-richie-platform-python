@@ -461,7 +461,7 @@ class TestE2EBoundedAtomicity:
 
 
 class TestE2ENamespaceIsolation:
-    def test_5_1_two_namespaces_do_not_share_state(self) -> None:
+    def test_5_1_two_namespaces_do_not_share_state(self, requires_redis: None) -> None:
         client1 = redis_lib.Redis.from_url(REDIS_URL, decode_responses=True)
         client2 = redis_lib.Redis.from_url(REDIS_URL, decode_responses=True)
         ns1 = f"R-220-M5-NS1:{uuid.uuid4().hex[:8]}"

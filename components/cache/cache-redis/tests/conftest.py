@@ -108,6 +108,21 @@ def requires_redis(redis_available: bool) -> None:
         )
 
 
+@pytest.fixture(scope="session")
+def requires_redis_session(redis_available: bool) -> None:
+    """Session-scoped `requires_redis` for module/session-scoped fixtures.
+
+    A module-scoped `registrar` fixture cannot depend on the function-scoped
+    `requires_redis` (pytest raises ScopeMismatch), so real-Redis fixtures
+    request this variant instead.
+    """
+    if not redis_available:
+        pytest.skip(
+            f"Redis not reachable at {REDIS_URL}; "
+            "set ATLAS_RICHIE_CACHE_REDIS_URL or start the test Redis"
+        )
+
+
 @pytest.fixture(scope="module")
 def redis_namespace() -> str:
     """A unique namespace per test session — prevents cross-test pollution."""
