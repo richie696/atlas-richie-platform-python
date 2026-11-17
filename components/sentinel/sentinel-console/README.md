@@ -4,6 +4,29 @@ Independent ASGI service for the Sentinel control plane. It is deliberately
 separate from `atlas-richie-sentinel-dashboard`, which remains the optional
 per-process diagnostics UI/API embedded beside one Sentinel engine.
 
+## Project boundary
+
+This is an **independent uv project with its own `uv.lock`**, deliberately not a
+member of the repository-root `[tool.uv.workspace]`. It is an application, not a
+library component: it pulls aiohttp, Starlette, SQLAlchemy[asyncio], Alembic,
+argon2-cffi and cryptography, plus database-driver extras. Making it a workspace
+member would force that application stack into every `uv sync --all-packages`
+library environment, which contradicts the platform's rule that installing one
+component must not drag in unrelated dependencies.
+
+The dependency direction is one-way: this app consumes platform libraries
+(`atlas-richie-contracts`, the sentinel reporters); no workspace code imports
+`atlas_richie.sentinel_console`.
+
+It is declared in the root `versions.toml` so `tools/sync_versions.py` recognises
+the package when it walks the tree. That declaration records its version; it does
+not make it a workspace member, and the `atlas-richie-platform` umbrella
+deliberately excludes it.
+
+Build and test it from this directory (`uv sync --extra test`), not from the
+repository root. Its SQLAlchemy persistence adapters are app-local; extracting a
+reusable platform persistence component would be a separate, deliberate decision.
+
 This package is an implementation in progress. Current vertical slices include
 the public bootstrap status, authenticated session and identity commands,
 admin-managed registered configuration-source operations, rule workflow HTTP
