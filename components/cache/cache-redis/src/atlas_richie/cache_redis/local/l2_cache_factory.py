@@ -38,7 +38,7 @@ class L2CacheFactory:
     def __init__(self, default_region: str = "default") -> None:
         self._default_region = default_region
         self._instances: Dict[
-            Tuple[int, int], L2DistributedCache
+            Tuple[int, int, bool, str | None], L2DistributedCache
         ] = {}
         self._lock = threading.Lock()
 
@@ -48,10 +48,17 @@ class L2CacheFactory:
         max_size: int = 10_000,
         ttl_seconds: int = 300,
         region: str | None = None,
+        *,
+        notification_ops=None,
+        invalidation_topic: str | None = None,
     ) -> L2DistributedCache:
         """Return the cached `L2DistributedCache` for the given
-        configuration, creating it on first call."""
-        key = (max_size, ttl_seconds)
+        configuration, creating it on first call.
+
+        Cross-process L1 invalidation is part of the configuration key, so
+        opting in never returns an instance that was built without it.
+        """
+        key = (max_size, ttl_seconds, notification_ops is not None, invalidation_topic)
         with self._lock:
             cache = self._instances.get(key)
             if cache is not None:
@@ -61,13 +68,21 @@ class L2CacheFactory:
                 region=region or self._default_region,
                 max_size=max_size,
                 ttl_seconds=ttl_seconds,
+                notification_ops=notification_ops,
+                invalidation_topic=invalidation_topic,
             )
             self._instances[key] = cache
             return cache
 
     def clear(self) -> None:
-        """Drop all cached instances. Useful for tests."""
+        """Drop all cached instances. Useful for tests.
+
+        Instances holding an invalidation subscription are closed first so
+        their listener threads and pub/sub connections are released.
+        """
         with self._lock:
+            for cache in self._instances.values():
+                cache.close()
             self._instances.clear()
 
 

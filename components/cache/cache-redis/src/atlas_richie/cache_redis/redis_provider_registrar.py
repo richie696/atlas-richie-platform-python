@@ -405,11 +405,19 @@ class RedisProviderRegistrar(ProviderRegistrar):
         self,
         max_size: int = 10_000,
         ttl_seconds: int = 300,
+        *,
+        broadcast_l1_invalidation: bool = False,
     ) -> "L2DistributedCache":
         """Return a cached `L2DistributedCache` for the given config.
 
         Same config → same instance (so `stats()` accumulates across
         calls). Different config → different instance.
+
+        `broadcast_l1_invalidation=True` opts into cross-process L1
+        coherence: writes fan out an eviction notice over this registrar's
+        namespaced pub/sub so peer processes drop the stale L1 entry instead
+        of waiting for its TTL. It costs a subscription (connection + daemon
+        thread) per instance, so it stays off by default.
         """
         from .local.l2_cache_factory import L2CacheFactory
         if not hasattr(self, "_l2_factory"):
@@ -420,6 +428,7 @@ class RedisProviderRegistrar(ProviderRegistrar):
             value_ops=self._string_manager,
             max_size=max_size,
             ttl_seconds=ttl_seconds,
+            notification_ops=self.notification_ops() if broadcast_l1_invalidation else None,
         )
 
     # ── R-224: SnowflakeIdBuilder ───────────────────────────────

@@ -57,6 +57,7 @@ from atlas_richie.cache_core.local.enums.expiry_policy import ExpiryPolicy
 from atlas_richie.cache_core.local.manage.local_cache_manager import (
     LocalCacheManager,
 )
+from atlas_richie.cache_core.ops.notification_ops import NotificationOps
 
 from ..managers.redis_string_manager import (
     RedisStringManager,
@@ -65,6 +66,7 @@ from ..managers.redis_string_manager import (
     _is_negative,
     _NEGATIVE_SENTINEL,
 )
+from .l1_invalidation import L1InvalidationBroadcaster
 
 
 class _KeyLock:
@@ -106,6 +108,13 @@ class L2DistributedCache:
     `cachetools.LRUCache` and the L2 is just a reference to a
     `RedisStringManager`. Use ``L2CacheFactory`` (or
     ``RedisProviderRegistrar.l1(...)``) to obtain cached instances.
+
+    Cross-process L1 coherence is opt-in via `notification_ops`: writes then
+    fan out an eviction notice so peer processes drop the affected L1 entry
+    instead of serving it until its TTL expires. Without it the cache is
+    single-process coherent only. Pass `invalidation_topic` to share a channel
+    across instances; it defaults to `l1-invalidate:{region}` and is namespaced
+    by the registrar. Call `close()` to release the subscription.
     """
 
     def __init__(
@@ -114,6 +123,9 @@ class L2DistributedCache:
         region: str,
         max_size: int = 10_000,
         ttl_seconds: int = 300,
+        *,
+        notification_ops: NotificationOps | None = None,
+        invalidation_topic: str | None = None,
     ) -> None:
         if max_size <= 0:
             raise ValueError("max_size must be > 0")
@@ -153,6 +165,16 @@ class L2DistributedCache:
         self._in_process_loader_wait_seconds_total = 0.0
         self._loader_timeouts = 0
         self._stats_lock = threading.Lock()
+        # Cross-process L1 coherence is opt-in: subscribing costs a Redis
+        # connection plus a daemon thread, so the default stays cheap and
+        # single-process (peers then fall back to the L1 TTL).
+        self._invalidation: L1InvalidationBroadcaster | None = None
+        if notification_ops is not None:
+            self._invalidation = L1InvalidationBroadcaster(
+                notification_ops,
+                invalidation_topic or f"l1-invalidate:{region}",
+                self._evict_local,
+            )
 
     # ── Public API ───────────────────────────────────────────────
 
@@ -194,6 +216,7 @@ class L2DistributedCache:
             pass
         # L2 (network).
         self._value_ops.set_with_ttl(key, value, effective_ttl * 1000)
+        self._publish_evict(key)
 
     def delete(self, key: str) -> None:
         """Delete from BOTH L1 and L2."""
@@ -207,6 +230,7 @@ class L2DistributedCache:
         self._value_ops._backend.raw_client().delete(  # type: ignore[attr-defined]
             self._value_ops._k(key)  # type: ignore[attr-defined]
         )
+        self._publish_evict(key)
 
     def invalidate_l1(self, key: str) -> None:
         """Delete from L1 only (force a fresh L2 read on the next get)."""
@@ -214,6 +238,27 @@ class L2DistributedCache:
             self._local.remove(self._region, key)
         except Exception:
             pass
+
+    def close(self) -> None:
+        """Release the cross-process invalidation subscription, if any.
+
+        Safe to call when invalidation is disabled and safe to call twice.
+        The L1 bucket and the L2 connection are owned by the caller.
+        """
+        if self._invalidation is not None:
+            self._invalidation.close()
+            self._invalidation = None
+
+    def _evict_local(self, key: str) -> None:
+        """Peer-triggered L1 eviction. Never re-publishes, so no echo loop."""
+        try:
+            self._local.remove(self._region, key)
+        except Exception:
+            pass
+
+    def _publish_evict(self, key: str) -> None:
+        if self._invalidation is not None:
+            self._invalidation.publish_evict(key)
 
     # ── M5.2: in-process stampede prevention + loader-driven read ──
 
@@ -378,6 +423,7 @@ class L2DistributedCache:
                             key, _NEGATIVE_SENTINEL,
                             int(negative_cache_ttl_millis),
                         )
+                        self._publish_evict(key)
                     except Exception:
                         pass
                 return None
@@ -390,6 +436,7 @@ class L2DistributedCache:
             except Exception:
                 pass
             self._value_ops.set_with_ttl(key, value, effective_ttl * 1000)
+            self._publish_evict(key)
             return value
 
     # ── M5.3: batch loader ─────────────────────────────────────────
@@ -570,6 +617,7 @@ class L2DistributedCache:
                                 k, _NEGATIVE_SENTINEL,
                                 int(negative_cache_ttl_millis),
                             )
+                            self._publish_evict(k)
                         except Exception:
                             pass
                 # Loader returned None / timed out → all `missing` keys
@@ -590,6 +638,7 @@ class L2DistributedCache:
                 except Exception:
                     pass
                 self._value_ops.set_with_ttl(k, v, effective_ttl * 1000)
+                self._publish_evict(k)
             # Any `missing` keys that the loader didn't return are
             # treated as "no value" (returns `None`).
             for k in missing:
