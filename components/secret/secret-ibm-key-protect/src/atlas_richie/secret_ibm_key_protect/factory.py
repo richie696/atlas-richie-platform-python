@@ -61,6 +61,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
+from atlas_richie.http import no_proxy_ipv6_guard
 from atlas_richie.secret.errors import SecretConfigurationException
 from atlas_richie.secret.metadata import SecretBackend, SecretCapability
 from atlas_richie.secret.provider.configuration import SecretProviderConfiguration
@@ -224,7 +225,7 @@ def _default_kms_factory(properties: IbmKeyProtectProperties) -> KmsLike:
         )
     # ibm-cloud-sdk-core is opt-in; lazy import.
     try:
-        from ibm_cloud_sdk_core import (  # type: ignore[import-not-found]
+        from ibm_cloud_sdk_core.authenticators import (  # type: ignore[import-not-found]
             BearerTokenAuthenticator,
         )
     except ImportError as error:
@@ -246,16 +247,17 @@ def _default_kms_factory(properties: IbmKeyProtectProperties) -> KmsLike:
             f"{error} (SEC-BOOT-003)",
         ) from error
     try:
-        client = httpx.Client(
-            base_url=properties.kms_endpoint,
-            auth=_BearerTokenHttpxAuth(bearer_token),
-            timeout=httpx.Timeout(
-                connect=properties.connect_timeout_seconds,
-                read=properties.read_timeout_seconds,
-                write=properties.read_timeout_seconds,
-                pool=properties.connect_timeout_seconds,
-            ),
-        )
+        with no_proxy_ipv6_guard():
+            client = httpx.Client(
+                base_url=properties.kms_endpoint,
+                auth=_BearerTokenHttpxAuth(bearer_token),
+                timeout=httpx.Timeout(
+                    connect=properties.connect_timeout_seconds,
+                    read=properties.read_timeout_seconds,
+                    write=properties.read_timeout_seconds,
+                    pool=properties.connect_timeout_seconds,
+                ),
+            )
     except Exception as error:  # noqa: BLE001
         raise SecretConfigurationException(
             f"ibm-key-protect: cannot build httpx.Client "

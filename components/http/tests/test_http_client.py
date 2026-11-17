@@ -23,7 +23,8 @@ from atlas_richie.http import (
     MultipartPart,
     SseEventParser,
 )
-from atlas_richie.http.client import _HttpxClientFactory, _unbracket_ipv6_hosts
+from atlas_richie.http.client import _HttpxClientFactory
+from atlas_richie.http.environment import _unbracket_ipv6_hosts
 
 
 class _Events:

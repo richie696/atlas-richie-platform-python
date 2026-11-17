@@ -41,6 +41,7 @@ from typing import Protocol, runtime_checkable
 
 import httpx
 
+from atlas_richie.http import no_proxy_ipv6_guard
 from atlas_richie.secret.metadata import SecretBackend, SecretCapability
 from atlas_richie.secret.provider.configuration import SecretProviderConfiguration
 from atlas_richie.secret.provider.descriptor import SecretProviderDescriptor
@@ -79,14 +80,15 @@ class _HttpClientFactory(Protocol):
 
 
 def _default_http_factory(properties: BarbicanSecretProperties) -> httpx.Client:
-    return httpx.Client(
-        timeout=httpx.Timeout(
-            connect=properties.connect_timeout_seconds,
-            read=properties.read_timeout_seconds,
-            write=properties.read_timeout_seconds,
-            pool=properties.connect_timeout_seconds,
-        ),
-    )
+    with no_proxy_ipv6_guard():
+        return httpx.Client(
+            timeout=httpx.Timeout(
+                connect=properties.connect_timeout_seconds,
+                read=properties.read_timeout_seconds,
+                write=properties.read_timeout_seconds,
+                pool=properties.connect_timeout_seconds,
+            ),
+        )
 
 
 class BarbicanClientFactory:

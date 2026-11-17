@@ -60,6 +60,7 @@ from typing import Any
 
 import httpx
 
+from atlas_richie.http import no_proxy_ipv6_guard
 from atlas_richie.secret.bootstrap.catalog import RequiredWhen
 from atlas_richie.secret.bootstrap.spi import (
     SecretBootstrapContext,
@@ -163,14 +164,15 @@ class BarbicanSecretClient:
         elif http_client_factory is not None:
             self._http = http_client_factory()
         else:
-            self._http = httpx.Client(
-                timeout=httpx.Timeout(
-                    connect=self._properties.connect_timeout_seconds,
-                    read=self._properties.read_timeout_seconds,
-                    write=self._properties.read_timeout_seconds,
-                    pool=self._properties.connect_timeout_seconds,
-                ),
-            )
+            with no_proxy_ipv6_guard():
+                self._http = httpx.Client(
+                    timeout=httpx.Timeout(
+                        connect=self._properties.connect_timeout_seconds,
+                        read=self._properties.read_timeout_seconds,
+                        write=self._properties.read_timeout_seconds,
+                        pool=self._properties.connect_timeout_seconds,
+                    ),
+                )
         self._snapshot_manager = SecretSnapshotManager()
         self._closed = False
 

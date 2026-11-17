@@ -31,6 +31,7 @@ Tests `BarbicanSecretClient` end-to-end via
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -275,7 +276,12 @@ class TestBarbicanErrorMapping:
         # the actual file read happens at client construction.
         resolved = BarbicanConfigurationResolver().resolve(properties)
         with pytest.raises(SecretConfigurationException) as info:
-            BarbicanSecretClient(resolved=resolved, http_client=httpx.Client())
+            BarbicanSecretClient(
+                resolved=resolved,
+                http_client=httpx.Client(
+                    transport=httpx.MockTransport(lambda request: httpx.Response(200))
+                ),
+            )
         assert "SEC-BOOT-003" in str(info.value)
 
 
@@ -397,6 +403,28 @@ class TestBarbicanSession:
         client.close()
         with pytest.raises(SecretException):
             client.read(SecretReference(provider="barbican", path="db-password"))
+
+
+class TestBarbicanHttpEnvironment:
+    """默认 httpx 构造须容忍 NO_PROXY 里的方括号 IPv6（httpx 0.28.1 会直接崩）。"""
+
+    def test_default_http_factory_survives_bracketed_ipv6_no_proxy(
+        self, default_properties, monkeypatch
+    ) -> None:
+        from atlas_richie.secret_barbican.factory import _default_http_factory
+
+        original = "localhost,[::1],::1"
+        monkeypatch.setenv("NO_PROXY", original)
+        monkeypatch.setenv("no_proxy", original)
+
+        client = _default_http_factory(default_properties)
+        try:
+            assert isinstance(client, httpx.Client)
+        finally:
+            client.close()
+
+        assert os.environ["NO_PROXY"] == original
+        assert os.environ["no_proxy"] == original
 
 
 __all__ = []

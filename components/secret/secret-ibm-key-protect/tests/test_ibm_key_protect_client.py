@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import os
 
 import pytest
 
@@ -292,3 +293,24 @@ class TestIbmFactory:
         )
         assert unwrapped == b"data"
         session.close()
+
+    def test_default_kms_factory_survives_bracketed_ipv6_no_proxy(
+        self,
+        base_properties: IbmKeyProtectProperties,
+        monkeypatch,
+    ) -> None:
+        pytest.importorskip("ibm_cloud_sdk_core")
+        from atlas_richie.secret_ibm_key_protect.factory import _default_kms_factory
+
+        original = "localhost,[::1],::1"
+        monkeypatch.setenv("NO_PROXY", original)
+        monkeypatch.setenv("no_proxy", original)
+
+        kms = _default_kms_factory(base_properties)
+        try:
+            assert kms is not None
+        finally:
+            kms.close()
+
+        assert os.environ["NO_PROXY"] == original
+        assert os.environ["no_proxy"] == original

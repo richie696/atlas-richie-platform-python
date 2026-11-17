@@ -695,6 +695,7 @@ version = "0.2.0"
 source = { editable = "components/secret/secret-barbican" }
 dependencies = [
     { name = "atlas-richie-contracts" },
+    { name = "atlas-richie-http" },
     { name = "atlas-richie-secret-core" },
     { name = "httpx" },
     { name = "pydantic" },
@@ -709,6 +710,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "atlas-richie-http", editable = "components/http" },
     { name = "atlas-richie-secret-core", editable = "components/secret/secret-core" },
     { name = "httpx", specifier = ">=0.28,<1.0" },
     { name = "pydantic", specifier = ">=2.0,<3.0" },
@@ -809,6 +811,7 @@ version = "0.2.0"
 source = { editable = "components/secret/secret-ibm-key-protect" }
 dependencies = [
     { name = "atlas-richie-contracts" },
+    { name = "atlas-richie-http" },
     { name = "atlas-richie-secret-core" },
     { name = "httpx" },
     { name = "pydantic" },
@@ -826,6 +829,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "atlas-richie-http", editable = "components/http" },
     { name = "atlas-richie-secret-core", editable = "components/secret/secret-core" },
     { name = "httpx", specifier = ">=0.27,<1.0" },
     { name = "ibm-cloud-sdk-core", marker = "extra == 'sdk'", specifier = ">=3.18,<4.0" },
