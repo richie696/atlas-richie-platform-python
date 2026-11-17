@@ -68,6 +68,8 @@ conventions listed above (full data-id via
 
 from __future__ import annotations
 
+import importlib.metadata
+
 from .codec import (
     NacosCodecError,
     NacosDecodeError,
@@ -85,7 +87,7 @@ from .config import (
 )
 from .source import NacosRuleSource
 
-__version__ = "0.2.0"
+__version__ = importlib.metadata.version("atlas-richie-sentinel-source-nacos")
 
 __all__ = [
     "__version__",

@@ -122,6 +122,8 @@ Out of 1.0 scope (deferred to M6.3.x future):
 
 from __future__ import annotations
 
+import importlib.metadata
+
 from .client import ClientIdentity, RemoteTokenService
 from .config import ClusterTokenConfig, ClusterTokenMode, ResourceConfig
 from .errors import (
@@ -148,7 +150,7 @@ from .server import (
     main,
 )
 
-__version__ = "0.2.0"
+__version__ = importlib.metadata.version("atlas-richie-sentinel-cluster")
 
 __all__ = [
     "__version__",

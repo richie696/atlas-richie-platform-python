@@ -1,3 +1,5 @@
 """Compatibility metadata for a verified component combination."""
 
-__version__ = "0.1.0"
+import importlib.metadata
+
+__version__ = importlib.metadata.version("atlas-richie-platform")

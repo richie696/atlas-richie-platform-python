@@ -73,6 +73,8 @@ Public API:
 
 from __future__ import annotations
 
+import importlib.metadata
+
 from .errors import (
     CacheError,
     CapacityError,
@@ -117,7 +119,7 @@ from .redis_distributed_cache import RedisDistributedCache
 from .redis_cache_properties import ProtocolVersion, RedisCacheProperties, RedisPerfSettings, RedisType
 from .redis_provider_registrar import RedisProviderRegistrar
 
-__version__ = "0.10.0"  # bumped for R-224 (SnowflakeIdBuilder)
+__version__ = importlib.metadata.version("atlas-richie-cache-redis")
 
 __all__ = [
     "CacheError",

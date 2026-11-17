@@ -20,12 +20,14 @@ Zero backend dependency. `redis-py` is NOT installed by this package.
 
 from __future__ import annotations
 
+import importlib.metadata
+
 from .global_cache import GlobalCache
 from .global_cache_manager import GlobalCacheManager
 from .local import LocalCache, LocalCacheManager
 from .registry import CacheRegistry, ProviderRegistrar, StateError
 
-__version__ = "0.1.0"
+__version__ = importlib.metadata.version("atlas-richie-cache-core")
 
 __all__ = [
     "CacheRegistry",
