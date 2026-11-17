@@ -19,6 +19,7 @@ members = [
     "atlas-richie-mfa-validation",
     "atlas-richie-oauth",
     "atlas-richie-platform",
+    "atlas-richie-redis-streammq",
     "atlas-richie-secret-aliyun-kms",
     "atlas-richie-secret-aws-kms",
     "atlas-richie-secret-azure-keyvault",
@@ -599,6 +600,7 @@ dependencies = [
     { name = "atlas-richie-mcp" },
     { name = "atlas-richie-mfa-validation" },
     { name = "atlas-richie-oauth" },
+    { name = "atlas-richie-redis-streammq" },
     { name = "atlas-richie-secret-aliyun-kms" },
     { name = "atlas-richie-secret-aws-kms" },
     { name = "atlas-richie-secret-azure-keyvault" },
@@ -644,6 +646,7 @@ requires-dist = [
     { name = "atlas-richie-mcp", editable = "components/mcp" },
     { name = "atlas-richie-mfa-validation", editable = "components/mfa/mfa-validation" },
     { name = "atlas-richie-oauth", editable = "components/oauth" },
+    { name = "atlas-richie-redis-streammq", editable = "components/redis-streammq" },
     { name = "atlas-richie-secret-aliyun-kms", editable = "components/secret/secret-aliyun-kms" },
     { name = "atlas-richie-secret-aws-kms", editable = "components/secret/secret-aws-kms" },
     { name = "atlas-richie-secret-azure-keyvault", editable = "components/secret/secret-azure-keyvault" },
@@ -676,6 +679,26 @@ requires-dist = [
     { name = "atlas-richie-testing", editable = "foundation/testing" },
     { name = "atlas-richie-web-protection", editable = "components/web/web-protection" },
 ]
+
+[[package]]
+name = "atlas-richie-redis-streammq"
+version = "0.2.0"
+source = { editable = "components/redis-streammq" }
+dependencies = [
+    { name = "redis" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+    { name = "redis", specifier = ">=5.0,<9.0" },
+]
+provides-extras = ["test"]
 
 [[package]]
 name = "atlas-richie-secret-aliyun-kms"

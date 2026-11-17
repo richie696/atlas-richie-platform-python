@@ -34,6 +34,7 @@ jobs:
       - run: uv run python -m pytest components/mfa -q
       - run: uv run python -m pytest components/web -q
       - run: uv run python -m pytest components/statemachine -q
+      - run: uv run python -m pytest components/redis-streammq -q
       - run: uv build --all-packages
       - run: uv run python tools/release/prepare_wheelhouse.py
       - run: uv run python tools/release/verify_isolated_wheels.py
