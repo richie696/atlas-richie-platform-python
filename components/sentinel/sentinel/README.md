@@ -24,7 +24,7 @@ that protects both the entire service and individual resources. Sentinel is the 
 | Resource model       | None                                   | `Resource` + slot chain     |
 | Flow / Degrade rules | None                                   | 5 rule families (M1-M3)     |
 | System protection    | None                                   | `SystemSlot` (CPU/Load/QPS) |
-| Source / push        | None                                   | `source-file` / `source-nacos` / `source-redis` (extensions) |
+| Source / push        | None                                   | `source-file` / `source-nacos` (extensions) |
 | Dashboard            | None                                   | `sentinel-dashboard` (REST control plane) |
 | Third-party deps     | 1 each (lifecycle dep)                 | **0** in main wheel         |
 | Async-native         | partial                                | asyncio-first + async ctx   |

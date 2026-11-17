@@ -162,7 +162,6 @@ sdist PKG-INFO 全部 `0.2.0` 一致。
 
 - `atlas-richie-sentinel-cluster` — Cluster token client
 - `atlas-richie-sentinel-source-nacos` — Nacos rule source
-- `atlas-richie-sentinel-source-redis` — Redis pub/sub source
 - `atlas-richie-sentinel-adapter-grpc` — gRPC interceptor
 - `atlas-richie-sentinel-dashboard-prometheus` — Prometheus exporter
 - 3.10 / 3.11 support(单独 milestone)
