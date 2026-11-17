@@ -10,6 +10,7 @@ resolution-markers = [
 members = [
     "atlas-richie-cache-core",
     "atlas-richie-cache-redis",
+    "atlas-richie-chunking-core",
     "atlas-richie-contracts",
     "atlas-richie-http",
     "atlas-richie-httpx-env",
@@ -438,6 +439,20 @@ requires-dist = [
 provides-extras = ["test"]
 
 [[package]]
+name = "atlas-richie-chunking-core"
+version = "0.2.0"
+source = { editable = "components/chunking/chunking-core" }
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" }]
+provides-extras = ["test"]
+
+[[package]]
 name = "atlas-richie-contracts"
 version = "0.2.0"
 source = { editable = "foundation/contracts" }
@@ -544,6 +559,7 @@ source = { editable = "foundation/platform" }
 dependencies = [
     { name = "atlas-richie-cache-core" },
     { name = "atlas-richie-cache-redis" },
+    { name = "atlas-richie-chunking-core" },
     { name = "atlas-richie-contracts" },
     { name = "atlas-richie-http" },
     { name = "atlas-richie-httpx-env" },
@@ -584,6 +600,7 @@ dependencies = [
 requires-dist = [
     { name = "atlas-richie-cache-core", editable = "components/cache/cache-core" },
     { name = "atlas-richie-cache-redis", editable = "components/cache/cache-redis" },
+    { name = "atlas-richie-chunking-core", editable = "components/chunking/chunking-core" },
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
     { name = "atlas-richie-http", editable = "components/http" },
     { name = "atlas-richie-httpx-env", editable = "foundation/httpx-env" },

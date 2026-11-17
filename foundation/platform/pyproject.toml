@@ -16,6 +16,7 @@ authors = [
 dependencies = [
   "atlas-richie-cache-core>=0.2.0,<0.3.0",
   "atlas-richie-cache-redis>=0.2.0,<0.3.0",
+  "atlas-richie-chunking-core>=0.2.0,<0.3.0",
   "atlas-richie-contracts>=0.2.0,<0.3.0",
   "atlas-richie-http>=0.2.0,<0.3.0",
   "atlas-richie-httpx-env>=0.2.0,<0.3.0",

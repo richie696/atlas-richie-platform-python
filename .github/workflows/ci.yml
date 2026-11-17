@@ -29,6 +29,7 @@ jobs:
       - run: uv run python -m pytest components/http/tests -q
       - run: uv run python -m pytest components/oauth/tests -q
       - run: uv run python -m pytest components/mcp/tests -q
+      - run: uv run python -m pytest components/chunking -q
       - run: uv build --all-packages
       - run: uv run python tools/release/prepare_wheelhouse.py
       - run: uv run python tools/release/verify_isolated_wheels.py
