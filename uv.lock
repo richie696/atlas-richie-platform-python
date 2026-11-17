@@ -16,6 +16,7 @@ members = [
     "atlas-richie-http",
     "atlas-richie-httpx-env",
     "atlas-richie-mcp",
+    "atlas-richie-mfa-validation",
     "atlas-richie-oauth",
     "atlas-richie-platform",
     "atlas-richie-secret-aliyun-kms",
@@ -546,6 +547,20 @@ requires-dist = [
 provides-extras = ["jsonschema"]
 
 [[package]]
+name = "atlas-richie-mfa-validation"
+version = "0.2.0"
+source = { editable = "components/mfa/mfa-validation" }
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" }]
+provides-extras = ["test"]
+
+[[package]]
 name = "atlas-richie-oauth"
 version = "0.2.0"
 source = { editable = "components/oauth" }
@@ -580,6 +595,7 @@ dependencies = [
     { name = "atlas-richie-http" },
     { name = "atlas-richie-httpx-env" },
     { name = "atlas-richie-mcp" },
+    { name = "atlas-richie-mfa-validation" },
     { name = "atlas-richie-oauth" },
     { name = "atlas-richie-secret-aliyun-kms" },
     { name = "atlas-richie-secret-aws-kms" },
@@ -622,6 +638,7 @@ requires-dist = [
     { name = "atlas-richie-http", editable = "components/http" },
     { name = "atlas-richie-httpx-env", editable = "foundation/httpx-env" },
     { name = "atlas-richie-mcp", editable = "components/mcp" },
+    { name = "atlas-richie-mfa-validation", editable = "components/mfa/mfa-validation" },
     { name = "atlas-richie-oauth", editable = "components/oauth" },
     { name = "atlas-richie-secret-aliyun-kms", editable = "components/secret/secret-aliyun-kms" },
     { name = "atlas-richie-secret-aws-kms", editable = "components/secret/secret-aws-kms" },
