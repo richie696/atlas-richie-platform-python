@@ -1,0 +1,45 @@
+"""Framework-neutral request protection algorithms.
+
+Zero runtime dependencies. Servlet/ASGI plumbing, response rendering and shared
+storage are adapter concerns; this package only decides allow/deny.
+"""
+
+import importlib.metadata
+
+from .guards import (
+    HEADER_NONCE,
+    HEADER_SIGNATURE,
+    HEADER_TIMESTAMP,
+    ApiSignatureVerifier,
+    RequestContext,
+    RequestSizeDecision,
+    RequestSizeGuard,
+    SecretKeyProvider,
+    SignatureDecision,
+    canonicalize,
+    hmac_sha256_hex,
+)
+from .matchers import BotUserAgentMatcher, IpBlacklistEntry, glob_to_regex
+from .trackers import LoginAttemptTracker, NonceCache
+
+__version__ = importlib.metadata.version("atlas-richie-web-protection")
+
+__all__ = [
+    "HEADER_NONCE",
+    "HEADER_SIGNATURE",
+    "HEADER_TIMESTAMP",
+    "ApiSignatureVerifier",
+    "BotUserAgentMatcher",
+    "IpBlacklistEntry",
+    "LoginAttemptTracker",
+    "NonceCache",
+    "RequestContext",
+    "RequestSizeDecision",
+    "RequestSizeGuard",
+    "SecretKeyProvider",
+    "SignatureDecision",
+    "__version__",
+    "canonicalize",
+    "glob_to_regex",
+    "hmac_sha256_hex",
+]

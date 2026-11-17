@@ -48,6 +48,7 @@ members = [
     "atlas-richie-sentinel-source-file",
     "atlas-richie-sentinel-source-nacos",
     "atlas-richie-testing",
+    "atlas-richie-web-protection",
 ]
 
 [[package]]
@@ -626,6 +627,7 @@ dependencies = [
     { name = "atlas-richie-sentinel-source-file" },
     { name = "atlas-richie-sentinel-source-nacos" },
     { name = "atlas-richie-testing" },
+    { name = "atlas-richie-web-protection" },
 ]
 
 [package.metadata]
@@ -669,6 +671,7 @@ requires-dist = [
     { name = "atlas-richie-sentinel-source-file", editable = "components/sentinel/sentinel-source-file" },
     { name = "atlas-richie-sentinel-source-nacos", editable = "components/sentinel/sentinel-source-nacos" },
     { name = "atlas-richie-testing", editable = "foundation/testing" },
+    { name = "atlas-richie-web-protection", editable = "components/web/web-protection" },
 ]
 
 [[package]]
@@ -1459,6 +1462,20 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "atlas-richie-contracts", editable = "foundation/contracts" }]
+
+[[package]]
+name = "atlas-richie-web-protection"
+version = "0.2.0"
+source = { editable = "components/web/web-protection" }
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" }]
+provides-extras = ["test"]
 
 [[package]]
 name = "attrs"

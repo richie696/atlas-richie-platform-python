@@ -11,6 +11,7 @@ members = [
   "components/chunking/chunking-core",
   "components/desensitize/desensitize-core",
   "components/mfa/mfa-validation",
+  "components/web/web-protection",
   "components/mcp",
   "components/oauth",
   "components/secret/secret-core",
@@ -52,6 +53,7 @@ atlas-richie-httpx-env = { workspace = true }
 atlas-richie-chunking-core = { workspace = true }
 atlas-richie-desensitize-core = { workspace = true }
 atlas-richie-mfa-validation = { workspace = true }
+atlas-richie-web-protection = { workspace = true }
 atlas-richie-mcp = { workspace = true }
 atlas-richie-oauth = { workspace = true }
 atlas-richie-secret-core = { workspace = true }
