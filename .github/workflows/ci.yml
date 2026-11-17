@@ -17,7 +17,9 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python }}
-      - run: uv sync --all-packages --all-groups
+      # --all-extras so the optional `jose` (joserfc) and `test` (pytest) dependencies
+      # exist for `unittest discover`, which imports every flat tests/test_*.py module.
+      - run: uv sync --all-packages --all-groups --all-extras
       - run: uv lock --check
       - run: uv run python tools/dependency-check/check_core_imports.py
       - run: uv run python -m unittest discover -s components/http/tests -v

@@ -522,6 +522,10 @@ def _safe_error_code(value: object) -> str:
             "access_denied",
             "temporarily_unavailable",
             "server_error",
+            # RFC 8628 §3.5 device authorization grant error codes.
+            "authorization_pending",
+            "slow_down",
+            "expired_token",
         }
     )
     return value if value in known else "oauth_endpoint_error"
