@@ -6,6 +6,7 @@ members = [
   "foundation/contracts",
   "foundation/testing",
   "foundation/platform",
+  "foundation/httpx-env",
   "components/http",
   "components/mcp",
   "components/oauth",
@@ -44,6 +45,7 @@ members = [
 [tool.uv.sources]
 atlas-richie-contracts = { workspace = true }
 atlas-richie-http = { workspace = true }
+atlas-richie-httpx-env = { workspace = true }
 atlas-richie-mcp = { workspace = true }
 atlas-richie-oauth = { workspace = true }
 atlas-richie-secret-core = { workspace = true }

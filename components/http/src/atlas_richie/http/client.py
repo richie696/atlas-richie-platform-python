@@ -80,8 +80,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequen
 from typing import TypeVar
 
 import httpx
+from atlas_richie.httpx_env import no_proxy_ipv6_guard
 
-from .environment import no_proxy_ipv6_guard
 from .errors import (
     HttpClientClosedError,
     HttpConnectError,

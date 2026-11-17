@@ -60,7 +60,7 @@ from typing import Any
 
 import httpx
 
-from atlas_richie.http import no_proxy_ipv6_guard
+from atlas_richie.httpx_env import no_proxy_ipv6_guard
 from atlas_richie.secret.bootstrap.catalog import RequiredWhen
 from atlas_richie.secret.bootstrap.spi import (
     SecretBootstrapContext,

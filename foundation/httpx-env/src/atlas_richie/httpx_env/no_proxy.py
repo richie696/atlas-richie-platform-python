@@ -1,10 +1,11 @@
-"""HTTPX 构造期的进程环境兼容垫片。
+"""NO_PROXY 兼容垫片。
 
 English
 --------
-Compatibility shims for the process environment HTTPX reads when a client is
-constructed. Shared by every component that builds an HTTPX client directly,
-so the workaround lives in one place instead of being copied per provider.
+Compatibility shim for the NO_PROXY environment variable HTTPX reads when a
+client is constructed. Kept in a zero-dependency leaf so that any component
+building an HTTPX client can share the workaround without depending on the
+`atlas-richie-http` facade.
 """
 
 from __future__ import annotations

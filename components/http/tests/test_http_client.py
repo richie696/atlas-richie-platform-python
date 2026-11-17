@@ -24,7 +24,6 @@ from atlas_richie.http import (
     SseEventParser,
 )
 from atlas_richie.http.client import _HttpxClientFactory
-from atlas_richie.http.environment import _unbracket_ipv6_hosts
 
 
 class _Events:
@@ -344,12 +343,6 @@ class NoProxyIpv6Tests(unittest.TestCase):
             self.addCleanup(client.close)
             self.assertEqual(os.environ["NO_PROXY"], original)
             self.assertEqual(os.environ["no_proxy"], original)
-
-    def test_only_ipv6_brackets_are_removed(self) -> None:
-        self.assertEqual(
-            _unbracket_ipv6_hosts("example.com,[::1],127.0.0.0/8,[2001:db8::1],*"),
-            "example.com,::1,127.0.0.0/8,2001:db8::1,*",
-        )
 
 
 if __name__ == "__main__":

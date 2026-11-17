@@ -41,7 +41,7 @@ from typing import Protocol, runtime_checkable
 
 import httpx
 
-from atlas_richie.http import no_proxy_ipv6_guard
+from atlas_richie.httpx_env import no_proxy_ipv6_guard
 from atlas_richie.secret.metadata import SecretBackend, SecretCapability
 from atlas_richie.secret.provider.configuration import SecretProviderConfiguration
 from atlas_richie.secret.provider.descriptor import SecretProviderDescriptor

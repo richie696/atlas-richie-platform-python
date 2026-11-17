@@ -1,7 +1,6 @@
 """Owned HTTP semantics with HTTPX kept behind the component boundary."""
 
 from .client import AsyncHttpClient, HttpClient
-from .environment import no_proxy_ipv6_guard
 from .errors import (
     HttpClientClosedError,
     HttpConnectError,
@@ -55,7 +54,6 @@ __all__ = [
     "HttpTransportError",
     "MediaType",
     "MultipartPart",
-    "no_proxy_ipv6_guard",
     "SseEvent",
     "SseEventParser",
 ]

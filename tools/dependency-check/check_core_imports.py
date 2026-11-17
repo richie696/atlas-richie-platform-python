@@ -37,6 +37,7 @@ def main() -> int:
     root = Path(__file__).resolve().parents[2]
     source_roots = [
         root / "foundation" / "contracts" / "src",
+        root / "foundation" / "httpx-env" / "src",
         root / "components" / "mcp" / "src",
         root / "components" / "oauth" / "src",
     ]
