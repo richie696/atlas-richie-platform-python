@@ -9,6 +9,7 @@ members = [
   "foundation/httpx-env",
   "components/http",
   "components/chunking/chunking-core",
+  "components/desensitize/desensitize-core",
   "components/mcp",
   "components/oauth",
   "components/secret/secret-core",
@@ -48,6 +49,7 @@ atlas-richie-contracts = { workspace = true }
 atlas-richie-http = { workspace = true }
 atlas-richie-httpx-env = { workspace = true }
 atlas-richie-chunking-core = { workspace = true }
+atlas-richie-desensitize-core = { workspace = true }
 atlas-richie-mcp = { workspace = true }
 atlas-richie-oauth = { workspace = true }
 atlas-richie-secret-core = { workspace = true }
