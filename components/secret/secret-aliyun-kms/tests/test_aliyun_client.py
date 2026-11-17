@@ -61,7 +61,7 @@ from atlas_richie.secret_aliyun_kms.client import (
 )
 from atlas_richie.secret_aliyun_kms.properties import AliyunSecretMapping
 
-from tests.conftest import (  # type: ignore[import-not-found]
+from conftest import (  # type: ignore[import-not-found]
     FakeAliyunGateway,
     decode_base64,
     fake_aliyun_gateway,
