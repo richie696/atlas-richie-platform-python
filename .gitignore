@@ -228,3 +228,6 @@ Icon?
 # Editor / IDE noise (per-repo, not in template)
 .vscode/
 .idea/
+
+# Session handoff notes contain local dev credentials — never commit
+HANDOFF.md
