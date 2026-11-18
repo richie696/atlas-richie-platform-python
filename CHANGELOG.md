@@ -86,6 +86,19 @@ categories and Semantic Versioning.
 
 ### Changed
 
+- **BREAKING (behaviour): local-cache expiry now honours the JSR-107 policy.**
+  `ExpiryPolicy` declared CREATED / ACCESSED / MODIFIED / TOUCHED, but the
+  bucket only distinguished ETERNAL from everything else, so all four
+  behaved as CREATED — including ACCESSED, which is both the default policy
+  and the one `L2DistributedCache` configures for its L1 region. Reads now
+  reset the deadline under ACCESSED / TOUCHED, and updates reset it under
+  MODIFIED / TOUCHED while CREATED / ACCESSED keep the original deadline
+  (matching JCache's `getExpiryForUpdate`). A per-key TTL override is
+  remembered so a refresh reuses it rather than the region default.
+  **Effect:** hot keys stay in L1 longer under repeated reads. This is the
+  intended semantics and matches the Java side; the staleness risk is
+  mitigated by the cross-process L1 invalidation broadcast added to
+  `L2DistributedCache` (opt-in via `broadcast_l1_invalidation=True`).
 - **Cache parent restructure** (R-227): single-package
   `components/cache/src/` replaced with
   `components/cache/{cache-core, cache-redis}/` to keep

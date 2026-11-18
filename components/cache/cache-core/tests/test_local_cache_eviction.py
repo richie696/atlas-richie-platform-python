@@ -47,6 +47,16 @@ def _manager(policy: ExpiryPolicy, *, max_size: int = 100, ttl_millis: int = 300
     )
 
 
+@pytest.fixture
+def clock(monkeypatch):
+    """Deterministic millisecond clock so the expiry matrix needs no sleeps."""
+    from atlas_richie.cache_core.local.manage import local_cache_manager as lcm
+
+    now = [0]
+    monkeypatch.setattr(lcm._CacheBucket, "_now_millis", staticmethod(lambda: now[0]))
+    return now
+
+
 class TestLruEviction:
     def test_least_recently_used_is_evicted_at_max_size(self) -> None:
         manager = _manager(ExpiryPolicy.ETERNAL, max_size=2)
@@ -78,20 +88,144 @@ class TestLruEviction:
 
 
 class TestExpiryPolicies:
+    """JSR-107 expiry semantics, matching the Java JCache policy factories.
+
+    | policy   | create | access(read) | update(write) |
+    | CREATED  | set    | unchanged    | unchanged     |
+    | ACCESSED | set    | reset        | unchanged     |
+    | MODIFIED | set    | unchanged    | reset         |
+    | TOUCHED  | set    | reset        | reset         |
+    | ETERNAL  | never expires                          |
+    """
+
     def test_eternal_ignores_ttl(self) -> None:
         manager = _manager(ExpiryPolicy.ETERNAL)
         manager.put_with_ttl(REGION, "k", b"v", 20)
         time.sleep(0.05)
         assert manager.get(REGION, "k") == b"v"
 
-    @pytest.mark.parametrize(
-        "policy", [ExpiryPolicy.CREATED, ExpiryPolicy.ACCESSED, ExpiryPolicy.MODIFIED, ExpiryPolicy.TOUCHED]
-    )
-    def test_non_eternal_expires_from_write(self, policy: ExpiryPolicy) -> None:
-        manager = _manager(policy, ttl_millis=25)
+    def test_created_expires_from_write(self) -> None:
+        manager = _manager(ExpiryPolicy.CREATED, ttl_millis=25)
         manager.put(REGION, "k", b"v")
-        assert manager.get(REGION, "k") == b"v"
         time.sleep(0.06)
+        assert manager.get(REGION, "k") is None
+
+    def test_accessed_read_extends_ttl(self, clock) -> None:
+        manager = _manager(ExpiryPolicy.ACCESSED, ttl_millis=100)
+        manager.put(REGION, "k", b"v")          # deadline 100
+        clock[0] = 80
+        assert manager.get(REGION, "k") == b"v"  # read resets deadline to 180
+        clock[0] = 150
+        assert manager.get(REGION, "k") == b"v"  # this read resets it again, to 250
+        clock[0] = 251
+        assert manager.get(REGION, "k") is None
+
+    def test_created_read_does_not_extend_ttl(self, clock) -> None:
+        manager = _manager(ExpiryPolicy.CREATED, ttl_millis=100)
+        manager.put(REGION, "k", b"v")
+        clock[0] = 80
+        assert manager.get(REGION, "k") == b"v"
+        clock[0] = 101
+        assert manager.get(REGION, "k") is None, "CREATED expires from write regardless of reads"
+
+    def test_modified_update_extends_but_read_does_not(self, clock) -> None:
+        manager = _manager(ExpiryPolicy.MODIFIED, ttl_millis=100)
+        manager.put(REGION, "k", b"v")
+        clock[0] = 80
+        assert manager.get(REGION, "k") == b"v"
+        clock[0] = 101
+        assert manager.get(REGION, "k") is None, "read must not extend under MODIFIED"
+
+        manager.put(REGION, "k", b"v")
+        clock[0] = 180
+        manager.put(REGION, "k", b"v2")
+        clock[0] = 250
+        assert manager.get(REGION, "k") == b"v2", "update reset the deadline to 280"
+
+    def test_touched_extends_on_both_read_and_update(self, clock) -> None:
+        manager = _manager(ExpiryPolicy.TOUCHED, ttl_millis=100)
+        manager.put(REGION, "k", b"v")           # deadline 100
+        clock[0] = 80
+        manager.get(REGION, "k")                 # read resets to 180
+        clock[0] = 150
+        manager.put(REGION, "k", b"v2")          # update resets to 250
+        clock[0] = 240
+        assert manager.get(REGION, "k") == b"v2"  # read resets to 340
+        clock[0] = 341
+        assert manager.get(REGION, "k") is None
+
+    def test_created_update_keeps_original_deadline(self, clock) -> None:
+        """JSR-107 CreatedExpiryPolicy.getExpiryForUpdate leaves expiry unchanged."""
+        manager = _manager(ExpiryPolicy.CREATED, ttl_millis=100)
+        manager.put(REGION, "k", b"v")
+        clock[0] = 80
+        manager.put(REGION, "k", b"v2")
+        clock[0] = 101
+        assert manager.get(REGION, "k") is None, "update must not reset a CREATED deadline"
+
+    def test_accessed_update_keeps_deadline_until_next_read(self, clock) -> None:
+        manager = _manager(ExpiryPolicy.ACCESSED, ttl_millis=100)
+        manager.put(REGION, "k", b"v")
+        clock[0] = 80
+        manager.put(REGION, "k", b"v2")
+        clock[0] = 101
+        assert manager.get(REGION, "k") is None, "ACCESSED refreshes on read, not on write"
+
+    def test_replace_follows_policy(self, clock) -> None:
+        modified = _manager(ExpiryPolicy.MODIFIED, ttl_millis=100)
+        modified.put(REGION, "k", b"v")
+        clock[0] = 80
+        assert modified.replace(REGION, "k", b"v", b"v2") is True
+        clock[0] = 150
+        assert modified.get(REGION, "k") == b"v2"
+
+        created = _manager(ExpiryPolicy.CREATED, ttl_millis=100)
+        clock[0] = 0
+        created.put(REGION, "k", b"v")
+        clock[0] = 80
+        assert created.replace(REGION, "k", b"v", b"v2") is True
+        clock[0] = 101
+        assert created.get(REGION, "k") is None
+
+    def test_access_refresh_reuses_per_key_override(self, clock) -> None:
+        """A per-key TTL must survive an ACCESSED refresh, not fall back to the region default."""
+        manager = _manager(ExpiryPolicy.ACCESSED, ttl_millis=10_000)
+        manager.put_with_ttl(REGION, "k", b"v", 100)   # deadline 100, effective ttl 100
+        clock[0] = 80
+        manager.get(REGION, "k")                       # refresh reuses 100 -> 180
+        clock[0] = 150
+        assert manager.get(REGION, "k") == b"v"        # refresh again -> 250
+        clock[0] = 251
+        assert manager.get(REGION, "k") is None
+
+    def test_expiry_call_updates_effective_ttl(self, clock) -> None:
+        manager = _manager(ExpiryPolicy.ACCESSED, ttl_millis=10_000)
+        manager.put(REGION, "k", b"v")
+        manager.expiry(REGION, "k", 100)   # deadline 100, effective ttl now 100
+        clock[0] = 80
+        manager.get(REGION, "k")           # refresh -> 180
+        clock[0] = 150
+        assert manager.get(REGION, "k") == b"v"  # refresh -> 250
+        clock[0] = 251
+        assert manager.get(REGION, "k") is None
+
+    def test_explicit_ttl_on_write_always_applies(self, clock) -> None:
+        manager = _manager(ExpiryPolicy.CREATED, ttl_millis=10_000)
+        manager.put(REGION, "k", b"v")
+        clock[0] = 50
+        manager.put_with_ttl(REGION, "k", b"v2", 100)
+        clock[0] = 120
+        assert manager.get(REGION, "k") == b"v2", "explicit ttl is a caller instruction"
+        clock[0] = 151
+        assert manager.get(REGION, "k") is None
+
+    def test_contains_key_is_not_an_access(self, clock) -> None:
+        """JCache containsKey does not trigger the access expiry event."""
+        manager = _manager(ExpiryPolicy.ACCESSED, ttl_millis=100)
+        manager.put(REGION, "k", b"v")
+        clock[0] = 80
+        assert manager.contains_key(REGION, "k") is True
+        clock[0] = 101
         assert manager.get(REGION, "k") is None
 
     def test_per_key_ttl_overrides_region_default(self) -> None:
@@ -101,24 +235,6 @@ class TestExpiryPolicies:
         time.sleep(0.06)
         assert manager.get(REGION, "short") is None
         assert manager.get(REGION, "long") == b"v"
-
-    def test_accessed_policy_does_not_extend_ttl_on_read(self) -> None:
-        """Pins the current gap: reads do not refresh the expiry deadline."""
-        manager = _manager(ExpiryPolicy.ACCESSED, ttl_millis=60)
-        manager.put(REGION, "k", b"v")
-        time.sleep(0.04)
-        assert manager.get(REGION, "k") == b"v"  # read inside the window
-        time.sleep(0.04)
-        assert manager.get(REGION, "k") is None, (
-            "ACCESSED currently expires from write, not from last read"
-        )
-
-    def test_expiry_call_sets_per_key_deadline(self) -> None:
-        manager = _manager(ExpiryPolicy.CREATED, ttl_millis=300_000)
-        manager.put(REGION, "k", b"v")
-        manager.expiry(REGION, "k", 25)
-        time.sleep(0.06)
-        assert manager.get(REGION, "k") is None
 
 
 class TestCapacityLimits:

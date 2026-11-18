@@ -9,10 +9,24 @@ English
 Per-instance Holder for the process-local in-memory cache.
 
 Mirrors `cn.richie696.component.cache.local.manage.LocalCacheManager`
-**without** the JSR-107 contract. This is a Pythonic Holder: one
+as a Pythonic Holder rather than a full JCache implementation: one
 `_CacheBucket` per region name (`CacheName` or str), each backed by
-`cachetools.LRUCache` plus manual expiry tracking so per-key TTL
-overrides work cleanly across all `ExpiryPolicy` values.
+`cachetools.LRUCache` plus manual expiry tracking.
+
+Expiry follows the JSR-107 policy semantics that the Java side gets from
+its JCache `ExpiryPolicy` factories:
+
+| policy   | create | access (read) | update (write) |
+|----------|--------|---------------|----------------|
+| CREATED  | set    | unchanged     | unchanged      |
+| ACCESSED | set    | reset         | unchanged      |
+| MODIFIED | set    | unchanged     | reset          |
+| TOUCHED  | set    | reset         | reset          |
+| ETERNAL  | never expires                           |
+
+`contains_key` is not an access event. A per-key TTL override is remembered
+in `_ttls` so a refresh reuses it instead of the region default, and an
+explicit `ttl_ms` on a write always applies.
 
 Design choices:
 
@@ -63,6 +77,7 @@ class _CacheBucket:
         "_lock",
         "_entries",
         "_expiries",
+        "_ttls",
     )
 
     def __init__(
@@ -80,27 +95,18 @@ class _CacheBucket:
         self._expiries: Optional[Dict[str, int]] = (
             None if policy == ExpiryPolicy.ETERNAL else {}
         )
+        # Effective per-key TTL, so an ACCESSED/TOUCHED refresh reuses the duration
+        # the entry was created with instead of falling back to the region default
+        # and silently discarding a per-key override.
+        self._ttls: Optional[Dict[str, int]] = (
+            None if policy == ExpiryPolicy.ETERNAL else {}
+        )
 
     # ── Helpers ──────────────────────────────────────────────────────
 
     @staticmethod
     def _now_millis() -> int:
         return int(time.time() * 1000)
-
-    def _expire_at(self, ttl_ms: Optional[int]) -> int:
-        """Compute the absolute expiry timestamp for a new entry.
-
-        Returns 0 for ETERNAL policy; otherwise
-        `now + (ttl_ms if ttl_ms is not None else self._default_ttl_ms)`.
-        A 0/None `ttl_ms` falls back to the region default (the API
-        contract is "no override ⇒ use default", not "no override ⇒
-        immediate expiry"). Callers wanting explicit non-expiry can
-        set the region's policy to ETERNAL.
-        """
-        if self._expiries is None:
-            return 0
-        ttl = ttl_ms if ttl_ms else self._default_ttl_ms
-        return self._now_millis() + ttl
 
     def _is_expired(self, key: str) -> bool:
         if self._expiries is None:
@@ -110,15 +116,44 @@ class _CacheBucket:
             # Lazy expiry
             self._entries.pop(key, None)
             self._expiries.pop(key, None)
+            if self._ttls is not None:
+                self._ttls.pop(key, None)
             return True
         return False
 
     def _set_entry(
         self, key: str, value: Any, ttl_ms: Optional[int]
     ) -> None:
+        """Write an entry, applying the JSR-107 expiry policy.
+
+        Creation always sets the deadline. An update refreshes it only under
+        MODIFIED / TOUCHED; under CREATED / ACCESSED the existing deadline is
+        kept, matching `CreatedExpiryPolicy` / `AccessedExpiryPolicy`, whose
+        `getExpiryForUpdate` leaves expiry unchanged. An explicit `ttl_ms` is a
+        caller instruction and always applies.
+
+        A 0/None `ttl_ms` means "use the region default", NOT "expire
+        immediately"; callers wanting non-expiry set the policy to ETERNAL.
+        """
+        is_update = key in self._entries and not self._is_expired(key)
         self._entries[key] = DefensiveCopyUtils.copy(value)
-        if self._expiries is not None:
-            self._expiries[key] = self._expire_at(ttl_ms)
+        if self._expiries is None or self._ttls is None:
+            return
+        ttl = ttl_ms if ttl_ms else self._default_ttl_ms
+        if ttl_ms or not is_update:
+            self._ttls[key] = ttl
+            self._expiries[key] = self._now_millis() + ttl
+        elif self._policy in (ExpiryPolicy.MODIFIED, ExpiryPolicy.TOUCHED):
+            self._expiries[key] = self._now_millis() + self._ttls.get(key, ttl)
+
+    def _touch_access(self, key: str) -> None:
+        """JSR-107 access event: ACCESSED and TOUCHED reset the deadline."""
+        if self._expiries is None or self._ttls is None:
+            return
+        if self._policy in (ExpiryPolicy.ACCESSED, ExpiryPolicy.TOUCHED):
+            self._expiries[key] = self._now_millis() + self._ttls.get(
+                key, self._default_ttl_ms
+            )
 
     # ── Public API (RLock-protected) ───────────────────────────────
 
@@ -134,6 +169,7 @@ class _CacheBucket:
                 return None
             if self._is_expired(key):
                 return None
+            self._touch_access(key)
             return DefensiveCopyUtils.copy(self._entries[key])
 
     def contains_key(self, key: str) -> bool:
@@ -148,6 +184,8 @@ class _CacheBucket:
             self._entries.pop(key, None)
             if self._expiries is not None:
                 self._expiries.pop(key, None)
+            if self._ttls is not None:
+                self._ttls.pop(key, None)
             return existed
 
     def clear(self) -> int:
@@ -156,6 +194,8 @@ class _CacheBucket:
             self._entries.clear()
             if self._expiries is not None:
                 self._expiries.clear()
+            if self._ttls is not None:
+                self._ttls.clear()
             return count
 
     def put_if_absent(
@@ -176,9 +216,12 @@ class _CacheBucket:
             if self._entries[key] != old_value:
                 return False
             self._entries[key] = DefensiveCopyUtils.copy(new_value)
-            if self._expiries is not None:
-                # Touch TTL on replace (MODIFIED semantics for free).
-                self._expiries[key] = self._expire_at(None)
+            if self._expiries is not None and self._ttls is not None:
+                # JSR-107: only MODIFIED / TOUCHED reset expiry on update.
+                if self._policy in (ExpiryPolicy.MODIFIED, ExpiryPolicy.TOUCHED):
+                    self._expiries[key] = self._now_millis() + self._ttls.get(
+                        key, self._default_ttl_ms
+                    )
             return True
 
     def get_and_remove(self, key: str) -> Any:
@@ -188,6 +231,8 @@ class _CacheBucket:
             value = self._entries.pop(key)
             if self._expiries is not None:
                 self._expiries.pop(key, None)
+            if self._ttls is not None:
+                self._ttls.pop(key, None)
             return DefensiveCopyUtils.copy(value)
 
     def get_and_put(
@@ -246,6 +291,8 @@ class _CacheBucket:
                 return
             if self._expiries is not None:
                 self._expiries[key] = self._now_millis() + ttl_ms
+                if self._ttls is not None:
+                    self._ttls[key] = ttl_ms
 
     def put_all(
         self,
