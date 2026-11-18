@@ -55,13 +55,71 @@ service.mask_map({"phone": "13812345678", "nested": {"email": "a@b.com"}}, MaskS
 enabled and the context carries a role listed in `permission.plain_text_roles`.
 Inject your own `MaskPermissionEvaluator` to plug in real RBAC.
 
+## Object graphs and log-safe serialization
+
+`SafeLogSerializer` renders any payload as log-safe JSON, masking as it goes:
+
+```python
+from dataclasses import dataclass
+from atlas_richie.desensitize_core import (
+    DefaultMaskingService, MaskRuleRegistry, MaskScene, MaskType,
+    SafeLogSerializer, SensitiveLogArg, sensitive_field, transient_field,
+)
+
+@dataclass
+class User:
+    name: str
+    phone: str = sensitive_field(MaskType.PHONE)
+    email: str = sensitive_field(MaskType.EMAIL, scenes=(MaskScene.LOG,))
+    secret: str = transient_field(default="hidden")
+
+props = DesensitizeProperties(sensitive_keys={"phone": MaskType.PHONE})
+service = DefaultMaskingService(props)
+serializer = SafeLogSerializer(service, MaskRuleRegistry(props))
+
+serializer.to_safe_json(User("张三丰", "13812348000", "a@b.com"))
+serializer.to_safe_json(payload, MaskScene.API_RESPONSE)
+serializer.to_safe_string({"phone": "13812348000"})
+
+logger.info("login for %s", SensitiveLogArg.phone("13812348000"))  # masked in the log
+```
+
+Handles scalars, mappings, lists/tuples/sets, dataclasses, and plain objects with
+`__dict__` or `__slots__`. Field markers come from dataclass metadata (Java uses
+the `@Sensitive` annotation); `ClassVar` and `transient_field` are skipped, matching
+Java's skip of static and transient fields. Without a marker, the
+`properties.fields[class_fqn][field]` mapping applies. Only **string** fields are
+masked, as in Java.
+
+`DefaultObjectMaskingService` is the thin facade over the serializer, matching the
+Java service shape.
+
+### Bounded recursion
+
+Depth is capped at 8 (Java's `MAX_DEPTH`) and cyclic mappings are replaced with a
+`[circular]` marker. `mask_map` itself is bounded too — Java's version recurses
+without a limit, so a self-referencing payload would hang the caller. A log
+serializer must terminate.
+
+### Deliberate deviations
+
+- **`SensitiveLogArg.__str__` masks.** Java's `toString()` returns the **raw** value
+  and relies on a Logback turbo filter to mask it. Python's logging has no such
+  interception, so returning raw would leak credentials. Masking happens in
+  `__str__` using an injected service or a default one; `raw_value` is an explicit
+  opt-in accessor and `__repr__` never shows the value.
+- **Valid JSON escaping.** Java's hand-rolled `quote` escapes only `" \ \n \r \t`,
+  leaving other control characters raw and emitting invalid JSON. This uses proper
+  JSON escaping.
+- **The caller's scene propagates into nested values.** Java's `writeMap` hardcodes
+  `LOG` for nested entries, so an `API_RESPONSE`-only sensitive key nested one level
+  down would be left unmasked. Honouring the caller's scene is the actual contract.
+
 ## Scope
 
 Ported: models, properties, the eight strategies, both registries, the permission
-evaluator, and `DefaultMaskingService` (string + recursive map masking).
+evaluator, `DefaultMaskingService` (string + recursive map masking), field markers,
+`SafeLogSerializer`, `DefaultObjectMaskingService` and `SensitiveLogArg`.
 
-Not ported: the `@Sensitive` Jackson annotation and annotation-driven field
-resolution, `ObjectMaskingService` / `SafeLogSerializer` (reflection and JSON
-adapters), the log/exception regex fallbacks, and the static `DesensitizeUtils`
-global binding — the platform has no global runtime, so inject the service.
-Field types resolve from the explicit `properties.fields[class_fqn][field]` map.
+Not ported: the Logback turbo filter and `desensitize-jackson` / `desensitize-logging`
+adapter modules (JVM-specific), and the log/exception regex fallbacks.

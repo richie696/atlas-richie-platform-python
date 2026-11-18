@@ -17,6 +17,8 @@ from .properties import DesensitizeProperties
 from .registry import MaskRuleRegistry, SensitiveKeyRegistry
 from .strategies import MaskingStrategyRegistry
 
+_MAX_MAP_DEPTH = 8
+
 
 class MaskingService(Protocol):
     def mask(self, raw: str | None, mask_type: MaskType, scene: MaskScene = MaskScene.LOG) -> str | None: ...
@@ -63,6 +65,24 @@ class DefaultMaskingService:
     ) -> dict[str, Any] | None:
         if source is None:
             return None
+        return self._mask_map(source, scene, 0, set())
+
+    def _mask_map(
+        self, source: dict[str, Any], scene: MaskScene, depth: int, ancestors: set[int]
+    ) -> dict[str, Any]:
+        """Recursive map masking, bounded against deep and cyclic graphs.
+
+        A log serializer must terminate on self-referencing payloads. Java's
+        `maskMap` recurses without a bound; here depth is capped and an ancestor
+        mapping is replaced by a marker rather than expanded, so neither a cycle
+        nor a very deep graph can hang the caller or leak unmasked content.
+        """
+        if depth > _MAX_MAP_DEPTH:
+            return {"[max-depth]": "[max-depth]"}
+        marker = id(source)
+        if marker in ancestors:
+            return {"[circular]": "[circular]"}
+        ancestors = ancestors | {marker}
         result: dict[str, Any] = {}
         for key, value in source.items():
             if isinstance(value, str):
@@ -73,7 +93,7 @@ class DefaultMaskingService:
                     else value
                 )
             elif isinstance(value, dict):
-                result[key] = self.mask_map(value, scene)
+                result[key] = self._mask_map(value, scene, depth + 1, ancestors)
             else:
                 result[key] = value
         return result

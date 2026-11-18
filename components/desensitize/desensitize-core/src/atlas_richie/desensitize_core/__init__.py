@@ -18,7 +18,15 @@ from .model import (
 from .permission import DefaultMaskPermissionEvaluator, MaskPermissionEvaluator
 from .properties import DesensitizeProperties, Permission, SceneOverride, TypeRule
 from .registry import MaskRuleRegistry, SensitiveKeyRegistry
+from .serializer import (
+    MAX_DEPTH,
+    DefaultObjectMaskingService,
+    ObjectMaskingService,
+    SafeLogSerializer,
+    SensitiveLogArg,
+)
 from .service import DefaultMaskingService, MaskingService
+from .support import Sensitive, sensitive_field, transient_field
 from .strategies import (
     AddressMaskingStrategy,
     ApiKeyMaskingStrategy,
@@ -36,11 +44,13 @@ from .strategies import (
 __version__ = importlib.metadata.version("atlas-richie-desensitize-core")
 
 __all__ = [
+    "MAX_DEPTH",
     "AddressMaskingStrategy",
     "ApiKeyMaskingStrategy",
     "BankCardMaskingStrategy",
     "DefaultMaskPermissionEvaluator",
     "DefaultMaskingService",
+    "DefaultObjectMaskingService",
     "DesensitizeProperties",
     "EmailMaskingStrategy",
     "IdCardMaskingStrategy",
@@ -54,15 +64,21 @@ __all__ = [
     "MaskingStrategy",
     "MaskingStrategyRegistry",
     "NameMaskingStrategy",
+    "ObjectMaskingService",
     "PasswordMaskingStrategy",
     "Permission",
     "PhoneMaskingStrategy",
+    "SafeLogSerializer",
     "SceneOverride",
+    "Sensitive",
     "SensitiveKeyRegistry",
+    "SensitiveLogArg",
     "TypeRule",
     "__version__",
     "default_keep_left",
     "default_keep_right",
     "default_mask_length",
     "default_strategies",
+    "sensitive_field",
+    "transient_field",
 ]
