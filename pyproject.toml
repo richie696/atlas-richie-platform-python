@@ -12,6 +12,7 @@ members = [
   "components/desensitize/desensitize-core",
   "components/mfa/mfa-validation",
   "components/web/web-protection",
+  "components/web/web-protection-adapter-asgi",
   "components/statemachine/statemachine-core",
   "components/redis-streammq",
   "components/mcp",
@@ -56,6 +57,7 @@ atlas-richie-chunking-core = { workspace = true }
 atlas-richie-desensitize-core = { workspace = true }
 atlas-richie-mfa-validation = { workspace = true }
 atlas-richie-web-protection = { workspace = true }
+atlas-richie-web-protection-adapter-asgi = { workspace = true }
 atlas-richie-statemachine-core = { workspace = true }
 atlas-richie-redis-streammq = { workspace = true }
 atlas-richie-mcp = { workspace = true }
