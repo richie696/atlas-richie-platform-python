@@ -22,6 +22,7 @@ dependencies = [
   "atlas-richie-coordination-core>=0.2.0,<0.3.0",
   "atlas-richie-coordination-redis>=0.2.0,<0.3.0",
   "atlas-richie-desensitize-core>=0.2.0,<0.3.0",
+  "atlas-richie-desensitize-pydantic>=0.2.0,<0.3.0",
   "atlas-richie-document-parser>=0.2.0,<0.3.0",
   "atlas-richie-document-parser-pdf>=0.2.0,<0.3.0",
   "atlas-richie-document-parser-html>=0.2.0,<0.3.0",

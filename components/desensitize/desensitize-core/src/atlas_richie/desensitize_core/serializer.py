@@ -35,7 +35,9 @@ def _quote(value: str) -> str:
 
 
 class ObjectMaskingService(Protocol):
-    def to_safe_json(self, value: Any) -> str: ...
+    def to_safe_json(
+        self, value: Any, scene: MaskScene = MaskScene.LOG
+    ) -> str: ...
 
     def to_safe_string(self, mapping: Mapping[str, Any] | None) -> str: ...
 
@@ -143,8 +145,11 @@ class DefaultObjectMaskingService:
     def __init__(self, serializer: SafeLogSerializer) -> None:
         self._serializer = serializer
 
-    def to_safe_json(self, value: Any) -> str:
-        return self._serializer.to_safe_json(value)
+    def to_safe_json(
+        self, value: Any, scene: MaskScene = MaskScene.LOG
+    ) -> str:
+        """JSON for a scene; the API_RESPONSE scene un-cloaks response payloads."""
+        return self._serializer.to_safe_json(value, scene)
 
     def to_safe_string(self, mapping: Mapping[str, Any] | None) -> str:
         return self._serializer.to_safe_string(mapping)
