@@ -16,36 +16,19 @@ Provides:
 from __future__ import annotations
 
 import os
-import socket
 from typing import Iterator
 
 import pytest
+
+from atlas_richie.testing import tcp_reachable
 
 DEFAULT_REDIS_URL = "redis://:Redis2025!Local@127.0.0.1:16379/0"
 REDIS_URL = os.environ.get("ATLAS_RICHIE_CACHE_REDIS_URL", DEFAULT_REDIS_URL)
 
 
 def _is_redis_reachable(url: str) -> bool:
-    """Quick TCP probe to see if a Redis is listening on the URL's host:port.
-
-    Used as a gate for `requires_redis` to make unit-only runs
-    skip the real-Redis tests cleanly instead of failing.
-    """
-    # Parse `redis://[:password@]host:port/db`
-    try:
-        # Strip `redis://` prefix and optional auth.
-        rest = url.split("://", 1)[1]
-        if "@" in rest:
-            rest = rest.split("@", 1)[1]
-        host_port = rest.split("/", 1)[0]
-        if ":" in host_port:
-            host, port = host_port.rsplit(":", 1)
-        else:
-            host, port = host_port, 6379
-        with socket.create_connection((host, int(port)), timeout=1.0):
-            return True
-    except (OSError, ValueError):
-        return False
+    """Delegates to the shared probe in atlas-richie-testing."""
+    return tcp_reachable(url, default_port=6379)
 
 
 def pytest_collection_modifyitems(

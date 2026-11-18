@@ -401,12 +401,14 @@ dependencies = [
 
 [package.optional-dependencies]
 test = [
+    { name = "atlas-richie-testing" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "atlas-richie-testing", marker = "extra == 'test'", editable = "foundation/testing" },
     { name = "cachetools", specifier = ">=7.1.8" },
     { name = "pydantic", specifier = ">=2.0,<3.0" },
     { name = "pydantic-settings", specifier = ">=2.0,<3.0" },
@@ -430,6 +432,7 @@ dependencies = [
 
 [package.optional-dependencies]
 test = [
+    { name = "atlas-richie-testing" },
     { name = "pytest" },
 ]
 
@@ -437,6 +440,7 @@ test = [
 requires-dist = [
     { name = "atlas-richie-cache-core", editable = "components/cache/cache-core" },
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "atlas-richie-testing", marker = "extra == 'test'", editable = "foundation/testing" },
     { name = "pydantic", specifier = ">=2.0,<3.0" },
     { name = "pydantic-settings", specifier = ">=2.0,<3.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
@@ -696,11 +700,13 @@ dependencies = [
 
 [package.optional-dependencies]
 test = [
+    { name = "atlas-richie-testing" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "atlas-richie-testing", marker = "extra == 'test'", editable = "foundation/testing" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
     { name = "redis", specifier = ">=5.0,<9.0" },
 ]
@@ -1509,12 +1515,14 @@ dependencies = [
 
 [package.optional-dependencies]
 test = [
+    { name = "atlas-richie-testing" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "atlas-richie-statemachine-core", editable = "components/statemachine/statemachine-core" },
+    { name = "atlas-richie-testing", marker = "extra == 'test'", editable = "foundation/testing" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
     { name = "redis", specifier = ">=5.0,<9.0" },
 ]
@@ -1528,8 +1536,17 @@ dependencies = [
     { name = "atlas-richie-contracts" },
 ]
 
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
 [package.metadata]
-requires-dist = [{ name = "atlas-richie-contracts", editable = "foundation/contracts" }]
+requires-dist = [
+    { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+]
+provides-extras = ["test"]
 
 [[package]]
 name = "atlas-richie-web-protection"

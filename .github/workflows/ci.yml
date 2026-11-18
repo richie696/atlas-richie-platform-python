@@ -43,6 +43,7 @@ jobs:
           for d in \
             components/cache \
             foundation/httpx-env/tests \
+            foundation/testing/tests \
             components/secret/*/tests \
             components/sentinel/sentinel-adapter-asgi/tests \
             components/sentinel/sentinel-adapter-httpx/tests \
