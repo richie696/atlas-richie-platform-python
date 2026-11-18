@@ -470,3 +470,197 @@ class TestStreamCleanupAgainstRedis:
             first.stop()
             second.stop()
         assert bus.client.get(f"{prefix}:leader:stream-cleanup") is None, "stop 必须释放租约"
+
+
+class TestErrorStrategyAlignment:
+    """RETRY / NO_ACK 对位 Java；用假 bus 隔离验证策略分支。"""
+
+    def _consumer(self, strategy, handler, **config_kwargs):
+        from atlas_richie.redis_streammq import ConsumerConfig, ErrorStrategy, StreamConsumer
+
+        class _Bus:
+            def __init__(self):
+                self.acked = []
+                self.dlq = []
+                self.client = None
+
+            def read(self, *a, **k):
+                return []
+
+            def delivery_counts(self, *a, **k):
+                return {}
+
+            def ack(self, stream, group, *ids):
+                self.acked.extend(ids)
+                return len(ids)
+
+            def send_to_dead_letter(self, *a, **k):
+                self.dlq.append(a)
+                return []
+
+        bus = _Bus()
+        config = ConsumerConfig("s", "g", error_strategy=strategy, **config_kwargs)
+        consumer = StreamConsumer(bus, config, handler, guard=IdempotencyGuard(None))
+        return consumer, bus
+
+    def _message(self):
+        from atlas_richie.redis_streammq import StreamMessage
+
+        return StreamMessage(stream="s", id="1-0", body={"n": 1}, business_id="b")
+
+    @staticmethod
+    def _outcome():
+        return {"processed": 0, "skipped_duplicate": 0, "dead_lettered": 0,
+                "awaiting_retry": 0, "skipped_error": 0}
+
+    def test_retry_succeeds_on_second_attempt(self) -> None:
+        from atlas_richie.redis_streammq import ErrorStrategy
+
+        attempts = []
+
+        def handler(m):
+            attempts.append(1)
+            if len(attempts) < 2:
+                raise RuntimeError("transient")
+
+        consumer, bus = self._consumer(ErrorStrategy.RETRY, handler)
+        outcome = self._outcome()
+        consumer._handle_one(self._message(), 1, outcome)
+        assert outcome["processed"] == 1
+        assert len(attempts) == 2, "RETRY 应立即进程内重试一次"
+        assert bus.acked == ["1-0"]
+
+    def test_retry_failure_leaves_pending(self) -> None:
+        from atlas_richie.redis_streammq import ErrorStrategy
+
+        def handler(m):
+            raise RuntimeError("always down")
+
+        consumer, bus = self._consumer(ErrorStrategy.RETRY, handler)
+        outcome = self._outcome()
+        consumer._handle_one(self._message(), 1, outcome)
+        assert outcome["awaiting_retry"] == 1
+        assert bus.acked == [], "重试失败不得确认"
+        assert bus.dlq == [], "RETRY 不进 DLQ"
+
+    def test_no_ack_never_acks_or_dlqs(self) -> None:
+        from atlas_richie.redis_streammq import ErrorStrategy
+
+        def handler(m):
+            raise RuntimeError("down")
+
+        consumer, bus = self._consumer(ErrorStrategy.NO_ACK, handler, max_retries=1)
+        outcome = self._outcome()
+        consumer._handle_one(self._message(), 5, outcome)
+        assert outcome["awaiting_retry"] == 1
+        assert bus.acked == []
+        assert bus.dlq == [], "NO_ACK 即使超过 max_retries 也不进 DLQ"
+
+    def test_no_ack_releases_idempotency_claim(self) -> None:
+        from atlas_richie.redis_streammq import ErrorStrategy, IdempotencyProperties
+
+        guard = IdempotencyGuard(None)
+        calls = []
+
+        def handler(m):
+            calls.append(1)
+            raise RuntimeError("down")
+
+        from atlas_richie.redis_streammq import ConsumerConfig, StreamConsumer
+
+        class _Bus:
+            client = None
+            def ack(self, *a): return 0
+            def send_to_dead_letter(self, *a, **k): return []
+
+        config = ConsumerConfig("s", "g", error_strategy=ErrorStrategy.NO_ACK)
+        consumer = StreamConsumer(_Bus(), config, handler, guard=guard)
+        message = self._message()
+        consumer._handle_one(message, 1, self._outcome())
+        #  claim 已释放：同一 business_id 可再次获取（重试不会被误判重复）
+        assert guard.try_acquire("b") is True
+
+
+@pytest.mark.integration
+class TestConsumerLifecycle:
+    def test_start_stop_runs_as_daemon(self, bus, stream, group, guard) -> None:
+        import time as _t
+
+        bus.ensure_group(stream, group, start_id="0")
+        bus.publish(stream, {"n": 1})
+        seen = []
+        consumer = StreamConsumer(
+            bus, ConsumerConfig(stream, group), lambda m: seen.append(m.body), guard=guard
+        )
+        consumer.start(poll_interval_seconds=0.05)
+        try:
+            assert consumer.running is True
+            deadline = _t.monotonic() + 3
+            while not seen and _t.monotonic() < deadline:
+                _t.sleep(0.02)
+            assert seen == [{"n": 1}], "常驻循环必须真的处理消息"
+            assert consumer.stats.processed >= 1
+            assert consumer.stats.polls >= 1
+        finally:
+            consumer.stop()
+        assert consumer.running is False
+
+    def test_stop_is_idempotent_and_prompt(self, bus, stream, group, guard) -> None:
+        import time as _t
+
+        consumer = StreamConsumer(bus, ConsumerConfig(stream, group), lambda m: None, guard=guard)
+        consumer.start(poll_interval_seconds=5.0)  # 长间隔：stop 必须能打断等待
+        started = _t.monotonic()
+        consumer.stop()
+        consumer.stop()
+        assert _t.monotonic() - started < 2.0, "stop 不得等满轮询间隔"
+
+    def test_poll_error_does_not_kill_daemon(self, bus, stream, group, guard) -> None:
+        import time as _t
+
+        consumer = StreamConsumer(bus, ConsumerConfig(stream, group), lambda m: None, guard=guard)
+        calls = {"n": 0}
+        original = consumer.poll_once
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise ConnectionError("redis blip")
+            return original()
+
+        consumer.poll_once = flaky
+        consumer.start(poll_interval_seconds=0.05)
+        try:
+            deadline = _t.monotonic() + 3
+            while calls["n"] < 3 and _t.monotonic() < deadline:
+                _t.sleep(0.02)
+            assert calls["n"] >= 3, "一次轮询失败后循环必须继续"
+            assert consumer.stats.poll_errors >= 1
+        finally:
+            consumer.stop()
+
+    def test_stats_accumulate_across_polls(self, bus, stream, group, guard) -> None:
+        bus.ensure_group(stream, group, start_id="0")
+        bus.publish(stream, {"n": 1})
+        bus.publish(stream, {"n": 2})
+        consumer = StreamConsumer(bus, ConsumerConfig(stream, group), lambda m: None, guard=guard)
+        consumer.poll_once()
+        consumer.poll_once()
+        stats = consumer.stats
+        assert stats.processed == 2
+        assert stats.polls == 2
+
+    def test_context_manager(self, bus, stream, group, guard) -> None:
+        bus.ensure_group(stream, group, start_id="0")
+        bus.publish(stream, {"n": 1})
+        seen = []
+        with StreamConsumer(
+            bus, ConsumerConfig(stream, group), lambda m: seen.append(m.body), guard=guard
+        ) as consumer:
+            consumer._config = ConsumerConfig(stream, group)
+            import time as _t
+            deadline = _t.monotonic() + 3
+            while not seen and _t.monotonic() < deadline:
+                _t.sleep(0.02)
+        assert seen == [{"n": 1}]
+        assert consumer.running is False

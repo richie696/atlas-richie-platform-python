@@ -33,6 +33,8 @@ class PublishFailureReason(StrEnum):
 class ErrorStrategy(StrEnum):
     SKIP = "SKIP"
     DEAD_LETTER = "DEAD_LETTER"
+    RETRY = "RETRY"
+    NO_ACK = "NO_ACK"
 
 
 @dataclass(frozen=True, slots=True)

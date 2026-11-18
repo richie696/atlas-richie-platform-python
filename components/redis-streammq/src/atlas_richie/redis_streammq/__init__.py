@@ -8,7 +8,7 @@ import importlib.metadata
 
 from .bus import DEFAULT_MAX_LEN, RedisStreamBus, dead_letter_streams
 from .cleanup import CleanupReport, StreamCleanup, default_holder_id
-from .consumer import PollOutcome, StreamConsumer
+from .consumer import ConsumerStats, PollOutcome, StreamConsumer
 from .idempotency import IdempotencyGuard
 from .model import (
     BacklogInfo,
@@ -43,6 +43,7 @@ __all__ = [
     "PublishResult",
     "RedisStreamBus",
     "StreamConsumer",
+    "ConsumerStats",
     "StreamMessage",
     "__version__",
     "dead_letter_streams",
