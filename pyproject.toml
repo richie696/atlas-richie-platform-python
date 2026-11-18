@@ -19,6 +19,8 @@ members = [
   "components/scheduling/scheduling-core",
   "components/coordination/coordination-core",
   "components/coordination/coordination-redis",
+  "components/persistence/persistence-core",
+  "components/persistence/persistence-sqlalchemy",
   "components/mcp",
   "components/oauth",
   "components/secret/secret-core",
@@ -68,6 +70,8 @@ atlas-richie-redis-streammq = { workspace = true }
 atlas-richie-scheduling-core = { workspace = true }
 atlas-richie-coordination-core = { workspace = true }
 atlas-richie-coordination-redis = { workspace = true }
+atlas-richie-persistence-core = { workspace = true }
+atlas-richie-persistence-sqlalchemy = { workspace = true }
 atlas-richie-mcp = { workspace = true }
 atlas-richie-oauth = { workspace = true }
 atlas-richie-secret-core = { workspace = true }

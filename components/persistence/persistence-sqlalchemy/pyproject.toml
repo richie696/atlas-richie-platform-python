@@ -1,0 +1,43 @@
+[build-system]
+requires = [
+    "uv_build>=0.12,<0.13",
+]
+build-backend = "uv_build"
+
+[project]
+name = "atlas-richie-persistence-sqlalchemy"
+version = "0.2.0"
+description = "SQLAlchemy 2 async adapter for the persistence contracts, with an Alembic migration runner."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "Atlas Richie" },
+]
+dependencies = [
+  "atlas-richie-persistence-core>=0.2.0,<0.3.0",
+  "sqlalchemy[asyncio]>=2.0,<3.0",
+]
+
+[project.optional-dependencies]
+migrations = ["alembic>=1.13,<2.0"]
+sqlite = ["aiosqlite>=0.20,<1.0"]
+postgres = ["psycopg[binary]>=3.2,<4.0"]
+test = [
+  "pytest>=8.0,<9.0",
+  "aiosqlite>=0.20,<1.0",
+  "alembic>=1.13,<2.0",
+]
+
+[project.license]
+text = "Apache-2.0"
+
+[tool.pytest.ini_options]
+markers = [
+    "unit: fast tests with no I/O, no external dependencies (default)",
+    "integration: multi-component interaction, may use real Redis",
+    "e2e: end-to-end tests that may spin up servers, slower",
+]
+
+[tool.uv.build-backend]
+module-name = "atlas_richie.persistence_sqlalchemy"
+module-root = "src"
