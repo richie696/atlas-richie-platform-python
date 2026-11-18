@@ -70,29 +70,21 @@ def _vault_reachable(url: str) -> bool:
 def _ensure_mounts(client: hvac.Client) -> None:
     """Idempotently enable the KV v2 and Transit mounts we test against.
 
-    `client.sys.mount` raises on duplicate; we treat that as success.
+    Existence is probed by listing mounts rather than by catching enable errors:
+    hvac's exception types and the `sys.mount` namespace both changed across
+    major versions (hvac 2.x exposes `sys.mount` as a `Mount` instance with no
+    `kv_v2`/`transit` helpers), so relying on them made this fixture fragile.
+
+    Both mounts are always ensured — an earlier version returned as soon as KV
+    existed, which silently left Transit unmounted.
     """
-    try:
-        client.sys.mount.kv_v2(KV_MOUNT)
-    except hvac.exceptions.InvalidRequest:
-        # Already mounted — fine.
-        pass
-    except Exception:
-        # Some hvac versions raise a generic `VaultError`. Probe by
-        # listing mounts.
-        mounts = client.sys.list_mounted_secrets_engines()["data"]
-        if f"{KV_MOUNT}/" in mounts:
-            return
-        raise
-    try:
-        client.sys.mount.transit(TRANSIT_MOUNT)
-    except hvac.exceptions.InvalidRequest:
-        pass
-    except Exception:
-        mounts = client.sys.list_mounted_secrets_engines()["data"]
-        if f"{TRANSIT_MOUNT}/" in mounts:
-            return
-        raise
+    mounted = client.sys.list_mounted_secrets_engines()["data"]
+    if f"{KV_MOUNT}/" not in mounted:
+        client.sys.enable_secrets_engine(
+            backend_type="kv", path=KV_MOUNT, options={"version": "2"}
+        )
+    if f"{TRANSIT_MOUNT}/" not in mounted:
+        client.sys.enable_secrets_engine(backend_type="transit", path=TRANSIT_MOUNT)
 
 
 def _ensure_transit_keys(client: hvac.Client) -> None:
@@ -128,6 +120,12 @@ def vault_client() -> Iterator[hvac.Client]:
     if not _vault_reachable(VAULT_URL):
         pytest.skip(f"Vault not reachable at {VAULT_URL}")
     client = hvac.Client(url=VAULT_URL, token=VAULT_TOKEN, timeout=10)
+    if not client.is_authenticated():
+        pytest.skip(
+            f"Vault at {VAULT_URL} rejected the test token; set "
+            "ATLAS_RICHIE_SECRET_VAULT_TEST_URL / _TOKEN to a dev Vault "
+            "(e.g. docker run -p 8201:8200 -e VAULT_DEV_ROOT_TOKEN_ID=root-token-dev hashicorp/vault)"
+        )
     _ensure_mounts(client)
     _ensure_transit_keys(client)
     try:

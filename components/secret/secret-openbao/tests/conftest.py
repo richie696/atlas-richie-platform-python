@@ -62,24 +62,20 @@ def _openbao_reachable(url: str) -> bool:
 
 
 def _ensure_mounts(client: hvac.Client) -> None:
-    try:
-        client.sys.mount.kv_v2(KV_MOUNT)
-    except hvac.exceptions.InvalidRequest:
-        pass
-    except Exception:
-        mounts = client.sys.list_mounted_secrets_engines()["data"]
-        if f"{KV_MOUNT}/" in mounts:
-            return
-        raise
-    try:
-        client.sys.mount.transit(TRANSIT_MOUNT)
-    except hvac.exceptions.InvalidRequest:
-        pass
-    except Exception:
-        mounts = client.sys.list_mounted_secrets_engines()["data"]
-        if f"{TRANSIT_MOUNT}/" in mounts:
-            return
-        raise
+    """Idempotently enable KV v2 and Transit; see the vault conftest for rationale.
+
+    Probes by listing mounts instead of catching enable errors, because hvac 2.x
+    turned `sys.mount` into a `Mount` instance without `kv_v2`/`transit` helpers.
+    Both mounts are always ensured — returning early when KV existed used to
+    leave Transit unmounted.
+    """
+    mounted = client.sys.list_mounted_secrets_engines()["data"]
+    if f"{KV_MOUNT}/" not in mounted:
+        client.sys.enable_secrets_engine(
+            backend_type="kv", path=KV_MOUNT, options={"version": "2"}
+        )
+    if f"{TRANSIT_MOUNT}/" not in mounted:
+        client.sys.enable_secrets_engine(backend_type="transit", path=TRANSIT_MOUNT)
 
 
 def _ensure_transit_keys(client: hvac.Client) -> None:
@@ -104,6 +100,11 @@ def openbao_hvac_client() -> Iterator[hvac.Client]:
     if not _openbao_reachable(OPENBAO_URL):
         pytest.skip(f"OpenBao (or Vault) not reachable at {OPENBAO_URL}")
     client = hvac.Client(url=OPENBAO_URL, token=OPENBAO_TOKEN, timeout=10)
+    if not client.is_authenticated():
+        pytest.skip(
+            f"OpenBao/Vault at {OPENBAO_URL} rejected the test token; set "
+            "OPENBAO_TEST_URL / OPENBAO_TEST_TOKEN to a dev instance"
+        )
     _ensure_mounts(client)
     _ensure_transit_keys(client)
     try:
