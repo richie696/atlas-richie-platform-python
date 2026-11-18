@@ -14,6 +14,12 @@ from .diversify import (
     VectorResultDiversifier,
 )
 from .diversify import apply as diversify
+from .embeddings import (
+    EmbeddingModel,
+    ModalityAwareEmbeddingService,
+    UnsupportedModalityError,
+)
+from .text_search import RerankNotConfiguredError, Reranker, VectorTextSearch
 from .engine import (
     VectorCapabilityMismatchError,
     VectorProviderUnavailableError,
@@ -102,6 +108,12 @@ __all__ = [
     "MAX_VECTOR_BYTES",
     "MAX_RESPONSE_BYTES",
     "VectorStoreEngine",
+    "EmbeddingModel",
+    "ModalityAwareEmbeddingService",
+    "UnsupportedModalityError",
+    "VectorTextSearch",
+    "Reranker",
+    "RerankNotConfiguredError",
     "VectorStoreError",
     "VectorStoreNotExistsError",
     "VectorStoreAccessDeniedError",

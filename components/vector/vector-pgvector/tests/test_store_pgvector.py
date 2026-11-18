@@ -511,3 +511,100 @@ class TestProperties:
         info = PgVectorProperties(dsn="postgresql://h/x", host="ignored").conninfo()
         assert "host=h" in info
         assert "ignored" not in info
+
+class _WordCountEmbedding:
+    """Deterministic test embedding: 3 dims = counts of cat/dog/bird.
+
+    Not a real model — it proves the text→vector→search plumbing against a
+    real pgvector backend without needing an external embedding service.
+    """
+
+    def embed(self, text: str) -> tuple[float, ...]:
+        lowered = text.lower()
+        return (
+            float(lowered.count("cat")),
+            float(lowered.count("dog")),
+            float(lowered.count("bird")),
+        )
+
+    def dimensions(self) -> int:
+        return 3
+
+
+@pytest.mark.integration
+class TestTextSearchAgainstPgVector:
+    def _embeddings(self):
+        from atlas_richie.vector_core import ModalityAwareEmbeddingService
+
+        return ModalityAwareEmbeddingService(_WordCountEmbedding())
+
+    def _embed(self, embeddings, text):
+        from atlas_richie.vector_core import Modality, TextContent
+
+        return embeddings.embed(Modality.TEXT, TextContent(text))
+
+    def test_text_query_finds_semantically_matching_records(self, store_factory) -> None:
+        from atlas_richie.vector_core import VectorTextSearch
+
+        store = store_factory(dimension=3, metric="cosine")
+        embeddings = self._embeddings()
+        for id, text in [("cat-1", "cat cat cat"), ("dog-1", "dog dog"), ("bird-1", "bird")]:
+            store.upsert([_record(id, self._embed(embeddings, text), content=text)])
+        hits = VectorTextSearch(store, embeddings).search_by_text("cat")
+        assert hits, "文本查询必须真的返回命中"
+        assert hits[0].id == "cat-1"
+        assert hits[0].content == "cat cat cat"
+
+    def test_text_query_with_acl_filter(self, store_factory) -> None:
+        from atlas_richie.vector_core import (
+            AccessScope,
+            SearchOptions,
+            VectorTextSearch,
+            build_access_filter,
+        )
+
+        store = store_factory(dimension=3, metric="cosine")
+        embeddings = self._embeddings()
+        for id, tenant in [("mine", 1), ("other", 2)]:
+            store.upsert([_record(id, self._embed(embeddings, "cat"), tenant=tenant)])
+        scope_filter = build_access_filter("kb", AccessScope(tenant_id=1, tenant_admin=True))
+        hits = VectorTextSearch(store, embeddings).search_by_text(
+            "cat", SearchOptions(rerank=False, filter=scope_filter)
+        )
+        assert [h.id for h in hits] == ["mine"]
+
+    def test_full_rag_chain_text_query(self, store_factory) -> None:
+        """parse → chunk → map → embed → upsert → 文本查询，全链闭环。"""
+        from atlas_richie.chunking_parser_adapter import ParserChunkingAdapter, Section
+        from atlas_richie.document_parser import BytesSource, ParserRouter
+        from atlas_richie.vector_chunk_adapter import ChunkVectorRecordMapper, VectorRecordContext
+        from atlas_richie.vector_core import VectorTextSearch
+
+        store = store_factory(dimension=3, metric="cosine")
+        embeddings = self._embeddings()
+        source = BytesSource("cat cat cat\n\ndog dog\n\nbird".encode(), name="pets.txt")
+        mapper = ChunkVectorRecordMapper()
+        context = VectorRecordContext(
+            index_name="kb", document_id="pets", version=1,
+            metadata={"tenantId": 1, "knowledgeBaseId": "kb", "status": "ACTIVE",
+                      "visibility": "COMPANY"},
+        )
+        sections = [
+            event.value.result.chunks
+            for event in ParserChunkingAdapter().chunk_events(
+                ParserRouter().parse(source), file_name="pets.txt"
+            )
+            if isinstance(event, Section)
+        ]
+        # map_sections 分配文档级全局 ordinal：逐条 map 会让多 section 的
+        # id 全部碰撞（这正是该 API 存在的理由，见 vector-chunk-adapter）。
+        records = [
+            r.with_vector(self._embed(embeddings, r.content.text))
+            for r in mapper.map_sections(sections, context)
+        ]
+        assert len(records) == 3
+        assert len({r.id for r in records}) == 3
+        store.upsert(records)
+        hits = VectorTextSearch(store, embeddings).search_by_text("cat")
+        assert hits[0].content == "cat cat cat"
+        assert hits[0].metadata.get("chunkOrdinal") == 0
