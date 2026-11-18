@@ -11,6 +11,46 @@ categories and Semantic Versioning.
 
 ### Added
 
+- **Audit / soft-delete field defaults** (new `persistence-core.audit` +
+  `persistence-sqlalchemy.audit`): the five audit fields (`createId` /
+  `updateId` / `createTime` / `updateTime` / `deleted`) are delivered as a
+  policy in the zero-dependency core, with a SQLAlchemy column-default helper in
+  the adapter — mirroring Java `DefaultFieldHandler` without requiring ORM
+  models. Documented deviations from Java: the update path refreshes
+  `updateId` / `updateTime` instead of only filling blanks, and the current
+  user is injected by the caller (this workspace has no
+  `LoginUserContextHolder` equivalent). The decision lives in one place —
+  every column default delegates to `AuditFieldPolicy`.
+- **Vector bulk ingestion pipeline** (new `vector-core.bulk` module):
+  the "embed → batch → persist" orchestration is exposed as an observable event
+  stream (`BulkStarted` / `BulkItemStarted` / `BulkItemSucceeded` /
+  `BulkItemFailed` / `BulkCompleted`), mirroring Java
+  `BulkIngestionPipeline`. A single-record failure degrades to an event instead
+  of aborting the batch, and every run ends with a `BulkCompleted` carrying the
+  terminal counters. Deviation from Java, documented in the module: the pipeline
+  is a synchronous generator (the `VectorStoreEngine` protocol is synchronous),
+  so the reactive-only knobs — embedding/write concurrency and the flush
+  interval — are not offered rather than silently ignored; `write_batch_size`
+  (100) and `fail_fast` match Java.
+- **Vector projection writer** (`atlas-richie-vector-persistence-sqlalchemy`):
+  mirrors Java `DefaultVectorProjectionWriter` — drives the projection state
+  machine from the bulk event stream, maintains the vectorId manifest, and
+  decorates every record with the six projection metadata fields plus
+  `status=ACTIVE`. Together with the projection version convergence below this
+  closes the "rebuild → write → manifest → activate → retrieve → retire →
+  clean" vertical.
+- **Vector projection version convergence** (new
+  **`atlas-richie-vector-persistence-sqlalchemy`**): the vector projection state
+  machine, the version→vectorId manifest ledger and the delayed-cleanup outbox land
+  in a relational database, mirroring Java `atlas-richie-vector-projection-dao`.
+  `vector-core` gains the zero-dependency `projection` contract module
+  (`VectorProjectionState` / `VectorProjectionReference` /
+  `VectorProjectionSpecification` / `VectorProjectionVersion` +
+  `ActiveProjectionVersionResolver`), and `KnowledgeBaseVectorService` accepts an
+  optional resolver: active versions are pushed down as
+  `projectionVersionId IN (...)`, and an empty set short-circuits to an empty result
+  instead of calling the provider. 4 tables (`rag_vector_projection` /
+  `_version` / `_record` / `_outbox`), 64 new tests.
 - Framework-neutral HTTP, OAuth 2.1, and MCP component packages.
 - Modern MCP Streamable HTTP, MRTR, client cache/pagination, and legacy dialect adapter.
 - **`atlas-richie-cache-core`** + **`atlas-richie-cache-redis`** (R-220):
@@ -86,6 +126,26 @@ categories and Semantic Versioning.
 
 ### Changed
 
+- **Anti-avalanche jitter is now wired** (`cache-core` + `cache-redis`):
+  `CacheFunction.get_random_extra_millis()` was implemented but had zero
+  callers — each Redis manager carried its own copy of the offset logic, and
+  the `*_with_lock` publish paths plus `KeyOps.set_expired_time` carried no
+  jitter at all. The core function is now the single implementation (the three
+  adapter-local copies are gone), and every cache-entry TTL written by the
+  Redis driver goes through it: the high-level `StringFunction` / `HashFunction`
+  / `CollectionOps` write helpers, the `*_with_lock` publish paths, and
+  `KeyOps.set_expired_time`. Verified line by line against the Java sources —
+  `RedisStringManager` (4 call sites), `RedisSetManager.getFromSetWithLock`,
+  `RedisHashManager.getFromHashWithLock` (4 overloads) +
+  `RedisHashManager.addObject`, `RedisKeyManager.setExpiredTime`.
+  **Behaviour change:** the offset is Java's discrete whole-minute bucket
+  (10 values in `[60s, 10min]`) instead of the previous continuous uniform
+  draw, and `*_with_lock` entries now carry the offset too — previously a mass
+  reload left every key with an identical expiry instant, which is exactly
+  the avalanche the feature exists to prevent. Two paths deliberately keep
+  their exact TTL because they are not cache entries: the raw `ValueOps` ops
+  (`set_with_ttl` and friends) and the M5.7 negative-cache marker (a short
+  suppression window that must expire on schedule).
 - **BREAKING (behaviour): local-cache expiry now honours the JSR-107 policy.**
   `ExpiryPolicy` declared CREATED / ACCESSED / MODIFIED / TOUCHED, but the
   bucket only distinguished ETERNAL from everything else, so all four
@@ -113,6 +173,20 @@ categories and Semantic Versioning.
 
 ### Fixed
 
+- **`AlembicMigrationRunner` could not migrate with a percent-encoded
+  password**: Alembic stores main options in a `configparser` section and
+  `BasicInterpolation` reads `%` as an interpolation marker, so a DSN like
+  `postgresql://u:p%40ss@host/db` raised `ValueError: invalid interpolation
+  syntax` the first time the option was read. The URL is now escaped
+  (`%` → `%%`) before it reaches Alembic, which un-escapes it on read.
+  Covered by a regression test.
+- **Migration-lock test ignored its own DSN**: the PostgreSQL advisory-lock
+  cases validated reachability with `ATLAS_RICHIE_PERSISTENCE_PG_TEST_URL`
+  but connected through a hardcoded passwordless URL, so they failed with
+  "no password supplied" against any password-protected instance — and
+  skipped silently otherwise. The admin and per-database URLs are now
+  derived from the same DSN the fixture validated, so the two
+  concurrent-migration cases actually run against a real PostgreSQL.
 - **`CacheFunction` Protocol parent class** (R-229): `class CacheFunction:`
   was missing the `Protocol` parent, causing all 11 subclasses
   (`HashFunction`, `SetFunction`, `StringFunction`, etc.) to fail under
