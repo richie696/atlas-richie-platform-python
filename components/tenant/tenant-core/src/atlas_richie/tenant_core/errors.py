@@ -1,0 +1,29 @@
+"""租户错误（对位 Java `TenantErrorCode` / `BusinessException`）。"""
+
+from __future__ import annotations
+
+
+class TenantErrorCode:
+    TENANT_NOT_BOUND = "TENANT_NOT_BOUND"
+    INVALID_TENANT_ID = "INVALID_TENANT_ID"
+    TENANT_INVALID_NAMING = "TENANT_INVALID_NAMING"
+    TENANT_AUTH_MISSING_TOKEN = "TENANT_AUTH_MISSING_TOKEN"
+    TENANT_AUTH_INVALID_FORMAT = "TENANT_AUTH_INVALID_FORMAT"
+    TENANT_AUTH_EXPIRED = "TENANT_AUTH_EXPIRED"
+    TENANT_AUTH_INACTIVE = "TENANT_AUTH_INACTIVE"
+    TENANT_AUTH_MISMATCH = "TENANT_AUTH_MISMATCH"
+    TENANT_IDENTITY_NOT_FOUND = "TENANT_IDENTITY_NOT_FOUND"
+    TENANT_MIGRATING = "TENANT_MIGRATING"
+    TENANT_PROVISIONING = "TENANT_PROVISIONING"
+    TENANT_NOT_FOUND = "TENANT_NOT_FOUND"
+    TENANT_ADMIN_REQUIRED = "TENANT_ADMIN_REQUIRED"
+    TENANT_SWITCH_IN_TRANSACTION = "TENANT_SWITCH_IN_TRANSACTION"
+
+
+class TenantError(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+__all__ = ["TenantErrorCode", "TenantError"]

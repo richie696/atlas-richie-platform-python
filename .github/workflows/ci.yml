@@ -41,6 +41,8 @@ jobs:
       - run: uv run python -m pytest components/document -q
       - run: uv run python -m pytest components/storage -q
       - run: uv run python -m pytest components/vector -q
+      - run: uv run python -m pytest components/tenant -q
+      - run: uv run python -m pytest components/concurrency -q
       # Per-package invocations: each package is its own pytest rootdir. Running
       # several in one invocation collides on the `tests.conftest` module name.
       # sentinel-source-file is omitted because it has no tests (pytest exits 5).

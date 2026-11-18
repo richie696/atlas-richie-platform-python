@@ -70,6 +70,7 @@ dependencies = [
   "atlas-richie-statemachine-core>=0.2.0,<0.3.0",
   "atlas-richie-statemachine-redis>=0.2.0,<0.3.0",
   "atlas-richie-statemachine-sqlalchemy>=0.2.0,<0.3.0",
+  "atlas-richie-tenant-core>=0.2.0,<0.3.0",
   "atlas-richie-storage-core>=0.2.0,<0.3.0",
   "atlas-richie-storage-s3>=0.2.0,<0.3.0",
   "atlas-richie-storage-local>=0.2.0,<0.3.0",
