@@ -16,7 +16,7 @@ import pytest
 
 from atlas_richie.cache_redis import L2DistributedCache, RedisProviderRegistrar
 
-REDIS_URL_DEFAULT = "redis://:Redis2025!Local@127.0.0.1:16379/0"
+REDIS_URL_DEFAULT = "redis://127.0.0.1:16379/0"
 
 
 def _wait_for(predicate: Callable[[], bool], timeout: float = 5.0) -> bool:

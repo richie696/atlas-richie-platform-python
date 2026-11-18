@@ -67,7 +67,7 @@ from atlas_richie.cache_redis import (
 
 REDIS_URL = os.environ.get(
     "ATLAS_RICHIE_CACHE_REDIS_URL",
-    "redis://:Redis2025!Local@127.0.0.1:16379/0",
+    "redis://127.0.0.1:16379/0",
 )
 
 
@@ -117,16 +117,16 @@ class TestE2EInfrastructure:
     ) -> None:
         """`connection_string` must not leak the password in cleartext.
 
-        The Redis URL contains the password `Redis2025!Local`; the
+        The Redis URL contains a password; the
         `RedisProviderRegistrar.from_url` masks it to `***` in the
         diagnostics string.
         """
         reg = RedisProviderRegistrar.from_url(
-            "redis://:Redis2025!Local@127.0.0.1:16379/0",
+            "redis://:synthetic-mask-secret@127.0.0.1:16379/0",
             namespace="credential-mask-test",
         )
         conn = reg.connection_string()
-        assert "Redis2025" not in conn, f"leaked: {conn!r}"
+        assert "synthetic-mask-secret" not in conn, f"leaked: {conn!r}"
         assert "***" in conn, f"missing mask: {conn!r}"
         reg.close()
         print("  ✅ 0.2 credential mask")

@@ -12,7 +12,7 @@ from atlas_richie.cache_redis import RedisProviderRegistrar
 from atlas_richie.cache_core import GlobalCache, CacheRegistry
 
 registrar = RedisProviderRegistrar(
-    redis_url="redis://:Redis2025!Local@127.0.0.1:16379/0",
+    redis_url="redis://127.0.0.1:16379/0",
     namespace="atlas-richie",
 )
 CacheRegistry.register(GlobalCacheManager(registrar))
@@ -42,3 +42,20 @@ atlas_richie/cache_redis/
   `string_function()`.
 - 28 stubbed with `NotImplementedError` (M2-M4 will fill in).
 - Real-Redis smoke test: 1 round-trip.
+
+## Running the integration tests
+
+Credentials are never hardcoded. The suites default to a passwordless
+`redis://127.0.0.1:16379/0` and skip cleanly when that server is unreachable
+**or** requires a password they do not have (the gate PINGs, not just TCP-probes).
+
+Point them at your own instance with the environment:
+
+```bash
+export ATLAS_RICHIE_CACHE_REDIS_URL='redis://:YOUR_PASSWORD@127.0.0.1:16379/1'
+uv run python -m pytest components/cache -q
+```
+
+The same pattern applies to `ATLAS_RICHIE_STREAMMQ_REDIS_URL`,
+`ATLAS_RICHIE_STATEMACHINE_REDIS_URL`, `ATLAS_RICHIE_COORDINATION_REDIS_URL`
+and `ATLAS_RICHIE_SECRET_REDIS_TEST_URL`.

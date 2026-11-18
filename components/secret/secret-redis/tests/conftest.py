@@ -24,6 +24,8 @@ from collections.abc import Iterator
 
 import pytest
 
+from atlas_richie.testing.pytest_support import skip_unless_reachable
+
 from atlas_richie.cache_redis import RedisCacheInfrastructure
 from atlas_richie.secret import SecretProviderConfiguration
 from atlas_richie.secret_redis import (
@@ -34,7 +36,7 @@ from atlas_richie.secret_redis import (
 
 REDIS_URL = os.environ.get(
     "ATLAS_RICHIE_SECRET_REDIS_TEST_URL",
-    "redis://:Redis2025!Local@127.0.0.1:16379/0",
+    "redis://127.0.0.1:16379/0",
 )
 
 
@@ -91,8 +93,27 @@ def _build_infra(properties: RedisSecretProperties) -> RedisCacheInfrastructure:
     return manager.get_infrastructure(properties.to_cache_properties())
 
 
+def _redis_ready(url: str) -> bool:
+    """An open port is not enough: the server may require a password we lack."""
+    import redis as redis_lib
+
+    client = redis_lib.Redis.from_url(url, socket_timeout=3, socket_connect_timeout=3)
+    try:
+        return bool(client.ping())
+    finally:
+        client.close()
+
+
+@pytest.fixture(scope="session")
+def requires_redis() -> None:
+    skip_unless_reachable(
+        REDIS_URL, "Redis",
+        env_hint="ATLAS_RICHIE_SECRET_REDIS_TEST_URL", probe=_redis_ready,
+    )
+
+
 @pytest.fixture
-def redis_session() -> Iterator[object]:
+def redis_session(requires_redis: None) -> Iterator[object]:
     """Yield a connected `SecretProviderSession` for a unique namespace.
 
     The session is closed on teardown, and all keys under the
@@ -129,7 +150,7 @@ def redis_session() -> Iterator[object]:
 
 
 @pytest.fixture
-def factory() -> RedisSecretProviderFactory:
+def factory(requires_redis: None) -> RedisSecretProviderFactory:
     """Yield a default `RedisSecretProviderFactory`.
 
     Use this when the test needs to drive `factory.create(...)`

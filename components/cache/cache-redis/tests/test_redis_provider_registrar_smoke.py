@@ -4,7 +4,7 @@ Validates that the new `RedisProviderRegistrar` correctly implements
 `ProviderRegistrar` end-to-end against a real Redis 8.x instance.
 
 The test uses the env var `ATLAS_RICHIE_CACHE_REDIS_URL` (default
-`redis://:Redis2025!Local@127.0.0.1:16379/0`) and a test namespace
+`redis://127.0.0.1:16379/0`) and a test namespace
 prefixed with `R-220-M1:` so it cannot collide with other test runs
 in the same Redis instance.
 """
@@ -34,7 +34,7 @@ from atlas_richie.cache_redis import (
 
 REDIS_URL = os.environ.get(
     "ATLAS_RICHIE_CACHE_REDIS_URL",
-    "redis://:Redis2025!Local@127.0.0.1:16379/0",
+    "redis://127.0.0.1:16379/0",
 )
 
 

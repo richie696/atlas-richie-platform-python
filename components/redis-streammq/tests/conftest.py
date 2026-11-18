@@ -8,10 +8,21 @@ import pytest
 
 from atlas_richie.testing.pytest_support import skip_unless_reachable
 
-DEFAULT_REDIS_URL = "redis://:Redis2025!Local@127.0.0.1:16379/0"
+DEFAULT_REDIS_URL = "redis://127.0.0.1:16379/0"
 REDIS_URL = os.environ.get("ATLAS_RICHIE_STREAMMQ_REDIS_URL", DEFAULT_REDIS_URL)
 
 
+
+
+def _redis_ready(url: str) -> bool:
+    """An open port is not enough: the server may require a password we lack."""
+    import redis as redis_lib
+
+    client = redis_lib.Redis.from_url(url, socket_timeout=3, socket_connect_timeout=3)
+    try:
+        return bool(client.ping())
+    finally:
+        client.close()
 
 
 @pytest.fixture(scope="session")
@@ -21,7 +32,9 @@ def redis_url() -> str:
 
 @pytest.fixture(scope="session")
 def requires_redis(redis_url: str) -> None:
-    skip_unless_reachable(redis_url, "Redis", env_hint="ATLAS_RICHIE_STREAMMQ_REDIS_URL")
+    skip_unless_reachable(
+        redis_url, "Redis", env_hint="ATLAS_RICHIE_STREAMMQ_REDIS_URL", probe=_redis_ready
+    )
 
 
 @pytest.fixture

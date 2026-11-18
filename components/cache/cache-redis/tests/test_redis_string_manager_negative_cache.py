@@ -41,7 +41,7 @@ from atlas_richie.cache_redis.managers.redis_string_manager import (
 
 REDIS_URL = os.environ.get(
     "ATLAS_RICHIE_CACHE_REDIS_URL",
-    "redis://:Redis2025!Local@127.0.0.1:16379/0",
+    "redis://127.0.0.1:16379/0",
 )
 
 

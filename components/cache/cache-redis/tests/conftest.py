@@ -22,13 +22,24 @@ import pytest
 
 from atlas_richie.testing import tcp_reachable
 
-DEFAULT_REDIS_URL = "redis://:Redis2025!Local@127.0.0.1:16379/0"
+DEFAULT_REDIS_URL = "redis://127.0.0.1:16379/0"
 REDIS_URL = os.environ.get("ATLAS_RICHIE_CACHE_REDIS_URL", DEFAULT_REDIS_URL)
 
 
 def _is_redis_reachable(url: str) -> bool:
-    """Delegates to the shared probe in atlas-richie-testing."""
-    return tcp_reachable(url, default_port=6379)
+    """TCP reachability plus a PING: an auth-required server we cannot log into
+    is reachable but unusable, and must skip rather than error every test."""
+    if not tcp_reachable(url, default_port=6379):
+        return False
+    import redis as redis_lib
+
+    client = redis_lib.Redis.from_url(url, socket_timeout=3, socket_connect_timeout=3)
+    try:
+        return bool(client.ping())
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        client.close()
 
 
 def pytest_collection_modifyitems(
