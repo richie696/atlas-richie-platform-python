@@ -195,6 +195,29 @@ class StorageEngineRegistry:
                 raise StorageError(f"storage engine not registered: {key}")
             return engine
 
+    def replace(self, name: str, engine: ObjectStorageEngine) -> ObjectStorageEngine:
+        """Hot-swap an engine, returning the previous one (对位 Java refresh).
+
+        The default designation is preserved: swapping the default engine does
+        not silently promote another.
+        """
+        if not name or not name.strip():
+            raise ValueError("engine name must not be blank")
+        with self._lock:
+            previous = self._engines.get(name)
+            if previous is None:
+                raise StorageError(f"storage engine not registered: {name}")
+            self._engines[name] = engine
+            return previous
+
+    def unregister(self, name: str) -> ObjectStorageEngine | None:
+        """Remove an engine; if it was the default, fall back to the first remaining."""
+        with self._lock:
+            removed = self._engines.pop(name, None)
+            if removed is not None and self._default == name:
+                self._default = next(iter(self._engines), None)
+            return removed
+
     def names(self) -> tuple[str, ...]:
         with self._lock:
             return tuple(self._engines)
@@ -205,7 +228,18 @@ class StorageEngineRegistry:
             return self._default
 
 
+from .keys import (
+    MIN_EXPIRE_SECONDS,
+    build_public_object_url,
+    real_path,
+    resolve_download_policy,
+)
+
 __all__ = [
+    "MIN_EXPIRE_SECONDS",
+    "real_path",
+    "build_public_object_url",
+    "resolve_download_policy",
     "Acl",
     "BucketNotFoundError",
     "DirectDownloadPolicy",
