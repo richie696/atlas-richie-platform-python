@@ -94,6 +94,14 @@ class DefaultMaskingService:
                 )
             elif isinstance(value, dict):
                 result[key] = self._mask_map(value, scene, depth + 1, ancestors)
+            elif isinstance(value, (list, tuple)):
+                # Java maskMap 递归集合；列表内的 dict 同样含敏感字段。
+                result[key] = type(value)(
+                    self._mask_map(item, scene, depth + 1, ancestors)
+                    if isinstance(item, dict)
+                    else item
+                    for item in value
+                )
             else:
                 result[key] = value
         return result

@@ -6,6 +6,7 @@ separate concerns; this package only decides what a masked value looks like.
 
 import importlib.metadata
 
+from .json_log import JsonLogMaskingFilter, mask_json_message
 from .model import (
     MaskContext,
     MaskRule,
@@ -44,6 +45,8 @@ from .strategies import (
 __version__ = importlib.metadata.version("atlas-richie-desensitize-core")
 
 __all__ = [
+    "mask_json_message",
+    "JsonLogMaskingFilter",
     "MAX_DEPTH",
     "AddressMaskingStrategy",
     "ApiKeyMaskingStrategy",
