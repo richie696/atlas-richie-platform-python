@@ -113,10 +113,29 @@ class StateMachineEngine:
 
             applied: Transition | None = None
             for transition in ordered:
-                if transition.condition is not None and not transition.condition(context):
-                    continue
+                if transition.condition is not None:
+                    try:
+                        passed = bool(transition.condition(context))
+                    except Exception:  # noqa: BLE001 — Java: a failing guard is false, try the next rule
+                        _log.warning(
+                            "transition condition failed; machine=%s to=%s",
+                            state_machine_name,
+                            transition.to_state,
+                            exc_info=True,
+                        )
+                        passed = False
+                    if not passed:
+                        continue
                 if transition.action is not None:
-                    transition.action(context)
+                    try:
+                        transition.action(context)
+                    except Exception:  # noqa: BLE001 — Java logs the action failure and still commits
+                        _log.warning(
+                            "transition action failed; machine=%s to=%s",
+                            state_machine_name,
+                            transition.to_state,
+                            exc_info=True,
+                        )
                 context.previous_state = context.current_state
                 context.current_state = transition.to_state
                 context.transition = transition

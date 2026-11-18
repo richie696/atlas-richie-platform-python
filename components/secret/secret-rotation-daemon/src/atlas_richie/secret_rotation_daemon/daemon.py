@@ -9,12 +9,12 @@
 设计:
 
 - **每条 reference 独立追踪 last-seen version**:`dict[id(reference)] -> version`
-- **polling 线程**:`threading.Thread(daemon=True)`,定时拉取
-  `operations.get_metadata(reference)`,跟 last-seen 对比
+- **polling 任务**:交给 `scheduling-core` 的 `Scheduler`(fixed-delay),
+  定时拉取 `operations.get_metadata(reference)`,跟 last-seen 对比
 - **同步 callback**:`SecretRotationCallback` 在 polling 线程
   上同步触发,consumer 在 callback 里直接 `get(reference)` 重新
   拿 value(consumer 自己负责同步原语)
-- **生命周期**:`start()` 启动线程,`stop()` 设 flag 优雅退出,
+- **生命周期**:`start()` 启动调度,`stop()` 优雅退出,
   重复 start/stop 是幂等的
 - **错误隔离**:单条 reference 的 metadata 拉取失败不影响其它
   reference(用 `try/except` 包住,失败只 log warning)
@@ -28,8 +28,8 @@ for version changes. Mirrors Java's `RotationPublisher` hook
 Design:
 
 - Per-reference last-seen version (`dict[id(reference)] -> version`)
-- Polling thread: `threading.Thread(daemon=True)`; on each tick,
-  call `operations.get_metadata(reference)` and compare.
+- Polling job: a fixed-delay job on `scheduling-core`'s `Scheduler`;
+  each tick calls `operations.get_metadata(reference)` and compares.
 - Synchronous callback: invoked on the polling thread. Consumers
   re-resolve by calling `session.get(reference)` themselves.
 - Lifecycle: `start()` / `stop()`; both are idempotent.
@@ -45,6 +45,7 @@ import time
 from collections.abc import Callable
 from typing import NamedTuple
 
+from atlas_richie.scheduling_core import Scheduler
 from atlas_richie.secret.errors import SecretException
 from atlas_richie.secret.metadata import SecretMetadata
 from atlas_richie.secret.operations import SecretOperations
@@ -107,8 +108,7 @@ class SecretRotationDaemon:
         "_poll_interval_seconds",
         "_registrations",
         "_running",
-        "_stop_event",
-        "_thread",
+        "_scheduler",
         "_time_source",
         "_versions",
     )
@@ -128,8 +128,7 @@ class SecretRotationDaemon:
         self._registrations: dict[int, _Registration] = {}
         self._versions: dict[int, SecretVersion] = {}
         self._lock = threading.Lock()
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._scheduler: Scheduler | None = None
         self._running = False
         self._closed = False
 
@@ -179,7 +178,7 @@ class SecretRotationDaemon:
         _logger.debug("unregistered rotation watcher for %r", reference.path)
 
     def start(self) -> None:
-        """Start the polling thread. Idempotent."""
+        """Start the polling job. Idempotent."""
         if self._closed:
             raise SecretException(
                 "secret_rotation_daemon: cannot start a closed daemon",
@@ -187,30 +186,25 @@ class SecretRotationDaemon:
         with self._lock:
             if self._running:
                 return
-            self._stop_event.clear()
-            self._thread = threading.Thread(
-                target=self._run_loop,
-                name="secret-rotation-daemon",
-                daemon=True,
+            scheduler = Scheduler(name="secret-rotation-daemon")
+            scheduler.schedule_fixed_delay(
+                self._poll_interval_seconds, self.poll_once, name="poll"
             )
+            scheduler.start()
+            self._scheduler = scheduler
             self._running = True
-            self._thread.start()
         _logger.debug("rotation daemon started")
 
     def stop(self) -> None:
-        """Stop the polling thread. Idempotent; blocks until the
-        thread exits.
-        """
+        """Stop the polling job. Idempotent; blocks until the job exits."""
         with self._lock:
             if not self._running:
                 return
-            self._stop_event.set()
-            thread = self._thread
-        assert thread is not None
-        thread.join(timeout=self._poll_interval_seconds * 2 + 5.0)
-        with self._lock:
+            scheduler = self._scheduler
             self._running = False
-            self._thread = None
+            self._scheduler = None
+        assert scheduler is not None
+        scheduler.stop(timeout=self._poll_interval_seconds * 2 + 5.0)
         _logger.debug("rotation daemon stopped")
 
     def close(self) -> None:
@@ -242,23 +236,7 @@ class SecretRotationDaemon:
                 continue
             self._maybe_invoke(reg.reference, metadata, reg.callback)
 
-    # --- Internal: the polling loop -------------------------------------
-
-    def _run_loop(self) -> None:
-        """Daemon's polling thread body.
-
-        The thread sleeps between polls using `Event.wait(...)`
-        so `stop()` can interrupt the sleep quickly.
-        """
-        while not self._stop_event.is_set():
-            try:
-                self.poll_once()
-            except Exception:  # noqa: BLE001
-                # Defensive: a bug in the daemon's own code must
-                # not kill the polling thread silently.
-                _logger.exception("secret_rotation_daemon: poll tick crashed")
-            # Sleep with interrupt support.
-            self._stop_event.wait(timeout=self._poll_interval_seconds)
+    # --- Internal: version comparison -----------------------------------
 
     def _maybe_invoke(
         self,

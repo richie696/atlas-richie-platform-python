@@ -42,19 +42,24 @@ class RedisCacheInfrastructure(CacheInfrastructure):
     `HashFunction.get_from_hash_with_lock_typed` / etc. to deserialise
     when the caller does not pass an explicit `clazz`.
 
-    L2 caching is **always enabled** in the Python translation
-    (matches Java's default). Per-key-type switches are exposed but
-    default to `True`; callers can opt out via `disable_key_type`.
+    L2 caching is **opt-in**, driven by `RedisCacheProperties.enable_l2_caching`
+    (default False, matching Java). `l2_caching_data` restricts which key types
+    participate; an empty list means all types. Callers can still opt out of a
+    single type via `disable_key_type`.
     """
 
-    def __init__(self, backend: RedisDistributedCache) -> None:
+    def __init__(self, backend: RedisDistributedCache, properties=None) -> None:
         self._backend = backend
+        self._properties = properties
         self._lock = threading.RLock()
         self._value_types: dict[str, type] = {}
+        allowed = getattr(properties, "l2_caching_data", None) or []
+        normalized = {str(item).lower() for item in allowed}
         # Per KeyTypeEnum: which types have L2 caching enabled.
-        self._l2_enabled: dict[KeyTypeEnum, bool] = dict.fromkeys(
-            KeyTypeEnum, True
-        )
+        self._l2_enabled: dict[KeyTypeEnum, bool] = {
+            key_type: (not normalized or key_type.value in normalized)
+            for key_type in KeyTypeEnum
+        }
 
     @property
     def backend(self) -> RedisDistributedCache:
@@ -66,7 +71,14 @@ class RedisCacheInfrastructure(CacheInfrastructure):
         return self._backend.connection_string
 
     def enable_l2_caching(self) -> bool:
-        return True
+        return bool(getattr(self._properties, "enable_l2_caching", False))
+
+    def remaining_ttl_millis(self, key: str) -> Optional[int]:
+        """Redis PTTL for `key`; None when unknown, negative when no expiry."""
+        try:
+            return int(self._backend.raw_client().pttl(self._backend.make_key(key)))
+        except Exception:  # noqa: BLE001 — TTL is an optimisation, never a hard failure
+            return None
 
     def enable_key_type_cache(self, key_type: KeyTypeEnum) -> bool:
         with self._lock:

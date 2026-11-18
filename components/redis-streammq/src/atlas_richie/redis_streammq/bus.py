@@ -177,6 +177,27 @@ class RedisStreamBus:
             consumers = tuple(_text(c[0]) for c in (summary[3] or [])) if len(summary) > 3 else ()
         return BacklogInfo(stream=stream, length=length, group=group, pending=pending, consumers=consumers)
 
+    def trim(self, stream: str, max_len: int, *, approximate: bool | None = None) -> int:
+        """Cap an existing stream, returning how many entries were removed.
+
+        Publishing trims only on XADD, so a stream that stops receiving messages
+        keeps its backlog forever. This is the standalone cap for that case.
+        A missing stream is a no-op (0), matching Java's hasKey guard.
+        """
+        if max_len < 0:
+            raise ValueError("max_len must be >= 0")
+        use_approximate = (
+            self._approximate_trimming if approximate is None else approximate
+        )
+        try:
+            return int(
+                self._client.xtrim(stream, maxlen=max_len, approximate=use_approximate)
+            )
+        except Exception as error:  # noqa: BLE001 — a missing stream is not an error
+            if "no such key" in str(error).lower():
+                return 0
+            raise
+
     def send_to_dead_letter(
         self,
         message: StreamMessage,

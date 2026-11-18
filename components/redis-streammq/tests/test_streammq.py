@@ -310,3 +310,163 @@ class TestConsumerAgainstRedis:
         assert len(outcomes) == 3
         assert outcomes[0].processed == 1
         assert outcomes[1].processed == 0
+
+
+class TestStreamCleanupLogic:
+    """Leader gating and limit resolution, without Redis."""
+
+    def _cleanup(self, limits, **kwargs):
+        from atlas_richie.coordination_core import InMemoryLeaderElector
+        from atlas_richie.redis_streammq import StreamCleanup
+
+        elector = InMemoryLeaderElector()
+        cleanup = StreamCleanup(
+            _RecordingBus(), limits, elector=elector,
+            default_max_len=kwargs.pop("default_max_len", 10), **kwargs
+        )
+        return cleanup, elector
+
+    def test_non_leader_skips(self) -> None:
+        cleanup, elector = self._cleanup({"s": 5})
+        elector.try_acquire("stream-cleanup", "other-node", 30.0)
+        cleanup._lease.start()
+        try:
+            report = cleanup.cleanup_once()
+            assert report.skipped is True
+            assert report.trimmed == {}
+        finally:
+            cleanup.stop()
+
+    def test_leader_trims_with_override_and_default(self) -> None:
+        cleanup, _ = self._cleanup({"a": 3, "b": None}, default_max_len=10)
+        cleanup._lease.start()
+        try:
+            assert cleanup.is_leader is True
+            cleanup.cleanup_once()
+            assert cleanup._bus.calls == [("a", 3), ("b", 10)]
+        finally:
+            cleanup.stop()
+
+    def test_non_positive_limit_is_skipped(self) -> None:
+        cleanup, _ = self._cleanup({"a": 0, "b": -1, "c": None}, default_max_len=0)
+        cleanup._lease.start()
+        try:
+            cleanup.cleanup_once()
+            assert cleanup._bus.calls == []
+        finally:
+            cleanup.stop()
+
+    def test_one_failing_stream_does_not_stop_the_rest(self) -> None:
+        cleanup, _ = self._cleanup({"bad": 5, "good": 5})
+        cleanup._bus.fail_on = "bad"
+        cleanup._lease.start()
+        try:
+            cleanup.cleanup_once()
+            assert ("good", 5) in cleanup._bus.calls
+        finally:
+            cleanup.stop()
+
+    def test_invalid_interval_rejected(self) -> None:
+        from atlas_richie.coordination_core import InMemoryLeaderElector
+        from atlas_richie.redis_streammq import StreamCleanup
+
+        with pytest.raises(ValueError):
+            StreamCleanup(
+                _RecordingBus(), {"s": 5},
+                elector=InMemoryLeaderElector(), interval_seconds=0,
+            )
+
+    def test_report_totals(self) -> None:
+        from atlas_richie.redis_streammq import CleanupReport
+
+        assert CleanupReport(trimmed={"a": 3, "b": 4}).total_removed == 7
+        assert CleanupReport(skipped=True).total_removed == 0
+
+
+class _RecordingBus:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+        self.fail_on: str | None = None
+
+    def trim(self, stream: str, max_len: int, **kwargs) -> int:
+        if stream == self.fail_on:
+            raise ConnectionError("redis down")
+        self.calls.append((stream, max_len))
+        return 1
+
+
+@pytest.mark.integration
+class TestStreamCleanupAgainstRedis:
+    def test_trim_caps_an_existing_stream(self, bus: RedisStreamBus, stream: str) -> None:
+        for index in range(20):
+            bus.publish(stream, {"n": index})
+        assert bus.backlog(stream).length == 20
+        assert bus.trim(stream, 5, approximate=False) == 15
+        assert bus.backlog(stream).length == 5
+
+    def test_trim_below_length_is_noop(self, bus: RedisStreamBus, stream: str) -> None:
+        bus.publish(stream, {"n": 1})
+        assert bus.trim(stream, 100, approximate=False) == 0
+
+    def test_trim_missing_stream_is_zero(self, bus: RedisStreamBus, stream: str) -> None:
+        assert bus.trim(stream, 5) == 0
+
+    def test_trim_rejects_negative_limit(self, bus: RedisStreamBus, stream: str) -> None:
+        with pytest.raises(ValueError):
+            bus.trim(stream, -1)
+
+    def test_cleanup_shrinks_backlog_after_publishing_stops(
+        self, client, stream: str
+    ) -> None:
+        from atlas_richie.coordination_redis import RedisLeaderElector
+        from atlas_richie.redis_streammq import StreamCleanup
+
+        # Exact trimming: MAXLEN ~ removes whole radix nodes, so a 30-entry
+        # stream can legitimately trim nothing (same trade-off Java makes).
+        bus = RedisStreamBus(client, approximate_trimming=False)
+        for index in range(30):
+            bus.publish(stream, {"n": index}, max_len=1000)
+        assert bus.backlog(stream).length == 30
+        cleanup = StreamCleanup(
+            bus, {stream: 5},
+            elector=RedisLeaderElector(bus.client, prefix=f"it:cleanup:{uuid.uuid4().hex[:8]}"),
+            interval_seconds=3600,
+        )
+        cleanup.start()
+        try:
+            # start() fires the first tick immediately (fixed-delay semantics).
+            import time as _t
+            deadline = _t.monotonic() + 2.0
+            while bus.backlog(stream).length > 5 and _t.monotonic() < deadline:
+                _t.sleep(0.02)
+            assert bus.backlog(stream).length == 5, "调度任务必须真的把 backlog 削下来"
+            assert cleanup.cleanup_once().skipped is False
+        finally:
+            cleanup.stop()
+
+    def test_only_the_leader_cleans_up(self, bus: RedisStreamBus, stream: str) -> None:
+        from atlas_richie.coordination_redis import RedisLeaderElector
+        from atlas_richie.redis_streammq import StreamCleanup
+
+        prefix = f"it:cleanup:{uuid.uuid4().hex[:8]}"
+        for index in range(20):
+            bus.publish(stream, {"n": index}, max_len=1000)
+        first = StreamCleanup(
+            bus, {stream: 5}, elector=RedisLeaderElector(bus.client, prefix=prefix),
+            holder_id="node-1", interval_seconds=3600,
+        )
+        second = StreamCleanup(
+            bus, {stream: 5}, elector=RedisLeaderElector(bus.client, prefix=prefix),
+            holder_id="node-2", interval_seconds=3600,
+        )
+        first.start()
+        second.start()
+        try:
+            assert first.is_leader is True
+            assert second.is_leader is False
+            assert second.cleanup_once().skipped is True
+            assert first.cleanup_once().skipped is False
+        finally:
+            first.stop()
+            second.stop()
+        assert bus.client.get(f"{prefix}:leader:stream-cleanup") is None, "stop 必须释放租约"

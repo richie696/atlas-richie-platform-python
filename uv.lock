@@ -860,6 +860,8 @@ name = "atlas-richie-redis-streammq"
 version = "0.2.0"
 source = { editable = "components/redis-streammq" }
 dependencies = [
+    { name = "atlas-richie-coordination-core" },
+    { name = "atlas-richie-scheduling-core" },
     { name = "redis" },
 ]
 
@@ -871,6 +873,8 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "atlas-richie-coordination-core", editable = "components/coordination/coordination-core" },
+    { name = "atlas-richie-scheduling-core", editable = "components/scheduling/scheduling-core" },
     { name = "atlas-richie-testing", marker = "extra == 'test'", editable = "foundation/testing" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
     { name = "redis", specifier = ">=5.0,<9.0" },
@@ -1305,6 +1309,7 @@ version = "0.2.0"
 source = { editable = "components/secret/secret-rotation-daemon" }
 dependencies = [
     { name = "atlas-richie-contracts" },
+    { name = "atlas-richie-scheduling-core" },
     { name = "atlas-richie-secret-core" },
 ]
 
@@ -1316,6 +1321,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "atlas-richie-scheduling-core", editable = "components/scheduling/scheduling-core" },
     { name = "atlas-richie-secret-core", editable = "components/secret/secret-core" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
 ]

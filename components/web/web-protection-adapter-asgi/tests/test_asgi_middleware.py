@@ -223,8 +223,19 @@ class TestSignature:
     def test_gateway_bypass_header_skips_signature(self) -> None:
         app = _App()
         middleware = ProtectionASGIMiddleware(app, signature_verifier=_verifier())
-        _call(middleware, _scope("/api/orders", "POST", {"x-gateway-verified": "1"}))
+        _call(middleware, _scope("/api/orders", "POST", {"x-forwarded-from-gateway": "1"}))
         assert app.calls == 1
+
+    def test_default_bypass_header_matches_java_contract(self) -> None:
+        """Regression: the default was x-gateway-verified, which no Java gateway
+        sends, so the bypass silently never fired in a mixed deployment."""
+        app = _App()
+        middleware = ProtectionASGIMiddleware(app, signature_verifier=_verifier())
+        headers = _signed_headers()
+        headers["x-signature"] = "deadbeef"
+        headers["X-Forwarded-From-Gateway"] = "edge-1"
+        sent = _call(middleware, _scope("/api/orders", "POST", headers))
+        assert app.calls == 1, "Java 契约头名必须触发 bypass（大小写不敏感）"
 
     def test_gateway_bypass_can_be_disabled(self) -> None:
         app = _App()
@@ -234,7 +245,7 @@ class TestSignature:
         # A client key is present but no signature: with bypass disabled this must deny.
         sent = _call(
             middleware,
-            _scope("/api/orders", "POST", {"x-gateway-verified": "1", "x-client-key": "partner"}),
+            _scope("/api/orders", "POST", {"x-forwarded-from-gateway": "1", "x-client-key": "partner"}),
         )
         assert _status(sent) == 401
         assert app.calls == 0

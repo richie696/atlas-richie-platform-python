@@ -112,8 +112,21 @@ class L2SyncHelper:
                 return cached
         result = redis_loader()
         if result is not None and self.is_enabled(key_type):
-            LocalCache.put(self.REGION, key, result)
+            self._backfill(key, result)
         return result
+
+    def _backfill(self, key: str, value: T) -> None:
+        """Copy a Redis value into L1 without outliving the Redis key.
+
+        A plain `put` would give the local entry the region default TTL, which
+        can be far longer than what is left on the Redis key — L1 would then
+        serve a value Redis has already expired.
+        """
+        remaining = self._infra.remaining_ttl_millis(key)
+        if remaining is not None and remaining > 0:
+            LocalCache.put_with_ttl(self.REGION, key, value, remaining)
+        else:
+            LocalCache.put(self.REGION, key, value)
 
     def get_with_lock(
         self, key_type: KeyTypeEnum, key: str, redis_loader: Callable[[], T | None]
@@ -132,7 +145,7 @@ class L2SyncHelper:
                 return cached
         result = redis_loader()
         if result is not None and self.is_enabled(key_type):
-            LocalCache.put(self.REGION, key, result)
+            self._backfill(key, result)
         return result
 
     def remove(self, key: str) -> None:

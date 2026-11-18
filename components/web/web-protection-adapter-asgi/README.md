@@ -63,7 +63,8 @@ since the header is client-supplied otherwise.
 
 ## Gateway bypass
 
-If `gateway_bypass_header` (default `x-gateway-verified`) is present, signature
+If `gateway_bypass_header` (default `x-forwarded-from-gateway`, the same header
+name the Java `PlatformProtectionInterceptor` reads) is present, signature
 verification is skipped, matching the Java interceptor's gateway-bypass behaviour.
 Set it to `None` to disable. **Only enable this when a trusted gateway strips or
 sets the header**, otherwise a client can forge it.

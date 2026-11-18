@@ -157,3 +157,117 @@ class TestCurrent:
         assert lease.is_expired(clock()) is False
         clock.advance(30)
         assert lease.is_expired(clock()) is True
+
+
+class TestLeaderLeaseWatchdog:
+    """Auto-renewal: Java's optimisticWithRenewal keeps a busy leader alive."""
+
+    def test_start_acquires_immediately(self, elector) -> None:
+        from atlas_richie.coordination_core import LeaderLease
+
+        with LeaderLease(elector, "cleanup", "node-1", ttl_seconds=5.0) as lease:
+            assert lease.is_leader is True
+            assert lease.leadership.holder_id == "node-1"
+            assert elector.current("cleanup").holder_id == "node-1"
+
+    def test_renewal_outlives_the_original_ttl(self) -> None:
+        import time
+
+        from atlas_richie.coordination_core import LeaderLease
+
+        elector = InMemoryLeaderElector()
+        lease = LeaderLease(
+            elector, "cleanup", "node-1", ttl_seconds=0.15, renew_interval_seconds=0.05
+        )
+        lease.start()
+        try:
+            time.sleep(0.4)
+            assert lease.is_leader is True, "看门狗必须续租，否则忙碌的 leader 会静默丢租约"
+            assert elector.current("cleanup") is not None
+        finally:
+            lease.stop()
+
+    def test_stop_releases_so_another_holder_can_acquire(self, elector) -> None:
+        from atlas_richie.coordination_core import LeaderLease
+
+        lease = LeaderLease(elector, "cleanup", "node-1", ttl_seconds=5.0)
+        lease.start()
+        lease.stop()
+        assert lease.is_leader is False
+        assert elector.try_acquire("cleanup", "node-2", 5.0) is not None
+
+    def test_loss_fires_callback_and_then_reacquires(self) -> None:
+        import time
+
+        from atlas_richie.coordination_core import LeaderLease
+
+        elector = InMemoryLeaderElector()
+        lost: list[Leadership] = []
+        lease = LeaderLease(
+            elector, "cleanup", "node-1",
+            ttl_seconds=0.15, renew_interval_seconds=0.05,
+            on_lost=lost.append,
+        )
+        granted = lease.start()
+        try:
+            elector.release(granted)
+            other = elector.try_acquire("cleanup", "node-2", 5.0)
+            time.sleep(0.15)
+            assert len(lost) == 1
+            assert lease.is_leader is False, "被别人持有期间不能自称 leader"
+            elector.release(other)
+            time.sleep(0.15)
+            assert lease.is_leader is True, "租约空出后应自动重新获取"
+            assert lease.leadership.fencing_token > granted.fencing_token
+        finally:
+            lease.stop()
+
+    def test_broken_on_lost_callback_does_not_stop_renewal(self) -> None:
+        import time
+
+        from atlas_richie.coordination_core import LeaderLease
+
+        def boom(_lease: Leadership) -> None:
+            raise RuntimeError("callback down")
+
+        elector = InMemoryLeaderElector()
+        lease = LeaderLease(
+            elector, "cleanup", "node-1",
+            ttl_seconds=0.15, renew_interval_seconds=0.05, on_lost=boom,
+        )
+        granted = lease.start()
+        try:
+            elector.release(granted)
+            time.sleep(0.25)
+            assert lease.is_leader is True, "回调异常不能让看门狗死掉"
+        finally:
+            lease.stop()
+
+    @pytest.mark.parametrize("interval", [0.0, -1.0, 5.0, 10.0])
+    def test_invalid_renew_interval_rejected(self, elector, interval: float) -> None:
+        from atlas_richie.coordination_core import LeaderLease
+
+        with pytest.raises(ValueError):
+            LeaderLease(elector, "r", "h", ttl_seconds=5.0, renew_interval_seconds=interval)
+
+    def test_invalid_ttl_rejected(self, elector) -> None:
+        from atlas_richie.coordination_core import LeaderLease
+
+        with pytest.raises(ValueError):
+            LeaderLease(elector, "r", "h", ttl_seconds=0)
+
+    def test_start_and_stop_are_idempotent(self, elector) -> None:
+        from atlas_richie.coordination_core import LeaderLease
+
+        lease = LeaderLease(elector, "cleanup", "node-1", ttl_seconds=5.0)
+        first = lease.start()
+        assert lease.start() is first
+        lease.stop()
+        lease.stop()
+        assert lease.is_leader is False
+
+    def test_default_interval_is_a_third_of_ttl(self, elector) -> None:
+        from atlas_richie.coordination_core import LeaderLease
+
+        lease = LeaderLease(elector, "r", "h", ttl_seconds=9.0)
+        assert lease._interval == 3.0

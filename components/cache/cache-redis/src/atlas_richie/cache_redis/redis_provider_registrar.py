@@ -78,6 +78,7 @@ class RedisProviderRegistrar(ProviderRegistrar):
         connection_string: str | None = None,
         connection_pool: Any | None = None,
         perf: RedisPerfGuard | None = None,
+        properties: Any | None = None,
     ) -> None:
         self._backend = RedisDistributedCache(
             client,
@@ -85,7 +86,7 @@ class RedisProviderRegistrar(ProviderRegistrar):
             connection_string=connection_string,
             connection_pool=connection_pool,
         )
-        self._infra = RedisCacheInfrastructure(self._backend)
+        self._infra = RedisCacheInfrastructure(self._backend, properties)
         # Eagerly construct the real managers (M1-M4).
         # R-M5.4: thread the optional `perf` guard into every manager
         # that has a `_perf` slot. The 5 small managers that don't
@@ -241,6 +242,7 @@ class RedisProviderRegistrar(ProviderRegistrar):
             connection_string=masked,
             connection_pool=pool,
             perf=perf_guard,
+            properties=properties,
         )
 
     # ── 16 low-level ops ───────────────────────────────────────────

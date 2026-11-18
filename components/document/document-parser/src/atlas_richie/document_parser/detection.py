@@ -125,11 +125,24 @@ def _sniff_zip(head: bytes) -> str:
     return "application/zip"
 
 
+_TEXT_FAMILY = frozenset({Format.TXT, Format.MD, Format.HTML, Format.XML})
+_EXPLICIT_TEXT = frozenset({Format.TXT, Format.MD})
+
+
 def detect_format(head: bytes, name_hint: str | None = None) -> Format:
-    """Content sniffing first, extension fallback when content is inconclusive."""
+    """Content sniffing first, extension fallback when content is inconclusive.
+
+    Exception: HTML/XML sniffing is a weak heuristic (any leading `<` triggers
+    it), so an explicit `.txt`/`.md` name overrides a text-family verdict —
+    otherwise a text file that merely contains markup becomes unparseable.
+    Binary magic (PDF/ZIP/OLE2/RTF) is strong evidence and always wins.
+    """
     fmt = to_format(sniff(head))
+    named = from_extension(name_hint)
     if fmt is Format.UNKNOWN:
-        fmt = from_extension(name_hint)
+        return named
+    if fmt in _TEXT_FAMILY and named in _EXPLICIT_TEXT:
+        return named
     return fmt
 
 

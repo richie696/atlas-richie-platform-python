@@ -26,10 +26,16 @@ pytestmark = pytest.mark.unit
 class _FakeInfra:
     """Configurable stand-in for the CacheInfrastructure Protocol."""
 
-    def __init__(self, *, l2: bool = True, key_type: bool = True) -> None:
+    def __init__(
+        self, *, l2: bool = True, key_type: bool = True, ttl: int | None = None
+    ) -> None:
         self.l2 = l2
         self.key_type = key_type
+        self.ttl = ttl
         self.registered: list[tuple[str, type]] = []
+
+    def remaining_ttl_millis(self, key: str) -> int | None:
+        return self.ttl
 
     def get_connection_string(self) -> str:
         return "fake://"
@@ -193,3 +199,53 @@ class TestRegisterType:
         infra = _FakeInfra(l2=False)
         L2SyncHelper(infra).register_type("k", str)
         assert infra.registered == [("k", str)]
+
+
+class TestBackfillRespectsRedisTtl:
+    """Regression: backfill used a plain put, so an L1 entry could outlive the
+    Redis key it was loaded from and serve an already-expired value."""
+
+    def test_positive_remaining_ttl_is_used(self) -> None:
+        infra = _FakeInfra(ttl=40)
+        helper = L2SyncHelper(infra)
+        assert helper.get(KeyTypeEnum.STRING, "k", lambda: "v") == "v"
+        manager = LocalCache.get_manager()
+        assert manager._bucket(L2CachingRegion.GLOBAL_CACHE)._ttls["k"] == 40
+
+    def test_backfilled_entry_expires_with_the_redis_key(self) -> None:
+        infra = _FakeInfra(ttl=1)
+        helper = L2SyncHelper(infra)
+        helper.get(KeyTypeEnum.STRING, "k", lambda: "v")
+        time.sleep(0.02)
+        calls: list[int] = []
+
+        def loader() -> str:
+            calls.append(1)
+            return "fresh"
+
+        assert helper.get(KeyTypeEnum.STRING, "k", loader) == "fresh"
+        assert calls == [1], "L1 过期后必须回源，不能继续供应陈旧值"
+
+    def test_unknown_ttl_falls_back_to_region_default(self) -> None:
+        infra = _FakeInfra(ttl=None)
+        helper = L2SyncHelper(infra)
+        assert helper.get(KeyTypeEnum.STRING, "k", lambda: "v") == "v"
+        assert LocalCache.get(L2CachingRegion.GLOBAL_CACHE, "k") == "v"
+
+    def test_no_expiry_ttl_falls_back_to_region_default(self) -> None:
+        infra = _FakeInfra(ttl=-1)
+        helper = L2SyncHelper(infra)
+        assert helper.get(KeyTypeEnum.STRING, "k", lambda: "v") == "v"
+
+    def test_get_with_lock_uses_the_same_backfill(self) -> None:
+        infra = _FakeInfra(ttl=40)
+        helper = L2SyncHelper(infra)
+        assert helper.get_with_lock(KeyTypeEnum.STRING, "k", lambda: "v") == "v"
+        manager = LocalCache.get_manager()
+        assert manager._bucket(L2CachingRegion.GLOBAL_CACHE)._ttls["k"] == 40
+
+    def test_l2_disabled_does_not_backfill(self) -> None:
+        infra = _FakeInfra(l2=False, ttl=40)
+        helper = L2SyncHelper(infra)
+        assert helper.get(KeyTypeEnum.STRING, "k", lambda: "v") == "v"
+        assert LocalCache.get_manager().size(L2CachingRegion.GLOBAL_CACHE) == 0

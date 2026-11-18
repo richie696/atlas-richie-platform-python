@@ -195,6 +195,47 @@ class TestLiveCountReporting:
         assert manager.size(REGION) == 1
 
 
+class TestEternalExplicitExpiry:
+    def test_eternal_create_never_expires(self) -> None:
+        manager = _manager(ExpiryPolicy.ETERNAL, ttl_millis=1)
+        manager.put(REGION, "a", "a")
+        time.sleep(0.02)
+        assert manager.get(REGION, "a") == "a"
+
+    def test_expiry_applies_under_eternal(self) -> None:
+        """Regression: expiry() was a no-op under ETERNAL; Java setExpiry
+        wraps the value in an ExpiryWrapper regardless of policy."""
+        manager = _manager(ExpiryPolicy.ETERNAL)
+        manager.put(REGION, "a", "a")
+        manager.expiry(REGION, "a", 1)
+        time.sleep(0.02)
+        assert manager.get(REGION, "a") is None
+
+    def test_expiry_on_one_eternal_key_does_not_expire_others(self) -> None:
+        manager = _manager(ExpiryPolicy.ETERNAL)
+        manager.put(REGION, "a", "a")
+        manager.put(REGION, "b", "b")
+        manager.expiry(REGION, "a", 1)
+        time.sleep(0.02)
+        assert manager.get(REGION, "a") is None
+        assert manager.get(REGION, "b") == "b"
+        assert manager.size(REGION) == 1
+
+    def test_eternal_read_does_not_resurrect_an_expired_deadline(self) -> None:
+        manager = _manager(ExpiryPolicy.ETERNAL)
+        manager.put(REGION, "a", "a")
+        manager.expiry(REGION, "a", 1)
+        time.sleep(0.02)
+        assert manager.get(REGION, "a") is None
+        manager.put(REGION, "a", "again")
+        assert manager.get(REGION, "a") == "again", "重新写入应清除旧 deadline"
+
+    def test_expiry_on_missing_key_is_noop(self) -> None:
+        manager = _manager(ExpiryPolicy.ETERNAL)
+        manager.expiry(REGION, "absent", 1)
+        assert manager.size(REGION) == 0
+
+
 class TestExpiryPolicies:
     """JSR-107 expiry semantics, matching the Java JCache policy factories.
 

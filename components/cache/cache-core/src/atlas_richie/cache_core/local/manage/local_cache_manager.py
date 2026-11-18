@@ -89,9 +89,11 @@ class _PruningLRUCache(cachetools.LRUCache):
 class _CacheBucket:
     """Single-region (CacheName) cache bucket.
 
-    Internal to `LocalCacheManager`. Holds one `cachetools.LRUCache`
-    and a parallel expiry dict (when policy ≠ ETERNAL). Every public
-    method is RLock-protected so callers can compose safely.
+    Internal to `LocalCacheManager`. Holds one `cachetools.LRUCache` plus
+    parallel expiry metadata. Under ETERNAL no deadline is written on create
+    or access, but an explicit `expiry()` call still applies — matching Java's
+    `setExpiry`, which wraps the value in an `ExpiryWrapper` regardless of
+    policy. Every public method is RLock-protected so callers can compose.
     """
 
     __slots__ = (
@@ -115,16 +117,11 @@ class _CacheBucket:
         self._max_size = int(max_size)
         self._lock = threading.RLock()
         self._entries: cachetools.LRUCache = _PruningLRUCache(max_size, self._forget)
-        # None means ETERNAL (no expiry tracking); {} means tracked.
-        self._expiries: Optional[Dict[str, int]] = (
-            None if policy == ExpiryPolicy.ETERNAL else {}
-        )
+        self._expiries: Dict[str, int] = {}
         # Effective per-key TTL, so an ACCESSED/TOUCHED refresh reuses the duration
         # the entry was created with instead of falling back to the region default
         # and silently discarding a per-key override.
-        self._ttls: Optional[Dict[str, int]] = (
-            None if policy == ExpiryPolicy.ETERNAL else {}
-        )
+        self._ttls: Dict[str, int] = {}
 
     # ── Helpers ──────────────────────────────────────────────────────
 
@@ -134,15 +131,11 @@ class _CacheBucket:
 
     def _forget(self, key: str) -> None:
         """Drop expiry metadata for a key that is no longer stored."""
-        if self._expiries is not None:
-            self._expiries.pop(key, None)
-        if self._ttls is not None:
-            self._ttls.pop(key, None)
+        self._expiries.pop(key, None)
+        self._ttls.pop(key, None)
 
     def _reap_expired(self) -> None:
         """Eagerly drop expired entries so size()/keys() report live counts."""
-        if self._expiries is None:
-            return
         now = self._now_millis()
         for key, expire_at in list(self._expiries.items()):
             if expire_at > 0 and now >= expire_at:
@@ -150,8 +143,6 @@ class _CacheBucket:
                 self._forget(key)
 
     def _is_expired(self, key: str) -> bool:
-        if self._expiries is None:
-            return False
         expire_at = self._expiries.get(key, 0)
         if expire_at > 0 and self._now_millis() >= expire_at:
             # Lazy expiry
@@ -171,12 +162,15 @@ class _CacheBucket:
         `getExpiryForUpdate` leaves expiry unchanged. An explicit `ttl_ms` is a
         caller instruction and always applies.
 
+        ETERNAL writes no deadline at all, so only `expiry()` can expire an
+        entry in such a region.
+
         A 0/None `ttl_ms` means "use the region default", NOT "expire
         immediately"; callers wanting non-expiry set the policy to ETERNAL.
         """
         is_update = key in self._entries and not self._is_expired(key)
         self._entries[key] = DefensiveCopyUtils.copy(value)
-        if self._expiries is None or self._ttls is None:
+        if self._policy is ExpiryPolicy.ETERNAL:
             return
         ttl = ttl_ms if ttl_ms else self._default_ttl_ms
         if ttl_ms or not is_update:
@@ -187,8 +181,6 @@ class _CacheBucket:
 
     def _touch_access(self, key: str) -> None:
         """JSR-107 access event: ACCESSED and TOUCHED reset the deadline."""
-        if self._expiries is None or self._ttls is None:
-            return
         if self._policy in (ExpiryPolicy.ACCESSED, ExpiryPolicy.TOUCHED):
             self._expiries[key] = self._now_millis() + self._ttls.get(
                 key, self._default_ttl_ms
@@ -228,10 +220,8 @@ class _CacheBucket:
         with self._lock:
             count = len(self._entries)
             self._entries.clear()
-            if self._expiries is not None:
-                self._expiries.clear()
-            if self._ttls is not None:
-                self._ttls.clear()
+            self._expiries.clear()
+            self._ttls.clear()
             return count
 
     def put_if_absent(
@@ -252,12 +242,11 @@ class _CacheBucket:
             if self._entries[key] != old_value:
                 return False
             self._entries[key] = DefensiveCopyUtils.copy(new_value)
-            if self._expiries is not None and self._ttls is not None:
-                # JSR-107: only MODIFIED / TOUCHED reset expiry on update.
-                if self._policy in (ExpiryPolicy.MODIFIED, ExpiryPolicy.TOUCHED):
-                    self._expiries[key] = self._now_millis() + self._ttls.get(
-                        key, self._default_ttl_ms
-                    )
+            # JSR-107: only MODIFIED / TOUCHED reset expiry on update.
+            if self._policy in (ExpiryPolicy.MODIFIED, ExpiryPolicy.TOUCHED):
+                self._expiries[key] = self._now_millis() + self._ttls.get(
+                    key, self._default_ttl_ms
+                )
             return True
 
     def get_and_remove(self, key: str) -> Any:
@@ -310,7 +299,7 @@ class _CacheBucket:
             # popitem() evicts the true least-recently-used entry; iterating
             # keys() would not, because LRUCache iterates in insertion order.
             # Snapshot deadlines first: the eviction hook prunes metadata.
-            deadlines = dict(self._expiries) if self._expiries is not None else {}
+            deadlines = dict(self._expiries)
             now = self._now_millis()
             popped: Dict[str, Any] = {}
             for _ in range(min(count, len(self._entries))):
@@ -323,16 +312,15 @@ class _CacheBucket:
     def expiry(self, key: str, ttl_ms: int) -> None:
         """Update the TTL of an existing entry.
 
-        If the entry doesn't exist, the call is a no-op (matches Java
-        behaviour; the entry is not created).
+        Applies under every policy including ETERNAL, matching Java's
+        `setExpiry`. If the entry doesn't exist the call is a no-op (Java
+        logs a warning and returns; the entry is not created).
         """
         with self._lock:
             if key not in self._entries or self._is_expired(key):
                 return
-            if self._expiries is not None:
-                self._expiries[key] = self._now_millis() + ttl_ms
-                if self._ttls is not None:
-                    self._ttls[key] = ttl_ms
+            self._expiries[key] = self._now_millis() + ttl_ms
+            self._ttls[key] = ttl_ms
 
     def put_all(
         self,

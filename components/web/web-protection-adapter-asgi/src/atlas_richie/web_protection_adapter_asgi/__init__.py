@@ -74,7 +74,7 @@ class ProtectionASGIMiddleware:
         login_key: Callable[[Scope, dict[str, str]], str | None] | None = None,
         client_key_header: str = "x-client-key",
         trust_forwarded: bool = False,
-        gateway_bypass_header: str | None = "x-gateway-verified",
+        gateway_bypass_header: str | None = "x-forwarded-from-gateway",
         deny_renderer: Callable[[int, str], bytes] | None = None,
         deny_status_ip: int = 403,
         deny_status_bot: int = 403,

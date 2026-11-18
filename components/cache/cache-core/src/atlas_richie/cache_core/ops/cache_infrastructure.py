@@ -96,5 +96,15 @@ class CacheInfrastructure(Protocol):
         """
         ...
 
+    def remaining_ttl_millis(self, key: str) -> int | None:
+        """Remaining TTL of `key` in the backing store, or None when unknown.
+
+        L1 backfill uses this so a local entry cannot outlive the Redis key it
+        was loaded from. Concrete (not abstract) because stores without a TTL
+        concept simply return None and the backfill falls back to the region
+        default.
+        """
+        return None
+
 
 __all__ = ["CacheInfrastructure"]

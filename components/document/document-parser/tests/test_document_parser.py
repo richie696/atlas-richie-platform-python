@@ -130,6 +130,35 @@ class TestMimeAndExtensionMapping:
     def test_content_wins_over_extension(self) -> None:
         assert detect_format(b"%PDF-1.4", "lies.txt") is Format.PDF
 
+    @pytest.mark.parametrize(
+        ("head", "name", "expected"),
+        [
+            (b"<html><body>hi</body></html>", "notes.txt", Format.TXT),
+            (b"<?xml version='1.0'?>", "notes.txt", Format.TXT),
+            (b"<div>partial markup</div>", "README.md", Format.MD),
+            (b"# Title\n\n<div>x</div>", "README.md", Format.MD),
+            (b"<html>x</html>", "page.html", Format.HTML),
+            (b"<?xml version='1.0'?>", "data.xml", Format.XML),
+            (b"plain text", "notes.md", Format.MD),
+        ],
+    )
+    def test_explicit_text_name_overrides_weak_markup_sniff(
+        self, head: bytes, name: str, expected: Format
+    ) -> None:
+        """Regression: any leading '<' sniffed as HTML/XML, so a .txt/.md file
+        containing markup was routed to an unregistered parser and raised."""
+        assert detect_format(head, name) is expected
+
+    def test_binary_magic_still_wins_over_text_name(self) -> None:
+        assert detect_format(b"%PDF-1.4", "notes.md") is Format.PDF
+        assert detect_format(b"PK\x03\x04word/document.xml", "notes.txt") is Format.DOCX
+        assert detect_format(b"{\\rtf1\\ansi", "notes.txt") is Format.RTF
+
+    def test_router_parses_text_file_containing_markup(self) -> None:
+        router = ParserRouter()
+        events = list(router.parse(BytesSource(b"<html>hi</html>", name="notes.txt")))
+        assert events, "TXT 快路径必须能处理含 markup 的 .txt 文件"
+
     def test_extension_fallback_when_content_inconclusive(self) -> None:
         assert detect_format(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "legacy.xls") is Format.XLS
 

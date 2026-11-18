@@ -198,6 +198,47 @@ def test_lifecycle_start_stop_is_idempotent() -> None:
     assert len(events) >= 1
 
 
+def test_polling_runs_on_scheduling_core() -> None:
+    """The daemon must delegate its loop to scheduling-core, not hand-roll one."""
+    from atlas_richie.scheduling_core import ScheduleKind
+
+    ops = MagicMock()
+    ops.get_metadata.return_value = _make_metadata("1")
+    daemon = SecretRotationDaemon(ops, poll_interval_seconds=0.01)
+    daemon.register(SecretReference(provider="test", path="db"), lambda e: None)
+    daemon.start()
+    try:
+        scheduler = daemon._scheduler
+        assert scheduler is not None
+        assert scheduler.started is True
+        jobs = scheduler.jobs()
+        assert len(jobs) == 1
+        assert jobs[0].kind is ScheduleKind.FIXED_DELAY
+        assert jobs[0].seconds == 0.01
+        import time as _t
+        _t.sleep(0.05)
+        assert jobs[0].stats.runs >= 1
+    finally:
+        daemon.stop()
+    assert daemon._scheduler is None
+
+
+def test_crashing_poll_does_not_kill_the_job() -> None:
+    ops = MagicMock()
+    ops.get_metadata.side_effect = RuntimeError("backend down")
+    daemon = SecretRotationDaemon(ops, poll_interval_seconds=0.01)
+    daemon.register(SecretReference(provider="test", path="db"), lambda e: None)
+    daemon.start()
+    try:
+        import time as _t
+        _t.sleep(0.08)
+        job = daemon._scheduler.jobs()[0]
+        assert job.running is True, "异常必须被隔离，任务不能静默死掉"
+        assert job.stats.failures >= 1
+    finally:
+        daemon.stop()
+
+
 def test_register_rejects_non_callable() -> None:
     ops = MagicMock()
     daemon = SecretRotationDaemon(ops)

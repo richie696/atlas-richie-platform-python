@@ -142,7 +142,22 @@ class TestGuardsAndActions:
         assert result.success is False
         assert result.error_message == "状态转换失败"
 
-    def test_guard_exception_becomes_failure_not_raise(self) -> None:
+    def test_guard_exception_is_false_and_falls_through_to_next_rule(self) -> None:
+        """Java StateTransitionRule: a guard that throws evaluates to false,
+        so the next candidate rule is still tried."""
+        def boom(ctx):
+            raise RuntimeError("guard exploded")
+
+        model = StateMachineModel(name="m", initial_state="A")
+        model.add_transition(
+            Transition("high", "A", "B", event="GO", priority=10, condition=boom)
+        )
+        model.add_transition(Transition("low", "A", "C", event="GO", priority=1))
+        result = StateMachineEngine({"m": model}).fire("m", "GO", 1)
+        assert result.success is True
+        assert result.context.current_state == "C"
+
+    def test_guard_exception_with_no_other_rule_is_a_failure_result(self) -> None:
         def boom(ctx):
             raise RuntimeError("guard exploded")
 
@@ -150,16 +165,20 @@ class TestGuardsAndActions:
         model.add_transition(Transition("go", "A", "B", event="GO", condition=boom))
         result = StateMachineEngine({"m": model}).fire("m", "GO", 1)
         assert result.success is False
-        assert "状态转换异常" in result.error_message
+        assert result.error_message == "状态转换失败"
 
-    def test_action_exception_becomes_failure_not_raise(self) -> None:
+    def test_action_exception_still_commits_the_transition(self) -> None:
+        """Java executeAction logs and swallows; the state change still commits."""
         def boom(ctx):
             raise ValueError("action exploded")
 
         model = StateMachineModel(name="m", initial_state="A")
         model.add_transition(Transition("go", "A", "B", event="GO", action=boom))
-        result = StateMachineEngine({"m": model}).fire("m", "GO", 1)
-        assert result.success is False
+        engine = StateMachineEngine({"m": model})
+        result = engine.fire("m", "GO", 1)
+        assert result.success is True
+        assert result.context.current_state == "B"
+        assert engine.get_current_state("m", 1) == "B", "迁移必须已落库"
 
 
 class TestWildcardAndTerminalStates:
