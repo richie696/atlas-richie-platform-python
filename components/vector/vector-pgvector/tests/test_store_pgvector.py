@@ -608,3 +608,126 @@ class TestTextSearchAgainstPgVector:
         hits = VectorTextSearch(store, embeddings).search_by_text("cat")
         assert hits[0].content == "cat cat cat"
         assert hits[0].metadata.get("chunkOrdinal") == 0
+
+
+@pytest.mark.integration
+class TestKnowledgeFacadeAgainstPgVector:
+    def _setup(self, store_factory):
+        from atlas_richie.vector_core import ModalityAwareEmbeddingService
+
+        store = store_factory(dimension=3, metric="cosine")
+        embeddings = ModalityAwareEmbeddingService(_WordCountEmbedding())
+        return store, embeddings
+
+    def _ingest(self, store, embeddings, docs):
+        from atlas_richie.vector_chunk_adapter import ChunkVectorRecordMapper, VectorRecordContext
+        from atlas_richie.vector_core import Modality, TextContent
+
+        mapper = ChunkVectorRecordMapper()
+        records = []
+        for doc_id, chunks in docs.items():
+            context = VectorRecordContext(
+                index_name="kb", document_id=doc_id, version=1,
+                metadata={"tenantId": 1, "knowledgeBaseId": "kb", "status": "ACTIVE",
+                          "visibility": "COMPANY"},
+            )
+            from atlas_richie.chunking_core import Chunk
+
+            section = [Chunk(i, text, 0, len(text)) for i, text in enumerate(chunks)]
+            for r in mapper.map_sections([section], context):
+                v = embeddings.embed(Modality.TEXT, TextContent(r.content.text))
+                records.append(r.with_vector(v))
+        store.upsert(records)
+
+    def test_knowledge_search_returns_citations_with_provenance(self, store_factory) -> None:
+        from atlas_richie.vector_core import (
+            AccessScope,
+            KnowledgeBaseVectorService,
+            KnowledgeSearchRequest,
+        )
+
+        store, embeddings = self._setup(store_factory)
+        self._ingest(store, embeddings, {
+            "cats": ["cat cat cat", "cat likes fish"],
+            "dogs": ["dog dog"],
+        })
+        service = KnowledgeBaseVectorService(store, embeddings)
+        result = service.search("kb", KnowledgeSearchRequest(
+            query="cat", top_k=3, access_scope=AccessScope(tenant_id=1, tenant_admin=True),
+        ))
+        assert result.citations, "知识库检索必须返回引用"
+        assert result.citations[0].document_id == "cats"
+        assert result.citations[0].chunk_no is not None
+        assert result.diagnostics.candidate_count >= 1
+        assert result.diagnostics.returned_count == len(result.citations)
+
+    def test_per_document_cap_across_real_results(self, store_factory) -> None:
+        from atlas_richie.vector_core import (
+            AccessScope,
+            KnowledgeBaseVectorService,
+            KnowledgeSearchRequest,
+        )
+
+        store, embeddings = self._setup(store_factory)
+        self._ingest(store, embeddings, {
+            "cats": ["cat cat", "cat cat cat", "cat cat cat cat"],
+            "dogs": ["dog"],
+        })
+        service = KnowledgeBaseVectorService(store, embeddings)
+        result = service.search("kb", KnowledgeSearchRequest(
+            query="cat", top_k=5, max_chunks_per_document=1,
+            access_scope=AccessScope(tenant_id=1, tenant_admin=True),
+        ))
+        cat_citations = [c for c in result.citations if c.document_id == "cats"]
+        assert len(cat_citations) == 1, "单文档上限必须生效"
+
+    def test_tenant_isolation_at_the_facade_level(self, store_factory) -> None:
+        from atlas_richie.vector_core import (
+            AccessScope,
+            KnowledgeBaseVectorService,
+            KnowledgeSearchRequest,
+            Modality,
+            TextContent,
+        )
+        from atlas_richie.vector_chunk_adapter import ChunkVectorRecordMapper, VectorRecordContext
+        from atlas_richie.chunking_core import Chunk
+
+        store, embeddings = self._setup(store_factory)
+        mapper = ChunkVectorRecordMapper()
+        for doc_id, tenant in [("mine", 1), ("theirs", 2)]:
+            context = VectorRecordContext(
+                index_name="kb", document_id=doc_id, version=1,
+                metadata={"tenantId": tenant, "knowledgeBaseId": "kb", "status": "ACTIVE",
+                          "visibility": "COMPANY"},
+            )
+            r = mapper.map(Chunk(0, "cat", 0, 3), context)
+            store.upsert([r.with_vector(embeddings.embed(Modality.TEXT, TextContent("cat")))])
+        service = KnowledgeBaseVectorService(store, embeddings)
+        result = service.search("kb", KnowledgeSearchRequest(
+            query="cat", top_k=5, access_scope=AccessScope(tenant_id=1, tenant_admin=True),
+        ))
+        assert {c.document_id for c in result.citations} == {"mine"}
+
+    def test_mmr_at_the_facade_level(self, store_factory) -> None:
+        from atlas_richie.vector_core import (
+            AccessScope,
+            KnowledgeBaseVectorService,
+            KnowledgeSearchRequest,
+        )
+
+        store, embeddings = self._setup(store_factory)
+        # 三个高度相似的 cat chunk + 一个 dog：MMR 应让 dog 进入前列
+        self._ingest(store, embeddings, {
+            "cats": ["cat cat cat", "cat cat cat cat", "cat cat cat cat cat"],
+            "dogs": ["dog"],
+        })
+        service = KnowledgeBaseVectorService(store, embeddings)
+        # lambda=0.3：三个 cat 向量完全平行（cosine=1），第二轮 cat 得分
+        # 0.3-0.7=-0.4，dog 得分 0，多样性胜出。lambda=0.5 时二者平局、
+        # 按候选序 cat 先——这正是 MMR 权衡的语义。
+        result = service.search("kb", KnowledgeSearchRequest(
+            query="cat", top_k=2, mmr=True, mmr_lambda=0.3, max_chunks_per_document=99,
+            access_scope=AccessScope(tenant_id=1, tenant_admin=True),
+        ))
+        ids = [c.document_id for c in result.citations]
+        assert "dogs" in ids, "MMR 应提升多样性，让不同文档进入结果"

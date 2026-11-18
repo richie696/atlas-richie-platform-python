@@ -343,7 +343,7 @@ class PgVectorStore:
         )
         columns = (
             "id, content, metadata, tags, source, namespace, status, "
-            "created_at, updated_at"
+            "created_at, updated_at, document_id, chunk_no"
         )
         if needs_vectors:
             columns += ", embedding"
@@ -364,13 +364,20 @@ class PgVectorStore:
             score = _score(metric, float(row[-1]))
             if score < resolved.min_score:
                 continue
+            # documentId/chunkNo 是独立列；并入 metadata 供知识库门面取溯源
+            # （Java 侧 provider 同样在结果 metadata 中暴露这两个键）。
+            metadata = dict(row[2] or {})
+            if row[9] is not None:
+                metadata.setdefault("documentId", row[9])
+            if row[10] is not None:
+                metadata.setdefault("chunkNo", row[10])
             results.append(
                 VectorSearchResult(
                     id=row[0],
                     content=row[1],
                     score=score,
-                    vector=_parse_vector(row[9]) if needs_vectors else None,
-                    metadata=row[2],
+                    vector=_parse_vector(row[11]) if needs_vectors else None,
+                    metadata=metadata,
                     tags=tuple(row[3]) if row[3] is not None else None,
                     source=row[4],
                     namespace=row[5],

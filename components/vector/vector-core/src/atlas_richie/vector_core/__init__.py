@@ -50,6 +50,13 @@ from .filters import (
 )
 from .execution import DEFAULT_MAX_CONCURRENT, VectorQueryExecutionGuard
 from .hybrid import RRF_K, CheckedSearch, fuse, native_first
+from .knowledge import (
+    KnowledgeBaseVectorService,
+    KnowledgeSearchRequest,
+    RetrievalCitation,
+    RetrievalDiagnostics,
+    RetrievalResult,
+)
 from .model import (
     HybridSearchOptions,
     ImageContent,
@@ -140,6 +147,11 @@ __all__ = [
     "or_",
     "VectorQueryExecutionGuard",
     "RRF_K",
+    "KnowledgeBaseVectorService",
+    "KnowledgeSearchRequest",
+    "RetrievalCitation",
+    "RetrievalDiagnostics",
+    "RetrievalResult",
     "CheckedSearch",
     "fuse",
     "native_first",
