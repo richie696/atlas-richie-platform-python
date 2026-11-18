@@ -25,6 +25,7 @@ from .service import (
     approximate_token_counter,
 )
 from .spi import SemanticBoundaryAdvisor, TokenCounter
+from .streaming import StreamingChunker
 from .strategies import (
     ChunkLimitExceededError,
     ChunkingStrategy,
@@ -68,6 +69,7 @@ __all__ = [
     "SemanticFailureMode",
     "SentenceChunkingStrategy",
     "Strategy",
+    "StreamingChunker",
     "TokenChunkingStrategy",
     "TokenCounter",
     "approximate_token_counter",
