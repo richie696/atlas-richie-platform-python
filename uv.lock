@@ -73,6 +73,7 @@ members = [
     "atlas-richie-testing",
     "atlas-richie-vector-chunk-adapter",
     "atlas-richie-vector-core",
+    "atlas-richie-vector-persistence-sqlalchemy",
     "atlas-richie-vector-pgvector",
     "atlas-richie-web-protection",
     "atlas-richie-web-protection-adapter-asgi",
@@ -998,6 +999,7 @@ dependencies = [
     { name = "atlas-richie-testing" },
     { name = "atlas-richie-vector-chunk-adapter" },
     { name = "atlas-richie-vector-core" },
+    { name = "atlas-richie-vector-persistence-sqlalchemy" },
     { name = "atlas-richie-vector-pgvector" },
     { name = "atlas-richie-web-protection" },
     { name = "atlas-richie-web-protection-adapter-asgi" },
@@ -1069,6 +1071,7 @@ requires-dist = [
     { name = "atlas-richie-testing", editable = "foundation/testing" },
     { name = "atlas-richie-vector-chunk-adapter", editable = "components/vector/vector-chunk-adapter" },
     { name = "atlas-richie-vector-core", editable = "components/vector/vector-core" },
+    { name = "atlas-richie-vector-persistence-sqlalchemy", editable = "components/vector/vector-persistence-sqlalchemy" },
     { name = "atlas-richie-vector-pgvector", editable = "components/vector/vector-pgvector" },
     { name = "atlas-richie-web-protection", editable = "components/web/web-protection" },
     { name = "atlas-richie-web-protection-adapter-asgi", editable = "components/web/web-protection-adapter-asgi" },
@@ -2104,6 +2107,28 @@ test = [
 
 [package.metadata]
 requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" }]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-vector-persistence-sqlalchemy"
+version = "0.2.0"
+source = { editable = "components/vector/vector-persistence-sqlalchemy" }
+dependencies = [
+    { name = "atlas-richie-vector-core" },
+    { name = "sqlalchemy" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-vector-core", editable = "components/vector/vector-core" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+    { name = "sqlalchemy", specifier = ">=2.0,<3.0" },
+]
 provides-extras = ["test"]
 
 [[package]]

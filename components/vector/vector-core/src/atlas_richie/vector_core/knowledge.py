@@ -3,9 +3,7 @@
 把已移植的部件串成业务 API：ACL 预过滤（`build_access_filter`）→ 嵌入 →
 引擎检索 → MMR + 单文档多样性截断 → `RetrievalCitation` 引用 + 诊断。
 
-与 Java 的两处差异：
-- 投影版本 resolver（`ActiveProjectionVersionResolver`）依赖 persistence
-  outbox，尚未移植；本门面不做版本过滤，接入时以 additionalFilter 表达。
+与 Java 的一处差异：
 - hybrid 需要 provider 声明 ACL_SAFE_HYBRID 能力；未声明时抛
   `VectorCapabilityMismatchError`（对位 Java 的 UnsupportedOperationException），
   而不是静默退回 dense——那会把「混合检索」变成假象。
@@ -24,8 +22,12 @@ from typing import Any, Mapping
 from .acl import AccessScope, build_access_filter
 from .embeddings import ModalityAwareEmbeddingService
 from .engine import VectorCapabilityMismatchError, VectorStoreEngine
-from .filters import VectorFilter, and_
+from .filters import VectorFilter, and_, in_
 from .model import SearchOptions, VectorSearchResult
+from .projection import (
+    PROJECTION_VERSION_FIELD,
+    ActiveProjectionVersionResolver,
+)
 from .query import VectorScoreThresholdKind
 from .text_search import VectorTextSearch
 from .topology import VectorCapability
@@ -115,10 +117,13 @@ class KnowledgeBaseVectorService:
         embeddings: ModalityAwareEmbeddingService,
         *,
         text_search: VectorTextSearch | None = None,
+        projection_versions: ActiveProjectionVersionResolver | None = None,
     ) -> None:
         self._engine = engine
         self._embeddings = embeddings
         self._text_search = text_search or VectorTextSearch(engine, embeddings)
+        # 可选 SPI：未注入时不做版本过滤，行为退化为单版本语义（对位 Java 的单参构造器）。
+        self._projection_versions = projection_versions
 
     def search(self, knowledge_base_id: str, request: KnowledgeSearchRequest) -> RetrievalResult:
         if not knowledge_base_id or not knowledge_base_id.strip():
@@ -128,6 +133,28 @@ class KnowledgeBaseVectorService:
         filter_ = build_access_filter(knowledge_base_id, request.access_scope)
         if request.additional_filter is not None:
             filter_ = and_(filter_, request.additional_filter)
+
+        if self._projection_versions is not None:
+            active = frozenset(
+                self._projection_versions.active_version_ids(
+                    request.access_scope.tenant_id, knowledge_base_id
+                )
+            )
+            if not active:
+                # 空集 = 该租户/知识库下没有任何活跃版本：短路返回空结果，
+                # 不打 provider。绕过过滤会把"无版本"变成"全量召回"。
+                return RetrievalResult(
+                    citations=(),
+                    diagnostics=RetrievalDiagnostics(
+                        candidate_count=0,
+                        returned_count=0,
+                        hybrid=request.hybrid,
+                        reranked=False,
+                        elapsed=time.monotonic() - started,
+                    ),
+                )
+            # 排序保证同一 scope 编译出同一条 DSL（与 ACL 段的 frozenset 处理一致）。
+            filter_ = and_(filter_, in_(PROJECTION_VERSION_FIELD, sorted(active)))
 
         if request.hybrid and not self._engine.capabilities().supports(
             VectorCapability.ACL_SAFE_HYBRID

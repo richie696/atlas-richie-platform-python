@@ -78,6 +78,7 @@ dependencies = [
   "atlas-richie-vector-core>=0.2.0,<0.3.0",
   "atlas-richie-vector-pgvector>=0.2.0,<0.3.0",
   "atlas-richie-vector-chunk-adapter>=0.2.0,<0.3.0",
+  "atlas-richie-vector-persistence-sqlalchemy>=0.2.0,<0.3.0",
   "atlas-richie-testing>=0.2.0,<0.3.0",
   "atlas-richie-web-protection>=0.2.0,<0.3.0",
   "atlas-richie-web-protection-adapter-asgi>=0.2.0,<0.3.0",
