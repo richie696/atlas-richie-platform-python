@@ -34,8 +34,10 @@ M1 中已实现：
 - ``*_with_lock`` 防击穿（M4：需要 ``RedisLockManager`` + 布隆过滤器 +
   L2 装配）。
 - ``scan``（M3：需要 ``RedisKeyManager`` + SCAN cursor 处理）。
-- 底层方法的防雪崩 TTL（已挂接在 StringFunction 辅助方法上；
-  ValueOps 方法透传调用方传入的 TTL）。
+- 防雪崩 TTL 抖动口径（见下方“防雪崩抖动”一节）：高层
+  `StringFunction` 写入方法与 `*_with_lock` 回写路径统一叠加
+  `CacheFunction.get_random_extra_millis()`；底层 `ValueOps` 方法
+  透传调用方传入的 TTL。
 - 布隆过滤器 ``put`` 集成（M4：``RedisSharedBloomFilter``）。
 - 性能守卫包装（``RedisPerfGuard.checkStringWritePayload``、``checkBatchRead``）。
 
@@ -62,6 +64,25 @@ the user-facing policy; the low-level `set_with_ttl` /
 `set_if_absent_with_ttl` / `batch_set_with_ttl` pass the TTL through
 unchanged.
 
+Anti-avalanche jitter
+---------------------
+
+Every TTL written by this manager that represents a **cache entry**
+gets `CacheFunction.get_random_extra_millis()` added on top of the
+caller-supplied TTL: the high-level `StringFunction` write helpers
+AND the `*_with_lock` publish path. That mirrors Java, where
+`getFromStringWithLock` publishes through `addValue(key, value,
+timeout)` and therefore inherits that helper's jitter — a mass
+reload must not leave every key with the same expiry instant.
+
+Two deliberate exceptions, both of which are **not** cache entries
+and must keep their exact TTL:
+
+- the raw `ValueOps` ops (`set_with_ttl`, `set_if_absent_with_ttl`,
+  `batch_set_with_ttl`), which pass the caller TTL through;
+- the M5.7 negative-cache marker, a short suppression window whose
+  whole point is to expire on schedule.
+
 What's implemented in M1:
 
 - Basic set / get / set_if_absent / set_with_ttl / set_if_absent_with_ttl.
@@ -80,9 +101,8 @@ What's deferred to later R-### milestones:
 - `*_with_lock` stampede prevention (M4: needs `RedisLockManager` +
   Bloom filter + L2 wiring).
 - `scan` (M3: needs `RedisKeyManager` + SCAN cursor handling).
-- Anti-avalanche TTL on the LOW-LEVEL methods (already wired on the
-  StringFunction helpers; the ValueOps methods pass through the
-  caller-supplied TTL).
+- Anti-avalanche TTL jitter is wired (see the "Anti-avalanche
+  jitter" section above).
 - Bloom filter `put` integration (M4: `RedisSharedBloomFilter`).
 - Perf guard wrapping (`RedisPerfGuard.checkStringWritePayload`,
   `checkBatchRead`).
@@ -90,13 +110,13 @@ What's deferred to later R-### milestones:
 
 from __future__ import annotations
 
-import secrets as _secrets
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from contextlib import contextmanager
 from typing import Any, Callable, Collection, Dict, Iterator, List
 
+from atlas_richie.cache_core.function.cache_function import CacheFunction
 from atlas_richie.cache_core.function.string_function import StringFunction
 from atlas_richie.cache_core.ops.value_ops import ValueOps
 
@@ -104,21 +124,6 @@ from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
 from .._perf_guard import RedisPerfGuard
-
-
-# Anti-avalanche TTL offset range (matches Java's
-# `CacheFunction.getRandomExtraMillis()`): uniform in
-# `[60_000, 600_000)` ms.
-_MIN_ANTI_AVALANCHE_MS = 60_000
-_MAX_ANTI_AVALANCHE_MS = 600_000
-
-
-def _anti_avalanche_ms() -> int:
-    """Return a uniform random offset in [60s, 10min) milliseconds."""
-    return (
-        _secrets.randbelow(_MAX_ANTI_AVALANCHE_MS - _MIN_ANTI_AVALANCHE_MS)
-        + _MIN_ANTI_AVALANCHE_MS
-    )
 
 
 # ── Stampede-prevention lock (M4) ────────────────────────────────────
@@ -788,13 +793,19 @@ class RedisStringManager(ValueOps, StringFunction):
                         # the caller is expecting.
                         pass
                 return None
-            # 6. Publish: write to the cache. Note: we use the
-            #    caller-supplied TTL verbatim. The anti-avalanche
-            #    offset is intentionally NOT applied here — the
-            #    `*_with_lock` path is the canonical write path
-            #    and the caller is responsible for any TTL
-            #    jitter policy.
-            self.set_with_ttl(key, value, timeout_millis)
+            # 6. Publish: write to the cache with the
+            #    caller-supplied TTL plus the anti-avalanche
+            #    offset. Mirrors Java's `getFromStringWithLock`,
+            #    which publishes through `addValue(key, value,
+            #    timeout)` and therefore inherits that helper's
+            #    jitter. The negative-cache marker above keeps
+            #    its exact TTL — it is a short suppression
+            #    window, not a cache entry.
+            self.set_with_ttl(
+                key,
+                value,
+                int(timeout_millis) + CacheFunction.get_random_extra_millis(),
+            )
             return value
         finally:
             # 7. Release the stampede lock (compare-and-delete so a
@@ -853,7 +864,7 @@ class RedisStringManager(ValueOps, StringFunction):
             pipe.set(
                 self._k(k),
                 encode_value(v),
-                px=int(timeout_millis) + _anti_avalanche_ms(),
+                px=int(timeout_millis) + CacheFunction.get_random_extra_millis(),
             )
         pipe.execute()
 
@@ -863,7 +874,7 @@ class RedisStringManager(ValueOps, StringFunction):
         client.set(
             self._k(key),
             encode_value(value),
-            px=int(timeout_millis) + _anti_avalanche_ms(),
+            px=int(timeout_millis) + CacheFunction.get_random_extra_millis(),
         )
 
     def add_value_simple(self, key: str, value: Any) -> None:
@@ -877,7 +888,7 @@ class RedisStringManager(ValueOps, StringFunction):
         result = client.set(
             self._k(key),
             encode_value(value),
-            px=int(timeout_millis) + _anti_avalanche_ms(),
+            px=int(timeout_millis) + CacheFunction.get_random_extra_millis(),
             nx=True,
         )
         return bool(result)
@@ -897,7 +908,7 @@ class RedisStringManager(ValueOps, StringFunction):
             pipe = client.pipeline(transaction=False)
             for k in batch_update:
                 pipe.pexpire(
-                    self._k(k), int(timeout_millis) + _anti_avalanche_ms()
+                    self._k(k), int(timeout_millis) + CacheFunction.get_random_extra_millis()
                 )
             pipe.execute()
 

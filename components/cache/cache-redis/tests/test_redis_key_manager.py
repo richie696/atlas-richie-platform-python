@@ -109,7 +109,10 @@ class TestKeyOpsTtl:
         registrar.value_ops().set("k", "v")
         manager.set_expired_time("k", 60_000)
         ttl = manager.get_expire("k")
-        assert 59_000 < ttl <= 60_000
+        # Java parity: `RedisKeyManager.setExpiredTime` writes
+        # `timeout + getRandomExtraMillis()`, so the effective TTL
+        # is the caller value plus a 1..10 whole-minute offset.
+        assert 119_000 < ttl <= 660_000, f"unexpected TTL: {ttl} ms"
 
     def test_get_expire_no_ttl(
         self, manager: RedisKeyManager, registrar: RedisProviderRegistrar

@@ -38,6 +38,19 @@ infrastructure + 11 functions + 2 meta accessors) and call
 `CacheRegistry.register(...)` at startup. The second register raises
 `StateError`; call `unregister()` first to swap backends.
 
+## Anti-avalanche jitter
+
+`CacheFunction.get_random_extra_millis()` is the platform's single
+anti-avalanche jitter implementation: it returns a **discrete**
+whole-minute offset in `[60_000, 600_000]` ms (10 equally likely
+values), mirroring Java's
+`ThreadLocalRandom.current().nextInt(1, 11) * 60_000L`.
+
+Backends that write cache TTLs must call it rather than shipping their
+own copy with a different distribution — see `atlas-richie-cache-redis`
+for the reference wiring (including the two paths that deliberately keep
+an exact TTL: the raw low-level ops and the negative-cache marker).
+
 ## Layout
 
 ```

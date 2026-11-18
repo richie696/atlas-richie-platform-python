@@ -348,8 +348,15 @@ class TestGetWithLock:
         ptls = registrar._backend.raw_client().hpttl(
             registrar._backend.make_key(unique_key), "f1"
         )
-        assert ptls and 0 < ptls[0] <= ttl_millis + 200, (
-            f"expected 0 < HPTTL <= {ttl_millis + 200}, got {ptls!r}"
+        # The published field carries the caller TTL plus the
+        # anti-avalanche offset (1..10 whole minutes) — Java
+        # parity: `getFromHashWithLock` expires the key with
+        # `timeout + getRandomExtraMillis()`.
+        assert ptls and (
+            ttl_millis + 60_000 - 200 <= ptls[0] <= ttl_millis + 600_000 + 200
+        ), (
+            f"expected {ttl_millis + 60_000 - 200} <= HPTTL <= "
+            f"{ttl_millis + 600_000 + 200}, got {ptls!r}"
         )
 
     def test_zero_timeout_raises(
@@ -640,8 +647,15 @@ class TestGetObjectFromHashWithLock:
         ptls = registrar._backend.raw_client().hpttl(
             registrar._backend.make_key(unique_key), "__obj__"
         )
-        assert ptls and 0 < ptls[0] <= ttl_millis + 200, (
-            f"expected 0 < HPTTL <= {ttl_millis + 200}, got {ptls!r}"
+        # The published field carries the caller TTL plus the
+        # anti-avalanche offset (1..10 whole minutes) — Java
+        # parity: `getFromHashWithLock` expires the key with
+        # `timeout + getRandomExtraMillis()`.
+        assert ptls and (
+            ttl_millis + 60_000 - 200 <= ptls[0] <= ttl_millis + 600_000 + 200
+        ), (
+            f"expected {ttl_millis + 60_000 - 200} <= HPTTL <= "
+            f"{ttl_millis + 600_000 + 200}, got {ptls!r}"
         )
 
     def test_zero_timeout_raises(
@@ -1069,11 +1083,15 @@ class TestGetManyWithLock:
         ptls = registrar._backend.raw_client().hpttl(
             registrar._backend.make_key(unique_key), "f1", "f2", "f3"
         )
-        # Each field should have a TTL in the (0, ttl_millis+slop] window.
+        # Each field carries the caller TTL plus the anti-avalanche
+        # offset (1..10 whole minutes).
         assert len(ptls) == 3, f"expected 3 TTLs, got {ptls!r}"
         for pttl in ptls:
-            assert 0 < pttl <= ttl_millis + 200, (
-                f"expected 0 < HPTTL <= {ttl_millis + 200}, got {ptl} for one of {ptls!r}"
+            assert (
+                ttl_millis + 60_000 - 200 <= pttl <= ttl_millis + 600_000 + 200
+            ), (
+                f"expected {ttl_millis + 60_000 - 200} <= HPTTL <= "
+                f"{ttl_millis + 600_000 + 200}, got {pttl} for one of {ptls!r}"
             )
 
     def test_zero_timeout_raises(

@@ -39,11 +39,12 @@ Notes
   the hit detector so that a *cached* empty Set is honoured as a
   valid value, distinct from a missing key.
 - The cache-write path on the Set variant uses ``DEL + SADD +
-  PEXPIRE`` directly (no anti-avalanche offset) because the
-  ``*_with_lock`` path is the canonical write path and the caller
-  is responsible for any TTL jitter policy.
-- The Struct variant uses ``set_with_ttl`` which passes the
-  caller-supplied TTL through verbatim (no anti-avalanche offset).
+  PEXPIRE``; the TTL carries the anti-avalanche offset (Java
+  parity: ``getFromSetWithLock`` expires the key with ``timeout +
+  getRandomExtraMillis()``).
+- The Struct variant uses ``set_with_ttl``, which passes the
+  caller-supplied TTL through verbatim (no anti-avalanche offset) —
+  Java's ``StructOpsImpl`` never sets an expiry of its own.
 """
 
 from __future__ import annotations
@@ -285,8 +286,13 @@ class TestCollectionOpsGetWithLock:
 
         full_key = registrar._backend.make_key(unique_key)
         pttl = registrar._backend.raw_client().pttl(full_key)
-        assert 0 < pttl <= ttl_millis + 200, (
-            f"expected 0 < pttl <= {ttl_millis + 200}, got {pttl}"
+        # The published Set carries the caller TTL plus the
+        # anti-avalanche offset (1..10 whole minutes) — Java
+        # parity: `getFromSetWithLock` expires the key with
+        # `timeout + getRandomExtraMillis()`.
+        assert ttl_millis + 60_000 - 200 <= pttl <= ttl_millis + 600_000 + 200, (
+            f"expected {ttl_millis + 60_000 - 200} <= pttl <= "
+            f"{ttl_millis + 600_000 + 200}, got {pttl}"
         )
 
     def test_zero_timeout_raises(
@@ -480,8 +486,11 @@ class TestSetFunctionGetFromSetWithLock:
 
         full_key = registrar._backend.make_key(unique_key)
         pttl = registrar._backend.raw_client().pttl(full_key)
-        assert 0 < pttl <= ttl_millis + 200, (
-            f"expected 0 < pttl <= {ttl_millis + 200}, got {pttl}"
+        # Same policy as the `CollectionOps` entry point: the caller
+        # TTL plus the anti-avalanche offset.
+        assert ttl_millis + 60_000 - 200 <= pttl <= ttl_millis + 600_000 + 200, (
+            f"expected {ttl_millis + 60_000 - 200} <= pttl <= "
+            f"{ttl_millis + 600_000 + 200}, got {pttl}"
         )
 
     def test_argument_validation(
@@ -665,6 +674,9 @@ class TestStructOpsGetWithLock:
 
         full_key = registrar._backend.make_key(unique_key)
         pttl = registrar._backend.raw_client().pttl(full_key)
+        # Struct ops keep the caller TTL verbatim — no anti-avalanche
+        # offset. Java's `StructOpsImpl` never sets an expiry of its
+        # own, so there is nothing to jitter there.
         assert 0 < pttl <= ttl_millis + 200, (
             f"expected 0 < pttl <= {ttl_millis + 200}, got {pttl}"
         )
@@ -849,6 +861,8 @@ class TestStructOpsGetWithLockTyped:
 
         full_key = registrar._backend.make_key(unique_key)
         pttl = registrar._backend.raw_client().pttl(full_key)
+        # Struct ops keep the caller TTL verbatim — no anti-avalanche
+        # offset (same reason as the untyped variant above).
         assert 0 < pttl <= ttl_millis + 200, (
             f"expected 0 < pttl <= {ttl_millis + 200}, got {pttl}"
         )

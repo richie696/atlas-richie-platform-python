@@ -13,9 +13,10 @@
 （``timeout_millis=0``、``delta=1``）。合并后的方法同时满足两个 Protocol
 的签名；语义仅在是否应用 TTL 或自定义 delta 上有所不同。
 
-防雪崩策略（对齐 Java）：仅在高层 ``set(key, field, value, timeout_millis)``
-且 ``timeout_millis > 0`` 时生效。底层 ``FieldOps.set``（无 TTL 参数）
-**不**附加防雪崩。
+防雪崩策略（对齐 Java）：高层 ``set(key, field, value, timeout_millis)``
+（``timeout_millis > 0``）、``set_all`` 与 ``*_with_lock`` 回写路径，
+都会在 TTL 上叠加 ``CacheFunction.get_random_extra_millis()``（1~10 分钟
+随机偏移）。底层 ``FieldOps.set``（无 TTL 参数）**不**附加防雪崩。
 
 M2 + M4 中已实现：
 
@@ -53,12 +54,11 @@ value (`timeout_millis=0`, `delta=1`). The merged method satisfies
 both Protocols' signatures; semantics differ only in whether TTL or
 a custom delta is applied.
 
-Anti-avalanche policy (matches Java): applied on the high-level
-`set(key, field, value, timeout_millis)` helper when `timeout_millis
-> 0`. Low-level `FieldOps.set` (no TTL argument) does NOT add
-anti-avalanche. The `*_with_lock` write path passes the caller-
-supplied TTL through verbatim — the lock-holder is the canonical
-writer and the caller owns any TTL jitter policy.
+Anti-avalanche policy (matches Java): the high-level
+`set(key, field, value, timeout_millis)` helper (when `timeout_millis
+> 0`), `set_all`, and the `*_with_lock` publish path all add
+`CacheFunction.get_random_extra_millis()` to the TTL. Low-level
+`FieldOps.set` (no TTL argument) does NOT add anti-avalanche.
 
 What's implemented in M2 + M4:
 
@@ -88,12 +88,12 @@ What's deferred to later R-### milestones:
 from __future__ import annotations
 
 import hashlib
-import secrets as _secrets
 import time
 import uuid
 from contextlib import contextmanager
 from typing import Any, Callable, Collection, Dict, Iterator, List, Set, TypeVar
 
+from atlas_richie.cache_core.function.cache_function import CacheFunction
 from atlas_richie.cache_core.function.hash_function import HashFunction
 from atlas_richie.cache_core.ops.field_ops import FieldOps
 
@@ -118,18 +118,6 @@ from .redis_string_manager import (
 )
 
 T = TypeVar("T")
-
-# Anti-avalanche TTL offset range (matches Java's
-# `CacheFunction.getRandomExtraMillis()`).
-_MIN_ANTI_AVALANCHE_MS = 60_000
-_MAX_ANTI_AVALANCHE_MS = 600_000
-
-
-def _anti_avalanche_ms() -> int:
-    return (
-        _secrets.randbelow(_MAX_ANTI_AVALANCHE_MS - _MIN_ANTI_AVALANCHE_MS)
-        + _MIN_ANTI_AVALANCHE_MS
-    )
 
 
 # ── Stampede-prevention lock keys (M4) ───────────────────────────────
@@ -263,7 +251,7 @@ class RedisFieldManager(FieldOps, HashFunction):
             client.hset(self._k(key), field, encoded)
             if timeout_millis and timeout_millis > 0:
                 client.hpexpire(
-                    self._k(key), int(timeout_millis) + _anti_avalanche_ms(), field
+                    self._k(key), int(timeout_millis) + CacheFunction.get_random_extra_millis(), field
                 )
 
     def get(self, key: str, field: str, clazz: type) -> Any:
@@ -326,7 +314,7 @@ class RedisFieldManager(FieldOps, HashFunction):
             encoded = {f: encode_value(v) for f, v in mapping.items()}
             client.hset(self._k(key), mapping=encoded)
             if timeout_millis and timeout_millis > 0:
-                ttl = int(timeout_millis) + _anti_avalanche_ms()
+                ttl = int(timeout_millis) + CacheFunction.get_random_extra_millis()
                 for field in encoded:
                     client.hpexpire(self._k(key), ttl, field)
 
@@ -441,9 +429,9 @@ class RedisFieldManager(FieldOps, HashFunction):
     #   5. Still missing → invoke `db_loader`. If it returns `None`,
     #      do NOT write to the cache and return `None`.
     #   6. Otherwise write the value(s) to the cache with the
-    #      caller-supplied TTL (no anti-avalanche offset — the
-    #      `*_with_lock` path is the canonical write path; the
-    #      caller owns any TTL jitter policy).
+    #      caller-supplied TTL plus the anti-avalanche offset
+    #      (Java parity: `getFromHashWithLock` expires the key
+    #      with `timeout + getRandomExtraMillis()`).
     #   7. Release the lock via compare-and-delete (so a stale
     #      holder cannot clobber a lock re-acquired by a different
     #      request after our TTL expired).
@@ -462,10 +450,12 @@ class RedisFieldManager(FieldOps, HashFunction):
     def _set_field_with_ttl(
         self, key: str, field: str, value: Any, timeout_millis: int
     ) -> None:
-        """HSET one field + HPEXPIRE; NO anti-avalanche offset.
+        """HSET one field + HPEXPIRE with the given TTL.
 
-        Used by the `*_with_lock` write path (canonical writer is
-        the lock-holder, so the caller owns TTL jitter).
+        Raw writer — it adds no jitter of its own. The `*_with_lock`
+        publish path passes `timeout_millis +
+        get_random_extra_millis()`; the M5.7 negative-cache marker
+        passes its exact TTL.
         """
         client = self._backend.raw_client()
         client.hset(self._k(key), field, encode_value(value))
@@ -475,7 +465,11 @@ class RedisFieldManager(FieldOps, HashFunction):
     def _set_many_with_ttl(
         self, key: str, mapping: Dict[str, Any], timeout_millis: int
     ) -> None:
-        """HSET many fields + per-field HPEXPIRE; NO anti-avalanche."""
+        """HSET many fields + per-field HPEXPIRE with the given TTL.
+
+        Raw writer — the caller decides the TTL (jittered for
+        publishes, exact for the negative-cache marker).
+        """
         if not mapping:
             return
         client = self._backend.raw_client()
@@ -1056,9 +1050,13 @@ class RedisFieldManager(FieldOps, HashFunction):
                         pass
                 return None
             # 6. Publish: HSET + HPEXPIRE with the caller-supplied
-            #    TTL (no anti-avalanche; the lock-holder is the
-            #    canonical writer).
-            self._set_field_with_ttl(key, field, value, timeout_millis)
+            #    TTL plus the anti-avalanche offset.
+            self._set_field_with_ttl(
+                key,
+                field,
+                value,
+                int(timeout_millis) + CacheFunction.get_random_extra_millis(),
+            )
             return value
         finally:
             # 7. Compare-and-delete the stampede lock so a stale
@@ -1151,7 +1149,12 @@ class RedisFieldManager(FieldOps, HashFunction):
                         pass
                 return None
             # 5. Publish.
-            self._set_field_with_ttl(key, _OBJECT_FIELD, value, timeout_millis)
+            self._set_field_with_ttl(
+                key,
+                _OBJECT_FIELD,
+                value,
+                int(timeout_millis) + CacheFunction.get_random_extra_millis(),
+            )
             return value
         finally:
             try:
@@ -1301,7 +1304,11 @@ class RedisFieldManager(FieldOps, HashFunction):
                     key, fields_list, {},
                 )
             # 5. Publish all loaded values back to the hash.
-            self._set_many_with_ttl(key, loaded, timeout_millis)
+            self._set_many_with_ttl(
+                key,
+                loaded,
+                int(timeout_millis) + CacheFunction.get_random_extra_millis(),
+            )
             # 6. Return the UNION of cached + loaded. The caller
             #    asked for `fields`; we owe them every one. Cached
             #    values that the loader didn't return stay in the

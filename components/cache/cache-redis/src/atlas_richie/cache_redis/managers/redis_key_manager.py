@@ -31,6 +31,7 @@ import time
 from typing import Collection, Set
 
 from atlas_richie.cache_core.enums.key_type_enum import KeyTypeEnum
+from atlas_richie.cache_core.function.cache_function import CacheFunction
 from atlas_richie.cache_core.ops.key_ops import KeyOps
 
 from .._perf_guard import RedisPerfGuard
@@ -108,17 +109,29 @@ class RedisKeyManager(KeyOps):
     def set_expired_time(self, key: str, timeout: int) -> None:
         """设置对应缓存过期时间的方法。
         ----
-        以毫秒为单位设置缓存的过期时间。
+        以毫秒为单位设置缓存的过期时间，并叠加防雪崩随机偏移。
+
+        对位 Java ``RedisKeyManager.setExpiredTime``：实际写入的 TTL 为
+        ``timeout + CacheFunction.get_random_extra_millis()``（1~10 分钟
+        随机偏移），避免大批 key 在同一时刻集体过期。
 
         English
         --------
-        Set TTL in **milliseconds**.
+        Set TTL in **milliseconds**, plus the anti-avalanche offset.
+
+        Mirrors Java's `RedisKeyManager.setExpiredTime`: the TTL
+        actually written is `timeout +
+        CacheFunction.get_random_extra_millis()`, so a batch of keys
+        does not expire at the same instant.
 
         Args:
             key: 缓存键。
             timeout: 超时时间（单位：毫秒）。
         """
-        self._backend.raw_client().pexpire(self._k(key), int(timeout))
+        self._backend.raw_client().pexpire(
+            self._k(key),
+            int(timeout) + CacheFunction.get_random_extra_millis(),
+        )
 
     def persist(self, key: str) -> bool:
         """移除指定 key 的过期时间（执行后 KEY 将不再过期）。

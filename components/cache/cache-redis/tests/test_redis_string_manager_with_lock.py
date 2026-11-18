@@ -307,8 +307,14 @@ def test_ttl_applied_to_cache_entry(
     pttl = registrar._backend.raw_client().pttl(full_key)
     # PTTL returns the remaining TTL in milliseconds; -1 means no TTL,
     # -2 means key missing. Both are failures for this test.
-    assert 0 < pttl <= ttl_millis + 200, (
-        f"expected 0 < pttl <= {ttl_millis + 200}, got {pttl}"
+    #
+    # The published entry carries the caller TTL plus the
+    # anti-avalanche offset (1..10 whole minutes). Java parity:
+    # `getFromStringWithLock` publishes through `addValue(key,
+    # value, timeout)`, which jitters.
+    assert ttl_millis + 60_000 - 200 <= pttl <= ttl_millis + 600_000 + 200, (
+        f"expected {ttl_millis + 60_000 - 200} <= pttl <= "
+        f"{ttl_millis + 600_000 + 200}, got {pttl}"
     )
 
 

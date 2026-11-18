@@ -36,6 +36,28 @@ atlas_richie/cache_redis/
     └── redis_string_manager.py          # M1: ValueOps + StringFunction
 ```
 
+## Anti-avalanche jitter
+
+Every cache-entry TTL written by this driver carries a random offset of
+1–10 whole minutes on top of the caller's TTL, so a batch of keys written
+together does not expire at the same instant.
+
+| Path | Jitter | Java counterpart |
+|---|---|---|
+| `StringFunction.add_value` / `add_value_if_absent` / `batch_add_to_string_with_ttl` / `batch_update_if_absent` | yes | `RedisStringManager` — the same four call sites |
+| `*_with_lock` publish (String / Set / Hash) | yes | Java publishes through `addValue` / `expire(key, timeout + jitter)` |
+| `CollectionOps.set(key, values, timeout_millis)` | yes | `RedisSetManager` |
+| `HashFunction.set(...)` / `set_all(...)` | yes | `RedisHashManager.addObject` |
+| `KeyOps.set_expired_time(key, timeout)` | yes | `RedisKeyManager.setExpiredTime` |
+| `ValueOps.set_with_ttl` / `set_if_absent_with_ttl` / `batch_set_with_ttl` | **no** | raw low-level ops — the caller owns the TTL |
+| M5.7 negative-cache marker | **no** | a short suppression window, not a cache entry |
+
+The offset comes from `CacheFunction.get_random_extra_millis()` in
+`atlas-richie-cache-core` — the single implementation in the platform.
+Backends must not ship their own copy: the distribution is part of the
+contract (discrete whole-minute buckets, matching Java's
+`ThreadLocalRandom.current().nextInt(1, 11) * 60_000L`).
+
 ## Status (R-220 M1)
 
 - 2/30 `ProviderRegistrar` methods real: `value_ops()`,

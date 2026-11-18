@@ -15,10 +15,10 @@
 Protocol 的方法而无需合并签名 —— Java 的设计选择与 Python 缺少方法重载
 恰好契合的少数情形之一。
 
-防雪崩策略（对齐 Java）：仅在高层 ``add_set`` / ``add_set_item`` 辅助
-方法的调用方显式传入 TTL 时生效（在 ``SetFunction`` 中很少见；Set 通常
-没有 TTL）。``CollectionOps.set(key, values, timeout_millis)`` 辅助方法会
-对传入的 TTL 应用防雪崩。
+防雪崩策略（对齐 Java）：``CollectionOps.set(key, values, timeout_millis)``
+辅助方法与 ``*_with_lock`` 回写路径，都会在传入的 TTL 上叠加
+``CacheFunction.get_random_extra_millis()``（1~10 分钟随机偏移）。高层
+``add_set`` / ``add_set_item`` 通常不带 TTL（Set 一般无 TTL），不受影响。
 
 English
 --------
@@ -41,20 +41,21 @@ Python translation can implement each Protocol's methods verbatim
 without merging signatures — a rare case where the Java design
 choice and Python's lack of overloading line up perfectly.
 
-Anti-avalanche policy (matches Java): applied on the high-level
-`add_set` / `add_set_item` helpers when the calling context
-explicitly passes a TTL (rare; Set is usually TTL-less in
-`SetFunction`). The `CollectionOps.set(key, values, timeout_millis)`
-helper applies anti-avalanche to the supplied TTL.
+Anti-avalanche policy (matches Java): the
+`CollectionOps.set(key, values, timeout_millis)` helper and the
+`*_with_lock` publish path both add
+`CacheFunction.get_random_extra_millis()` to the supplied TTL. The
+high-level `add_set` / `add_set_item` helpers are usually TTL-less
+(Set rarely has a TTL), so they are unaffected.
 """
 
 from __future__ import annotations
 
-import secrets as _secrets
 import time
 import uuid
 from typing import Any, Callable, Collection, Set as _PySet, TypeVar
 
+from atlas_richie.cache_core.function.cache_function import CacheFunction
 from atlas_richie.cache_core.function.set_function import SetFunction
 from atlas_richie.cache_core.ops.collection_ops import CollectionOps
 
@@ -72,18 +73,6 @@ from .redis_string_manager import (
 )
 
 T = TypeVar("T")
-
-# Anti-avalanche TTL offset range (matches Java's
-# `CacheFunction.getRandomExtraMillis()`).
-_MIN_ANTI_AVALANCHE_MS = 60_000
-_MAX_ANTI_AVALANCHE_MS = 600_000
-
-
-def _anti_avalanche_ms() -> int:
-    return (
-        _secrets.randbelow(_MAX_ANTI_AVALANCHE_MS - _MIN_ANTI_AVALANCHE_MS)
-        + _MIN_ANTI_AVALANCHE_MS
-    )
 
 
 class RedisCollectionManager(CollectionOps, SetFunction):
@@ -173,7 +162,7 @@ class RedisCollectionManager(CollectionOps, SetFunction):
             if timeout_millis and timeout_millis > 0:
                 pipe.pexpire(
                     self._k(key),
-                    int(timeout_millis) + _anti_avalanche_ms(),
+                    int(timeout_millis) + CacheFunction.get_random_extra_millis(),
                 )
             pipe.execute()
 
@@ -499,14 +488,15 @@ class RedisCollectionManager(CollectionOps, SetFunction):
                     except Exception:
                         pass
                 return set()
-            # 5. Publish: DEL + SADD + PEXPIRE, no anti-avalanche
-            #    offset (the `*_with_lock` path is the canonical
-            #    write path and the caller is responsible for any
-            #    TTL jitter policy). A successful publish
-            #    transparently clears any stale negative-cache
-            #    marker — the user can call again with a fresh
-            #    loader, no leftover "negative" state to confuse
-            #    the next caller.
+            # 5. Publish: DEL + SADD + PEXPIRE, with the
+            #    anti-avalanche offset on the TTL. Mirrors Java's
+            #    `getFromSetWithLock`, which publishes through
+            #    `addSet(key, value)` and then expires the key with
+            #    `timeout + getRandomExtraMillis()`. A successful
+            #    publish transparently clears any stale
+            #    negative-cache marker — the user can call again
+            #    with a fresh loader, no leftover "negative" state
+            #    to confuse the next caller.
             try:
                 client.delete(self._negative_set_marker_key(key))
             except Exception:
@@ -517,7 +507,10 @@ class RedisCollectionManager(CollectionOps, SetFunction):
             if encoded:
                 pipe.sadd(self._k(key), *encoded)
             if timeout_millis and timeout_millis > 0:
-                pipe.pexpire(self._k(key), int(timeout_millis))
+                pipe.pexpire(
+                    self._k(key),
+                    int(timeout_millis) + CacheFunction.get_random_extra_millis(),
+                )
             pipe.execute()
             return value
         finally:
