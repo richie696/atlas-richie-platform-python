@@ -558,3 +558,104 @@ class TestRateLimitAgainstRedis:
         finally:
             registrar.close()
             client.close()
+
+
+class TestIdempotencyMiddleware:
+    def _guard(self):
+        from atlas_richie.web_protection import IdempotencyGuard, InMemoryIdempotencyStore
+
+        return IdempotencyGuard(InMemoryIdempotencyStore(60))
+
+    def test_first_submission_passes(self) -> None:
+        app = _App()
+        middleware = ProtectionASGIMiddleware(app, idempotency_guard=self._guard())
+        sent = _call(middleware, _scope("/api/orders", "POST", {"x-idempotency-key": "k1"}))
+        assert app.calls == 1
+
+    def test_replay_denied_409(self) -> None:
+        app = _App()
+        middleware = ProtectionASGIMiddleware(app, idempotency_guard=self._guard())
+        scope = _scope("/api/orders", "POST", {"x-idempotency-key": "k1"})
+        _call(middleware, scope)
+        sent = _call(middleware, scope)
+        assert _status(sent) == 409
+        assert app.calls == 1
+        assert json.loads(_body(sent)) == {"error": "idempotent_replay"}
+
+    def test_no_header_passes(self) -> None:
+        app = _App()
+        middleware = ProtectionASGIMiddleware(app, idempotency_guard=self._guard())
+        _call(middleware, _scope("/api/orders", "POST"))
+        _call(middleware, _scope("/api/orders", "POST"))
+        assert app.calls == 2, "无幂等键的请求不受去重约束"
+
+    def test_idempotency_runs_before_rate_limit(self) -> None:
+        app = _App()
+        guard, limiter = _rate_guard(allow=True)
+        middleware = ProtectionASGIMiddleware(
+            app, idempotency_guard=self._guard(), rate_limit_guard=guard
+        )
+        scope = _scope("/api/orders", "POST", {**_rl_headers(), "x-idempotency-key": "k"})
+        _call(middleware, scope)
+        sent = _call(middleware, scope)
+        assert _status(sent) == 409, "重复提交应先于限流被拒"
+        assert len(limiter.calls) == 1, "被幂等拒绝的请求不应消耗限流配额"
+
+
+class TestLongLivedBypassMiddleware:
+    def test_sse_path_skips_guards(self) -> None:
+        from atlas_richie.web_protection import LongLivedPathBypass
+
+        app = _App()
+        guard, limiter = _rate_guard(allow=False)
+        middleware = ProtectionASGIMiddleware(
+            app,
+            rate_limit_guard=guard,
+            long_lived_bypass=LongLivedPathBypass(["/sse/**"]),
+        )
+        sent = _call(middleware, _scope("/sse/orders", "GET", _rl_headers()))
+        assert app.calls == 1, "SSE 长流应跳过限流直接放行"
+        assert limiter.calls == []
+
+    def test_non_long_lived_path_still_guarded(self) -> None:
+        from atlas_richie.web_protection import LongLivedPathBypass
+
+        app = _App()
+        guard, _ = _rate_guard(allow=False)
+        middleware = ProtectionASGIMiddleware(
+            app,
+            rate_limit_guard=guard,
+            long_lived_bypass=LongLivedPathBypass(["/sse/**"]),
+        )
+        sent = _call(middleware, _scope("/api/orders", "POST", _rl_headers()))
+        assert _status(sent) == 429
+        assert app.calls == 0
+
+    def test_bypass_skips_signature_too(self) -> None:
+        from atlas_richie.web_protection import LongLivedPathBypass
+
+        app = _App()
+        middleware = ProtectionASGIMiddleware(
+            app,
+            signature_verifier=_verifier(),
+            long_lived_bypass=LongLivedPathBypass(["/ws/**"]),
+        )
+        # 无签名头，但长连接路径豁免 → 放行
+        _call(middleware, _scope("/ws/chat", "GET", {"x-client-key": "partner"}))
+        assert app.calls == 1
+
+    def test_ip_blacklist_still_applies_to_long_lived(self) -> None:
+        from atlas_richie.web_protection import LongLivedPathBypass
+
+        app = _App()
+        middleware = ProtectionASGIMiddleware(
+            app,
+            ip_blacklist=(IpBlacklistEntry("203.0.113.0/24"),),
+            long_lived_bypass=LongLivedPathBypass(["/sse/**"]),
+        )
+        sent = _call(
+            middleware,
+            _scope("/sse/orders", "GET", client=("203.0.113.9", 1)),
+        )
+        assert _status(sent) == 403, "IP 黑名单先于长连接豁免，仍应生效"
+        assert app.calls == 0

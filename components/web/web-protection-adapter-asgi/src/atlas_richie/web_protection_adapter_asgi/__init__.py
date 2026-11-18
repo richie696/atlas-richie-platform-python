@@ -16,6 +16,8 @@ from collections.abc import Awaitable, Callable, Iterable, Sequence
 from typing import Any
 
 from atlas_richie.web_protection import (
+    IdempotencyGuard,
+    LongLivedPathBypass,
     RateLimitDecision,
     RateLimitGuard,
     ApiSignatureVerifier,
@@ -72,6 +74,8 @@ class ProtectionASGIMiddleware:
         size_guard: RequestSizeGuard | None = None,
         signature_verifier: ApiSignatureVerifier | None = None,
         rate_limit_guard: RateLimitGuard | None = None,
+        idempotency_guard: IdempotencyGuard | None = None,
+        long_lived_bypass: LongLivedPathBypass | None = None,
         login_tracker: LoginAttemptTracker | None = None,
         login_paths: Iterable[str] = DEFAULT_LOGIN_PATHS,
         login_key: Callable[[Scope, dict[str, str]], str | None] | None = None,
@@ -90,6 +94,8 @@ class ProtectionASGIMiddleware:
         self._size_guard = size_guard
         self._signature = signature_verifier
         self._rate_limit = rate_limit_guard
+        self._idempotency = idempotency_guard
+        self._long_lived = long_lived_bypass
         self._login_tracker = login_tracker
         self._login_paths = frozenset(login_paths)
         self._login_key = login_key or (lambda scope, headers: client_ip(scope, headers, trust_forwarded=trust_forwarded))
@@ -115,6 +121,11 @@ class ProtectionASGIMiddleware:
             await self._deny(send, self._deny_status_ip, "ip_blacklisted")
             return
 
+        if self._long_lived is not None and self._long_lived.matches(path):
+            # SSE/WS 是长流而非一次性请求，跳过请求级防护直接放行。
+            await self.app(scope, receive, send)
+            return
+
         user_agent = headers.get("user-agent")
         if any(matcher.matches(user_agent) for matcher in self._bot_matchers):
             await self._deny(send, self._deny_status_bot, "bot_detected")
@@ -131,6 +142,12 @@ class ProtectionASGIMiddleware:
         if self._login_tracker is not None and login_key is not None:
             if self._login_tracker.is_locked(login_key):
                 await self._deny(send, self._deny_status_locked, "account_locked")
+                return
+
+        if self._idempotency is not None:
+            decision = self._idempotency.check(headers)
+            if decision is not None:
+                await self._deny(send, decision.status, decision.reason)
                 return
 
         if self._rate_limit is not None:

@@ -6,6 +6,13 @@ storage are adapter concerns; this package only decides allow/deny.
 
 import importlib.metadata
 
+from .idempotency import (
+    IdempotencyDecision,
+    IdempotencyGuard,
+    IdempotencyStore,
+    InMemoryIdempotencyStore,
+    LongLivedPathBypass,
+)
 from .rate_limit import (
     ClientKeyResolver,
     CompositeKeyResolver,
@@ -38,6 +45,11 @@ __version__ = importlib.metadata.version("atlas-richie-web-protection")
 
 __all__ = [
     "ClientKeyResolver",
+    "IdempotencyDecision",
+    "IdempotencyGuard",
+    "IdempotencyStore",
+    "InMemoryIdempotencyStore",
+    "LongLivedPathBypass",
     "CompositeKeyResolver",
     "HeaderClientKeyResolver",
     "IpClientKeyResolver",

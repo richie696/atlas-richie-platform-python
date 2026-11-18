@@ -40,11 +40,17 @@ Cheap to expensive, so a rejected request costs as little as possible:
 2. **Bot User-Agent** → 403 `bot_detected`
 3. **Request size** → the guard's own status (413 body / 431 headers)
 4. **Login lockout** → 429 `account_locked`
-5. **Rate limit** → the guard's own status (default 429 `RATE_LIMITED`,
+5. **Idempotency** → 409 `idempotent_replay` when `X-Idempotency-Key` repeats
+   within the TTL (no header = pass through; dedup is opt-in)
+6. **Rate limit** → the guard's own status (default 429 `RATE_LIMITED`,
    or 401 `gateway_identity_missing` / `client_unidentified`)
-6. **HMAC signature** → 401 with the verifier's reason (`missing_header`,
+7. **HMAC signature** → 401 with the verifier's reason (`missing_header`,
    `bad_timestamp`, `timestamp_skew`, `nonce_replay`, `no_secret`,
    `signature_mismatch`)
+
+**Long-lived bypass**: paths matching `LongLivedPathBypass` (SSE/WebSocket)
+skip all request-level guards and pass straight through — they are streams,
+not one-shot requests. The IP blacklist still applies (it runs first).
 
 The size guard reads `Content-Length` only — it never consumes the request body,
 so downstream handlers still see the full stream.
