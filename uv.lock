@@ -20,6 +20,7 @@ members = [
     "atlas-richie-oauth",
     "atlas-richie-platform",
     "atlas-richie-redis-streammq",
+    "atlas-richie-scheduling-core",
     "atlas-richie-secret-aliyun-kms",
     "atlas-richie-secret-aws-kms",
     "atlas-richie-secret-azure-keyvault",
@@ -607,6 +608,7 @@ dependencies = [
     { name = "atlas-richie-mfa-validation" },
     { name = "atlas-richie-oauth" },
     { name = "atlas-richie-redis-streammq" },
+    { name = "atlas-richie-scheduling-core" },
     { name = "atlas-richie-secret-aliyun-kms" },
     { name = "atlas-richie-secret-aws-kms" },
     { name = "atlas-richie-secret-azure-keyvault" },
@@ -655,6 +657,7 @@ requires-dist = [
     { name = "atlas-richie-mfa-validation", editable = "components/mfa/mfa-validation" },
     { name = "atlas-richie-oauth", editable = "components/oauth" },
     { name = "atlas-richie-redis-streammq", editable = "components/redis-streammq" },
+    { name = "atlas-richie-scheduling-core", editable = "components/scheduling/scheduling-core" },
     { name = "atlas-richie-secret-aliyun-kms", editable = "components/secret/secret-aliyun-kms" },
     { name = "atlas-richie-secret-aws-kms", editable = "components/secret/secret-aws-kms" },
     { name = "atlas-richie-secret-azure-keyvault", editable = "components/secret/secret-azure-keyvault" },
@@ -710,6 +713,20 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
     { name = "redis", specifier = ">=5.0,<9.0" },
 ]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-scheduling-core"
+version = "0.2.0"
+source = { editable = "components/scheduling/scheduling-core" }
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" }]
 provides-extras = ["test"]
 
 [[package]]
