@@ -23,6 +23,28 @@ def _run(coroutine):
     return asyncio.run(coroutine)
 
 
+def _url_for(database: str) -> str:
+    """Connection URL for `database` on the same server as `PG_URL`.
+
+    The credentials must be derived from `PG_URL` — the same value the
+    `requires_pg` fixture validated. A hardcoded URL here ignores a
+    passworded DSN and fails with "no password supplied".
+    """
+    from sqlalchemy.engine.url import make_url
+
+    return make_url(PG_URL).set(database=database).render_as_string(
+        hide_password=False
+    )
+
+
+def _admin_url() -> str:
+    """Admin connection URL — the same DSN the `requires_pg` fixture
+    validated, so the credentials always match the environment."""
+    from sqlalchemy.engine.url import make_url
+
+    return make_url(PG_URL).render_as_string(hide_password=False)
+
+
 def _pg_ready(url: str) -> bool:
     try:
         from sqlalchemy import create_engine, text
@@ -87,6 +109,15 @@ class TestDriverDetection:
         runner = AlembicMigrationRunner("/m/a", f"{prefix}u@127.0.0.1:1/db", lock_timeout_seconds=0.1)
         with pytest.raises(Exception):
             runner._run_locked(lambda c, r: None, None, "head")
+
+    def test_percent_encoded_password_survives_config_building(self) -> None:
+        """A DSN with a percent-encoded password must not break the
+        Alembic config: `configparser` would read `%` as an
+        interpolation marker and raise."""
+        url = "postgresql://postgres:p%40ss%23word@127.0.0.1:15432/db"
+        runner = AlembicMigrationRunner("/m/a", url)
+        config = runner._config()
+        assert config.get_main_option("sqlalchemy.url") == url
 
     def test_lock_disabled_when_timeout_none(self) -> None:
         calls: list[str] = []
@@ -170,11 +201,11 @@ class TestConcurrentMigrationAgainstPostgres:
         from sqlalchemy import create_engine, inspect, text
 
         database = f"mig_lock_{uuid.uuid4().hex[:8]}"
-        admin = create_engine("postgresql://postgres@127.0.0.1:15432/vector_tests")
+        admin = create_engine(_admin_url())
         with admin.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
             connection.execute(text(f'CREATE DATABASE "{database}"'))
         admin.dispose()
-        target = f"postgresql://postgres@127.0.0.1:15432/{database}"
+        target = _url_for(database)
         try:
             first = AlembicMigrationRunner(script_location, target, lock_timeout_seconds=30.0)
             second = AlembicMigrationRunner(script_location, target, lock_timeout_seconds=30.0)
@@ -192,7 +223,7 @@ class TestConcurrentMigrationAgainstPostgres:
             finally:
                 engine.dispose()
         finally:
-            admin = create_engine("postgresql://postgres@127.0.0.1:15432/vector_tests")
+            admin = create_engine(_admin_url())
             with admin.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
                 connection.execute(text(f'DROP DATABASE "{database}" WITH (FORCE)'))
             admin.dispose()
@@ -207,7 +238,7 @@ class TestConcurrentMigrationAgainstPostgres:
         with admin.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
             connection.execute(text(f'CREATE DATABASE "{database}"'))
         admin.dispose()
-        target = f"postgresql://postgres@127.0.0.1:15432/{database}"
+        target = _url_for(database)
         try:
             first = AlembicMigrationRunner(script_location, target, lock_timeout_seconds=30.0)
             impatient = AlembicMigrationRunner(

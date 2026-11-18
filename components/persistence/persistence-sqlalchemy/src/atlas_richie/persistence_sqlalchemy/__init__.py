@@ -106,7 +106,13 @@ class AlembicMigrationRunner:
             ) from error
         config = Config()
         config.set_main_option("script_location", self._script_location)
-        config.set_main_option("sqlalchemy.url", self._url)
+        # Alembic stores main options in a `configparser` section, and
+        # `BasicInterpolation` reads `%` as an interpolation marker — a
+        # percent-encoded password (`p%40ss` style) would raise
+        # "invalid interpolation syntax" on the first read. Doubling
+        # `%` is the documented escape; configparser un-escapes it back
+        # to a single `%` when the option is read.
+        config.set_main_option("sqlalchemy.url", self._url.replace("%", "%%"))
         for key, value in self._config_kwargs.items():
             config.set_main_option(key, str(value))
         return config
