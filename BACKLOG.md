@@ -9,6 +9,8 @@
 
 ## P0 · 需要你决策（阻塞项）
 
+> 四项均已结项（见下）。P0 不再阻塞后续推进。
+
 - [x] **Redis 密码轮换** —— 用户裁决：**不轮换**（2026-11-18；本机 dev 测试口令，无需轮换）。
   保留已完成的部分：Java 平台仓 `e2ecef2f`、AS 仓 `19cebcc9` 已把口令改为
   `REDIS_PASSWORD` 环境变量取值（`${REDIS_PASSWORD:}`），三仓均无硬编码残留，
@@ -32,8 +34,10 @@
   versions.toml / uv.lock 均未登记，全仓无代码引用；目录内只剩一个 139M 的 `.venv`
   与一个孤立的 `.pyc`，无任何源码。删除后 `uv sync --frozen` 与三项门禁均正常，
   sentinel 各包测试无连带影响。
-- [ ] **Java `LocalComposeDefaults.MYSQL_PASSWORD` 硬编码**（S，安全）
-  `wjy123456` 明文在 Java main 代码。同类凭证问题，不在 Python 仓范围，需你定是否处理。
+- [x] **Java `LocalComposeDefaults.MYSQL_PASSWORD` 硬编码**（S，安全）—— 用户裁决：**暂不处理**（2026-11-19）。
+  `wjy123456` 明文在 Java main 代码。同类凭证问题，不在 Python 仓范围，本轮不动 Java 仓代码。
+  **决策已结，残余风险仍在**：该口令随 Java 仓源码分发。触发重评的条件——Java 仓
+  转为公开、或该口令在非 dev 环境被复用。届时改为环境变量注入 + 随附 `.env.example`。
 
 ---
 
