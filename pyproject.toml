@@ -27,6 +27,7 @@ members = [
   "components/storage/storage-s3",
   "components/vector/vector-core",
   "components/vector/vector-pgvector",
+  "components/vector/vector-chunk-adapter",
   "components/mcp",
   "components/oauth",
   "components/secret/secret-core",
@@ -84,6 +85,7 @@ atlas-richie-storage-core = { workspace = true }
 atlas-richie-storage-s3 = { workspace = true }
 atlas-richie-vector-core = { workspace = true }
 atlas-richie-vector-pgvector = { workspace = true }
+atlas-richie-vector-chunk-adapter = { workspace = true }
 atlas-richie-mcp = { workspace = true }
 atlas-richie-oauth = { workspace = true }
 atlas-richie-secret-core = { workspace = true }

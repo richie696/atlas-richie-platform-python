@@ -60,6 +60,7 @@ members = [
     "atlas-richie-storage-core",
     "atlas-richie-storage-s3",
     "atlas-richie-testing",
+    "atlas-richie-vector-chunk-adapter",
     "atlas-richie-vector-core",
     "atlas-richie-vector-pgvector",
     "atlas-richie-web-protection",
@@ -815,6 +816,7 @@ dependencies = [
     { name = "atlas-richie-storage-core" },
     { name = "atlas-richie-storage-s3" },
     { name = "atlas-richie-testing" },
+    { name = "atlas-richie-vector-chunk-adapter" },
     { name = "atlas-richie-vector-core" },
     { name = "atlas-richie-vector-pgvector" },
     { name = "atlas-richie-web-protection" },
@@ -874,6 +876,7 @@ requires-dist = [
     { name = "atlas-richie-storage-core", editable = "components/storage/storage-core" },
     { name = "atlas-richie-storage-s3", editable = "components/storage/storage-s3" },
     { name = "atlas-richie-testing", editable = "foundation/testing" },
+    { name = "atlas-richie-vector-chunk-adapter", editable = "components/vector/vector-chunk-adapter" },
     { name = "atlas-richie-vector-core", editable = "components/vector/vector-core" },
     { name = "atlas-richie-vector-pgvector", editable = "components/vector/vector-pgvector" },
     { name = "atlas-richie-web-protection", editable = "components/web/web-protection" },
@@ -1792,6 +1795,30 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-vector-chunk-adapter"
+version = "0.2.0"
+source = { editable = "components/vector/vector-chunk-adapter" }
+dependencies = [
+    { name = "atlas-richie-chunking-core" },
+    { name = "atlas-richie-vector-core" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "atlas-richie-chunking-parser-adapter" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-chunking-core", editable = "components/chunking/chunking-core" },
+    { name = "atlas-richie-chunking-parser-adapter", marker = "extra == 'test'", editable = "components/chunking/chunking-parser-adapter" },
+    { name = "atlas-richie-vector-core", editable = "components/vector/vector-core" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
 ]
 provides-extras = ["test"]

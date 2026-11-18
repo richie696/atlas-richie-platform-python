@@ -43,6 +43,7 @@ from .filters import (
     range_,
 )
 from .execution import DEFAULT_MAX_CONCURRENT, VectorQueryExecutionGuard
+from .hybrid import RRF_K, CheckedSearch, fuse, native_first
 from .model import (
     HybridSearchOptions,
     ImageContent,
@@ -126,6 +127,10 @@ __all__ = [
     "and_",
     "or_",
     "VectorQueryExecutionGuard",
+    "RRF_K",
+    "CheckedSearch",
+    "fuse",
+    "native_first",
     "DEFAULT_MAX_CONCURRENT",
     "Modality",
     "TextContent",
