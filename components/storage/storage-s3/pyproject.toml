@@ -1,0 +1,36 @@
+[build-system]
+requires = [
+    "uv_build>=0.12,<0.13",
+]
+build-backend = "uv_build"
+
+[project]
+name = "atlas-richie-storage-s3"
+version = "0.2.0"
+description = "S3-compatible object storage adapter (AWS S3, MinIO, RustFS) for the storage SPI."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "Atlas Richie" },
+]
+dependencies = [
+  "atlas-richie-storage-core>=0.2.0,<0.3.0",
+  "boto3>=1.34,<2.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0,<9.0", "atlas-richie-testing>=0.2.0,<0.3.0"]
+
+[project.license]
+text = "Apache-2.0"
+
+[tool.pytest.ini_options]
+markers = [
+    "unit: fast tests with no I/O, no external dependencies (default)",
+    "integration: multi-component interaction, may use real Redis",
+    "e2e: end-to-end tests that may spin up servers, slower",
+]
+
+[tool.uv.build-backend]
+module-name = "atlas_richie.storage_s3"
+module-root = "src"

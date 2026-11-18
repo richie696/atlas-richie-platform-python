@@ -22,6 +22,8 @@ members = [
   "components/persistence/persistence-core",
   "components/persistence/persistence-sqlalchemy",
   "components/document/document-parser",
+  "components/storage/storage-core",
+  "components/storage/storage-s3",
   "components/mcp",
   "components/oauth",
   "components/secret/secret-core",
@@ -74,6 +76,8 @@ atlas-richie-coordination-redis = { workspace = true }
 atlas-richie-persistence-core = { workspace = true }
 atlas-richie-persistence-sqlalchemy = { workspace = true }
 atlas-richie-document-parser = { workspace = true }
+atlas-richie-storage-core = { workspace = true }
+atlas-richie-storage-s3 = { workspace = true }
 atlas-richie-mcp = { workspace = true }
 atlas-richie-oauth = { workspace = true }
 atlas-richie-secret-core = { workspace = true }

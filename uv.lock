@@ -56,6 +56,8 @@ members = [
     "atlas-richie-sentinel-source-nacos",
     "atlas-richie-statemachine-core",
     "atlas-richie-statemachine-redis",
+    "atlas-richie-storage-core",
+    "atlas-richie-storage-s3",
     "atlas-richie-testing",
     "atlas-richie-web-protection",
     "atlas-richie-web-protection-adapter-asgi",
@@ -784,6 +786,8 @@ dependencies = [
     { name = "atlas-richie-sentinel-source-nacos" },
     { name = "atlas-richie-statemachine-core" },
     { name = "atlas-richie-statemachine-redis" },
+    { name = "atlas-richie-storage-core" },
+    { name = "atlas-richie-storage-s3" },
     { name = "atlas-richie-testing" },
     { name = "atlas-richie-web-protection" },
     { name = "atlas-richie-web-protection-adapter-asgi" },
@@ -838,6 +842,8 @@ requires-dist = [
     { name = "atlas-richie-sentinel-source-nacos", editable = "components/sentinel/sentinel-source-nacos" },
     { name = "atlas-richie-statemachine-core", editable = "components/statemachine/statemachine-core" },
     { name = "atlas-richie-statemachine-redis", editable = "components/statemachine/statemachine-redis" },
+    { name = "atlas-richie-storage-core", editable = "components/storage/storage-core" },
+    { name = "atlas-richie-storage-s3", editable = "components/storage/storage-s3" },
     { name = "atlas-richie-testing", editable = "foundation/testing" },
     { name = "atlas-richie-web-protection", editable = "components/web/web-protection" },
     { name = "atlas-richie-web-protection-adapter-asgi", editable = "components/web/web-protection-adapter-asgi" },
@@ -1692,6 +1698,44 @@ requires-dist = [
     { name = "atlas-richie-testing", marker = "extra == 'test'", editable = "foundation/testing" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
     { name = "redis", specifier = ">=5.0,<9.0" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-storage-core"
+version = "0.2.0"
+source = { editable = "components/storage/storage-core" }
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" }]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-storage-s3"
+version = "0.2.0"
+source = { editable = "components/storage/storage-s3" }
+dependencies = [
+    { name = "atlas-richie-storage-core" },
+    { name = "boto3" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "atlas-richie-testing" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-storage-core", editable = "components/storage/storage-core" },
+    { name = "atlas-richie-testing", marker = "extra == 'test'", editable = "foundation/testing" },
+    { name = "boto3", specifier = ">=1.34,<2.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
 ]
 provides-extras = ["test"]
 
