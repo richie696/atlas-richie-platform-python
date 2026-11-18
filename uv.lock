@@ -2041,13 +2041,19 @@ dependencies = [
 
 [package.optional-dependencies]
 test = [
+    { name = "atlas-richie-cache-redis" },
+    { name = "atlas-richie-testing" },
     { name = "pytest" },
+    { name = "redis" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "atlas-richie-cache-redis", marker = "extra == 'test'", editable = "components/cache/cache-redis" },
+    { name = "atlas-richie-testing", marker = "extra == 'test'", editable = "foundation/testing" },
     { name = "atlas-richie-web-protection", editable = "components/web/web-protection" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+    { name = "redis", marker = "extra == 'test'", specifier = ">=5.0,<9.0" },
 ]
 provides-extras = ["test"]
 

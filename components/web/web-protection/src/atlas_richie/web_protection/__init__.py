@@ -6,6 +6,18 @@ storage are adapter concerns; this package only decides allow/deny.
 
 import importlib.metadata
 
+from .rate_limit import (
+    ClientKeyResolver,
+    CompositeKeyResolver,
+    HeaderClientKeyResolver,
+    IpClientKeyResolver,
+    RateLimitDecision,
+    RateLimitGuard,
+    RateLimitProperties,
+    RateLimitRoute,
+    RateLimiter,
+    ant_pattern_to_regex,
+)
 from .guards import (
     HEADER_NONCE,
     HEADER_SIGNATURE,
@@ -25,6 +37,16 @@ from .trackers import LoginAttemptTracker, NonceCache
 __version__ = importlib.metadata.version("atlas-richie-web-protection")
 
 __all__ = [
+    "ClientKeyResolver",
+    "CompositeKeyResolver",
+    "HeaderClientKeyResolver",
+    "IpClientKeyResolver",
+    "RateLimitDecision",
+    "RateLimitGuard",
+    "RateLimitProperties",
+    "RateLimitRoute",
+    "RateLimiter",
+    "ant_pattern_to_regex",
     "HEADER_NONCE",
     "HEADER_SIGNATURE",
     "HEADER_TIMESTAMP",

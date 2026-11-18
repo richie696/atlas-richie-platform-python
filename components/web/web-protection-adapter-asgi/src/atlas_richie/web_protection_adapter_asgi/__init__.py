@@ -16,6 +16,8 @@ from collections.abc import Awaitable, Callable, Iterable, Sequence
 from typing import Any
 
 from atlas_richie.web_protection import (
+    RateLimitDecision,
+    RateLimitGuard,
     ApiSignatureVerifier,
     BotUserAgentMatcher,
     IpBlacklistEntry,
@@ -69,6 +71,7 @@ class ProtectionASGIMiddleware:
         bot_matchers: Sequence[BotUserAgentMatcher] = (),
         size_guard: RequestSizeGuard | None = None,
         signature_verifier: ApiSignatureVerifier | None = None,
+        rate_limit_guard: RateLimitGuard | None = None,
         login_tracker: LoginAttemptTracker | None = None,
         login_paths: Iterable[str] = DEFAULT_LOGIN_PATHS,
         login_key: Callable[[Scope, dict[str, str]], str | None] | None = None,
@@ -86,6 +89,7 @@ class ProtectionASGIMiddleware:
         self._bot_matchers = tuple(bot_matchers)
         self._size_guard = size_guard
         self._signature = signature_verifier
+        self._rate_limit = rate_limit_guard
         self._login_tracker = login_tracker
         self._login_paths = frozenset(login_paths)
         self._login_key = login_key or (lambda scope, headers: client_ip(scope, headers, trust_forwarded=trust_forwarded))
@@ -129,6 +133,12 @@ class ProtectionASGIMiddleware:
                 await self._deny(send, self._deny_status_locked, "account_locked")
                 return
 
+        if self._rate_limit is not None:
+            decision = self._rate_limit.check(path, headers, method=scope.get("method", "GET"), ip=ip)
+            if decision is not None and not decision.allowed:
+                await self._deny_decision(send, decision)
+                return
+
         if self._signature is not None:
             bypassed = (
                 self._gateway_bypass_header is not None
@@ -164,6 +174,25 @@ class ProtectionASGIMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_tracking)
+
+    async def _deny_decision(self, send: Send, decision: RateLimitDecision) -> None:
+        """Rate-limit denials carry their own status, code, message and headers."""
+        body = json.dumps(
+            {"error": decision.code or decision.reason, "message": decision.message},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        headers = [
+            (b"content-type", b"application/json; charset=utf-8"),
+            (b"content-length", str(len(body)).encode("latin-1")),
+        ]
+        for name, value in decision.headers.items():
+            headers.append((name.encode("latin-1"), str(value).encode("utf-8")))
+        await send({
+            "type": "http.response.start",
+            "status": decision.status,
+            "headers": headers,
+        })
+        await send({"type": "http.response.body", "body": body, "more_body": False})
 
     async def _deny(self, send: Send, status: int, reason: str) -> None:
         body = self._deny_renderer(status, reason)

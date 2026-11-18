@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 
 import pytest
 
@@ -353,3 +354,207 @@ class TestHelpers:
         scope = _scope()
         scope["client"] = None
         assert client_ip(scope, {}) is None
+
+
+class _AllowLimiter:
+    def __init__(self, allow: bool = True) -> None:
+        self.allow = allow
+        self.calls: list[tuple[str, int, int]] = []
+
+    def try_acquire(self, key: str, max_count: int, window_seconds: int) -> bool:
+        self.calls.append((key, max_count, window_seconds))
+        return self.allow
+
+
+def _rate_guard(allow=True, route=None):
+    from atlas_richie.web_protection import (
+        CompositeKeyResolver,
+        HeaderClientKeyResolver,
+        IpClientKeyResolver,
+        RateLimitGuard,
+        RateLimitProperties,
+        RateLimitRoute,
+    )
+
+    limiter = _AllowLimiter(allow)
+    guard = RateLimitGuard(
+        limiter,
+        RateLimitProperties(routes=(route or RateLimitRoute("/api/orders", permits_per_second=2),)),
+        CompositeKeyResolver(HeaderClientKeyResolver(), IpClientKeyResolver()),
+    )
+    return guard, limiter
+
+
+from conftest import REDIS_URL  # noqa: E402
+
+
+def _rl_headers(**overrides):
+    base = {"x-client-key": "partner-1", "x-forwarded-from-gateway": "edge-1"}
+    base.update(overrides)
+    return base
+
+
+class TestRateLimitMiddleware:
+    def test_allowed_request_passes_through(self) -> None:
+        app = _App()
+        guard, limiter = _rate_guard()
+        middleware = ProtectionASGIMiddleware(app, rate_limit_guard=guard)
+        _call(middleware, _scope("/api/orders", "POST", _rl_headers()))
+        assert app.calls == 1
+        assert limiter.calls == [("richie:web:rate-limit:partner-1:/api/orders", 2, 1)]
+
+    def test_rate_limited_returns_429_with_code_message_and_headers(self) -> None:
+        from atlas_richie.web_protection import RateLimitRoute
+
+        app = _App()
+        route = RateLimitRoute(
+            "/api/orders", deny_code="SLOW_DOWN",
+            deny_message="慢一点 (key={key})", deny_headers={"Retry-After": "30"},
+        )
+        guard, _ = _rate_guard(allow=False, route=route)
+        middleware = ProtectionASGIMiddleware(app, rate_limit_guard=guard)
+        sent = _call(middleware, _scope("/api/orders", "POST", _rl_headers()))
+        assert app.calls == 0
+        assert _status(sent) == 429
+        payload = json.loads(_body(sent))
+        assert payload == {"error": "SLOW_DOWN", "message": "慢一点 (key=partner-1)"}
+        header_names = {k.decode() for m in sent if m["type"] == "http.response.start"
+                        for k, _ in m["headers"]}
+        assert "retry-after" in {n.lower() for n in header_names}
+
+    def test_gateway_identity_missing_returns_401(self) -> None:
+        app = _App()
+        guard, _ = _rate_guard()
+        middleware = ProtectionASGIMiddleware(app, rate_limit_guard=guard)
+        sent = _call(middleware, _scope("/api/orders", "POST", {"x-client-key": "k"}))
+        assert _status(sent) == 401
+        assert app.calls == 0
+
+    def test_unmatched_route_is_passthrough(self) -> None:
+        app = _App()
+        guard, limiter = _rate_guard()
+        middleware = ProtectionASGIMiddleware(app, rate_limit_guard=guard)
+        _call(middleware, _scope("/health", "GET", _rl_headers()))
+        assert app.calls == 1
+        assert limiter.calls == []
+
+    def test_rate_limit_runs_before_signature_verification(self) -> None:
+        app = _App()
+        guard, _ = _rate_guard(allow=False)
+        from atlas_richie.web_protection import ApiSignatureVerifier, NonceCache
+
+        class _CountingKeys:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def secret_for(self, key):
+                self.calls += 1
+                return SECRET
+
+        keys = _CountingKeys()
+        signature = ApiSignatureVerifier(keys, NonceCache(300), 60, clock=lambda: NOW_MS / 1000)
+        middleware = ProtectionASGIMiddleware(
+            app, rate_limit_guard=guard, signature_verifier=signature
+        )
+        sent = _call(middleware, _scope("/api/orders", "POST", _rl_headers()))
+        assert _status(sent) == 429, "限流应先于签名"
+        assert keys.calls == 0, "被限流的请求不应再触发签名验证"
+
+    def test_ip_blacklist_still_wins_over_rate_limit(self) -> None:
+        app = _App()
+        guard, _ = _rate_guard(allow=True)
+        middleware = ProtectionASGIMiddleware(
+            app,
+            rate_limit_guard=guard,
+            ip_blacklist=(IpBlacklistEntry("203.0.113.0/24"),),
+        )
+        sent = _call(
+            middleware,
+            _scope("/api/orders", "GET", _rl_headers(), client=("203.0.113.9", 1)),
+        )
+        assert _status(sent) == 403
+        assert app.calls == 0
+
+    def test_no_guard_is_passthrough(self) -> None:
+        app = _App()
+        _call(ProtectionASGIMiddleware(app), _scope("/api/orders", "POST", _rl_headers()))
+        assert app.calls == 1
+
+    def test_ip_fallback_when_no_client_key_header(self) -> None:
+        app = _App()
+        guard, limiter = _rate_guard()
+        middleware = ProtectionASGIMiddleware(app, rate_limit_guard=guard)
+        _call(
+            middleware,
+            _scope("/api/orders", "GET", {"x-forwarded-from-gateway": "e"}, client=("198.51.100.7", 5)),
+        )
+        assert app.calls == 1
+        assert limiter.calls[0][0] == "richie:web:rate-limit:198.51.100.7:/api/orders"
+
+
+@pytest.mark.integration
+class TestRateLimitAgainstRedis:
+    def _guard(self, registrar, permits):
+        from atlas_richie.web_protection import (
+            CompositeKeyResolver,
+            HeaderClientKeyResolver,
+            IpClientKeyResolver,
+            RateLimitGuard,
+            RateLimitProperties,
+            RateLimitRoute,
+        )
+
+        return RateLimitGuard(
+            registrar.limiter_ops(),
+            RateLimitProperties(
+                key_prefix=f"rl:{uuid.uuid4().hex[:8]}",
+                routes=(RateLimitRoute("/api/orders", permits_per_second=permits),),
+            ),
+            CompositeKeyResolver(HeaderClientKeyResolver(), IpClientKeyResolver()),
+        )
+
+    def test_permits_exhaust_then_429(self, requires_redis) -> None:
+        import redis as redis_lib
+        from atlas_richie.cache_redis import RedisProviderRegistrar
+
+        url = REDIS_URL
+        client = redis_lib.Redis.from_url(url, decode_responses=True)
+        try:
+            client.ping()
+        except redis_lib.exceptions.RedisError:
+            pytest.skip(f"Redis not reachable at {url!r}")
+        registrar = RedisProviderRegistrar(client, namespace=f"rl-test:{uuid.uuid4().hex[:8]}")
+        app = _App()
+        try:
+            middleware = ProtectionASGIMiddleware(
+                app, rate_limit_guard=self._guard(registrar, permits=3)
+            )
+            scope = _scope("/api/orders", "POST", _rl_headers())
+            statuses = [_status(_call(middleware, scope)) for _ in range(5)]
+            assert statuses[:3] == [200, 200, 200], "前 3 次应在配额内"
+            assert statuses[3:] == [429, 429], "超出配额必须被限流"
+            assert app.calls == 3
+        finally:
+            registrar.close()
+            client.close()
+
+    def test_window_reset_restores_permits(self, requires_redis) -> None:
+        import time as _t
+        import redis as redis_lib
+        from atlas_richie.cache_redis import RedisProviderRegistrar
+
+        client = redis_lib.Redis.from_url(REDIS_URL, decode_responses=True)
+        registrar = RedisProviderRegistrar(client, namespace=f"rl-test:{uuid.uuid4().hex[:8]}")
+        app = _App()
+        try:
+            middleware = ProtectionASGIMiddleware(
+                app, rate_limit_guard=self._guard(registrar, permits=1)
+            )
+            scope = _scope("/api/orders", "POST", _rl_headers())
+            assert _status(_call(middleware, scope)) == 200
+            assert _status(_call(middleware, scope)) == 429
+            _t.sleep(2.0)  # 窗口 1 秒，越过整个窗口
+            assert _status(_call(middleware, scope)) == 200, "窗口滚动后配额应恢复"
+        finally:
+            registrar.close()
+            client.close()

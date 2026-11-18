@@ -40,7 +40,9 @@ Cheap to expensive, so a rejected request costs as little as possible:
 2. **Bot User-Agent** → 403 `bot_detected`
 3. **Request size** → the guard's own status (413 body / 431 headers)
 4. **Login lockout** → 429 `account_locked`
-5. **HMAC signature** → 401 with the verifier's reason (`missing_header`,
+5. **Rate limit** → the guard's own status (default 429 `RATE_LIMITED`,
+   or 401 `gateway_identity_missing` / `client_unidentified`)
+6. **HMAC signature** → 401 with the verifier's reason (`missing_header`,
    `bad_timestamp`, `timestamp_skew`, `nonce_replay`, `no_secret`,
    `signature_mismatch`)
 
@@ -60,6 +62,36 @@ to key on a username or tenant instead.
 `scope["client"][0]` is used by default. Set `trust_forwarded=True` to take the
 first hop of `X-Forwarded-For` instead — only do this behind a proxy you control,
 since the header is client-supplied otherwise.
+
+## Rate limiting (distributed)
+
+Pass a `RateLimitGuard` (from `atlas_richie.web_protection`) wired to any
+`LimiterOps` implementation — `cache-redis`'s `RedisProviderRegistrar.limiter_ops()`
+is a fixed-window Redis counter. Checks run after IP/bot/lockout and before
+signature verification, mirroring Java's interceptor order.
+
+```python
+from atlas_richie.cache_redis import RedisProviderRegistrar
+from atlas_richie.web_protection import (
+    CompositeKeyResolver, HeaderClientKeyResolver, IpClientKeyResolver,
+    RateLimitGuard, RateLimitProperties, RateLimitRoute,
+)
+from atlas_richie.web_protection_adapter_asgi import ProtectionASGIMiddleware
+
+registrar = RedisProviderRegistrar(client)
+guard = RateLimitGuard(
+    registrar.limiter_ops(),
+    RateLimitProperties(routes=(RateLimitRoute("/api/**", permits_per_second=50),)),
+    CompositeKeyResolver(HeaderClientKeyResolver(), IpClientKeyResolver()),
+)
+middleware = ProtectionASGIMiddleware(app, rate_limit_guard=guard)
+```
+
+Routes match exactly first, then Ant-style patterns (`*` no slash, `**`
+any depth, `{var}` one segment). `X-Forwarded-From-Gateway` identity is
+required by default; the client key comes from `x-client-key` with IP
+fallback. Denials use the per-route status/code/message/headers with
+`{key}` replaced by the client key.
 
 ## Gateway bypass
 
