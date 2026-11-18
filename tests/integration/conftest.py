@@ -46,7 +46,7 @@ import redis as redis_lib
 import redis.exceptions as redis_exc
 
 # Default test Redis URL (matches components/cache/cache-redis/tests/conftest.py).
-DEFAULT_REDIS_URL = "redis://:Redis2025!Local@127.0.0.1:16379/0"
+DEFAULT_REDIS_URL = "redis://127.0.0.1:16379/0"
 REDIS_URL = os.environ.get("ATLAS_RICHIE_CACHE_REDIS_URL", DEFAULT_REDIS_URL)
 
 
