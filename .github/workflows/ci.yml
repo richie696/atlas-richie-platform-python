@@ -40,10 +40,12 @@ jobs:
       - run: uv run python -m pytest components/persistence -q
       - run: uv run python -m pytest components/document -q
       - run: uv run python -m pytest components/storage -q
+      - run: uv run python -m pytest components/vector -q
       # Per-package invocations: each package is its own pytest rootdir. Running
       # several in one invocation collides on the `tests.conftest` module name.
       # sentinel-source-file is omitted because it has no tests (pytest exits 5).
-      # Vault/OpenBao suites skip cleanly when no server is reachable.
+      # Vault/OpenBao suites skip cleanly when no server is reachable; the
+      # pgvector suite does the same when no PostgreSQL + pgvector is reachable.
       - run: |
           for d in \
             components/cache \

@@ -59,6 +59,8 @@ members = [
     "atlas-richie-storage-core",
     "atlas-richie-storage-s3",
     "atlas-richie-testing",
+    "atlas-richie-vector-core",
+    "atlas-richie-vector-pgvector",
     "atlas-richie-web-protection",
     "atlas-richie-web-protection-adapter-asgi",
 ]
@@ -789,6 +791,8 @@ dependencies = [
     { name = "atlas-richie-storage-core" },
     { name = "atlas-richie-storage-s3" },
     { name = "atlas-richie-testing" },
+    { name = "atlas-richie-vector-core" },
+    { name = "atlas-richie-vector-pgvector" },
     { name = "atlas-richie-web-protection" },
     { name = "atlas-richie-web-protection-adapter-asgi" },
 ]
@@ -845,6 +849,8 @@ requires-dist = [
     { name = "atlas-richie-storage-core", editable = "components/storage/storage-core" },
     { name = "atlas-richie-storage-s3", editable = "components/storage/storage-s3" },
     { name = "atlas-richie-testing", editable = "foundation/testing" },
+    { name = "atlas-richie-vector-core", editable = "components/vector/vector-core" },
+    { name = "atlas-richie-vector-pgvector", editable = "components/vector/vector-pgvector" },
     { name = "atlas-richie-web-protection", editable = "components/web/web-protection" },
     { name = "atlas-richie-web-protection-adapter-asgi", editable = "components/web/web-protection-adapter-asgi" },
 ]
@@ -1755,6 +1761,44 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-vector-core"
+version = "0.2.0"
+source = { editable = "components/vector/vector-core" }
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" }]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-vector-pgvector"
+version = "0.2.0"
+source = { editable = "components/vector/vector-pgvector" }
+dependencies = [
+    { name = "atlas-richie-vector-core" },
+    { name = "psycopg", extra = ["binary"] },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "atlas-richie-testing" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-testing", marker = "extra == 'test'", editable = "foundation/testing" },
+    { name = "atlas-richie-vector-core", editable = "components/vector/vector-core" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
 ]
 provides-extras = ["test"]

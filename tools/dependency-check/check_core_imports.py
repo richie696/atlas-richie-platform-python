@@ -16,6 +16,7 @@ FORBIDDEN_ROOTS = frozenset(
         "sqlalchemy",
         "httpx",
         "redis",
+        "psycopg",
         "opentelemetry",
         "jwt",
     }
@@ -40,6 +41,7 @@ def main() -> int:
         root / "foundation" / "httpx-env" / "src",
         root / "components" / "mcp" / "src",
         root / "components" / "oauth" / "src",
+        root / "components" / "vector" / "vector-core" / "src",
     ]
     violations: list[str] = []
     for source_root in source_roots:
