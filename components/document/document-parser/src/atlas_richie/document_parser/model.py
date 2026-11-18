@@ -7,6 +7,7 @@ with records; Python uses a small class hierarchy with frozen dataclasses.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -43,7 +44,28 @@ class FormatNotSupportedException(DocumentParseException):
 
 
 class ImageOnlyPdfException(DocumentParseException):
-    """A PDF carries no extractable text, only images (needs OCR)."""
+    """A PDF carries no extractable text, only images (needs OCR).
+
+    Raised only in strict mode; by default images are emitted as ImageStreaming
+    events so the caller can route them to OCR/VLM instead of failing.
+    """
+
+    def __init__(
+        self,
+        image_count: int,
+        text_chars: int,
+        page_count: int = -1,
+        name_hint: str = "",
+    ) -> None:
+        super().__init__(
+            f"image-only PDF: {image_count} images, {text_chars} text chars"
+            + (f", {page_count} pages" if page_count >= 0 else "")
+            + (f" ({name_hint})" if name_hint else "")
+        )
+        self.image_count = image_count
+        self.text_chars = text_chars
+        self.page_count = page_count
+        self.name_hint = name_hint
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,11 +143,14 @@ class Failed(ParseEvent):
 class ParserContext:
     max_segment_length: int | None = None
     emit_images: bool = False
+    timeout: timedelta | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.max_segment_length is not None and self.max_segment_length <= 0:
             raise ValueError("max_segment_length must be > 0")
+        if self.timeout is not None and self.timeout <= timedelta(0):
+            raise ValueError("timeout must be positive")
 
     @classmethod
     def defaults(cls) -> ParserContext:
