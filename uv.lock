@@ -15,6 +15,7 @@ members = [
     "atlas-richie-coordination-core",
     "atlas-richie-coordination-redis",
     "atlas-richie-desensitize-core",
+    "atlas-richie-document-parser",
     "atlas-richie-http",
     "atlas-richie-httpx-env",
     "atlas-richie-mcp",
@@ -566,6 +567,24 @@ requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=8
 provides-extras = ["test"]
 
 [[package]]
+name = "atlas-richie-document-parser"
+version = "0.2.0"
+source = { editable = "components/document/document-parser" }
+
+[package.optional-dependencies]
+test = [
+    { name = "atlas-richie-chunking-core" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-chunking-core", marker = "extra == 'test'", editable = "components/chunking/chunking-core" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+]
+provides-extras = ["test"]
+
+[[package]]
 name = "atlas-richie-http"
 version = "0.2.0"
 source = { editable = "components/http" }
@@ -725,6 +744,7 @@ dependencies = [
     { name = "atlas-richie-coordination-core" },
     { name = "atlas-richie-coordination-redis" },
     { name = "atlas-richie-desensitize-core" },
+    { name = "atlas-richie-document-parser" },
     { name = "atlas-richie-http" },
     { name = "atlas-richie-httpx-env" },
     { name = "atlas-richie-mcp" },
@@ -778,6 +798,7 @@ requires-dist = [
     { name = "atlas-richie-coordination-core", editable = "components/coordination/coordination-core" },
     { name = "atlas-richie-coordination-redis", editable = "components/coordination/coordination-redis" },
     { name = "atlas-richie-desensitize-core", editable = "components/desensitize/desensitize-core" },
+    { name = "atlas-richie-document-parser", editable = "components/document/document-parser" },
     { name = "atlas-richie-http", editable = "components/http" },
     { name = "atlas-richie-httpx-env", editable = "foundation/httpx-env" },
     { name = "atlas-richie-mcp", editable = "components/mcp" },
