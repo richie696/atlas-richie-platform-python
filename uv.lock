@@ -49,6 +49,7 @@ members = [
     "atlas-richie-sentinel-source-file",
     "atlas-richie-sentinel-source-nacos",
     "atlas-richie-statemachine-core",
+    "atlas-richie-statemachine-redis",
     "atlas-richie-testing",
     "atlas-richie-web-protection",
     "atlas-richie-web-protection-adapter-asgi",
@@ -631,6 +632,7 @@ dependencies = [
     { name = "atlas-richie-sentinel-source-file" },
     { name = "atlas-richie-sentinel-source-nacos" },
     { name = "atlas-richie-statemachine-core" },
+    { name = "atlas-richie-statemachine-redis" },
     { name = "atlas-richie-testing" },
     { name = "atlas-richie-web-protection" },
     { name = "atlas-richie-web-protection-adapter-asgi" },
@@ -678,6 +680,7 @@ requires-dist = [
     { name = "atlas-richie-sentinel-source-file", editable = "components/sentinel/sentinel-source-file" },
     { name = "atlas-richie-sentinel-source-nacos", editable = "components/sentinel/sentinel-source-nacos" },
     { name = "atlas-richie-statemachine-core", editable = "components/statemachine/statemachine-core" },
+    { name = "atlas-richie-statemachine-redis", editable = "components/statemachine/statemachine-redis" },
     { name = "atlas-richie-testing", editable = "foundation/testing" },
     { name = "atlas-richie-web-protection", editable = "components/web/web-protection" },
     { name = "atlas-richie-web-protection-adapter-asgi", editable = "components/web/web-protection-adapter-asgi" },
@@ -1493,6 +1496,28 @@ test = [
 
 [package.metadata]
 requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" }]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-statemachine-redis"
+version = "0.2.0"
+source = { editable = "components/statemachine/statemachine-redis" }
+dependencies = [
+    { name = "atlas-richie-statemachine-core" },
+    { name = "redis" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-statemachine-core", editable = "components/statemachine/statemachine-core" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+    { name = "redis", specifier = ">=5.0,<9.0" },
+]
 provides-extras = ["test"]
 
 [[package]]

@@ -54,6 +54,7 @@ dependencies = [
   "atlas-richie-sentinel-source-file>=0.2.0,<0.3.0",
   "atlas-richie-sentinel-source-nacos>=0.2.0,<0.3.0",
   "atlas-richie-statemachine-core>=0.2.0,<0.3.0",
+  "atlas-richie-statemachine-redis>=0.2.0,<0.3.0",
   "atlas-richie-testing>=0.2.0,<0.3.0",
   "atlas-richie-web-protection>=0.2.0,<0.3.0",
   "atlas-richie-web-protection-adapter-asgi>=0.2.0,<0.3.0",
