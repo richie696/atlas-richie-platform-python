@@ -16,6 +16,7 @@ members = [
     "atlas-richie-coordination-core",
     "atlas-richie-coordination-redis",
     "atlas-richie-desensitize-core",
+    "atlas-richie-document-fetcher",
     "atlas-richie-document-parser",
     "atlas-richie-document-parser-html",
     "atlas-richie-document-parser-office",
@@ -599,6 +600,30 @@ requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=8
 provides-extras = ["test"]
 
 [[package]]
+name = "atlas-richie-document-fetcher"
+version = "0.2.0"
+source = { editable = "components/document/document-fetcher" }
+dependencies = [
+    { name = "atlas-richie-document-parser" },
+    { name = "atlas-richie-httpx-env" },
+    { name = "httpx" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-document-parser", editable = "components/document/document-parser" },
+    { name = "atlas-richie-httpx-env", editable = "foundation/httpx-env" },
+    { name = "httpx", specifier = ">=0.27,<1.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+]
+provides-extras = ["test"]
+
+[[package]]
 name = "atlas-richie-document-parser"
 version = "0.2.0"
 source = { editable = "components/document/document-parser" }
@@ -849,6 +874,7 @@ dependencies = [
     { name = "atlas-richie-coordination-core" },
     { name = "atlas-richie-coordination-redis" },
     { name = "atlas-richie-desensitize-core" },
+    { name = "atlas-richie-document-fetcher" },
     { name = "atlas-richie-document-parser" },
     { name = "atlas-richie-document-parser-html" },
     { name = "atlas-richie-document-parser-office" },
@@ -913,6 +939,7 @@ requires-dist = [
     { name = "atlas-richie-coordination-core", editable = "components/coordination/coordination-core" },
     { name = "atlas-richie-coordination-redis", editable = "components/coordination/coordination-redis" },
     { name = "atlas-richie-desensitize-core", editable = "components/desensitize/desensitize-core" },
+    { name = "atlas-richie-document-fetcher", editable = "components/document/document-fetcher" },
     { name = "atlas-richie-document-parser", editable = "components/document/document-parser" },
     { name = "atlas-richie-document-parser-html", editable = "components/document/document-parser-html" },
     { name = "atlas-richie-document-parser-office", editable = "components/document/document-parser-office" },

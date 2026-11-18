@@ -26,6 +26,7 @@ members = [
   "components/document/document-parser-pdf",
   "components/document/document-parser-html",
   "components/document/document-parser-office",
+  "components/document/document-fetcher",
   "components/storage/storage-core",
   "components/storage/storage-s3",
   "components/storage/storage-local",
@@ -88,6 +89,7 @@ atlas-richie-document-parser = { workspace = true }
 atlas-richie-document-parser-pdf = { workspace = true }
 atlas-richie-document-parser-html = { workspace = true }
 atlas-richie-document-parser-office = { workspace = true }
+atlas-richie-document-fetcher = { workspace = true }
 atlas-richie-storage-core = { workspace = true }
 atlas-richie-storage-s3 = { workspace = true }
 atlas-richie-storage-local = { workspace = true }
