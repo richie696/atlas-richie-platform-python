@@ -1,0 +1,36 @@
+[build-system]
+requires = [
+    "uv_build>=0.12,<0.13",
+]
+build-backend = "uv_build"
+
+[project]
+name = "atlas-richie-statemachine-sqlalchemy"
+version = "0.2.0"
+description = "Durable relational state storage for the statemachine engine (SQLAlchemy Core), with a replicating primary/replica wrapper for Redis-loss recovery."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "Atlas Richie" },
+]
+dependencies = [
+  "atlas-richie-statemachine-core>=0.2.0,<0.3.0",
+  "sqlalchemy>=2.0,<3.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0,<9.0", "aiosqlite>=0.20"]
+
+[project.license]
+text = "Apache-2.0"
+
+[tool.pytest.ini_options]
+markers = [
+    "unit: fast tests with no I/O, no external dependencies (default)",
+    "integration: multi-component interaction, may use real backends",
+    "e2e: end-to-end tests that may spin up servers, slower",
+]
+
+[tool.uv.build-backend]
+module-name = "atlas_richie.statemachine_sqlalchemy"
+module-root = "src"

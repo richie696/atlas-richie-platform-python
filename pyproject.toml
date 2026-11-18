@@ -18,6 +18,7 @@ members = [
   "components/web/web-protection-adapter-asgi",
   "components/statemachine/statemachine-core",
   "components/statemachine/statemachine-redis",
+  "components/statemachine/statemachine-sqlalchemy",
   "components/redis-streammq",
   "components/scheduling/scheduling-core",
   "components/coordination/coordination-core",
@@ -83,6 +84,7 @@ atlas-richie-web-protection = { workspace = true }
 atlas-richie-web-protection-adapter-asgi = { workspace = true }
 atlas-richie-statemachine-core = { workspace = true }
 atlas-richie-statemachine-redis = { workspace = true }
+atlas-richie-statemachine-sqlalchemy = { workspace = true }
 atlas-richie-redis-streammq = { workspace = true }
 atlas-richie-scheduling-core = { workspace = true }
 atlas-richie-coordination-core = { workspace = true }

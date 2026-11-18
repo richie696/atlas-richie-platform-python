@@ -63,6 +63,7 @@ members = [
     "atlas-richie-sentinel-source-nacos",
     "atlas-richie-statemachine-core",
     "atlas-richie-statemachine-redis",
+    "atlas-richie-statemachine-sqlalchemy",
     "atlas-richie-storage-core",
     "atlas-richie-storage-local",
     "atlas-richie-storage-s3",
@@ -966,6 +967,7 @@ dependencies = [
     { name = "atlas-richie-sentinel-source-nacos" },
     { name = "atlas-richie-statemachine-core" },
     { name = "atlas-richie-statemachine-redis" },
+    { name = "atlas-richie-statemachine-sqlalchemy" },
     { name = "atlas-richie-storage-core" },
     { name = "atlas-richie-storage-local" },
     { name = "atlas-richie-storage-s3" },
@@ -1033,6 +1035,7 @@ requires-dist = [
     { name = "atlas-richie-sentinel-source-nacos", editable = "components/sentinel/sentinel-source-nacos" },
     { name = "atlas-richie-statemachine-core", editable = "components/statemachine/statemachine-core" },
     { name = "atlas-richie-statemachine-redis", editable = "components/statemachine/statemachine-redis" },
+    { name = "atlas-richie-statemachine-sqlalchemy", editable = "components/statemachine/statemachine-sqlalchemy" },
     { name = "atlas-richie-storage-core", editable = "components/storage/storage-core" },
     { name = "atlas-richie-storage-local", editable = "components/storage/storage-local" },
     { name = "atlas-richie-storage-s3", editable = "components/storage/storage-s3" },
@@ -1899,6 +1902,30 @@ requires-dist = [
     { name = "atlas-richie-testing", marker = "extra == 'test'", editable = "foundation/testing" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
     { name = "redis", specifier = ">=5.0,<9.0" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-statemachine-sqlalchemy"
+version = "0.2.0"
+source = { editable = "components/statemachine/statemachine-sqlalchemy" }
+dependencies = [
+    { name = "atlas-richie-statemachine-core" },
+    { name = "sqlalchemy" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "aiosqlite" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiosqlite", marker = "extra == 'test'", specifier = ">=0.20" },
+    { name = "atlas-richie-statemachine-core", editable = "components/statemachine/statemachine-core" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+    { name = "sqlalchemy", specifier = ">=2.0,<3.0" },
 ]
 provides-extras = ["test"]
 
