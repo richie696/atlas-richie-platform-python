@@ -58,6 +58,7 @@ members = [
     "atlas-richie-statemachine-core",
     "atlas-richie-statemachine-redis",
     "atlas-richie-storage-core",
+    "atlas-richie-storage-local",
     "atlas-richie-storage-s3",
     "atlas-richie-testing",
     "atlas-richie-vector-chunk-adapter",
@@ -814,6 +815,7 @@ dependencies = [
     { name = "atlas-richie-statemachine-core" },
     { name = "atlas-richie-statemachine-redis" },
     { name = "atlas-richie-storage-core" },
+    { name = "atlas-richie-storage-local" },
     { name = "atlas-richie-storage-s3" },
     { name = "atlas-richie-testing" },
     { name = "atlas-richie-vector-chunk-adapter" },
@@ -874,6 +876,7 @@ requires-dist = [
     { name = "atlas-richie-statemachine-core", editable = "components/statemachine/statemachine-core" },
     { name = "atlas-richie-statemachine-redis", editable = "components/statemachine/statemachine-redis" },
     { name = "atlas-richie-storage-core", editable = "components/storage/storage-core" },
+    { name = "atlas-richie-storage-local", editable = "components/storage/storage-local" },
     { name = "atlas-richie-storage-s3", editable = "components/storage/storage-s3" },
     { name = "atlas-richie-testing", editable = "foundation/testing" },
     { name = "atlas-richie-vector-chunk-adapter", editable = "components/vector/vector-chunk-adapter" },
@@ -1753,6 +1756,26 @@ test = [
 
 [package.metadata]
 requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" }]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-storage-local"
+version = "0.2.0"
+source = { editable = "components/storage/storage-local" }
+dependencies = [
+    { name = "atlas-richie-storage-core" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-storage-core", editable = "components/storage/storage-core" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+]
 provides-extras = ["test"]
 
 [[package]]

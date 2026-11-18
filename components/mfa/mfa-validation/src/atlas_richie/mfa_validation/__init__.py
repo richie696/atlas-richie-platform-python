@@ -5,6 +5,11 @@ Zero runtime dependencies. Storage for replay markers is an injected SPI.
 
 import importlib.metadata
 
+from .enrollment import (
+    SECRET_KEY_LENGTH,
+    generate_qr_code_url,
+    generate_secret_key,
+)
 from .engine import TotpProperties, TotpValidationEngine, base32_decode, normalize_algorithm
 from .replay import InMemoryReplayGuard, ReplayGuard, ReplayPreventionProperties
 from .service import (
@@ -25,6 +30,9 @@ from .service import (
 __version__ = importlib.metadata.version("atlas-richie-mfa-validation")
 
 __all__ = [
+    "SECRET_KEY_LENGTH",
+    "generate_secret_key",
+    "generate_qr_code_url",
     "ENABLED",
     "DefaultMfaValidationService",
     "InMemoryMfaStateStore",

@@ -64,6 +64,7 @@ dependencies = [
   "atlas-richie-statemachine-redis>=0.2.0,<0.3.0",
   "atlas-richie-storage-core>=0.2.0,<0.3.0",
   "atlas-richie-storage-s3>=0.2.0,<0.3.0",
+  "atlas-richie-storage-local>=0.2.0,<0.3.0",
   "atlas-richie-vector-core>=0.2.0,<0.3.0",
   "atlas-richie-vector-pgvector>=0.2.0,<0.3.0",
   "atlas-richie-vector-chunk-adapter>=0.2.0,<0.3.0",
