@@ -26,8 +26,12 @@
   分散（`expire_on_commit=False` 这类语义散落 13 处）。
   保留的可选动作：若 console 出现"写业务表 + 同事务写事件"的场景，可**复制 outbox 的
   写法**（复制模式不产生依赖）。
-- [ ] **`sentinel-source-redis` 139M 未跟踪目录处置**（S）
-  空壳组件，权限系统曾拦截删除。需你明确授权删除或保留。
+- [x] **`sentinel-source-redis` 139M 未跟踪目录处置**（S）—— 用户裁决：**删除**（2026-11-18）。
+  已删。核查依据：该包在 M6.2 即被取消（`components/sentinel/docs/guide/使用手册.md`
+  记「sentinel-source-redis 已删除 (M6.2 取消, 不在 1.0)」），本仓 pyproject /
+  versions.toml / uv.lock 均未登记，全仓无代码引用；目录内只剩一个 139M 的 `.venv`
+  与一个孤立的 `.pyc`，无任何源码。删除后 `uv sync --frozen` 与三项门禁均正常，
+  sentinel 各包测试无连带影响。
 - [ ] **Java `LocalComposeDefaults.MYSQL_PASSWORD` 硬编码**（S，安全）
   `wjy123456` 明文在 Java main 代码。同类凭证问题，不在 Python 仓范围，需你定是否处理。
 
