@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextvars
 import threading
+from contextlib import contextmanager
 from typing import Callable, Protocol, TypeVar, runtime_checkable
 
 from .errors import TenantError, TenantErrorCode
@@ -100,6 +101,20 @@ class TenantContext:
     @classmethod
     def clear(cls) -> None:
         cls._holder.clear()
+
+    @classmethod
+    @contextmanager
+    def bind(cls, principal: TenantPrincipal):
+        """Bind for the duration of a block — usable around `await`.
+
+        contextvars set/reset in the same task is safe across awaits, so an
+        ASGI middleware can `with TenantContext.bind(p): await app(...)`。
+        """
+        token = _CURRENT.set(principal)
+        try:
+            yield principal
+        finally:
+            _CURRENT.reset(token)
 
 
 def propagate(task: Callable[[], T]) -> Callable[[], T]:
