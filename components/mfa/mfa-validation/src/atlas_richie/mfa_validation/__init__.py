@@ -7,15 +7,41 @@ import importlib.metadata
 
 from .engine import TotpProperties, TotpValidationEngine, base32_decode, normalize_algorithm
 from .replay import InMemoryReplayGuard, ReplayGuard, ReplayPreventionProperties
+from .service import (
+    ENABLED,
+    DefaultMfaValidationService,
+    InMemoryMfaStateStore,
+    InMemoryTrustedDeviceStore,
+    MfaSecurityProperties,
+    MfaStateStore,
+    MfaUserInfo,
+    MfaValidationProperties,
+    MfaValidationResult,
+    SecretRetriever,
+    TrustedDeviceProperties,
+    TrustedDeviceStore,
+)
 
 __version__ = importlib.metadata.version("atlas-richie-mfa-validation")
 
 __all__ = [
+    "ENABLED",
+    "DefaultMfaValidationService",
+    "InMemoryMfaStateStore",
     "InMemoryReplayGuard",
+    "InMemoryTrustedDeviceStore",
+    "MfaSecurityProperties",
+    "MfaStateStore",
+    "MfaUserInfo",
+    "MfaValidationProperties",
+    "MfaValidationResult",
     "ReplayGuard",
     "ReplayPreventionProperties",
+    "SecretRetriever",
     "TotpProperties",
     "TotpValidationEngine",
+    "TrustedDeviceProperties",
+    "TrustedDeviceStore",
     "__version__",
     "base32_decode",
     "normalize_algorithm",

@@ -54,15 +54,58 @@ its own markers and a code could be replayed against a different instance. For
 multi-instance deployments inject a shared-store implementation (for example a
 cache-redis backed adapter); this package deliberately does not depend on Redis.
 
+## Validation service
+
+`DefaultMfaValidationService` orchestrates the whole flow, ported from the Java
+`MfaValidationServiceImpl`. Error codes and their evaluation order match Java:
+`INVALID_PARAMS` / `INVALID_USER_ID` → `MFA_NOT_BOUND` → `MFA_NOT_ENABLED` →
+`ACCOUNT_LOCKED` → `MFA_CODE_USED` → `MFA_CODE_INVALID` → `MFA_VERIFY_ERROR`.
+
+```python
+from atlas_richie.mfa_validation import (
+    DefaultMfaValidationService, InMemoryMfaStateStore, MfaUserInfo, ENABLED,
+)
+
+store = InMemoryMfaStateStore()
+store.put_user_info("u1", None, MfaUserInfo(status=ENABLED, secret_reference="mfa:u1"))
+
+class Secrets:                      # wire to any of the platform's secret providers
+    def retrieve(self, reference): return load_base32_secret(reference)
+
+service = DefaultMfaValidationService(store, Secrets())
+service.check_mfa_status("u1")               # is MFA required?
+service.verify_mfa_code("u1", None, code)    # full verification
+service.check_trusted_device("u1", None, "device-1")
+```
+
+Three SPIs keep the core dependency-free: `MfaStateStore` (user info, failure
+counting, lock marker), `SecretRetriever` (KMS/Vault/DB — caller's choice) and
+`TrustedDeviceStore`. An optional `audit` callback replaces Java's Spring audit
+events; a failing sink is logged and never breaks validation. Thread-safe
+in-memory reference implementations are provided for all three.
+
+Per-user `algorithm` / `period` / `digits` from the user record take precedence over
+configuration, so verification uses the same parameters the provisioning QR code
+was generated with.
+
+### Deliberate improvement over Java
+
+Java writes the lockout to a standalone `mfa:lock:{tenant}:{user}` cache key but
+only reads `userInfo.lockedUntil` when checking, so a freshly triggered lock does
+not take effect until the management module reconciles it into the database. This
+port checks **both** the user record and the lock marker, so lockout is immediate.
+
 ## Scope
 
 Ported: the TOTP engine, its properties, algorithm normalisation, lenient Base32
-decoding, and the replay-prevention SPI with an in-memory implementation.
+decoding, the replay-prevention SPI with an in-memory implementation, and the
+validation service with its result contract and state/secret/trusted-device SPIs.
 
-Not ported: `MfaValidationService` (580 lines of DB/KMS/Redis orchestration),
-`MfaValidationResult`, and the Spring auto-configuration. The Java replay service's
-Servlet request-context coupling is replaced by explicit `user_id` / `tenant_id`
-arguments.
+Not ported: the Spring auto-configuration, MyBatis persistence, and the separate
+`mfa-core` (key management, HSM/Vault engines) and `mfa-management` (bind/unbind,
+backup codes, QR provisioning, key rotation, trusted-device administration)
+modules. The Java replay service's Servlet request-context coupling is replaced by
+explicit `user_id` / `tenant_id` arguments.
 
 ## Verification
 
