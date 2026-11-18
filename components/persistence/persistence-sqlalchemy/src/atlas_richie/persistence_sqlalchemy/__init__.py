@@ -205,4 +205,13 @@ def _advisory_lock(url: str, key: int, timeout_seconds: float):
         engine.dispose()
 
 
-__all__ = ["AlembicMigrationRunner", "SqlAlchemyPersistence"]
+from .outbox import OutboxEvent, OutboxRelay, OutboxStore, RelayReport
+
+__all__ = [
+    "AlembicMigrationRunner",
+    "SqlAlchemyPersistence",
+    "OutboxEvent",
+    "OutboxStore",
+    "OutboxRelay",
+    "RelayReport",
+]
