@@ -34,7 +34,10 @@ Design choices:
   per-entry TTL overrides; we keep a single `LRUCache` per region and
   carry expiry metadata in `_expiries` (a parallel dict) for the four
   non-ETERNAL policies. Reads check expiry inline; expired entries
-  are removed lazily on access. Eviction at max-size is automatic.
+  are removed lazily on access, and eagerly by `size()`/`keys()` so
+  those report live counts. Capacity eviction goes through
+  `_PruningLRUCache.popitem`, which drops the evicted key's metadata —
+  without that hook the parallel dicts would grow without bound.
 - **Defensive copy on every put/get**: prevents the caller from
   mutating the stored value and vice versa. Skip-copy for trivially
   immutable values (None, bool, int, float, str, bytes, complex,
@@ -60,6 +63,27 @@ from ..config.local_cache_properties import LocalCacheProperties
 from ..enums.expiry_policy import ExpiryPolicy
 from ..util.defensive_copy_utils import DefensiveCopyUtils
 from .expiry_wrapper import ExpiryWrapper  # noqa: F401  (kept for downstream re-export)
+
+
+class _PruningLRUCache(cachetools.LRUCache):
+    """LRUCache that reports evictions so parallel metadata stays bounded.
+
+    `cachetools.LRUCache` iterates in *insertion* order, not LRU order, and
+    exposes no eviction callback. Both matter here: expiry metadata lives in
+    parallel dicts, so a silent capacity eviction would leak them forever.
+    `popitem()` does evict the true least-recently-used entry, and
+    `__setitem__` routes capacity eviction through it, so overriding it is
+    enough to catch every eviction path.
+    """
+
+    def __init__(self, maxsize: int, on_evict: Any) -> None:
+        super().__init__(maxsize=maxsize)
+        self._on_evict = on_evict
+
+    def popitem(self) -> tuple:
+        key, value = super().popitem()
+        self._on_evict(key)
+        return key, value
 
 
 class _CacheBucket:
@@ -90,7 +114,7 @@ class _CacheBucket:
         self._default_ttl_ms = int(default_ttl_ms)
         self._max_size = int(max_size)
         self._lock = threading.RLock()
-        self._entries: cachetools.LRUCache = cachetools.LRUCache(maxsize=max_size)
+        self._entries: cachetools.LRUCache = _PruningLRUCache(max_size, self._forget)
         # None means ETERNAL (no expiry tracking); {} means tracked.
         self._expiries: Optional[Dict[str, int]] = (
             None if policy == ExpiryPolicy.ETERNAL else {}
@@ -108,6 +132,23 @@ class _CacheBucket:
     def _now_millis() -> int:
         return int(time.time() * 1000)
 
+    def _forget(self, key: str) -> None:
+        """Drop expiry metadata for a key that is no longer stored."""
+        if self._expiries is not None:
+            self._expiries.pop(key, None)
+        if self._ttls is not None:
+            self._ttls.pop(key, None)
+
+    def _reap_expired(self) -> None:
+        """Eagerly drop expired entries so size()/keys() report live counts."""
+        if self._expiries is None:
+            return
+        now = self._now_millis()
+        for key, expire_at in list(self._expiries.items()):
+            if expire_at > 0 and now >= expire_at:
+                self._entries.pop(key, None)
+                self._forget(key)
+
     def _is_expired(self, key: str) -> bool:
         if self._expiries is None:
             return False
@@ -115,9 +156,7 @@ class _CacheBucket:
         if expire_at > 0 and self._now_millis() >= expire_at:
             # Lazy expiry
             self._entries.pop(key, None)
-            self._expiries.pop(key, None)
-            if self._ttls is not None:
-                self._ttls.pop(key, None)
+            self._forget(key)
             return True
         return False
 
@@ -182,10 +221,7 @@ class _CacheBucket:
         with self._lock:
             existed = key in self._entries
             self._entries.pop(key, None)
-            if self._expiries is not None:
-                self._expiries.pop(key, None)
-            if self._ttls is not None:
-                self._ttls.pop(key, None)
+            self._forget(key)
             return existed
 
     def clear(self) -> int:
@@ -229,10 +265,7 @@ class _CacheBucket:
             if key not in self._entries or self._is_expired(key):
                 return None
             value = self._entries.pop(key)
-            if self._expiries is not None:
-                self._expiries.pop(key, None)
-            if self._ttls is not None:
-                self._ttls.pop(key, None)
+            self._forget(key)
             return DefensiveCopyUtils.copy(value)
 
     def get_and_put(
@@ -274,11 +307,18 @@ class _CacheBucket:
         if count <= 0:
             return {}
         with self._lock:
-            # cachetools.LRUCache iterates most-recently-used first;
-            # the first `count` keys are the OLDEST — exactly what
-            # "pop by count" should evict.
-            keys = list(self._entries.keys())[:count]
-            return {k: self.get_and_remove(k) for k in keys}
+            # popitem() evicts the true least-recently-used entry; iterating
+            # keys() would not, because LRUCache iterates in insertion order.
+            # Snapshot deadlines first: the eviction hook prunes metadata.
+            deadlines = dict(self._expiries) if self._expiries is not None else {}
+            now = self._now_millis()
+            popped: Dict[str, Any] = {}
+            for _ in range(min(count, len(self._entries))):
+                key, value = self._entries.popitem()
+                expire_at = deadlines.get(key, 0)
+                expired = expire_at > 0 and now >= expire_at
+                popped[key] = None if expired else DefensiveCopyUtils.copy(value)
+            return popped
 
     def expiry(self, key: str, ttl_ms: int) -> None:
         """Update the TTL of an existing entry.
@@ -305,10 +345,12 @@ class _CacheBucket:
 
     def keys(self) -> List[str]:
         with self._lock:
+            self._reap_expired()
             return list(self._entries.keys())
 
     def size(self) -> int:
         with self._lock:
+            self._reap_expired()
             return len(self._entries)
 
 

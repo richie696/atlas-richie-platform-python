@@ -169,7 +169,11 @@ class ApiSignatureVerifier:
         if not secret:
             return SignatureDecision("no_secret", client_key)
         expected = hmac_sha256_hex(secret, canonicalize(method, path, ts, nonce))
-        if not hmac.compare_digest(expected, signature):
+        # compare_digest rejects non-ASCII str; ASGI headers are latin-1
+        # decoded, so a hostile signature must yield a mismatch, not a 500.
+        if not hmac.compare_digest(
+            expected.encode("ascii"), signature.encode("utf-8", "surrogateescape")
+        ):
             return SignatureDecision("signature_mismatch", client_key)
         return None
 

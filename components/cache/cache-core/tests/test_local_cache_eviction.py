@@ -4,13 +4,15 @@ Pins the behaviour that the smoke suite does not reach: LRU eviction at
 `max_size`, the ETERNAL vs non-ETERNAL split, per-key TTL overrides, and the
 Set/ZSet capacity thresholds.
 
-NOTE on expiry policies: `ExpiryPolicy` declares ACCESSED / CREATED / MODIFIED /
-TOUCHED, but the bucket only distinguishes ETERNAL (no expiry tracking) from
-everything else (expiry measured from write). `get()` does not refresh the TTL,
-so ACCESSED — which is also the *default* policy — currently behaves as CREATED.
-`test_accessed_policy_does_not_extend_ttl_on_read` pins that actual behaviour so
-the gap is visible rather than assumed; changing it is a separate decision
-because `L2DistributedCache` configures its L1 region as ACCESSED.
+Expiry follows JSR-107: CREATED sets the deadline on create only, ACCESSED
+also resets it on read, MODIFIED also resets it on write, TOUCHED resets on
+both, ETERNAL never expires. `contains_key` is not an access event.
+
+Eviction has two invariants that are easy to break and invisible from the
+public API alone: capacity eviction must also drop the evicted key's expiry
+metadata (otherwise the parallel dicts grow without bound), and `pop_by_count`
+must evict in LRU order — `cachetools.LRUCache` iterates in *insertion* order,
+so iterating keys() would evict the most-recently-used entry instead.
 """
 
 from __future__ import annotations
@@ -87,6 +89,110 @@ class TestLruEviction:
         manager.put(REGION, "a", b"2")
         assert manager.size(REGION) == 1
         assert manager.get(REGION, "a") == b"2"
+
+    def test_capacity_eviction_prunes_expiry_metadata(self) -> None:
+        """Regression: metadata dicts leaked on every capacity eviction."""
+        manager = _manager(ExpiryPolicy.CREATED, max_size=2, ttl_millis=300_000)
+        for index in range(50):
+            manager.put(REGION, f"k{index}", index)
+        bucket = manager._bucket(REGION)
+        assert len(bucket._entries) == 2
+        assert len(bucket._expiries) == 2, "expiry metadata must not outlive entries"
+        assert len(bucket._ttls) == 2, "per-key TTL metadata must not outlive entries"
+
+    def test_metadata_stays_bounded_under_churn(self) -> None:
+        manager = _manager(ExpiryPolicy.TOUCHED, max_size=4, ttl_millis=300_000)
+        for index in range(500):
+            manager.put(REGION, f"k{index}", index)
+            manager.get(REGION, f"k{index}")
+            manager.remove(REGION, f"k{index - 1}")
+        bucket = manager._bucket(REGION)
+        assert len(bucket._expiries) <= len(bucket._entries)
+        assert len(bucket._ttls) <= len(bucket._entries)
+
+
+class TestPopByCount:
+    def test_evicts_least_recently_used_not_insertion_order(self) -> None:
+        """Regression: iterating keys() evicted the just-read (MRU) entry."""
+        manager = _manager(ExpiryPolicy.ETERNAL, max_size=10)
+        for key in ("a", "b", "c"):
+            manager.put(REGION, key, key)
+        assert manager.get(REGION, "a") == "a"  # 'a' becomes most recent
+
+        popped = manager.pop_by_count(REGION, 1)
+
+        assert list(popped) == ["b"], "must evict the LRU entry, not the MRU one"
+        assert popped["b"] == "b"
+        assert manager.get(REGION, "a") == "a"
+        assert manager.get(REGION, "c") == "c"
+
+    def test_evicts_in_lru_order_across_multiple_pops(self) -> None:
+        manager = _manager(ExpiryPolicy.ETERNAL, max_size=10)
+        for key in ("a", "b", "c", "d"):
+            manager.put(REGION, key, key)
+        manager.get(REGION, "a")
+        manager.get(REGION, "b")
+
+        assert list(manager.pop_by_count(REGION, 3)) == ["c", "d", "a"]
+        assert manager.size(REGION) == 1
+
+    def test_pop_prunes_metadata(self) -> None:
+        manager = _manager(ExpiryPolicy.CREATED, max_size=10, ttl_millis=300_000)
+        for key in ("a", "b", "c"):
+            manager.put(REGION, key, key)
+        manager.pop_by_count(REGION, 2)
+        bucket = manager._bucket(REGION)
+        assert len(bucket._expiries) == 1
+        assert len(bucket._ttls) == 1
+
+    def test_expired_entry_yields_none(self) -> None:
+        manager = _manager(ExpiryPolicy.CREATED, max_size=10, ttl_millis=1)
+        manager.put(REGION, "a", "a")
+        time.sleep(0.02)
+        assert manager.pop_by_count(REGION, 1) == {"a": None}
+
+    @pytest.mark.parametrize("count", [0, -1])
+    def test_non_positive_count_is_noop(self, count: int) -> None:
+        manager = _manager(ExpiryPolicy.ETERNAL, max_size=10)
+        manager.put(REGION, "a", "a")
+        assert manager.pop_by_count(REGION, count) == {}
+        assert manager.size(REGION) == 1
+
+    def test_count_beyond_size_pops_everything(self) -> None:
+        manager = _manager(ExpiryPolicy.ETERNAL, max_size=10)
+        manager.put(REGION, "a", "a")
+        assert len(manager.pop_by_count(REGION, 99)) == 1
+        assert manager.size(REGION) == 0
+
+
+class TestLiveCountReporting:
+    def test_size_excludes_expired_entries(self) -> None:
+        """Regression: size() counted expired-but-unreaped entries."""
+        manager = _manager(ExpiryPolicy.CREATED, max_size=10, ttl_millis=1)
+        manager.put(REGION, "a", "a")
+        manager.put(REGION, "b", "b")
+        time.sleep(0.02)
+        assert manager.size(REGION) == 0, "size() must report live entries only"
+
+    def test_keys_excludes_expired_entries(self) -> None:
+        manager = _manager(ExpiryPolicy.CREATED, max_size=10, ttl_millis=1)
+        manager.put(REGION, "a", "a")
+        time.sleep(0.02)
+        bucket = manager._bucket(REGION)
+        assert bucket.keys() == []
+
+    def test_size_keeps_live_entries_alongside_expired(self) -> None:
+        manager = _manager(ExpiryPolicy.CREATED, max_size=10, ttl_millis=300_000)
+        manager.put(REGION, "live", "live")
+        manager.put_with_ttl(REGION, "dead", "dead", 1)
+        time.sleep(0.02)
+        assert manager.size(REGION) == 1
+        assert manager.get(REGION, "live") == "live"
+
+    def test_eternal_size_is_unaffected_by_reaping(self) -> None:
+        manager = _manager(ExpiryPolicy.ETERNAL, max_size=10)
+        manager.put(REGION, "a", "a")
+        assert manager.size(REGION) == 1
 
 
 class TestExpiryPolicies:

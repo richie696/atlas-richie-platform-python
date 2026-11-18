@@ -199,6 +199,20 @@ class TestSignature:
         sent = _call(middleware, _scope("/api/orders", "POST", headers))
         assert json.loads(_body(sent)) == {"error": "signature_mismatch"}
 
+    def test_non_ascii_signature_header_denied_not_crashed(self) -> None:
+        """Regression: ASGI delivers headers latin-1 decoded, so a hostile
+        signature can contain non-ASCII. That must be a 401, not a 500."""
+        app = _App()
+        middleware = ProtectionASGIMiddleware(app, signature_verifier=_verifier())
+        scope = _scope("/api/orders", "POST", _signed_headers())
+        scope["headers"] = [
+            (k, b"ab\xff" if k == b"x-signature" else v) for k, v in scope["headers"]
+        ]
+        sent = _call(middleware, scope)
+        assert _status(sent) == 401
+        assert json.loads(_body(sent)) == {"error": "signature_mismatch"}
+        assert app.calls == 0
+
     def test_replayed_nonce_denied(self) -> None:
         app = _App()
         middleware = ProtectionASGIMiddleware(app, signature_verifier=_verifier())

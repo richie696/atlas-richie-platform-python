@@ -276,6 +276,28 @@ class TestApiSignature:
     def test_valid_signature_allowed(self) -> None:
         assert _verifier().verify(**_signed()) is None
 
+    @pytest.mark.parametrize(
+        "signature",
+        [
+            "ab\xff",          # latin-1 decoded ASGI header byte
+            "abc\u00ff",       # non-ASCII BMP
+            "签名",             # multi-byte
+            "\udcff",          # lone surrogate from surrogateescape decoding
+            "deadbeef\u0000",  # embedded NUL
+        ],
+    )
+    def test_non_ascii_signature_is_a_mismatch_not_a_crash(self, signature: str) -> None:
+        """Regression: compare_digest(str, str) raises TypeError on non-ASCII,
+        which turned a hostile signature header into a 500 instead of a 401."""
+        kwargs = _signed()
+        kwargs["signature"] = signature
+        decision = _verifier().verify(**kwargs)
+        assert decision is not None
+        assert decision.reason == "signature_mismatch"
+
+    def test_valid_signature_still_matches_after_byte_comparison(self) -> None:
+        assert _verifier().verify(**_signed(nonce="n-utf8-✓")) is None
+
     def test_blank_client_key_allowed_through(self) -> None:
         kwargs = _signed()
         kwargs["client_key"] = "  "
