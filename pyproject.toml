@@ -21,6 +21,7 @@ members = [
   "components/statemachine/statemachine-sqlalchemy",
   "components/redis-streammq",
   "components/scheduling/scheduling-core",
+  "components/concurrency/concurrency-core",
   "components/coordination/coordination-core",
   "components/coordination/coordination-redis",
   "components/persistence/persistence-core",
@@ -87,6 +88,7 @@ atlas-richie-statemachine-redis = { workspace = true }
 atlas-richie-statemachine-sqlalchemy = { workspace = true }
 atlas-richie-redis-streammq = { workspace = true }
 atlas-richie-scheduling-core = { workspace = true }
+atlas-richie-concurrency-core = { workspace = true }
 atlas-richie-coordination-core = { workspace = true }
 atlas-richie-coordination-redis = { workspace = true }
 atlas-richie-persistence-core = { workspace = true }
