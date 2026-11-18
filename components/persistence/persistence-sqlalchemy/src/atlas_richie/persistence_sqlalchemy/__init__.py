@@ -205,6 +205,7 @@ def _advisory_lock(url: str, key: int, timeout_seconds: float):
         engine.dispose()
 
 
+from .audit import audit_columns, utc_now
 from .outbox import OutboxEvent, OutboxRelay, OutboxStore, RelayReport
 from .tenant import TenantInterceptor
 
@@ -216,4 +217,6 @@ __all__ = [
     "OutboxRelay",
     "RelayReport",
     "TenantInterceptor",
+    "audit_columns",
+    "utc_now",
 ]

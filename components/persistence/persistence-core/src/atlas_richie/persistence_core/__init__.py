@@ -16,6 +16,17 @@ from __future__ import annotations
 from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol, runtime_checkable
 
+from .audit import (
+    INSERT_FIELDS,
+    UPDATE_FIELDS,
+    AuditField,
+    AuditFieldPolicy,
+    AuditFieldValues,
+    audit_column_values,
+    resolve_insert_values,
+    resolve_update_values,
+)
+
 
 class PersistenceError(RuntimeError):
     """Base error for persistence operations."""
@@ -51,4 +62,16 @@ class MigrationRunner(Protocol):
         ...
 
 
-__all__ = ["MigrationRunner", "Persistence", "PersistenceError"]
+__all__ = [
+    "MigrationRunner",
+    "Persistence",
+    "PersistenceError",
+    "AuditField",
+    "AuditFieldPolicy",
+    "AuditFieldValues",
+    "INSERT_FIELDS",
+    "UPDATE_FIELDS",
+    "resolve_insert_values",
+    "resolve_update_values",
+    "audit_column_values",
+]

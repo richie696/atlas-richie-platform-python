@@ -27,6 +27,32 @@ session tuning. `persistence.engine` is an escape hatch for DDL.
 For SQLite in-memory, pass `engine_kwargs={"poolclass": StaticPool}`; otherwise
 each pooled connection gets its own private database.
 
+## Audit fields
+
+`audit_columns()` wires the five audit/soft-delete columns with SQLAlchemy
+defaults, so a row gets `createId` / `updateId` / `createTime` /
+`updateTime` / `deleted` without the caller setting them — and an explicitly
+provided value is never overwritten.
+
+```python
+from atlas_richie.persistence_core import AuditFieldPolicy
+from atlas_richie.persistence_sqlalchemy import audit_columns
+
+policy = AuditFieldPolicy()
+table = Table(
+    "orders",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    *audit_columns(policy, username_provider=current_username, clock=utc_now),
+)
+```
+
+The decision logic is **not** duplicated here: every default delegates to
+`AuditFieldPolicy.insert_value` / `update_value` in `persistence-core`, so the
+core and the adapter cannot disagree. Disabling the policy keeps the columns but
+stops the auto-fill — matching Java, where the entity always declares the fields
+and only the handler stops.
+
 ## Migrations
 
 ```python
