@@ -16,6 +16,8 @@ authors = [
 dependencies = [
   "atlas-richie-persistence-core>=0.2.0,<0.3.0",
   "sqlalchemy[asyncio]>=2.0,<3.0",
+  "atlas-richie-scheduling-core>=0.2.0,<0.3.0",
+  "atlas-richie-tenant-core>=0.2.0,<0.3.0",
 ]
 
 [project.optional-dependencies]

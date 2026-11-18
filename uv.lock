@@ -893,6 +893,8 @@ version = "0.2.0"
 source = { editable = "components/persistence/persistence-sqlalchemy" }
 dependencies = [
     { name = "atlas-richie-persistence-core" },
+    { name = "atlas-richie-scheduling-core" },
+    { name = "atlas-richie-tenant-core" },
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 
@@ -919,6 +921,8 @@ requires-dist = [
     { name = "alembic", marker = "extra == 'migrations'", specifier = ">=1.13,<2.0" },
     { name = "alembic", marker = "extra == 'test'", specifier = ">=1.13,<2.0" },
     { name = "atlas-richie-persistence-core", editable = "components/persistence/persistence-core" },
+    { name = "atlas-richie-scheduling-core", editable = "components/scheduling/scheduling-core" },
+    { name = "atlas-richie-tenant-core", editable = "components/tenant/tenant-core" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2,<4.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0,<3.0" },

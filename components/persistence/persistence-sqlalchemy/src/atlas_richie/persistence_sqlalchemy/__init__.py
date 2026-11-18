@@ -206,6 +206,7 @@ def _advisory_lock(url: str, key: int, timeout_seconds: float):
 
 
 from .outbox import OutboxEvent, OutboxRelay, OutboxStore, RelayReport
+from .tenant import TenantInterceptor
 
 __all__ = [
     "AlembicMigrationRunner",
@@ -214,4 +215,5 @@ __all__ = [
     "OutboxStore",
     "OutboxRelay",
     "RelayReport",
+    "TenantInterceptor",
 ]
