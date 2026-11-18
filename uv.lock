@@ -24,6 +24,7 @@ members = [
     "atlas-richie-http",
     "atlas-richie-httpx-env",
     "atlas-richie-mcp",
+    "atlas-richie-mfa-secret-adapter",
     "atlas-richie-mfa-validation",
     "atlas-richie-oauth",
     "atlas-richie-persistence-core",
@@ -774,6 +775,28 @@ requires-dist = [
 provides-extras = ["jsonschema"]
 
 [[package]]
+name = "atlas-richie-mfa-secret-adapter"
+version = "0.2.0"
+source = { editable = "components/mfa/mfa-secret-adapter" }
+dependencies = [
+    { name = "atlas-richie-mfa-validation" },
+    { name = "atlas-richie-secret-core" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-mfa-validation", editable = "components/mfa/mfa-validation" },
+    { name = "atlas-richie-secret-core", editable = "components/secret/secret-core" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+]
+provides-extras = ["test"]
+
+[[package]]
 name = "atlas-richie-mfa-validation"
 version = "0.2.0"
 source = { editable = "components/mfa/mfa-validation" }
@@ -882,6 +905,7 @@ dependencies = [
     { name = "atlas-richie-http" },
     { name = "atlas-richie-httpx-env" },
     { name = "atlas-richie-mcp" },
+    { name = "atlas-richie-mfa-secret-adapter" },
     { name = "atlas-richie-mfa-validation" },
     { name = "atlas-richie-oauth" },
     { name = "atlas-richie-persistence-core" },
@@ -947,6 +971,7 @@ requires-dist = [
     { name = "atlas-richie-http", editable = "components/http" },
     { name = "atlas-richie-httpx-env", editable = "foundation/httpx-env" },
     { name = "atlas-richie-mcp", editable = "components/mcp" },
+    { name = "atlas-richie-mfa-secret-adapter", editable = "components/mfa/mfa-secret-adapter" },
     { name = "atlas-richie-mfa-validation", editable = "components/mfa/mfa-validation" },
     { name = "atlas-richie-oauth", editable = "components/oauth" },
     { name = "atlas-richie-persistence-core", editable = "components/persistence/persistence-core" },
