@@ -9,6 +9,7 @@ members = [
   "foundation/httpx-env",
   "components/http",
   "components/chunking/chunking-core",
+  "components/chunking/chunking-parser-adapter",
   "components/desensitize/desensitize-core",
   "components/mfa/mfa-validation",
   "components/web/web-protection",
@@ -65,6 +66,7 @@ atlas-richie-contracts = { workspace = true }
 atlas-richie-http = { workspace = true }
 atlas-richie-httpx-env = { workspace = true }
 atlas-richie-chunking-core = { workspace = true }
+atlas-richie-chunking-parser-adapter = { workspace = true }
 atlas-richie-desensitize-core = { workspace = true }
 atlas-richie-mfa-validation = { workspace = true }
 atlas-richie-web-protection = { workspace = true }

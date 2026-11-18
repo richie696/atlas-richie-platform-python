@@ -11,6 +11,7 @@ members = [
     "atlas-richie-cache-core",
     "atlas-richie-cache-redis",
     "atlas-richie-chunking-core",
+    "atlas-richie-chunking-parser-adapter",
     "atlas-richie-contracts",
     "atlas-richie-coordination-core",
     "atlas-richie-coordination-redis",
@@ -497,6 +498,28 @@ requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=8
 provides-extras = ["test"]
 
 [[package]]
+name = "atlas-richie-chunking-parser-adapter"
+version = "0.2.0"
+source = { editable = "components/chunking/chunking-parser-adapter" }
+dependencies = [
+    { name = "atlas-richie-chunking-core" },
+    { name = "atlas-richie-document-parser" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-chunking-core", editable = "components/chunking/chunking-core" },
+    { name = "atlas-richie-document-parser", editable = "components/document/document-parser" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+]
+provides-extras = ["test"]
+
+[[package]]
 name = "atlas-richie-contracts"
 version = "0.2.0"
 source = { editable = "foundation/contracts" }
@@ -744,6 +767,7 @@ dependencies = [
     { name = "atlas-richie-cache-core" },
     { name = "atlas-richie-cache-redis" },
     { name = "atlas-richie-chunking-core" },
+    { name = "atlas-richie-chunking-parser-adapter" },
     { name = "atlas-richie-contracts" },
     { name = "atlas-richie-coordination-core" },
     { name = "atlas-richie-coordination-redis" },
@@ -802,6 +826,7 @@ requires-dist = [
     { name = "atlas-richie-cache-core", editable = "components/cache/cache-core" },
     { name = "atlas-richie-cache-redis", editable = "components/cache/cache-redis" },
     { name = "atlas-richie-chunking-core", editable = "components/chunking/chunking-core" },
+    { name = "atlas-richie-chunking-parser-adapter", editable = "components/chunking/chunking-parser-adapter" },
     { name = "atlas-richie-contracts", editable = "foundation/contracts" },
     { name = "atlas-richie-coordination-core", editable = "components/coordination/coordination-core" },
     { name = "atlas-richie-coordination-redis", editable = "components/coordination/coordination-redis" },
