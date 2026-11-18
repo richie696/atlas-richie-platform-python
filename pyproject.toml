@@ -17,6 +17,8 @@ members = [
   "components/statemachine/statemachine-redis",
   "components/redis-streammq",
   "components/scheduling/scheduling-core",
+  "components/coordination/coordination-core",
+  "components/coordination/coordination-redis",
   "components/mcp",
   "components/oauth",
   "components/secret/secret-core",
@@ -64,6 +66,8 @@ atlas-richie-statemachine-core = { workspace = true }
 atlas-richie-statemachine-redis = { workspace = true }
 atlas-richie-redis-streammq = { workspace = true }
 atlas-richie-scheduling-core = { workspace = true }
+atlas-richie-coordination-core = { workspace = true }
+atlas-richie-coordination-redis = { workspace = true }
 atlas-richie-mcp = { workspace = true }
 atlas-richie-oauth = { workspace = true }
 atlas-richie-secret-core = { workspace = true }

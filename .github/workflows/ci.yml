@@ -36,6 +36,7 @@ jobs:
       - run: uv run python -m pytest components/statemachine -q
       - run: uv run python -m pytest components/redis-streammq -q
       - run: uv run python -m pytest components/scheduling -q
+      - run: uv run python -m pytest components/coordination -q
       # Per-package invocations: each package is its own pytest rootdir. Running
       # several in one invocation collides on the `tests.conftest` module name.
       # sentinel-source-file is omitted because it has no tests (pytest exits 5).
