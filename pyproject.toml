@@ -24,6 +24,7 @@ members = [
   "components/persistence/persistence-sqlalchemy",
   "components/document/document-parser",
   "components/document/document-parser-pdf",
+  "components/document/document-parser-html",
   "components/storage/storage-core",
   "components/storage/storage-s3",
   "components/storage/storage-local",
@@ -84,6 +85,7 @@ atlas-richie-persistence-core = { workspace = true }
 atlas-richie-persistence-sqlalchemy = { workspace = true }
 atlas-richie-document-parser = { workspace = true }
 atlas-richie-document-parser-pdf = { workspace = true }
+atlas-richie-document-parser-html = { workspace = true }
 atlas-richie-storage-core = { workspace = true }
 atlas-richie-storage-s3 = { workspace = true }
 atlas-richie-storage-local = { workspace = true }

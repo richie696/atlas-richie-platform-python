@@ -24,6 +24,7 @@ dependencies = [
   "atlas-richie-desensitize-core>=0.2.0,<0.3.0",
   "atlas-richie-document-parser>=0.2.0,<0.3.0",
   "atlas-richie-document-parser-pdf>=0.2.0,<0.3.0",
+  "atlas-richie-document-parser-html>=0.2.0,<0.3.0",
   "atlas-richie-http>=0.2.0,<0.3.0",
   "atlas-richie-mfa-validation>=0.2.0,<0.3.0",
   "atlas-richie-httpx-env>=0.2.0,<0.3.0",
