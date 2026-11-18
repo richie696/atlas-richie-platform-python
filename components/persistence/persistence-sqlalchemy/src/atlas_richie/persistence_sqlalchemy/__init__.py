@@ -13,9 +13,12 @@ console stores already assume.
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+import hashlib
+import time
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any, AsyncIterator
 
+from sqlalchemy import NullPool
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from atlas_richie.persistence_core import PersistenceError
@@ -81,10 +84,18 @@ class AlembicMigrationRunner:
     Alembic is an optional extra (`pip install atlas-richie-persistence-sqlalchemy[migrations]`).
     """
 
-    def __init__(self, script_location: str, url: str, *, config_kwargs: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        script_location: str,
+        url: str,
+        *,
+        config_kwargs: dict[str, Any] | None = None,
+        lock_timeout_seconds: float | None = 300.0,
+    ) -> None:
         self._script_location = script_location
         self._url = url
         self._config_kwargs = dict(config_kwargs or {})
+        self._lock_timeout = lock_timeout_seconds
 
     def _config(self):
         try:
@@ -104,13 +115,42 @@ class AlembicMigrationRunner:
         from alembic import command
 
         config = self._config()
-        await asyncio.to_thread(command.upgrade, config, revision)
+        await asyncio.to_thread(self._run_locked, command.upgrade, config, revision)
 
     async def downgrade(self, revision: str) -> None:
         from alembic import command
 
         config = self._config()
-        await asyncio.to_thread(command.downgrade, config, revision)
+        await asyncio.to_thread(self._run_locked, command.downgrade, config, revision)
+
+    def _run_locked(self, action, config, revision) -> None:
+        """Run a migration command under a cross-process advisory lock.
+
+        Alembic has no cross-process lock: two nodes upgrading concurrently
+        race on the alembic_version table. Liquibase guards with a
+        DATABASECHANGELOGLOCK row; the PostgreSQL equivalent is an advisory
+        lock held on a dedicated connection for the duration of the command.
+        Non-PostgreSQL URLs (SQLite etc.) are single-writer or single-process
+        already, so the lock degrades to a no-op there.
+        """
+        if self._lock_timeout is None or not self._url.startswith(
+            ("postgresql://", "postgresql+")
+        ):
+            action(config, revision)
+            return
+        with _advisory_lock(self._url, self.lock_key, self._lock_timeout):
+            action(config, revision)
+
+    @property
+    def lock_key(self) -> int:
+        """Stable 63-bit advisory-lock key derived from the script location.
+
+        Different applications get different keys, so an app upgrading its own
+        schema does not serialize against unrelated apps; nodes of the SAME
+        app derive the same key and serialize against each other.
+        """
+        digest = hashlib.sha256(self._script_location.encode("utf-8")).digest()
+        return int.from_bytes(digest[:8], "big") % (2**62)
 
     async def current_revision(self) -> str | None:
         from alembic.migration import MigrationContext
@@ -125,6 +165,44 @@ class AlembicMigrationRunner:
                 engine.dispose()
 
         return await asyncio.to_thread(_read)
+
+
+@contextmanager
+def _advisory_lock(url: str, key: int, timeout_seconds: float):
+    """Hold a PostgreSQL advisory lock on a dedicated connection.
+
+    Uses `pg_try_advisory_lock` with polling rather than the blocking form so
+    a stuck holder surfaces as a `PersistenceError` after `timeout_seconds`
+    instead of hanging the startup forever. The lock is session-scoped:
+    releasing (or the connection dying) frees it, so a crashed migrator does
+    not leave the schema permanently locked.
+    """
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(url, poolclass=NullPool)
+    try:
+        with engine.connect() as connection:
+            deadline = time.monotonic() + timeout_seconds
+            while True:
+                acquired = connection.execute(
+                    text("SELECT pg_try_advisory_lock(:k)"), {"k": key}
+                ).scalar()
+                if acquired:
+                    break
+                if time.monotonic() > deadline:
+                    raise PersistenceError(
+                        f"could not acquire the migration lock {key} within "
+                        f"{timeout_seconds}s; another process may be migrating "
+                        "or holding a stale lock"
+                    )
+                time.sleep(0.5)
+            try:
+                yield
+            finally:
+                connection.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+                connection.commit()
+    finally:
+        engine.dispose()
 
 
 __all__ = ["AlembicMigrationRunner", "SqlAlchemyPersistence"]
