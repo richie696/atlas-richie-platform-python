@@ -221,7 +221,11 @@ class TestXmlHandling:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error", XMLParsedAsHTMLWarning)
-            events = _events("<?xml version='1.0'?><root><p>x</p></root>", name="d.xml")
+            events = list(
+                HtmlParser().parse(
+                    BytesSource(b"<?xml version='1.0'?><root><p>x</p></root>", name="d.xml")
+                )
+            )
         assert _texts(events) == ["x"]
 
     def test_explicit_features_override_is_respected(self) -> None:
