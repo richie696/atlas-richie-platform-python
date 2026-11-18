@@ -372,6 +372,14 @@ class RedisStringManager(ValueOps, StringFunction):
         raw = self._backend.get(key)
         return decode_value(raw, clazz)
 
+    def remaining_ttl_millis(self, key: str) -> int | None:
+        """Redis PTTL for `key`, or None when unknown.
+
+        L1 read-through backfill needs this so a local copy cannot outlive the
+        Redis key it came from.
+        """
+        return self._infra.remaining_ttl_millis(key)
+
     def get_typed(self, key: str, reference: type) -> Any:
         """Read with a runtime-resolved type.
 

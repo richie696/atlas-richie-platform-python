@@ -176,6 +176,20 @@ class L2DistributedCache:
                 self._evict_local,
             )
 
+    def _backfill_from_l2(self, key: str, value: bytes, fallback_ttl_millis: int) -> None:
+        """Copy an L2 value into L1 without outliving the Redis key.
+
+        Using the instance default TTL here would let L1 serve a value Redis
+        has already expired whenever the key's remaining TTL is shorter.
+        """
+        try:
+            remaining = self._value_ops.remaining_ttl_millis(key)
+            ttl = remaining if remaining is not None and remaining > 0 else fallback_ttl_millis
+            self._local.put(self._region, key, value)
+            self._local.expiry(self._region, key, ttl)
+        except Exception:
+            pass
+
     # ── Public API ───────────────────────────────────────────────
 
     def get(self, key: str) -> Optional[bytes]:
@@ -193,11 +207,7 @@ class L2DistributedCache:
         if l2_value is None:
             return None
         # Read-through: copy L2 → L1.
-        try:
-            self._local.put(self._region, key, l2_value)
-            self._local.expiry(self._region, key, self._ttl_seconds * 1000)
-        except Exception:
-            pass
+        self._backfill_from_l2(key, l2_value, self._ttl_seconds * 1000)
         return l2_value
 
     def set(self, key: str, value: bytes, ttl_seconds: int = 0) -> None:
@@ -386,11 +396,7 @@ class L2DistributedCache:
                     except Exception:
                         pass
                     return None
-                try:
-                    self._local.put(self._region, key, l2_value)
-                    self._local.expiry(self._region, key, effective_ttl * 1000)
-                except Exception:
-                    pass
+                self._backfill_from_l2(key, l2_value, effective_ttl * 1000)
                 return l2_value
 
             # 5. L1 + L2 both miss → call the loader, optionally
@@ -573,16 +579,9 @@ class L2DistributedCache:
                     results[k] = None
                 else:
                     results[k] = v
-                try:
-                    self._local.put(self._region, k, v)
-                    # Use the caller-supplied TTL (or default);
-                    # the negative TTL is only relevant for
-                    # writes triggered by a TIMEOUT, not for
-                    # a published L2 negative marker (which
-                    # already has its own L2-side TTL).
-                    self._local.expiry(self._region, k, effective_ttl * 1000)
-                except Exception:
-                    pass
+                # The negative TTL only applies to TIMEOUT-triggered writes,
+                # not to a published L2 marker that has its own L2-side TTL.
+                self._backfill_from_l2(k, v, effective_ttl * 1000)
             missing = [k for k in missing if k not in l2_hits]
             if not missing:
                 return results

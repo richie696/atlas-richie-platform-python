@@ -249,3 +249,40 @@ class TestL2CacheFactory:
         )
         assert c is not a  # cleared
         print("  ✅ L2CacheFactory.clear() drops instances")
+
+
+class TestReadThroughTtlFidelity:
+    """Regression: L1 read-through backfill used the instance default TTL, so a
+    local copy could outlive the Redis key and serve an already-expired value."""
+
+    def test_l1_copy_expires_with_the_redis_key(
+        self, registrar: RedisProviderRegistrar
+    ) -> None:
+        import time as _t
+
+        l1: L2DistributedCache = registrar.l1(max_size=10, ttl_seconds=60)
+        # L2 key lives 30ms; the L1 instance default is 60s.
+        registrar.value_ops().set_with_ttl("short", b"v", 30)
+        assert l1.get("short") == b"v"  # L1 miss → L2 hit → backfill
+        _t.sleep(0.08)
+        assert l1.get("short") is None, "L1 不得活得比 Redis key 更久"
+
+    def test_no_expiry_key_falls_back_to_instance_default(
+        self, registrar: RedisProviderRegistrar
+    ) -> None:
+        l1: L2DistributedCache = registrar.l1(max_size=10, ttl_seconds=60)
+        registrar.value_ops().set("persistent", b"v")
+        assert l1.get("persistent") == b"v"
+        assert l1.get("persistent") == b"v", "无过期时间的 key 应走 L1 默认 TTL"
+
+    def test_batch_read_through_also_honours_remaining_ttl(
+        self, registrar: RedisProviderRegistrar
+    ) -> None:
+        import time as _t
+
+        l1: L2DistributedCache = registrar.l1(max_size=10, ttl_seconds=60)
+        registrar.value_ops().set_with_ttl("b1", b"v1", 30)
+        loaded = l1.get_or_load_many(["b1"], lambda keys: {k: b"db" for k in keys})
+        assert loaded["b1"] == b"v1"
+        _t.sleep(0.08)
+        assert l1.get("b1") is None
