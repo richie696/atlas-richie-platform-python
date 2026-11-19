@@ -9,6 +9,11 @@ ProviderRegistrar、L2 缓存、Pub/Sub、Bloom Filter、Snowflake ID 等
     RedisProviderRegistrar      # 具体 ProviderRegistrar
     RedisProviderRegistrar.from_url(...)
     RedisDistributedCache       # 传输层包装
+    MultiRedisDistributedCache   # 多实例前缀路由入口
+    RedisRoutingClient           # 按 key 前缀路由的 redis-py 客户端代理
+    RedisRoutingPipeline         # 按实例分组执行的 pipeline
+    RedisCommandKeySpecTable     # 命令 -> key 位置表
+    CacheRouteRegistry           # 路由前缀表（core 契约）
     RedisCacheInfrastructure    # CacheInfrastructure 实现
     RedisStringManager          # M1: ValueOps + StringFunction
     RedisFieldManager           # M2: FieldOps + HashFunction
@@ -75,6 +80,12 @@ from __future__ import annotations
 
 import importlib.metadata
 
+from atlas_richie.cache_core.routing import (
+    CacheRouteError,
+    CacheRouteKey,
+    CacheRouteRegistry,
+)
+
 from .errors import (
     CacheError,
     CapacityError,
@@ -82,6 +93,7 @@ from .errors import (
     ConflictError,
     ConnectionError,
     KeyError_,
+    RouteError,
     SerializationError,
     StateError,
 )
@@ -122,18 +134,41 @@ from .managers.redis_string_manager import RedisStringManager
 from .managers.redis_struct_manager import RedisStructManager
 from .redis_cache_infrastructure import RedisCacheInfrastructure
 from .redis_distributed_cache import RedisDistributedCache
-from .redis_cache_properties import ProtocolVersion, RedisCacheProperties, RedisPerfSettings, RedisType
+from .redis_cache_properties import (
+    ProtocolVersion,
+    RedisCacheProperties,
+    RedisInstanceSettings,
+    RedisPerfSettings,
+    RedisType,
+)
 from .redis_provider_registrar import RedisProviderRegistrar
+from .routing import (
+    MultiRedisDistributedCache,
+    RedisCommandKeySpec,
+    RedisCommandKeySpecTable,
+    RedisRoutingClient,
+    RedisRoutingPipeline,
+)
 
 __version__ = importlib.metadata.version("atlas-richie-cache-redis")
 
 __all__ = [
     "CacheError",
+    "CacheRouteError",
+    "CacheRouteKey",
+    "CacheRouteRegistry",
     "CapacityError",
     "ConfigurationError",
     "ConflictError",
     "ConnectionError",
     "KeyError_",
+    "MultiRedisDistributedCache",
+    "RedisCommandKeySpec",
+    "RedisCommandKeySpecTable",
+    "RedisInstanceSettings",
+    "RedisRoutingClient",
+    "RedisRoutingPipeline",
+    "RouteError",
     "RedisBitmapManager",
     "RedisBoundedQueue",
     "RedisBoundedQueueManager",

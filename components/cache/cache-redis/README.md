@@ -22,9 +22,16 @@ SPI 的全部 30 个方法（16 ops + 1 infrastructure + 11 functions + 2 meta�
     - [分级策略判定](#分级策略判定)
     - [String 载荷形状规则](#string-载荷形状规则)
     - [其余检查项](#其余检查项)
+- [🔀 多实例前缀路由](#-多实例前缀路由)
+    - [路由规则](#路由规则)
+    - [配置](#配置)
+    - [命令 key 规格表](#命令-key-规格表)
+    - [与 Java 的差异](#与-java-的差异)
+    - [行为清单](#行为清单)
 - [⚙️ 配置参考](#️-配置参考)
     - [RedisPerfSettings 字段](#redisperfsettings-字段)
     - [防雪崩 jitter](#防雪崩-jitter)
+    - [RedisInstanceSettings 字段](#redisinstancesettings-字段)
 - [🔧 故障排查](#-故障排查)
 - [📎 ⏱️ 时序图参考](#-️-时序图参考)
     - [分级判定与调用](#分级判定与调用)
@@ -42,6 +49,8 @@ SPI 的全部 30 个方法（16 ops + 1 infrastructure + 11 functions + 2 meta�
   `SCARD` / `LLEN` / `STRLEN`），非 O(1) 调用自动提示
 - ✅ **String 载荷形状规则**：集合 / Map 整包塞 String 会被判 ERROR——
   这类用法易 BIGKEY、阻塞序列化、难部分更新
+- ✅ **多实例前缀路由**：`order@@user:1` 这样的 key 自动路由到
+  对应实例，16 个 manager 零改动——对位 Java `MultiRedisTemplate`
 - ✅ **零开销默认**：`enabled=false` 时所有检查都是空操作
 - ✅ **防雪崩 jitter**：所有缓存条目 TTL 叠加 1–10 分钟离散随机偏移
 
@@ -65,6 +74,12 @@ atlas_richie/cache_redis/
 │   ├── operation_catalog.py             # RedisOperationCatalog（26 条预设）
 │   ├── string_payload_inspector.py      # RedisStringPayloadInspector
 │   └── guard.py                         # RedisPerfGuard
+├── routing/                             # 多实例前缀路由
+│   ├── __init__.py
+│   ├── command_specs.py                 # RedisCommandKeySpecTable（命令 -> key 位置）
+│   ├── route_client.py                  # RedisRoutingClient（路由 + key 改写）
+│   ├── route_pipeline.py                # RedisRoutingPipeline（按实例分组）
+│   └── multi_distributed_cache.py       # MultiRedisDistributedCache（统一入口）
 └── managers/                            # 16 个 manager
 ```
 
@@ -228,6 +243,125 @@ ERROR 级别在 `block_string_payload_violations` 为真时**抛异常**——�
 | 耗时分级 | `time_op` | soft / hard 阈值 |
 | 大 key 提示 | `check_key_name_hint` | 键名含 `all` / `dump` / `bulk` 等 token |
 
+## 🔀 多实例前缀路由
+
+对位 Java ``cn.richie696.component.cache.redis.bean.MultiRedisTemplate``：
+把多个 Redis 实例包成一个入口，按 key 前缀把命令路由到对应实例。
+**16 个 manager 一行都不用改**——这正是 Java 端承诺的"业务无感"。
+
+### 路由规则
+
+| 调用方传入的 key | 目标实例 | 实际落库的 key |
+|------------------|----------|----------------|
+| ``user:1`` | 主实例 | ``{主实例 namespace}:user:1`` |
+| ``order@@user:1`` | 前缀 ``order`` 对应的实例 | ``{order 实例 namespace}:user:1`` |
+| ``unknown@@user:1`` | **抛错** | — |
+
+> ``make_key()`` 在两种模式下语义一致（都加**主实例**的 namespace）；路由层
+> 解析路由前缀时剥掉这层 namespace，转发时再套上**目标实例**自己的
+> namespace——因此同一条业务 key 在不同实例上有各自独立的 namespace，而
+> pub/sub 频道名这类不走路由的名字仍然带 namespace。
+
+前缀取**第一个** ``@@`` 之前的部分；``@@`` 之后的内容全部算真实 key
+（与 ``CacheKeyUtils.get_real_key`` 同一语义）。
+
+未注册前缀**直接抛错**而不是悄悄回落到主实例——Java 端同样抛
+``PlatformRuntimeException``，因为静默回落会把数据写进错误的实例。
+
+```mermaid
+graph TB
+    M[manager 方法] --> B[make_key<br/>加主实例 namespace]
+    B --> R[RedisRoutingClient]
+    R --> T{命令的 key 位置表}
+    T --> P{剥掉主实例 namespace 后<br/>key 含 @@ ?}
+    P -->|否| PR[主实例]
+    P -->|是| REG{前缀已注册 ?}
+    REG -->|否| E[抛 RouteError]
+    REG -->|是| S[目标实例]
+    S --> W[改写 key<br/>剥前缀 + 套目标 namespace]
+    W --> C[执行命令]
+```
+
+### 配置
+
+```python
+from atlas_richie.cache_redis import RedisCacheProperties, RedisProviderRegistrar
+
+properties = RedisCacheProperties(
+    url="redis://primary:6379/0",
+    slaves={
+        "order": {"url": "redis://order-redis:6379/0"},
+        "user": {"url": "redis://user-redis:6379/0", "namespace": "atlas-user"},
+    },
+)
+registrar = RedisProviderRegistrar.from_properties(properties)
+```
+
+环境变量（JSON 数组 / 对象同 pydantic-settings 的 list 字段规则）：
+
+```bash
+export ATLAS_RICHIE_CACHE_REDIS_SLAVES='{"order": {"url": "redis://order-redis:6379/0"}}'
+```
+
+前缀默认取 ``slaves`` 映射的键名（与 Java 的 ``slaves`` 映射 key
+一致），也可以用 ``prefix`` 字段显式指定。
+
+### 用法
+
+```python
+registrar.value_ops().set("order@@user:1", "v")   # → order 实例
+registrar.value_ops().set("user:1", "v")           # → 主实例
+```
+
+派生 key（锁 key、meta key、负缓存标记）通过 ``decorate_key()`` 构造，
+自动继承原 key 的路由前缀，因此**一定和原 key 落在同一个实例**。
+
+### 命令 key 规格表
+
+路由必须知道"一条命令的哪些参数是 key"。Java 端靠覆写 ``RedisTemplate``
+的固定方法面解决；Python 端 managers 直接调 redis-py 的动态客户端，没有
+封闭的 API 面，因此改用显式命令表（``RedisCommandKeySpecTable``，内置
+130+ 条）：
+
+| 模式 | 含义 | 典型命令 |
+|------|------|----------|
+| ``none`` | 没有 key | PING / INFO |
+| ``primary_only`` | 有 key 形态参数但走主实例 | PUBLISH |
+| ``single`` | 单个 key | GET / SET / HGET |
+| ``varargs`` | 后续参数全是 key | DEL / EXISTS / SDIFF |
+| ``list`` | 参数装一个或多个 key | MGET / ZINTER |
+| ``mapping`` | 参数是 dict，其 key 是 Redis key | MSET / XREAD |
+| ``store`` | 第 0 位是目标 key，第 1 位是来源 key 列表 | ZUNIONSTORE |
+| ``numkeys`` | 参数是 key 个数，后面紧跟 key | EVAL / EVALSHA |
+| ``numkeys_list`` | 参数是 key 个数，下一个是 key 列表 | SINTERCARD |
+| ``keyword`` | 关键字参数是 key | SCAN_ITER(match=) |
+
+表里没有的命令在 strict 模式会被**拒绝执行**；业务方可以用
+``RedisCommandKeySpecTable.register()`` 补登记。
+
+### 与 Java 的差异
+
+| 维度 | Java ``MultiRedisTemplate`` | 本驱动 | 原因 |
+|------|------------------------------|--------|------|
+| 路由粒度 | 覆写 ``RedisTemplate`` 的固定方法面 | 命令 key 位置表 | Python 直接调动态客户端，没有封闭 API 面 |
+| 未知前缀 | 抛 ``PlatformRuntimeException`` | 抛 ``RouteError``（继承 ``CacheError``） | 同一语义，不同异常类型 |
+| 同命令多 key 跨实例 | 按第一个 key 选实例，其余 key 剥前缀后一起发过去（**静默写错实例**） | **直接报错** | 跨实例操作在 Redis 里不可表达 |
+| 未登记的命令 | 不可能（API 面封闭） | strict 模式**直接报错** | 否则 key 会被静默写进主实例 |
+| PUBLISH / 订阅 | 未覆写 publish → 主实例 | 同样走主实例 | 频道消息无法跨实例 |
+| 路由表增删 | 仅配置期，运行时改要重启 | 运行时可增删（线程安全） | 契约与连接分离 |
+| 派生 key | 无此概念 | ``decorate_key()`` 继承路由前缀 | 锁 key / meta key 必须与原 key 同实例 |
+
+### 行为清单
+
+- ✅ ``order@@user:1`` → order 实例，真实 key ``user:1``
+- ✅ 派生 key（锁 / meta / 负缓存标记）自动与原 key 同实例
+- ✅ pipeline 按实例分组执行，结果按原始顺序返回
+- ✅ WATCH 乐观锁锁定在被 WATCH 的实例与连接上
+- ✅ ``SCRIPT LOAD`` 在所有实例预加载，``EVALSHA`` 在路由实例可用
+- ❌ ``unknown@@x`` → 抛错（不回落主实例）
+- ❌ 一条命令的 key 落在不同实例 → 抛错
+- ❌ 未登记的命令在 strict 模式 → 抛错
+
 ## ⚙️ 配置参考
 
 ### RedisPerfSettings 字段
@@ -271,6 +405,21 @@ ERROR 级别在 `block_string_payload_violations` 为真时**抛异常**——�
 ——全平台唯一实现。后端不得自带副本：分布本身是契约的一部分（离散整分钟档，
 对位 Java 的 `ThreadLocalRandom.current().nextInt(1, 11) * 60_000L`）。
 
+### RedisInstanceSettings 字段
+
+路由实例（从库 / 分库）的连接配置，出现在 ``RedisCacheProperties.slaves``
+的每个值里。留空 = 继承主实例：
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| ``url`` | **必填** | 该实例的 Redis 连接 URL |
+| ``namespace`` | ``None`` | 该实例自己的 key 前缀；None=继承主实例 |
+| ``prefix`` | ``None`` | 路由前缀；None=用 ``slaves`` 映射的键名 |
+| ``max_connections`` | ``None`` | 连接池大小；None=继承主实例 |
+| ``socket_timeout`` / ``socket_connect_timeout`` | ``None`` | 超时（秒）；None=继承主实例 |
+| ``socket_keepalive`` / ``retry_on_timeout`` | ``None`` | 连接行为；None=继承主实例 |
+| ``decode_responses`` | ``None`` | bytes 自动 decode；None=继承主实例 |
+
 ## 🔧 故障排查
 
 | 现象 | 可能原因 | 处理 |
@@ -280,6 +429,9 @@ ERROR 级别在 `block_string_payload_violations` 为真时**抛异常**——�
 | O(1) 操作也被拦 | `block_forbidden_tiers` 只拦 LINEAR_N / WORSE | 确认该操作引用的预设是否正确 |
 | String 写入被拒 | 载荷是集合 / Map | 改用 Hash / List / ZSet 结构，或拆 key |
 | 长 key 刷屏日志 | 日志里的 key 被截断到 160 字符 | 正常行为，日志已做截断保护 |
+| 抛 ``RouteError`` 说前缀未注册 | key 里的前缀没在 ``slaves`` / 路由表里 | 补登记前缀，或改用不带前缀的 key |
+| 抛 ``RouteError`` 说 key 跨实例 | 一条命令的 key 带了不同前缀 | 拆成多条命令；跨实例操作在 Redis 里不成立 |
+| 抛 ``RouteError`` 说命令未登记 | strict 模式下命令不在 key 位置表里 | 用 ``RedisCommandKeySpecTable.register()`` 补登记，或关闭 strict |
 
 ## 📎 ⏱️ 时序图参考
 

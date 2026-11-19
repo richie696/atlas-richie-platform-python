@@ -57,16 +57,16 @@ class RedisBoundedStackManager(BoundedStackOps):
         self, key: str, max_len: int, clazz: type
     ) -> RedisBoundedStack:
         ns_key = self._backend.make_key(key)
-        ns_meta = self._backend.make_key(
-            BoundedListCapacityLimits.meta_key(key)
+        ns_meta = self._backend.decorate_key(
+            key, BoundedListCapacityLimits.meta_key
         )
         s = RedisBoundedStack(self._support, key, max_len, clazz)
         s._bind(ns_key, ns_meta)
         return s
 
     def _init_meta(self, key: str, max_len: int) -> bool:
-        ns_meta = self._backend.make_key(
-            BoundedListCapacityLimits.meta_key(key)
+        ns_meta = self._backend.decorate_key(
+            key, BoundedListCapacityLimits.meta_key
         )
         return self._support.set_meta_if_absent(ns_meta, max_len)
 
@@ -75,8 +75,8 @@ class RedisBoundedStackManager(BoundedStackOps):
         self._support.assert_list_key_compatible(ns_key, "BoundedStack")
         if not self._init_meta(key, max_len):
             existing = self._support.read_meta_max_len(
-                self._backend.make_key(
-                    BoundedListCapacityLimits.meta_key(key)
+                self._backend.decorate_key(
+                    key, BoundedListCapacityLimits.meta_key
                 )
             )
             BoundedListCapacityLimits.assert_max_len_matches(
@@ -85,8 +85,8 @@ class RedisBoundedStackManager(BoundedStackOps):
         return self._make_stack(key, max_len, clazz)
 
     def get(self, key: str, clazz: type) -> BoundedStack:
-        ns_meta = self._backend.make_key(
-            BoundedListCapacityLimits.meta_key(key)
+        ns_meta = self._backend.decorate_key(
+            key, BoundedListCapacityLimits.meta_key
         )
         max_len = self._support.read_meta_max_len(ns_meta)
         if max_len is None:
@@ -98,23 +98,23 @@ class RedisBoundedStackManager(BoundedStackOps):
     ) -> BoundedStack:
         if not self._init_meta(key, max_len):
             existing = self._support.read_meta_max_len(
-                self._backend.make_key(
-                    BoundedListCapacityLimits.meta_key(key)
+                self._backend.decorate_key(
+                    key, BoundedListCapacityLimits.meta_key
                 )
             )
             max_len = existing or max_len
         return self._make_stack(key, max_len, clazz)
 
     def exists(self, key: str) -> bool:
-        ns_meta = self._backend.make_key(
-            BoundedListCapacityLimits.meta_key(key)
+        ns_meta = self._backend.decorate_key(
+            key, BoundedListCapacityLimits.meta_key
         )
         return self._support.read_meta_max_len(ns_meta) is not None
 
     def destroy(self, key: str) -> bool:
         ns_key = self._backend.make_key(key)
-        ns_meta = self._backend.make_key(
-            BoundedListCapacityLimits.meta_key(key)
+        ns_meta = self._backend.decorate_key(
+            key, BoundedListCapacityLimits.meta_key
         )
         n = int(
             self._support.evalsha_cached(
@@ -125,8 +125,8 @@ class RedisBoundedStackManager(BoundedStackOps):
 
     def expire(self, key: str, timeout: int) -> bool:
         ns_key = self._backend.make_key(key)
-        ns_meta = self._backend.make_key(
-            BoundedListCapacityLimits.meta_key(key)
+        ns_meta = self._backend.decorate_key(
+            key, BoundedListCapacityLimits.meta_key
         )
         ok1 = bool(self._support._client.expire(ns_key, int(timeout)))
         ok2 = bool(self._support._client.expire(ns_meta, int(timeout)))

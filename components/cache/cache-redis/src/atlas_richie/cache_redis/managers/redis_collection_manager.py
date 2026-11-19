@@ -381,7 +381,9 @@ class RedisCollectionManager(CollectionOps, SetFunction):
     # is namespaced under `__negative_set__:` and uses
     # `make_key` so it picks up the same prefix as the user key.
     def _negative_set_marker_key(self, key: str) -> str:
-        return self._backend.make_key(f"__negative_set__:{key}")
+        return self._backend.decorate_key(
+            key, lambda real: f"__negative_set__:{real}"
+        )
 
     def _is_negative_set_cached(self, key: str) -> bool:
         """True if the M5.7 negative-cache marker exists for `key`."""

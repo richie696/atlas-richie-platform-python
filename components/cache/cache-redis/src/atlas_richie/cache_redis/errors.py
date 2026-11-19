@@ -24,6 +24,7 @@ core contract is the same as the rest of the platform.
 
 from __future__ import annotations
 
+from atlas_richie.cache_core.routing import CacheRouteError
 from atlas_richie.contracts import PlatformError
 
 
@@ -59,6 +60,16 @@ class StateError(CacheError):
     """The cache or a sub-component is in an invalid state for the requested operation."""
 
 
+class RouteError(CacheError, CacheRouteError):
+    """A cache key could not be routed to a Redis instance.
+
+    Raised when the route prefix of a key is not registered, when one
+    command touches keys of different instances, or when a command
+    that is not registered in the routing command table is executed
+    under strict routing.
+    """
+
+
 __all__ = [
     "CacheError",
     "CapacityError",
@@ -66,6 +77,7 @@ __all__ = [
     "ConflictError",
     "ConnectionError",
     "KeyError_",
+    "RouteError",
     "SerializationError",
     "StateError",
 ]

@@ -207,8 +207,12 @@ class RedisSharedBloomFilter(BloomFilter):
     ) -> None:
         self._backend = backend
         self._config = config
-        self._bit_key = backend.make_key(f"bloom:{config.key}")
-        self._meta_key = backend.make_key(f"bloom:{config.key}:meta")
+        self._bit_key = backend.decorate_key(
+            config.key, lambda real: f"bloom:{real}"
+        )
+        self._meta_key = backend.decorate_key(
+            config.key, lambda real: f"bloom:{real}:meta"
+        )
         self._bit_size, self._hash_count = self._ensure_meta()
 
     # ── meta + init ──────────────────────────────────────────────

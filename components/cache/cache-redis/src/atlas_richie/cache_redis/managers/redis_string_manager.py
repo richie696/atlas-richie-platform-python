@@ -161,7 +161,9 @@ return 0
 
 
 def _make_stampede_lock_key(backend: RedisDistributedCache, user_key: str) -> str:
-    return backend.make_key(f"__stampede_lock__:{user_key}")
+    return backend.decorate_key(
+        user_key, lambda real: f"__stampede_lock__:{real}"
+    )
 
 
 def _stampede_acquire(

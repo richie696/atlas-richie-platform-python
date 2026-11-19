@@ -36,9 +36,9 @@ controlled by `socket_keepalive` + `retry_on_timeout` +
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
-from pydantic import Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -147,6 +147,72 @@ class RedisPerfSettings(BaseSettings):
     block_hash_payload_violations: bool = True
 
 
+class RedisInstanceSettings(BaseModel):
+    """单个路由实例（从库 / 分库）的连接配置。
+    ----
+    对位 Java 端 ``AtlasRedisProperties.slaves`` 的 ``Map<String,
+    AtlasRedisProperties>`` —— Java 的每个从库是一份完整的
+    ``AtlasRedisProperties``，Python 端收敛成一个更小的模型：只保留
+    「连接 + namespace + 路由前缀」三项必填语义，其余池参数留空时继承
+    主实例的配置。
+
+    English
+    --------
+    Connection settings of one routed instance. Mirrors Java's
+    ``Map<String, AtlasRedisProperties>`` for ``slaves``, but keeps
+    only the connection / namespace / route prefix; unset pool settings
+    are inherited from the primary instance.
+    """
+
+    url: str = Field(
+        ...,
+        description="该实例的 Redis 连接 URL，格式同主实例。",
+    )
+    namespace: Optional[str] = Field(
+        default=None,
+        description="该实例自己的 key 前缀；None=继承主实例的 namespace。",
+    )
+    prefix: Optional[str] = Field(
+        default=None,
+        description="路由前缀；None=用 slaves 映射的键名作为前缀。"
+        "对位 Java 端 ``slaves`` 映射的 key。",
+    )
+    max_connections: Optional[int] = Field(
+        default=None, description="连接池大小；None=继承主实例。"
+    )
+    socket_timeout: Optional[float] = Field(
+        default=None, description="读写超时（秒）；None=继承主实例。"
+    )
+    socket_connect_timeout: Optional[float] = Field(
+        default=None, description="连接超时（秒）；None=继承主实例。"
+    )
+    socket_keepalive: Optional[bool] = Field(
+        default=None, description="TCP keepalive；None=继承主实例。"
+    )
+    retry_on_timeout: Optional[bool] = Field(
+        default=None, description="超时时重试；None=继承主实例。"
+    )
+    decode_responses: Optional[bool] = Field(
+        default=None, description="bytes 自动 decode；None=继承主实例。"
+    )
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, v: str) -> str:
+        if not v or not isinstance(v, str):
+            raise ValueError("url must be a non-empty string")
+        if not (
+            v.startswith("redis://")
+            or v.startswith("rediss://")
+            or v.startswith("unix://")
+        ):
+            raise ValueError(
+                f"url must start with redis://, rediss://, or unix://; "
+                f"got {v[:20]!r}"
+            )
+        return v
+
+
 class RedisCacheProperties(BaseSettings):
     """Redis 缓存完整配置（顶层 dataclass）。
 
@@ -192,6 +258,7 @@ class RedisCacheProperties(BaseSettings):
         ATLAS_RICHIE_CACHE_REDIS_SHUTDOWN_TIMEOUT          # 秒
         ATLAS_RICHIE_CACHE_REDIS_POOL_MAX_WAIT_SECONDS     # 秒
         ATLAS_RICHIE_CACHE_REDIS_PERF__ENABLED             # 嵌套（用 `__` 分隔）
+        ATLAS_RICHIE_CACHE_REDIS_SLAVES                    # 路由实例表（JSON）
         ... 等 23 个 perf 字段
 
     **List 字段 env var 格式**：pydantic-settings v2 解析 list 字段时
@@ -203,6 +270,9 @@ class RedisCacheProperties(BaseSettings):
         # ✓ 正确
         ATLAS_RICHIE_CACHE_REDIS_L2_CACHING_DATA='["string", "hash"]'
         ATLAS_RICHIE_CACHE_REDIS_PERF_TOC_ALLOWED_COMPLEXITIES='["O1", "LOG_N"]'
+
+        # ✓ 正确（路由实例表：映射名 -> 实例配置）
+        ATLAS_RICHIE_CACHE_REDIS_SLAVES='{"order-redis": {"url": "redis://..."}}'
 
     **kv env var 来源**：业务方生产环境用 `docker run -e` 或 K8s
     `envFrom` 注入；开发环境在项目根写 `.env` 文件（pydantic-settings
@@ -340,4 +410,14 @@ class RedisCacheProperties(BaseSettings):
     perf: RedisPerfSettings = Field(
         default_factory=RedisPerfSettings,
         description="Redis 性能守卫（嵌套 23 字段）。对位 Java 端 `RedisPerf`。",
+    )
+
+    # ── 多实例前缀路由（对位 Java 端 slaves 映射）──────────────────
+
+    slaves: Dict[str, RedisInstanceSettings] = Field(
+        default_factory=dict,
+        description="路由实例表：映射名 -> 实例配置。key 形如 "
+        "`prefix@@real_key` 的缓存 key 会路由到该前缀对应的实例；"
+        "不带前缀的 key 走主实例。对位 Java 端 "
+        "`AtlasRedisProperties.slaves`。",
     )

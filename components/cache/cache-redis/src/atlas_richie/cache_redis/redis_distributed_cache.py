@@ -35,7 +35,7 @@ abstraction. Each `Redis*Manager` in `managers/` wraps a
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import redis as redis_lib
 
@@ -117,6 +117,21 @@ class RedisDistributedCache:
         """
         self._validate(key)
         return f"{self._namespace}:{key}"
+
+    def decorate_key(self, key: str, transform: Callable[[str], str]) -> str:
+        """Derive a key from ``key`` (lock key, meta key, marker key).
+
+        The transform is applied to the key and the result is namespaced
+        like any other key. The multi-instance override keeps the route
+        prefix so the derived key lands in the same instance as the
+        original one.
+
+        English
+        --------
+        Derive a namespaced key from ``key``.
+        """
+        self._validate(key)
+        return self.make_key(transform(key))
 
     # ── Escape hatch ────────────────────────────────────────────────
 

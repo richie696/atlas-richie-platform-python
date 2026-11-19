@@ -31,7 +31,7 @@ split on the locking side).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from atlas_richie.cache_core.config.bloom_filter_config import (
     BloomFilterConfig,
@@ -40,6 +40,7 @@ from atlas_richie.cache_core.enums.cache_provider import CacheProvider
 from atlas_richie.cache_core.ops.cache_infrastructure import (
     CacheInfrastructure,
 )
+from atlas_richie.cache_core.routing import CacheRouteRegistry
 from atlas_richie.cache_core.registry.provider_registrar import (
     ProviderRegistrar,
 )
@@ -65,6 +66,7 @@ from .managers.redis_struct_manager import RedisStructManager
 from .perf import RedisPerfGuard
 from .redis_cache_infrastructure import RedisCacheInfrastructure
 from .redis_distributed_cache import RedisDistributedCache
+from .routing import MultiRedisDistributedCache
 
 
 class RedisProviderRegistrar(ProviderRegistrar):
@@ -79,13 +81,32 @@ class RedisProviderRegistrar(ProviderRegistrar):
         connection_pool: Any | None = None,
         perf: RedisPerfGuard | None = None,
         properties: Any | None = None,
+        slaves: Mapping[str, RedisDistributedCache] | None = None,
+        route_registry: CacheRouteRegistry | None = None,
+        strict_routing: bool = True,
     ) -> None:
-        self._backend = RedisDistributedCache(
-            client,
-            namespace=namespace,
-            connection_string=connection_string,
-            connection_pool=connection_pool,
-        )
+        if slaves:
+            # Multi-instance mode: the primary stays the default target
+            # and the slaves are reached through their route prefix.
+            primary = RedisDistributedCache(
+                client,
+                namespace=namespace,
+                connection_string=connection_string,
+                connection_pool=connection_pool,
+            )
+            self._backend = MultiRedisDistributedCache(
+                primary,
+                slaves,
+                registry=route_registry,
+                strict=strict_routing,
+            )
+        else:
+            self._backend = RedisDistributedCache(
+                client,
+                namespace=namespace,
+                connection_string=connection_string,
+                connection_pool=connection_pool,
+            )
         self._infra = RedisCacheInfrastructure(self._backend, properties)
         # Eagerly construct the real managers (M1-M4).
         # Thread the optional `perf` guard into every manager that
@@ -237,6 +258,46 @@ class RedisProviderRegistrar(ProviderRegistrar):
         )
         client = redis_lib.Redis(connection_pool=pool)
 
+        # Multi-instance routing (mirrors Java's `slaves` map): every
+        # entry gets its own client + connection pool. Settings that
+        # the instance does not override are inherited from the
+        # primary.
+        slaves: dict[str, RedisDistributedCache] = {}
+        for name, cfg in (properties.slaves or {}).items():
+            slave_pool_kwargs = dict(pool_kwargs)
+            for field_name in (
+                "max_connections",
+                "socket_timeout",
+                "socket_connect_timeout",
+                "socket_keepalive",
+                "retry_on_timeout",
+                "decode_responses",
+            ):
+                override = getattr(cfg, field_name)
+                if override is not None:
+                    slave_pool_kwargs[field_name] = override
+            slave_pool = BlockingConnectionPool.from_url(
+                cfg.url, timeout=pool_timeout, **slave_pool_kwargs
+            )
+            slave_client = redis_lib.Redis(connection_pool=slave_pool)
+            slaves[name] = RedisDistributedCache(
+                slave_client,
+                namespace=cfg.namespace or properties.namespace,
+                connection_string=_mask_redis_url(cfg.url),
+                connection_pool=slave_pool,
+            )
+
+        # The route prefix defaults to the `slaves` map key (Java uses
+        # the map key as the prefix too); an explicit `prefix` wins.
+        registry: CacheRouteRegistry | None = None
+        if slaves:
+            registry = CacheRouteRegistry(
+                {
+                    cfg.prefix or name: name
+                    for name, cfg in (properties.slaves or {}).items()
+                }
+            )
+
         masked = _mask_redis_url(properties.url)
         # R-M5.4: build the perf guard from `properties.perf` so all
         # 23 fields in `RedisPerfSettings` flow into the manager
@@ -253,9 +314,21 @@ class RedisProviderRegistrar(ProviderRegistrar):
             connection_pool=pool,
             perf=perf_guard,
             properties=properties,
+            slaves=slaves or None,
+            route_registry=registry,
         )
 
     # ── 16 low-level ops ───────────────────────────────────────────
+
+    @property
+    def backend(self) -> RedisDistributedCache:
+        """The transport wrapper behind the managers.
+
+        A plain ``RedisDistributedCache`` in single-instance mode, a
+        ``MultiRedisDistributedCache`` when route prefixes are
+        configured.
+        """
+        return self._backend
 
     @property
     def namespace(self) -> str:

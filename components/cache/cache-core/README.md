@@ -34,6 +34,10 @@
     - [Read-through](#read-through)
     - [Write-through](#write-through)
     - [Refresh-ahead](#refresh-ahead)
+- [🔀 前缀路由契约](#-前缀路由契约)
+    - [key 约定](#key-约定)
+    - [路由契约 API](#路由契约-api)
+    - [为什么分成两半](#为什么分成两半)
 - [⚙️ 配置参考](#️-配置参考)
     - [CacheDefinition 字段](#cachedefinition-字段)
     - [与 Java 的字段对位](#与-java-的字段对位)
@@ -62,6 +66,7 @@
 - ✅ **Write-through**：缓存变更同步回写数据源，顺序与 JSR-107 一致（先改缓存、再调写入器）
 - ✅ **Refresh-ahead**：条目临近过期时后台异步刷新，热 key 不在到期瞬间付回源延迟
 - ✅ **按值存储可开关**：读写都做防御性拷贝是默认行为，按引用存储作为显式关闭开关
+- ✅ **多实例路由契约**：前缀路由的 key 解析与前缀表放在 core（零第三方依赖），连接那一半留在后端包
 - ✅ **零第三方依赖守护**：`tools/dependency-check/check_core_imports.py` 守住 core 不引入后端依赖
 - ✅ **后端零耦合**：后端实现 `ProviderRegistrar` SPI 并注册到 `CacheRegistry`，
   core 不反向依赖任何后端
@@ -76,6 +81,7 @@ atlas_richie/cache_core/
 ├── function/      # 11 个高层 function Protocol
 ├── contracts/     # 5 个横切契约（lock、pubsub、keyspace ...）
 ├── commons/       # cache_key_utils、geo_point_result
+├── routing/       # 多实例前缀路由契约（key 解析 + 前缀表，零第三方依赖）
 ├── enums/         # CacheProvider、KeyTypeEnum、L2CachingRegion
 ├── config/        # BloomFilterConfig
 ├── operations/    # BoundedQueue、BoundedStack、容量上限
@@ -310,6 +316,62 @@ LocalCacheProperties(
 - ✅ 需要 `read_through=True` **且**注册了 loader 才生效（与 Java 的要求一致）
 - ✅ 同一 key 的刷新有 in-flight 去重，不会并发重复回源
 - ✅ 刷新失败不影响条目：源不可达时它照常按原时间过期
+
+## 🔀 前缀路由契约
+
+多 Redis 实例路由的**契约半边**：只管「前缀 -> 实例名」的映射与 key 解析，
+不碰任何连接。连接那一半在 ``atlas-richie-cache-redis`` 的 ``routing/``
+子包。
+
+### key 约定
+
+| key 形态 | 含义 | 真实 key |
+|----------|------|----------|
+| ``user:1`` | 走主实例 | ``user:1`` |
+| ``order@@user:1`` | 路由到前缀 ``order`` 的实例 | ``user:1`` |
+
+前缀取**第一个** ``@@`` 之前的部分；``@@`` 之后的内容全部算真实 key——
+与 ``CacheKeyUtils.get_real_key`` 完全一致，因此两处不会出现口径分歧。
+
+### 路由契约 API
+
+| 类型 | 作用 |
+|------|------|
+| ``CacheRouteKey.parse(key)`` | 解析出 ``(prefix, real_key)`` |
+| ``CacheRouteKey.decorate(transform)`` | 对**真实 key** 做变换并保留前缀——派生 key（锁 key / meta key）靠它留在同一实例 |
+| ``CacheRouteRegistry`` | 线程安全的「前缀 -> 实例名」表，可运行时增删 |
+| ``CacheRouteError`` | 前缀未注册 / key 非法（继承 ``RuntimeError``，不引入 contracts 依赖） |
+
+```python
+from atlas_richie.cache_core.routing import CacheRouteKey, CacheRouteRegistry
+
+registry = CacheRouteRegistry({"order": "order-redis"})
+registry.resolve("order")                      # "order-redis"
+CacheRouteKey.parse("order@@user:1").real_key  # "user:1"
+CacheRouteKey.parse("order@@user:1").decorate(lambda r: f"lock:{r}")
+# "order@@lock:user:1"
+```
+
+### 为什么分成两半
+
+Java 端 ``MultiRedisTemplate.slaveTemplateMap`` 是「前缀 -> RedisTemplate
+实例」，只能在配置期装配（``RedisBaseAutoConfiguration.createRedisTemplate``
+递归建好模板后一次性塞进去），运行时增删必须重启。Python 端把**表**和
+**连接**拆开：
+
+- 本包（core，零第三方依赖）只管「前缀 -> 实例名」；
+- ``cache_redis`` 侧的路由客户端把「实例名 -> 实际连接」绑定上。
+
+因此路由表可以在运行时增删（线程安全）——这是与 Java 的一处刻意差异。
+
+### 与 Java 的差异
+
+| 维度 | Java | 本包 |
+|------|------|------|
+| 表的内容 | 前缀 -> RedisTemplate 实例 | 前缀 -> 实例名（连接在 redis 侧绑定） |
+| 装配时机 | 仅配置期，运行时改要重启 | 运行时可增删（线程安全） |
+| 未注册前缀 | 抛 ``PlatformRuntimeException`` | 抛 ``CacheRouteError``（core 不依赖 contracts） |
+| 真实 key 取值 | ``key.split("@@")[1]``（只取第二段） | 首个 ``@@`` 之后的**全部**内容（与 ``CacheKeyUtils`` 一致） |
 
 ## ⚙️ 配置参考
 
