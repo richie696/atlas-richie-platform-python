@@ -52,6 +52,7 @@ from atlas_richie.cache_core.commons.geo_point_result import GeoPointResult
 from atlas_richie.cache_core.function.geo_function import GeoFunction
 from atlas_richie.cache_core.ops.geo_ops import GeoOps
 
+from ..perf import RedisOperationCatalog, RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 
@@ -70,9 +71,11 @@ class RedisGeoManager(GeoOps, GeoFunction):
         self,
         backend: RedisDistributedCache,
         infra: RedisCacheInfrastructure,
+        perf: RedisPerfGuard | None = None,
     ) -> None:
         self._backend = backend
         self._infra = infra
+        self._perf = perf
 
     def _k(self, key: str) -> str:
         return self._backend.make_key(key)
@@ -135,6 +138,10 @@ class RedisGeoManager(GeoOps, GeoFunction):
     def add_geo(
         self, key: str, longitude: float, latitude: float, member: str
     ) -> None:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "add_geo", RedisOperationCatalog.GEO_ADD
+            )
         self.add(key, longitude, latitude, member)
 
     def geo_dist(
@@ -142,6 +149,10 @@ class RedisGeoManager(GeoOps, GeoFunction):
     ) -> float | None:
         """Same as `distance` but returns `None` for missing members
         (matches the cache-core `GeoFunction.geo_dist` signature)."""
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "geo_dist", RedisOperationCatalog.GEO_DIST
+            )
         raw = self._backend.raw_client().geodist(
             self._k(key), str(member1), str(member2)
         )
@@ -152,6 +163,10 @@ class RedisGeoManager(GeoOps, GeoFunction):
     def geo_radius(
         self, key: str, longitude: float, latitude: float, radius: float
     ) -> List[GeoPointResult]:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "geo_radius", RedisOperationCatalog.GEO_RADIUS
+            )
         return self.radius(key, longitude, latitude, radius)
 
 

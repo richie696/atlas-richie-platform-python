@@ -61,6 +61,7 @@ from typing import Any, Collection, Dict, List, Set, TypeVar
 from atlas_richie.cache_core.function.z_set_function import ZSetFunction
 from atlas_richie.cache_core.ops.ranking_ops import RankingOps
 
+from ..perf import RedisOperationCatalog, RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
@@ -93,9 +94,11 @@ class RedisRankingManager(RankingOps, ZSetFunction):
         self,
         backend: RedisDistributedCache,
         infra: RedisCacheInfrastructure,
+        perf: RedisPerfGuard | None = None,
     ) -> None:
         self._backend = backend
         self._infra = infra
+        self._perf = perf
 
     def _k(self, key: str) -> str:
         return self._backend.make_key(key)
@@ -231,6 +234,10 @@ class RedisRankingManager(RankingOps, ZSetFunction):
         self.set(key, value, score)
 
     def batch_add_to_zset(self, mapping: dict[str, set]) -> None:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "batch_add_to_zset", RedisOperationCatalog.ZSET_BATCH
+            )
         self.batch_set(mapping)
 
     def get_zset_data(
@@ -300,6 +307,10 @@ class RedisRankingManager(RankingOps, ZSetFunction):
     def intersect_from_zset(
         self, key: str, other_keys: Collection[str], reference: type
     ) -> List[Any]:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "intersect_from_zset", RedisOperationCatalog.ZSET_MULTI_KEY
+            )
         namespaced = [self._k(key)] + [self._k(k) for k in other_keys]
         raws = self._backend.raw_client().zinter(namespaced)
         return [self._decode_member(r, reference) for r in raws or []]
@@ -307,6 +318,10 @@ class RedisRankingManager(RankingOps, ZSetFunction):
     def union_from_zset(
         self, key: str, other_keys: Collection[str], reference: type
     ) -> List[Any]:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "union_from_zset", RedisOperationCatalog.ZSET_MULTI_KEY
+            )
         namespaced = [self._k(key)] + [self._k(k) for k in other_keys]
         raws = self._backend.raw_client().zunion(namespaced)
         return [self._decode_member(r, reference) for r in raws or []]
@@ -314,6 +329,10 @@ class RedisRankingManager(RankingOps, ZSetFunction):
     def difference_from_zset(
         self, key: str, other_keys: Collection[str], reference: type
     ) -> List[Any]:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "difference_from_zset", RedisOperationCatalog.ZSET_MULTI_KEY
+            )
         namespaced = [self._k(key)] + [self._k(k) for k in other_keys]
         raws = self._backend.raw_client().zdiff(namespaced)
         return [self._decode_member(r, reference) for r in raws or []]
@@ -321,6 +340,11 @@ class RedisRankingManager(RankingOps, ZSetFunction):
     def intersect_and_store_from_zset(
         self, key: str, other_keys: Collection[str], dest_key: str
     ) -> int:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "intersect_and_store_from_zset",
+                RedisOperationCatalog.ZSET_MULTI_KEY,
+            )
         namespaced = [self._k(key)] + [self._k(k) for k in other_keys]
         return int(
             self._backend.raw_client().zinterstore(
@@ -331,6 +355,11 @@ class RedisRankingManager(RankingOps, ZSetFunction):
     def union_and_store_from_zset(
         self, key: str, other_keys: Collection[str], dest_key: str
     ) -> int:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "union_and_store_from_zset",
+                RedisOperationCatalog.ZSET_MULTI_KEY,
+            )
         namespaced = [self._k(key)] + [self._k(k) for k in other_keys]
         return int(
             self._backend.raw_client().zunionstore(
@@ -341,6 +370,11 @@ class RedisRankingManager(RankingOps, ZSetFunction):
     def difference_and_store_from_zset(
         self, key: str, other_keys: Collection[str], dest_key: str
     ) -> int:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "difference_and_store_from_zset",
+                RedisOperationCatalog.ZSET_MULTI_KEY,
+            )
         namespaced = [self._k(key)] + [self._k(k) for k in other_keys]
         return int(
             self._backend.raw_client().zdiffstore(

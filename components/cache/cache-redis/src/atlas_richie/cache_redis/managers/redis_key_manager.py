@@ -34,7 +34,7 @@ from atlas_richie.cache_core.enums.key_type_enum import KeyTypeEnum
 from atlas_richie.cache_core.function.cache_function import CacheFunction
 from atlas_richie.cache_core.ops.key_ops import KeyOps
 
-from .._perf_guard import RedisPerfGuard
+from ..perf import RedisOperationCatalog, RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from .redis_string_manager import _noop_cm
@@ -428,6 +428,10 @@ class RedisKeyManager(KeyOps):
         Returns:
             该父节点下的所有子节点 key。
         """
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "get_all_keys", RedisOperationCatalog.KEYS_PATTERN
+            )
         out: Set[str] = set()
         prefix = f"{self._backend.namespace}:"
         for raw in self._backend.raw_client().scan_iter(

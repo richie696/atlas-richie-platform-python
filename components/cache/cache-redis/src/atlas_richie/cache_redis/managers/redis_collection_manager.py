@@ -59,7 +59,7 @@ from atlas_richie.cache_core.function.cache_function import CacheFunction
 from atlas_richie.cache_core.function.set_function import SetFunction
 from atlas_richie.cache_core.ops.collection_ops import CollectionOps
 
-from .._perf_guard import RedisPerfGuard
+from ..perf import RedisOperationCatalog, RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
@@ -542,6 +542,10 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         return set()
 
     def get_from_set(self, key: str, reference: type) -> _PySet[T]:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "get_from_set", RedisOperationCatalog.SET_MEMBERS
+            )
         return self.get(key, reference)
 
     def pop_data_from_set(self, key: str, reference: type) -> Any:
@@ -558,6 +562,10 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         """SDIFF across multiple keys (left-to-right precedence)."""
         if not keys:
             return set()
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "difference_from_set", RedisOperationCatalog.SET_COMBINE
+            )
         namespaced = [self._k(k) for k in keys]
         raws = self._backend.raw_client().sdiff(*namespaced)
         if not raws:
@@ -570,6 +578,10 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         """SDIFF `key` minus the union of `other_keys`."""
         if not other_keys:
             return self.get_from_set(key, reference)
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "difference_from_set_with_key", RedisOperationCatalog.SET_COMBINE
+            )
         namespaced = [self._k(k) for k in other_keys]
         raws = self._backend.raw_client().sdiff(self._k(key), *namespaced)
         if not raws:
@@ -582,6 +594,10 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         """SDIFFSTORE; returns the cardinality of the stored set."""
         if not compare_keys:
             return 0
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "difference_and_store_from_set", RedisOperationCatalog.SET_COMBINE
+            )
         namespaced = [self._k(k) for k in compare_keys]
         return int(
             self._backend.raw_client().sdiffstore(
@@ -596,6 +612,10 @@ class RedisCollectionManager(CollectionOps, SetFunction):
         """Bulk SADD across many Sets; NOT atomic (per the Java doc)."""
         if not mapping:
             return
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "batch_add_to_set", RedisOperationCatalog.SET_COMBINE
+            )
         client = self._backend.raw_client()
         pipe = client.pipeline(transaction=False)
         for key, values in mapping.items():

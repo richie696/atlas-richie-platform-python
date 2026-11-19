@@ -41,6 +41,7 @@ from __future__ import annotations
 
 from atlas_richie.cache_core.ops.limiter_ops import LimiterOps
 
+from ..perf import RedisOperationCatalog, RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 
@@ -70,9 +71,11 @@ class RedisLimiterManager(LimiterOps):
         self,
         backend: RedisDistributedCache,
         infra: RedisCacheInfrastructure,
+        perf: RedisPerfGuard | None = None,
     ) -> None:
         self._backend = backend
         self._infra = infra
+        self._perf = perf
         self._script_sha: str | None = None
 
     def _k(self, key: str) -> str:
@@ -91,6 +94,10 @@ class RedisLimiterManager(LimiterOps):
     def try_acquire(
         self, key: str, max_count: int, window_seconds: int
     ) -> bool:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "try_acquire", RedisOperationCatalog.LIMITER_LUA
+            )
         sha = self._load_script()
         try:
             current = self._backend.raw_client().evalsha(

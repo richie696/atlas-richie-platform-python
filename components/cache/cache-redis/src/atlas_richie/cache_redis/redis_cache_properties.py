@@ -93,17 +93,20 @@ class RedisPerfSettings(BaseSettings):
     `hashFieldPayloadMaxBytes{Warn,Error}` /
     `hashPayloadMaxBytes{Warn,Error}` / `blockHashPayloadViolations`。
 
-    注意：性能守卫在 M5.3+ 才真正接入 manager；目前字段已就位但
-    enforcement 代码未实现（属于 dev 剩余）。`enabled=false` 默认值
-    与 Java 端一致，避免对存量项目产生日志噪声。
+    性能守卫的 enforcement 已全部接入 manager：载荷 / 批量 / 耗时三类检查在
+    `RedisPerfGuard`，复杂度分级策略在 `check_operation_tier`，String 载荷
+    形状规则在 `check_string_write_payload`。`enabled=false` 默认值与
+    Java 端一致，避免对存量项目产生日志噪声——关闭时所有检查都是空操作。
 
     English
     --------
     Redis performance-guard settings. Mirrors Java's `RedisPerf`
-    1:1. NOTE: enforcement is not yet wired into the managers
-    (deferred to M5.3+); the fields are defined so the config
-    surface is complete. `enabled=False` matches Java's default
-    to avoid log noise on existing deployments.
+    1:1 (23 fields). Enforcement is wired into the managers: the
+    payload / batch / time checks live in `RedisPerfGuard`, the
+    complexity-tier policy in `check_operation_tier`, and the String
+    shape rules in `check_string_write_payload`. `enabled=False`
+    matches Java's default to avoid log noise on existing deployments
+    — with the flag off every check is a no-op.
     """
 
     model_config = SettingsConfigDict(

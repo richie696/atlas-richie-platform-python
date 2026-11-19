@@ -42,7 +42,7 @@ from typing import Any, Callable, TypeVar
 import redis as redis_lib
 from atlas_richie.cache_core.ops.struct_ops import StructOps
 
-from .._perf_guard import RedisPerfGuard
+from ..perf import RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value

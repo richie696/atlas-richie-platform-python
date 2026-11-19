@@ -49,6 +49,7 @@ from atlas_richie.cache_core.function.notification_function import (
 )
 from atlas_richie.cache_core.ops.notification_ops import NotificationOps
 
+from ..perf import RedisOperationCatalog, RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import encode_value
@@ -69,10 +70,12 @@ class RedisNotificationManager(NotificationOps, NotificationFunction):
         self,
         backend: RedisDistributedCache,
         infra: RedisCacheInfrastructure,
+        perf: RedisPerfGuard | None = None,
     ) -> None:
         # Redis 模板（JSON 序列化）
         self._backend = backend
         self._infra = infra
+        self._perf = perf
 
     def _k(self, key: str) -> str:
         return self._backend.make_key(key)
@@ -121,6 +124,10 @@ class RedisNotificationManager(NotificationOps, NotificationFunction):
         --------
         `NotificationFunction` alias for `publish`.
         """
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "publish_notify", RedisOperationCatalog.PUBLISH
+            )
         return self.publish(topic, message)
 
     def subscribe(

@@ -27,6 +27,17 @@ facade，由每个 manager 注入并按需调用。
 （如 `check_string_payload`）对应 Java 的
 `RedisPerf.checkStringWritePayload(...)`。
 
+**复杂度分级**：`check_operation_tier` 对位 Java 的
+`RedisPerfGuard.execute(manager, method, meta, supplier)` 里的策略判定部分
+——白名单、`warn_non_o1`、`block_forbidden_tiers` 三段。Java 把策略判定
+与计时合在一个 `execute` 里，Python 侧沿用本仓库"检查前置 + `time_op`
+计时"的写法，所以本方法只判定、不计时。分级取值来自
+`RedisOperationCatalog`，不再由调用方手写字符串。
+
+**String 载荷形状**：`check_string_write_payload` 对位 Java 的
+`checkStringWritePayload`，由 `RedisStringPayloadInspector` 判定
+集合/Map/数组整包、超大文本与疑似整包 JSON。
+
 English
 --------
 Performance guard (`RedisPerfGuard`) — wire `RedisPerfSettings` (23
@@ -61,8 +72,14 @@ from typing import Any, Iterator, Mapping
 
 import structlog
 
-from .errors import ConfigurationError
-from .redis_cache_properties import RedisPerfSettings
+from ..errors import ConfigurationError
+from ..redis_cache_properties import RedisPerfSettings
+from .command_meta import RedisCommandMeta
+from .complexity_tier import BLOCKED_TIERS, RedisComplexityTier
+from .string_payload_inspector import (
+    RedisStringPayloadInspector,
+    StringPayloadSeverity,
+)
 
 _log = structlog.get_logger("atlas_richie.cache.perf")
 
@@ -81,6 +98,29 @@ _BIG_KEY_TOKEN_RE = re.compile(
     r"(^|[^a-z0-9_]+)(" + "|".join(_BIG_KEY_TOKENS) + r")([^a-z0-9_]+|$)",
     flags=re.IGNORECASE,
 )
+
+#: 旧式复杂度字符串 → 分级枚举（`check_complexity` 兼容入口用）。
+_LEGACY_COMPLEXITY: dict[str, RedisComplexityTier] = {
+    "O1": RedisComplexityTier.O1,
+    "LOG_N": RedisComplexityTier.LOG_N,
+    "O_N": RedisComplexityTier.LINEAR_N,
+    "LINEAR_N": RedisComplexityTier.LINEAR_N,
+    "O_N_LOG_N": RedisComplexityTier.WORSE,
+    "WORSE": RedisComplexityTier.WORSE,
+    "SCRIPT_OR_UNKNOWN": RedisComplexityTier.SCRIPT_OR_UNKNOWN,
+}
+
+#: 键名过长时截断的长度（与 Java `ellipsizeKey` 一致）。
+_MAX_KEY_HINT = 160
+
+
+def _ellipsize_key(key: str | None) -> str:
+    """超长键名截断，避免日志被一个巨型 key 撑爆。"""
+    if key is None:
+        return "null"
+    if len(key) <= _MAX_KEY_HINT:
+        return key
+    return key[:_MAX_KEY_HINT] + f"...({len(key)} chars)"
 
 
 def _is_empty(values: Any) -> bool:
@@ -391,45 +431,175 @@ class RedisPerfGuard:
         op_name: str,
         declared_complexity: str,
     ) -> None:
-        """Annotate a method's complexity class.
+        """按字符串声明复杂度分级（**兼容入口**）。
 
-        Used by managers to self-declare their algorithmic class
-        (`"O1"`, `"LOG_N"`, `"O_N"`, `"O_N_LOG_N"`, etc.) at the
-        top of each public method. The guard then either warns
-        (when `warn_non_o1=True` and the declared class is not
-        `O1`) or blocks (when `block_forbidden_tiers=True` and
-        the declared class is not in
-        `toc_allowed_complexities`).
+        新代码请用 :meth:`check_operation_tier` 并从
+        :class:`RedisOperationCatalog` 取预设——分级字符串手写容易各写各的，
+        而且拿不到 BIGKEY 探测建议。
+
+        本方法把旧字符串映射成 :class:`RedisComplexityTier` 后转交
+        `check_operation_tier`，因此**策略语义与新入口完全一致**
+        （白名单不命中即报错、按配置拦截 LINEAR_N / WORSE）。
 
         Args:
             op_name: Embed in log events.
-            declared_complexity: The complexity class this method
-                declares (e.g. `"O1"`).
+            declared_complexity: 旧式分级字符串（`"O1"` / `"LOG_N"` /
+                `"O_N"` / `"O_N_LOG_N"` …）。无法识别时按
+                `SCRIPT_OR_UNKNOWN` 处理。
+        """
+        self.check_operation_tier(
+            op_name,
+            _LEGACY_COMPLEXITY.get(
+                declared_complexity.upper(), RedisComplexityTier.SCRIPT_OR_UNKNOWN
+            ),
+        )
+
+    # ══════════════════════════════════════════════════════════════
+    # Complexity tier policy
+    # ══════════════════════════════════════════════════════════════
+
+    def check_operation_tier(
+        self,
+        op_name: str,
+        meta: RedisCommandMeta | RedisComplexityTier,
+    ) -> None:
+        """按复杂度分级执行策略判定。
+
+        判定顺序与 Java `RedisPerfGuard.executeInternal` 一致：
+
+        1. **白名单**：`toc_allowed_complexities` 非空时，分级不在名单内
+           即记 error；`block_forbidden_tiers` 为真时**抛异常**拦截。
+        2. **非 O(1) 告警**：`warn_non_o1` 为真且分级不是 `O1` 时记 warning。
+        3. **禁用档拦截**：`block_forbidden_tiers` 为真且分级属于
+           `LINEAR_N` / `WORSE` 时**抛异常**——这两档在 ToC 核心路径
+           必须禁用。
+
+        与 Java 的差别：Java 把策略判定与计时合在一个 `execute(...)` 里，
+        Python 侧沿用本仓库既有的"检查前置 + `time_op` 计时"写法，
+        因此本方法只做策略判定，不计时。
+
+        Args:
+            op_name: Embed in log events.
+            meta: 分级预设（带 BIGKEY 探测建议）或裸分级。
         """
         if not self._settings.enabled:
             return
-        normalized = declared_complexity.upper()
-        if (
-            self._settings.warn_non_o1
-            and normalized != "O1"
-        ):
+
+        if isinstance(meta, RedisCommandMeta):
+            tier = meta.tier
+            if self._settings.log_big_key_probe_hints:
+                self._log_big_key_hints(op_name, meta)
+        else:
+            tier = meta
+
+        allowed = self._settings.toc_allowed_complexities
+        if allowed:
+            normalized_allowed = {
+                str(item).strip().upper() for item in allowed if str(item).strip()
+            }
+            if tier.value.upper() not in normalized_allowed:
+                _log.error(
+                    "perf.tier_not_allowed",
+                    op=op_name,
+                    tier=tier.value,
+                    allowed=list(allowed),
+                )
+                if self._settings.block_forbidden_tiers:
+                    raise ConfigurationError(
+                        f"tier {tier.value} not in toc_allowed_complexities "
+                        f"(op={op_name!r}, allowed={list(allowed)})"
+                    )
+
+        if self._settings.warn_non_o1 and tier is not RedisComplexityTier.O1:
             _log.warning(
                 "perf.non_o1_op",
                 op=op_name,
-                complexity=normalized,
+                tier=tier.value,
             )
-        if (
-            self._settings.block_forbidden_tiers
-            and self._settings.toc_allowed_complexities
-            and normalized not in {
-                c.upper() for c in self._settings.toc_allowed_complexities
-            }
-        ):
+
+        if self._settings.block_forbidden_tiers and tier in BLOCKED_TIERS:
             _log.error(
                 "perf.forbidden_tier",
                 op=op_name,
-                complexity=normalized,
-                allowed=list(self._settings.toc_allowed_complexities),
+                tier=tier.value,
+            )
+            raise ConfigurationError(
+                f"operation blocked by complexity policy "
+                f"(op={op_name!r}, tier={tier.value})"
+            )
+
+    def _log_big_key_hints(
+        self, op_name: str, meta: RedisCommandMeta
+    ) -> None:
+        """非 O(1) 操作时，提示该用哪个命令探一下 BIGKEY。"""
+        if meta.tier is RedisComplexityTier.O1:
+            return
+        hints = meta.probe_hints()
+        if not hints:
+            return
+        _log.warning(
+            "perf.big_key_probe_hints",
+            op=op_name,
+            tier=meta.tier.value,
+            suggest=hints,
+            meta=meta.description,
+        )
+
+    # ══════════════════════════════════════════════════════════════
+    # String payload shape inspection
+    # ══════════════════════════════════════════════════════════════
+
+    def check_string_write_payload(
+        self,
+        op_name: str,
+        key: str,
+        value: Any,
+    ) -> None:
+        """写入 Redis String 前检测典型滥用。
+
+        受 `enabled` 与 `warn_string_payload_anti_patterns` 双开关控制。
+        **`value` 必须是序列化之前的原始值**——集合 / Map 的形状只有在
+        原始值上才看得出来（编码成 JSON 之后就只剩字符串了）。
+
+        Args:
+            op_name: Embed in log events.
+            key: 缓存键（过长会截断）。
+            value: 即将写入的原始值。
+
+        Raises:
+            ConfigurationError: 检查结果为 ERROR 且
+                `block_string_payload_violations` 为真时抛出。
+        """
+        if (
+            not self._settings.enabled
+            or not self._settings.warn_string_payload_anti_patterns
+        ):
+            return
+
+        result = RedisStringPayloadInspector.inspect(value, self._settings)
+        if result.severity is StringPayloadSeverity.OK:
+            return
+
+        key_hint = _ellipsize_key(key)
+        if result.severity is StringPayloadSeverity.WARN:
+            _log.warning(
+                "perf.string_payload_anti_pattern",
+                op=op_name,
+                key=key_hint,
+                detail=result.detail,
+            )
+            return
+
+        _log.error(
+            "perf.string_payload_anti_pattern",
+            op=op_name,
+            key=key_hint,
+            detail=result.detail,
+        )
+        if self._settings.block_string_payload_violations:
+            raise ConfigurationError(
+                f"String value anti-pattern op={op_name!r} key={key_hint} "
+                f"detail={result.detail}"
             )
 
     # ══════════════════════════════════════════════════════════════

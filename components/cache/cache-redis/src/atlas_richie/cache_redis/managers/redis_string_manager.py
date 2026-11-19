@@ -123,7 +123,7 @@ from atlas_richie.cache_core.ops.value_ops import ValueOps
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
-from .._perf_guard import RedisPerfGuard
+from ..perf import RedisOperationCatalog, RedisPerfGuard
 
 
 # ── Stampede-prevention lock (M4) ────────────────────────────────────
@@ -402,6 +402,9 @@ class RedisStringManager(ValueOps, StringFunction):
             return {}
         if self._perf is not None:
             self._perf.check_batch_size("get_map", len(keys))
+            self._perf.check_operation_tier(
+                "get_map", RedisOperationCatalog.STRING_MULTI_GET
+            )
         with self._perf.time_op("get_map") if self._perf is not None else _noop_cm():
             namespaced = [self._k(k) for k in keys]
             raws = self._backend.raw_client().mget(namespaced)
@@ -417,6 +420,9 @@ class RedisStringManager(ValueOps, StringFunction):
             return []
         if self._perf is not None:
             self._perf.check_batch_size("get_list", len(keys))
+            self._perf.check_operation_tier(
+                "get_list", RedisOperationCatalog.STRING_MULTI_GET
+            )
         with self._perf.time_op("get_list") if self._perf is not None else _noop_cm():
             namespaced = [self._k(k) for k in keys]
             raws = self._backend.raw_client().mget(namespaced)
@@ -870,6 +876,8 @@ class RedisStringManager(ValueOps, StringFunction):
 
     def add_value(self, key: str, value: Any, timeout_millis: int) -> None:
         """High-level set with TTL + anti-avalanche offset."""
+        if self._perf is not None:
+            self._perf.check_string_write_payload("add_value", key, value)
         client = self._backend.raw_client()
         client.set(
             self._k(key),
@@ -878,12 +886,18 @@ class RedisStringManager(ValueOps, StringFunction):
         )
 
     def add_value_simple(self, key: str, value: Any) -> None:
+        if self._perf is not None:
+            self._perf.check_string_write_payload("add_value_simple", key, value)
         self.set(key, value)
 
     def add_value_if_absent(
         self, key: str, value: Any, timeout_millis: int
     ) -> bool:
         """High-level set-if-absent with TTL + anti-avalanche offset."""
+        if self._perf is not None:
+            self._perf.check_string_write_payload(
+                "add_value_if_absent", key, value
+            )
         client = self._backend.raw_client()
         result = client.set(
             self._k(key),
@@ -894,6 +908,10 @@ class RedisStringManager(ValueOps, StringFunction):
         return bool(result)
 
     def add_value_if_absent_simple(self, key: str, value: Any) -> bool:
+        if self._perf is not None:
+            self._perf.check_string_write_payload(
+                "add_value_if_absent_simple", key, value
+            )
         return self.set_if_absent(key, value)
 
     def batch_update_if_absent(

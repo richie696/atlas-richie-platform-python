@@ -62,7 +62,7 @@ from .managers.redis_ranking_manager import RedisRankingManager
 from .managers.redis_script_manager import RedisScriptManager
 from .managers.redis_string_manager import RedisStringManager
 from .managers.redis_struct_manager import RedisStructManager
-from ._perf_guard import RedisPerfGuard
+from .perf import RedisPerfGuard
 from .redis_cache_infrastructure import RedisCacheInfrastructure
 from .redis_distributed_cache import RedisDistributedCache
 
@@ -88,32 +88,42 @@ class RedisProviderRegistrar(ProviderRegistrar):
         )
         self._infra = RedisCacheInfrastructure(self._backend, properties)
         # Eagerly construct the real managers (M1-M4).
-        # R-M5.4: thread the optional `perf` guard into every manager
-        # that has a `_perf` slot. The 5 small managers that don't
-        # currently enforce perf (script / limiter / notification /
-        # event / ranking / bitmap / hyper_log / geo / lock /
-        # bounded_queue / bounded_stack) get `None` — adding the
-        # `perf` arg to their constructors is deferred to a later
-        # milestone (only the 5 most-frequent public surfaces are
-        # instrumented right now).
+        # Thread the optional `perf` guard into every manager that
+        # enforces it. The 12 Redis-backed managers Java guards
+        # (string / hash / set / zset / key / geo / bitmap / hyper_log /
+        # script / limiter / notification / event) all take the guard
+        # here too, plus `struct` which has no Java counterpart in
+        # the guard layer. The remaining managers (lock / bounded_queue /
+        # bounded_stack) still get `None`: they have no catalog preset
+        # on the Java side either.
         self._string_manager = RedisStringManager(self._backend, self._infra, perf)
         self._field_manager = RedisFieldManager(self._backend, self._infra, perf)
         self._collection_manager = RedisCollectionManager(
             self._backend, self._infra, perf
         )
         self._key_manager = RedisKeyManager(self._backend, self._infra, perf)
-        self._script_manager = RedisScriptManager(self._backend, self._infra)
-        self._limiter_manager = RedisLimiterManager(self._backend, self._infra)
+        self._script_manager = RedisScriptManager(
+            self._backend, self._infra, perf
+        )
+        self._limiter_manager = RedisLimiterManager(
+            self._backend, self._infra, perf
+        )
         self._notification_manager = RedisNotificationManager(
-            self._backend, self._infra
+            self._backend, self._infra, perf
         )
-        self._event_manager = RedisEventManager(self._backend, self._infra)
-        self._ranking_manager = RedisRankingManager(self._backend, self._infra)
-        self._bitmap_manager = RedisBitmapManager(self._backend, self._infra)
+        self._event_manager = RedisEventManager(
+            self._backend, self._infra, perf
+        )
+        self._ranking_manager = RedisRankingManager(
+            self._backend, self._infra, perf
+        )
+        self._bitmap_manager = RedisBitmapManager(
+            self._backend, self._infra, perf
+        )
         self._hyper_log_manager = RedisHyperLogManager(
-            self._backend, self._infra
+            self._backend, self._infra, perf
         )
-        self._geo_manager = RedisGeoManager(self._backend, self._infra)
+        self._geo_manager = RedisGeoManager(self._backend, self._infra, perf)
         self._struct_manager = RedisStructManager(self._backend, self._infra, perf)
         self._bounded_queue_manager = RedisBoundedQueueManager(
             self._backend, self._infra
@@ -233,7 +243,7 @@ class RedisProviderRegistrar(ProviderRegistrar):
         # `__init__`s. The guard is a no-op when `perf.enabled` is
         # False (the default), so callers who don't tune the 23
         # fields pay zero overhead.
-        from ._perf_guard import RedisPerfGuard as _RedisPerfGuard
+        from .perf import RedisPerfGuard as _RedisPerfGuard
 
         perf_guard = _RedisPerfGuard(properties.perf)
         return cls(

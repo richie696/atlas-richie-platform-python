@@ -35,6 +35,7 @@ from typing import Any
 from atlas_richie.cache_core.function.hyper_log_function import HyperLogFunction
 from atlas_richie.cache_core.ops.hyper_log_ops import HyperLogOps
 
+from ..perf import RedisOperationCatalog, RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import encode_value
@@ -54,9 +55,11 @@ class RedisHyperLogManager(HyperLogOps, HyperLogFunction):
         self,
         backend: RedisDistributedCache,
         infra: RedisCacheInfrastructure,
+        perf: RedisPerfGuard | None = None,
     ) -> None:
         self._backend = backend
         self._infra = infra
+        self._perf = perf
 
     def _k(self, key: str) -> str:
         return self._backend.make_key(key)
@@ -79,9 +82,17 @@ class RedisHyperLogManager(HyperLogOps, HyperLogFunction):
         return int(self._backend.raw_client().pfcount(self._k(key)))
 
     def pf_add(self, key: str, *values: Any) -> None:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "pf_add", RedisOperationCatalog.HLL_PFADD
+            )
         self.add(key, *values)
 
     def pf_count(self, key: str) -> int:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "pf_count", RedisOperationCatalog.HLL_PF_COUNT
+            )
         return self.count(key)
 
 

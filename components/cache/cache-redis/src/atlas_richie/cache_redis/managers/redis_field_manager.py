@@ -97,7 +97,7 @@ from atlas_richie.cache_core.function.cache_function import CacheFunction
 from atlas_richie.cache_core.function.hash_function import HashFunction
 from atlas_richie.cache_core.ops.field_ops import FieldOps
 
-from .._perf_guard import RedisPerfGuard
+from ..perf import RedisOperationCatalog, RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 from ..serialization import decode_value, encode_value
@@ -319,6 +319,10 @@ class RedisFieldManager(FieldOps, HashFunction):
                     client.hpexpire(self._k(key), ttl, field)
 
     def get_all(self, key: str, clazz: type) -> Dict[str, Any]:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "get_all", RedisOperationCatalog.HASH_FULL
+            )
         raw_map = self._backend.raw_client().hgetall(self._k(key))
         if not raw_map:
             return {}
@@ -360,6 +364,10 @@ class RedisFieldManager(FieldOps, HashFunction):
     # ── Meta ────────────────────────────────────────────────────────
 
     def get_fields(self, key: str) -> Set[str]:
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "get_fields", RedisOperationCatalog.HASH_KEYS
+            )
         raw = self._backend.raw_client().hkeys(self._k(key))
         return {self._normalise_field(f) for f in raw or []}
 

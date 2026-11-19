@@ -34,6 +34,7 @@ from typing import Any, List, TypeVar
 
 from atlas_richie.cache_core.ops.script_ops import ScriptOps
 
+from ..perf import RedisOperationCatalog, RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 
@@ -54,9 +55,11 @@ class RedisScriptManager(ScriptOps):
         self,
         backend: RedisDistributedCache,
         infra: RedisCacheInfrastructure,
+        perf: RedisPerfGuard | None = None,
     ) -> None:
         self._backend = backend
         self._infra = infra
+        self._perf = perf
 
     def _k(self, key: str) -> str:
         return self._backend.make_key(key)
@@ -71,6 +74,10 @@ class RedisScriptManager(ScriptOps):
         tuple so the namespaced-key prefix is applied to all KEYS[]
         references in the script.
         """
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "eval", RedisOperationCatalog.LUA_EVAL
+            )
         namespaced = [self._k(k) for k in keys]
         raw = self._backend.raw_client().eval(
             script, len(namespaced), *namespaced, *args

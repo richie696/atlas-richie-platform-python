@@ -74,6 +74,7 @@ from atlas_richie.cache_core.contracts.keyspace_listener import (
 from atlas_richie.cache_core.function.event_function import EventFunction
 from atlas_richie.cache_core.ops.event_ops import EventOps
 
+from ..perf import RedisOperationCatalog, RedisPerfGuard
 from ..redis_cache_infrastructure import RedisCacheInfrastructure
 from ..redis_distributed_cache import RedisDistributedCache
 
@@ -106,9 +107,11 @@ class RedisEventManager(EventOps, EventFunction):
         self,
         backend: RedisDistributedCache,
         infra: RedisCacheInfrastructure,
+        perf: RedisPerfGuard | None = None,
     ) -> None:
         self._backend = backend
         self._infra = infra
+        self._perf = perf
         self._subscriptions: Dict[str, _Subscription] = {}
         self._lock = threading.Lock()
         # R-226: in-process event bus.
@@ -129,6 +132,10 @@ class RedisEventManager(EventOps, EventFunction):
         # The listener receives the FULL key name (namespaced) as
         # `data`, so the caller can filter by their own namespace
         # prefix if they want.
+        if self._perf is not None:
+            self._perf.check_operation_tier(
+                "subscribe_key_event", RedisOperationCatalog.EVENT_SUBSCRIBE
+            )
         client = self._backend.raw_client()
         pubsub = client.pubsub()
         sub = _Subscription(pubsub, listener, pattern, pattern)

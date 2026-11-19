@@ -85,7 +85,13 @@ from .errors import (
     SerializationError,
     StateError,
 )
-from ._perf_guard import RedisPerfGuard
+from .perf import (
+    RedisCommandMeta,
+    RedisComplexityTier,
+    RedisOperationCatalog,
+    RedisPerfGuard,
+    RedisStringPayloadInspector,
+)
 from .managers.redis_bitmap_manager import RedisBitmapManager
 from .managers.redis_bounded_queue import RedisBoundedQueue
 from .managers.redis_bounded_queue_manager import RedisBoundedQueueManager
@@ -136,6 +142,8 @@ __all__ = [
     "RedisCacheInfrastructure",
     "RedisCacheProperties",
     "RedisCollectionManager",
+    "RedisCommandMeta",
+    "RedisComplexityTier",
     "RedisDistributedBatchLock",
     "RedisDistributedCache",
     "RedisDistributedLock",
@@ -148,9 +156,11 @@ __all__ = [
     "RedisLockManager",
     "RedisNotificationManager",
     "RedisNotificationListener",
+    "RedisOperationCatalog",
     "RedisPerfGuard",
     "RedisPerfSettings",
     "RedisSharedBloomFilter",
+    "RedisStringPayloadInspector",
     "InMemoryBloomFilter",
     "L2DistributedCache",
     "L2CacheFactory",
