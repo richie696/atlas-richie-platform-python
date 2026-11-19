@@ -1,6 +1,6 @@
 # 未完成工作清单
 
-> 截至 2026-11-19。已完成 59 项任务、71 个登记包（69 个 workspace 成员）。本清单只列**未完成**项。
+> 截至 2026-11-19。已完成 60 项任务、71 个登记包（69 个 workspace 成员）。本清单只列**未完成**项。
 > 优先级：P0 需你决策（阻塞）· P1 高价值缺口 · P2 剩余 provider · P3 未移植组件 · P4 技术债。
 > 规模：S（<半天）· M（1–2 天）· L（>2 天，建议单独立项）。
 > 原则：纯算法/契约 core 零第三方依赖；驱动隔离在适配器包；非必要不耦合，必要时桥接。
@@ -97,8 +97,21 @@
   `RedisKeyManager.setExpiredTime`。
   两处**刻意不抖动**（都不是缓存条目）：底层 `ValueOps` op（`set_with_ttl` 等）、
   M5.7 负缓存标记（短抑制窗口，必须准点过期）。
-- [ ] **perf guard 命令复杂度分级表**（S）
+- [x] **perf guard 命令复杂度分级表**（S）
   RedisOperationCatalog/ComplexityTier + String payload 形状规则（拒绝整集合塞 String）。
+  → 已补齐：新增 `cache-redis.perf` 子包，1:1 对位 Java `redis/perf`——
+  `RedisComplexityTier`（5 档）/ `RedisCommandMeta`（分级 + BIGKEY 探测建议）/
+  `RedisOperationCatalog`（26 条预设）/ `RedisStringPayloadInspector`（形状判定）。
+  `RedisPerfGuard` 补 `check_operation_tier`（白名单 → 非 O(1) 告警 →
+  禁用档拦截，顺序同 Java `executeInternal`）与 `check_string_write_payload`。
+  分级预设接到 12 个 manager 的 28 个调用点、形状检查接到 4 个 String 写入点
+  （对位 Java 34 处）。此前 Python 侧 `check_complexity` 零调用、8 个 manager
+  未注入 perf（registrar 里写明"延后到后续里程碑"）——本轮一并补上，
+  catalog 没有死预设。
+  两处**刻意差异**：Python 侧把策略判定与计时拆开（判定走
+  `check_operation_tier`，计时仍由 `time_op` 承担）；形状检查必须拿
+  **序列化前**的原始值——Java 的 `guardStringPayload` 拿到的是 `Object value`，
+  Python 若沿用"先 `encode_value` 再检查"会丢掉集合形状，只剩弱启发式。
 - [ ] **多 Redis 实例前缀路由**（M，需驱动）
   MultiRedisTemplate 的 prefix→instance 路由。
 

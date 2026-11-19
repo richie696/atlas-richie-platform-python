@@ -11,6 +11,21 @@ categories and Semantic Versioning.
 
 ### Added
 
+- **Redis 性能守卫的复杂度分级表 + String 载荷形状规则**
+  (`atlas-richie-cache-redis.perf`): 新增 `perf` 子包，1:1 对位 Java
+  `redis/perf` 包——`RedisComplexityTier`（5 档）、`RedisCommandMeta`
+  （分级 + BIGKEY 探测建议）、`RedisOperationCatalog`（26 条预设）、
+  `RedisStringPayloadInspector`（String 载荷形状判定）。
+  `RedisPerfGuard` 新增 `check_operation_tier`（白名单 → 非 O(1) 告警 →
+  禁用档拦截，顺序与 Java `executeInternal` 一致）与
+  `check_string_write_payload`（集合 / Map 整包 → ERROR、复杂对象 → WARN、
+  疑似整包 JSON → WARN）。分级预设接到 12 个 manager 的 28 个调用点，
+  String 形状检查接到 4 个写入点（对位 Java 34 处）——此前 Python 侧
+  `check_complexity` 零调用、8 个 manager 根本没注入 perf，catalog 是纯死表。
+  刻意差异：Python 侧把策略判定与计时拆开（`check_operation_tier` 只判定，
+  计时仍由 `time_op` 承担）；形状检查必须拿**序列化之前**的原始值——先
+  `encode_value` 再检查会让集合形状丢失，只剩"长度像 JSON"的弱启发式；
+  字符数按 Unicode 码点计（Java 按 UTF-16 码元）。104 条新测试。
 - **L1 local-cache capability set** (`atlas-richie-cache-core`): the five
   JSR-107 switches Java wires from `CacheDefinition` are now real
   capabilities in Python — cumulative **statistics** (hits / misses / gets /
