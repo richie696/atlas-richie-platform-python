@@ -11,6 +11,28 @@ categories and Semantic Versioning.
 
 ### Added
 
+- **多 Redis 实例前缀路由** (`atlas-richie-cache-core.routing` +
+  `atlas-richie-cache-redis.routing`): 对位 Java
+  ``cn.richie696.component.cache.redis.bean.MultiRedisTemplate`` 的
+  prefix→instance 路由。core 侧出路由契约（``CacheRouteKey`` 解析 /
+  ``CacheRouteRegistry`` 前缀表 / ``CacheRouteError``，零第三方依赖），
+  redis 侧出连接与转发（``RedisCommandKeySpecTable`` 130+ 条命令 key 位置 /
+  ``RedisRoutingClient`` 路由 + key 改写 / ``RedisRoutingPipeline`` 按实例
+  分组 / ``MultiRedisDistributedCache`` 统一入口）；
+  ``RedisCacheProperties.slaves`` 提供配置面（对位 Java
+  ``AtlasRedisProperties.slaves``）。key 形如 ``order@@user:1`` 路由到
+  ``order`` 实例并落库为 ``{该实例 namespace}:user:1``；未注册前缀**直接
+  抛错**（Java 同），16 个 manager 零改动即生效。
+  四处**刻意差异**：①同命令多 key 跨实例时，Java 按第一个 key 选实例后把其余 key
+  剥前缀一起发过去（**静默写错实例**），Python 直接报错；②Java API 面封闭、
+  不存在「未知命令」，Python strict 模式下未登记命令直接拒绝执行（否则 key 会被
+  静默写进主实例）；③路由表拆成「前缀→实例名」（core）与「实例名→连接」
+  （redis）两半，可运行时增删（Java 只能配置期装配）；④派生 key（锁 / meta /
+  负缓存标记）经 ``decorate_key()`` 继承路由前缀，保证与原 key 同实例。
+  PUBLISH / 订阅一律走主实例（Java 端同样未覆写 publish）。98 条新测试，含一条
+  **静态扫描守卫**：仓内 manager 用到的每条 redis-py 命令都必须在命令 key 位置表
+  里登记，否则路由会漏掉它。
+
 - **Redis 性能守卫的复杂度分级表 + String 载荷形状规则**
   (`atlas-richie-cache-redis.perf`): 新增 `perf` 子包，1:1 对位 Java
   `redis/perf` 包——`RedisComplexityTier`（5 档）、`RedisCommandMeta`
@@ -308,7 +330,7 @@ categories and Semantic Versioning.
   the in-process stampede funnel without external probes.
   Documented in
   `docs/acceptance/R-M5-2-l1-stampede-design.md` (R-M5.2 design
-  predates the implementation; the §"stats" section was the
+  predates the implementation; the `"stats" section was the
   forward-spec).
 
 ### Added (R-M5.3.7 + Phase A2+A3 — negative cache + cache polish, commit `3c65f34`)
@@ -351,7 +373,7 @@ categories and Semantic Versioning.
   M6.5 父任务 (Sentinel Agent Reporting Protocol 异步遥测) 全部收口:
   - **M6.5.1-6 子任务**: 全部 [x] 实施 (V1 schema + Reporter 批次 + AgentReporter
     + 跨语言 wire contract + X-Atlas-Reporting-Token + outbox + 3-of-3
-    overflow policy), 详见 `docs/process/PLANNING.md` §M6.5.
+    overflow policy), 详见 `docs/process/PLANNING.md` `M6.5.
   - **M6.5.7 envelope V1 Frozen**: 5-owner 签收完成, 6 协议 doc 中英双份
     DRAFT → Frozen (commit `2c97b3d`).
   - **M6.5 跨进程验收**: 7 跨进程测试全过 (`tests/reporting/test_cross_process.py`):
@@ -388,7 +410,7 @@ categories and Semantic Versioning.
     + 异步生成器 + pytest-asyncio 组合 hang, unit test 跳过)
   - 实施结果: 19 passed + 1 skipped (SSE skip), sentinel main 352,
     cluster 147, contracts 147 全过, 0 主包 / 跨组件 regression
-  - PLANNING §M6.6 [x] → [ ] (v1 评估撤回), §M6+ Exit [x] → [partial]
+  - PLANNING `M6.6 [x] → [ ] (v1 评估撤回), `M6+ Exit [x] → [partial]
     (M6.6 实施中)
 
 - **Sentinel M6.5.7 — Agent Reporting 事件 envelope V1 协议 BUG 收口 + 路径重组 + 5-owner 签收 FROZEN**
@@ -410,7 +432,7 @@ categories and Semantic Versioning.
     schema 并走 V2
   - 5-owner 签收完成 (richie696 隐式 + Mavis self-attest 4 角色) →
     V1 Frozen; 6 协议 doc (中英双份) 标头从 `Draft / Provisional` 改为
-    `Frozen`, PLANNING §M6.5.7 [ ] → [x]. M6.5.1-6 实施 31 failed 修
+    `Frozen`, PLANNING `M6.5.7 [ ] → [x]. M6.5.1-6 实施 31 failed 修
     法 (commit `ebf3f9a`): 58 单测全过, sentinel main 352 passed,
     cluster+contracts 294 passed 0 主包/跨组件 regression. M6.5.5 跨进程
     真实网络故障验收留 1.0 publish 前 worker 后台跑, 不阻塞 V1 frozen.
@@ -455,7 +477,7 @@ categories and Semantic Versioning.
      `atlas-richie.reporting/v1`. 修改任何 frozen 值 → V2 major + ADR
      + 新 5-owner sign-off.
   4. **主包 0 3rd-party 约束**: `tools/dependency-check/check_core_imports.py`
-     验证通过, DEPENDENCY_POLICY.md §3 维持 (主包 0 3rd-party, extension
+     验证通过, DEPENDENCY_POLICY.md `3 维持 (主包 0 3rd-party, extension
      wheel 允许合理 3rd-party, 已在 sentinel-dashboard 实施 starlette/
      jinja2/uvicorn 验证).
   5. **R-240 时代遗留 M 文件清理**: 删除 `components/sentinel/sentinel-source-redis/`
@@ -493,7 +515,7 @@ categories and Semantic Versioning.
   (5/5 合同违反 + p99 > 20%); 同步 HTTP 客户端 (requests / httpx
   同步模式) = 不支持 (跨线程 + 取消 + 资源三违反); ASGI bridge =
   支持 (1.x 现状, 无需新增). 4 个可复现最小实验归档
-  (`M6.7-WSGI-SYNC-EVAL.md` §7).
+  (`M6.7-WSGI-SYNC-EVAL.md` `7).
 
 ### Added (R-M6 — `RedisCacheProperties`, commit `02f8ec8`)
 

@@ -1,6 +1,6 @@
 # 未完成工作清单
 
-> 截至 2026-11-19。已完成 60 项任务、71 个登记包（69 个 workspace 成员）。本清单只列**未完成**项。
+> 截至 2026-11-19。已完成 61 项任务、71 个登记包（69 个 workspace 成员）。本清单只列**未完成**项。
 > 优先级：P0 需你决策（阻塞）· P1 高价值缺口 · P2 剩余 provider · P3 未移植组件 · P4 技术债。
 > 规模：S（<半天）· M（1–2 天）· L（>2 天，建议单独立项）。
 > 原则：纯算法/契约 core 零第三方依赖；驱动隔离在适配器包；非必要不耦合，必要时桥接。
@@ -112,8 +112,26 @@
   `check_operation_tier`，计时仍由 `time_op` 承担）；形状检查必须拿
   **序列化前**的原始值——Java 的 `guardStringPayload` 拿到的是 `Object value`，
   Python 若沿用"先 `encode_value` 再检查"会丢掉集合形状，只剩弱启发式。
-- [ ] **多 Redis 实例前缀路由**（M，需驱动）
+- [x] **多 Redis 实例前缀路由**（M）
   MultiRedisTemplate 的 prefix→instance 路由。
+  → 已补齐：core 出路由契约（``cache_core.routing``：``CacheRouteKey`` 解析 /
+  ``CacheRouteRegistry`` 前缀表 / ``CacheRouteError``，零第三方依赖），redis 侧出
+  连接与转发（``cache_redis.routing``：``RedisCommandKeySpecTable`` 命令 key 位置表
+  130+ 条、``RedisRoutingClient`` 路由 + key 改写、``RedisRoutingPipeline`` 按实例分组、
+  ``MultiRedisDistributedCache`` 统一入口）。``RedisCacheProperties.slaves`` 提供配置面
+  （对位 Java ``AtlasRedisProperties.slaves``），registrar 按配置装配主实例 + 从实例
+  ——16 个 manager **零改动**即享受路由（对位 Java「业务无感」）。
+  逐行核对 Java ``MultiRedisTemplate`` + ``RedisBaseAutoConfiguration.createRedisTemplate``
+  后确认前缀路由是真实能力（路由表配置期静态装配），值得 1:1 对位。
+  四处**刻意差异**：①Java 按第一个 key 选实例后把其余 key 剥前缀一起发过去
+  （跨实例 key 会被**静默写错实例**），Python 直接报错；②Java API 面封闭，
+  不存在「未知命令」，Python strict 模式下未登记命令**直接拒绝执行**（否则 key
+  被静默写进主实例）；③路由表拆成「前缀→实例名」（core）与「实例名→连接」
+  （redis）两半，可运行时增删（Java 只能配置期装配）；④派生 key（锁 / meta /
+  负缓存标记）经 ``decorate_key()`` 继承路由前缀，保证与原 key 同实例。
+  PUBLISH / 订阅一律走主实例（Java 端同样未覆写 publish）。
+  98 条新测试，含一条**静态扫描守卫**：仓内 manager 用到的每条 redis-py 命令
+  都必须在命令 key 位置表里登记，否则路由会漏掉它。
 
 ### web
 - [ ] **组合请求上下文 / 过滤决策 SPI**（M）
