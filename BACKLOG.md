@@ -1,6 +1,6 @@
 # 未完成工作清单
 
-> 截至 2026-11-18。已完成 58 项任务、71 个登记包（69 个 workspace 成员）。本清单只列**未完成**项。
+> 截至 2026-11-19。已完成 59 项任务、71 个登记包（69 个 workspace 成员）。本清单只列**未完成**项。
 > 优先级：P0 需你决策（阻塞）· P1 高价值缺口 · P2 剩余 provider · P3 未移植组件 · P4 技术债。
 > 规模：S（<半天）· M（1–2 天）· L（>2 天，建议单独立项）。
 > 原则：纯算法/契约 core 零第三方依赖；驱动隔离在适配器包；非必要不耦合，必要时桥接。
@@ -72,9 +72,20 @@
   对位 liquibase 的 ChangeLogRegistry + 通配解析 + 启动 dry-run。
 
 ### cache
-- [ ] **L1 统计 / read-through / write-through**（M）
+- [x] **L1 统计 / read-through / write-through**（M）
   CacheDefinition 丢了 statisticsEnabled/storeByValue/readThrough/writeThrough/
   cache2kRefreshAhead 字段，相应能力缺失。
+  → 已补齐：`CacheDefinition` 补 7 个字段 + `LocalCacheProperties` 补对应
+  `default_*`；`cache-core` 内建统计（命中/未命中/读写/删除，且"过期淘汰"与
+  "容量淘汰"分开计数）、按值存储、read-through（同一 key 的并发未命中合并为
+  一次回源）、write-through（先改缓存再调写入器，与 JSR-107 同序）、refresh-ahead
+  （后台续命，保留原 TTL 时长滑动过期）。
+  逐行核对 Java `LocalCacheAutoConfiguration` 后确认这 5 个字段都被真实消费，
+  不是死字段，值得移植。
+  loader/writer 改为**注册可调用对象**（Python 无"按类路径字符串反射"惯用法），
+  Java 的 `cacheLoaderClassName`/`cacheWriterClassName` 因此无对位字段。
+  三处**刻意差异**已写进类文档与 README：`store_by_value` 默认 True、
+  `refresh_ahead` 去 `cache2k` 前缀、`refresh_ahead_ratio` 为 Python 自定义。
 - [x] **审计 / 软删字段自动填充**（M）
   core 出策略、SQLAlchemy 出列默认值；判定只有一份，adapter 全部回调 core。
 - [x] **防雪崩 jitter 接线**（S）

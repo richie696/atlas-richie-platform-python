@@ -11,6 +11,26 @@ categories and Semantic Versioning.
 
 ### Added
 
+- **L1 local-cache capability set** (`atlas-richie-cache-core`): the five
+  JSR-107 switches Java wires from `CacheDefinition` are now real
+  capabilities in Python — cumulative **statistics** (hits / misses / gets /
+  puts / removals, plus separate `expirations` and `evictions` counters so
+  the two eviction causes stay distinguishable), **store-by-value**,
+  **read-through** (miss → loader → cache, with concurrent misses on one key
+  collapsing into a single source load), **write-through** (cache first,
+  then the writer — JSR-107 ordering) and **refresh-ahead** (background
+  reload of entries close to expiry, keeping the original TTL duration).
+  `CacheDefinition` gains the seven missing fields and `LocalCacheProperties`
+  the matching `default_*` fallbacks; `CacheStatistics` / `CacheLoader` /
+  `CacheWriter` are the new zero-dependency contracts, wired through
+  `LocalCacheManager.register_loader` / `register_writer` / `stats` /
+  `all_stats`. Documented deviations from Java: `store_by_value` defaults
+  to True (the Python cache has always copied on every read and write),
+  `refresh_ahead` drops the `cache2k` prefix (the Python cache is
+  cachetools-backed, so the feature is not provider-specific) and
+  `refresh_ahead_ratio` is a Python-defined knob; the loader / writer are
+  registered callables instead of class-path strings, and JSR-107's
+  `average*Time` statistics are not ported. 82 new tests.
 - **Audit / soft-delete field defaults** (new `persistence-core.audit` +
   `persistence-sqlalchemy.audit`): the five audit fields (`createId` /
   `updateId` / `createTime` / `updateTime` / `deleted`) are delivered as a
