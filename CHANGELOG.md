@@ -11,6 +11,37 @@ categories and Semantic Versioning.
 
 ### Added
 
+- **组合请求上下文 / 过滤决策 SPI** (`atlas-richie-web-protection.spi` +
+  `atlas_richie.web_protection.interceptors` + ASGI 适配层): 对位 Java
+  `cn.richie696.component.web.core.spi` 的跨容器决策契约——`WebRequestContext`
+  （只读入站 + 可写出站 + 生命周期）、`WebFilterDecision`（四字段不可变事件：
+  interceptor / key / status / reason）、`WebInterceptor` + `WebInterceptorChain`
+  （`proceed(ctx)` 游标式链）、`DefaultWebInterceptorChain`、`MutableWebRequestContext`。
+  此前 Python 侧 guard 各自为政（IP 黑名单 / bot / 体积 / 登录锁定 / 幂等 / 限流 /
+  签名各写各的拒绝分支），缺统一决策事件；本轮把 9 个 guard 包成拦截器（对位 Java
+  `protection` 包），ASGI 中间件改为**链驱动**：装配 ctx → 驱动链 → 短路则按 ctx 的
+  status / headers / body 写回 → 否则调 app。
+  短路语义 1:1：标记 `mark_short_circuit` 且**不**调 `chain.proceed(ctx)`，抛出的
+  异常由适配层兜底成 5xx；「多个 deny 以先触发者为准」由链短路天然保证。
+  决策事件**双写**：ctx attribute（`platform.web.filter-decision`）+ 可选
+  `WebDecisionSink`。跨拦截器标志沿用 Java 的 attribute 自查模式——
+  `platform.web.gateway-bypass` / `platform.web.gateway-id` /
+  `platform.web.long-lived` 取值与 Java 逐字一致；长连接旁路从「提前 return」
+  改为「打标志 + 后续拦截器自查跳过」。
+  五处**刻意差异**：①决策 attribute **统一**（Java 每个拦截器各有一个名字，
+  BACKLOG 要的正是「统一决策事件」；Java 走 HookBus 发布，Python 尚无 hook bus，
+  见 BACKLOG「降级策略 / 看门狗 / hook bus / 热更新注册表」）；②Java 限流 reason
+  固定 `rate_limit.exceeded`，Python 保留 guard 细分 reason（`rate_limited` /
+  `gateway_identity_missing` / `client_unidentified`）；③Java 网关身份硬编码不可关，
+  Python 保留可配置（默认头名 `x-forwarded-from-gateway` 与 Java 契约一致）；
+  ④Java 的熔断拦截器未移植（熔断状态机不属于请求级 guard）；⑤登录结果学习
+  （下游 2xx / 401 / 403）仍在适配层（Java 靠 `RequestLifecycleHookInterceptor`，
+  属 hook bus 那一项）。
+  ASGI 适配层的**拒绝字节完全不变**：状态码 / body / 响应头 / Content-Length 与
+  改造前逐字节一致（自定义 `deny_renderer` 的 bytes 经 `surrogateescape` 无损往返）。
+  另修一处静默坑：ctx 的 header 值若传单个字符串会按字符拆开（str 本身是
+  `Iterable[str]`），现按单值处理。97 条新测试，web 套件 204 → 301。
+
 - **多 Redis 实例前缀路由** (`atlas-richie-cache-core.routing` +
   `atlas-richie-cache-redis.routing`): 对位 Java
   ``cn.richie696.component.cache.redis.bean.MultiRedisTemplate`` 的

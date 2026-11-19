@@ -1,6 +1,6 @@
 # 未完成工作清单
 
-> 截至 2026-11-19。已完成 61 项任务、71 个登记包（69 个 workspace 成员）。本清单只列**未完成**项。
+> 截至 2026-11-19。已完成 62 项任务、71 个登记包（69 个 workspace 成员）。本清单只列**未完成**项。
 > 优先级：P0 需你决策（阻塞）· P1 高价值缺口 · P2 剩余 provider · P3 未移植组件 · P4 技术债。
 > 规模：S（<半天）· M（1–2 天）· L（>2 天，建议单独立项）。
 > 原则：纯算法/契约 core 零第三方依赖；驱动隔离在适配器包；非必要不耦合，必要时桥接。
@@ -134,8 +134,26 @@
   都必须在命令 key 位置表里登记，否则路由会漏掉它。
 
 ### web
-- [ ] **组合请求上下文 / 过滤决策 SPI**（M）
+- [x] **组合请求上下文 / 过滤决策 SPI**（M）
   WebRequestContext/WebFilterDecision/拦截器链——目前 guard 各自为政，缺统一决策事件。
+  → 已补齐：新增 `web_protection.spi` 子包（`WebRequestContext` 契约 /
+  `WebFilterDecision` 四字段不可变事件 / `WebInterceptor` + `WebInterceptorChain` /
+  `DefaultWebInterceptorChain` / `MutableWebRequestContext` / attribute 常量），目录
+  结构 1:1 对位 Java `web.core.spi` + `spi/support`；新增 `web_protection.interceptors`
+  把 9 个 guard 包成拦截器（对位 Java `protection` 包），ASGI 中间件改**链驱动**
+  （装配 ctx → 驱动链 → 短路按 ctx 的 status/headers/body 写回 → 否则调 app）。
+  短路语义 1:1：标记 `mark_short_circuit` 且**不**调 `chain.proceed(ctx)`，异常由
+  适配层兜底 5xx；「先触发者为准」由链短路天然保证。决策事件**双写**：ctx attribute
+  （统一为 `platform.web.filter-decision`）+ 可选 `WebDecisionSink`（Java 走 HookBus，
+  属本段「hook bus」那一项）。跨拦截器标志沿用 Java 的 attribute 自查模式，长连接
+  旁路从「提前 return」改为「打标志 + 后续拦截器自查跳过」，`platform.web.*` 取值
+  与 Java 逐字一致。
+  五处**刻意差异**：①决策 attribute 统一（Java 每个拦截器各自一个名字，BACKLOG
+  要的正是「统一决策事件」）；②限流 reason 保留 guard 细分粒度（Java 固定
+  `rate_limit.exceeded`）；③网关身份可配置（Java 硬编码不可关，默认头名一致）；
+  ④熔断拦截器未移植（状态机不属于请求级 guard）；⑤登录结果学习仍在适配层
+  （Java 靠 `RequestLifecycleHookInterceptor`）。ASGI 拒绝字节与改造前逐字节一致；
+  另修「header 单字符串值被按字符拆开」的静默坑。97 条新测试，web 套件 204 → 301。
 - [ ] **trace 归一化**（S）
   TraceIdParser：traceparent / X-Request-Id 归一。
 - [ ] **降级策略 / 看门狗 / hook bus / 热更新注册表**（M）
