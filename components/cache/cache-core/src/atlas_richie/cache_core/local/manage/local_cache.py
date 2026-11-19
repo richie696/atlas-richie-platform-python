@@ -43,6 +43,7 @@ import threading
 from typing import Any, ClassVar, Dict, List
 
 from ..config.local_cache_properties import LocalCacheProperties
+from .cache_statistics import CacheStatistics
 from .local_cache_manager import LocalCacheManager
 
 
@@ -233,6 +234,78 @@ class LocalCache:
     @classmethod
     def region_size(cls, region: str | Any) -> int:
         return cls.get_manager().region_size(region)
+
+    @classmethod
+    def size(cls, region: str | Any) -> int:
+        """返回 region 中存活（未过期）的条目数。
+
+        English
+        --------
+        Number of live (non-expired) entries in `region`.
+        """
+        return cls.get_manager().size(region)
+
+    # ── Read-through / write-through ───────────────────────────────
+
+    @classmethod
+    def register_loader(cls, region: str | Any, loader: Any) -> None:
+        """注册某 region 的 read-through 加载器。
+
+        接受实现了 `load` / `load_all` 的对象，或单个
+        `key -> value | None` 可调用对象。未命中时由它回源并把结果
+        写回缓存。
+
+        English
+        --------
+        Register the read-through loader for `region`.
+
+        Accepts an object implementing `load` / `load_all`, or a
+        single `key -> value | None` callable. On a miss the loader is
+        asked for the value and the result is cached.
+        """
+        cls.get_manager().register_loader(region, loader)
+
+    @classmethod
+    def register_writer(cls, region: str | Any, writer: Any) -> None:
+        """注册某 region 的 write-through 写入器。
+
+        接受同时实现 `write` 与 `delete` 的对象，或 `(write, delete)`
+        二元组。缓存发生变更时同步回写数据源（先改缓存、再调写入器）。
+
+        English
+        --------
+        Register the write-through writer for `region`.
+
+        Accepts an object implementing both `write` and `delete`, or
+        a `(write, delete)` pair. Cache mutations are pushed back to
+        the source of truth (cache first, then the writer).
+        """
+        cls.get_manager().register_writer(region, writer)
+
+    # ── Statistics ─────────────────────────────────────────────────
+
+    @classmethod
+    def stats(cls, region: str | Any) -> CacheStatistics:
+        """返回某 region 的累计统计快照。
+
+        计数只在 region 的 `statistics_enabled` 为真时维护。
+
+        English
+        --------
+        Cumulative statistics snapshot for `region`. Counters are only
+        maintained when the region has `statistics_enabled` set.
+        """
+        return cls.get_manager().stats(region)
+
+    @classmethod
+    def all_stats(cls) -> Dict[str, CacheStatistics]:
+        """返回所有已创建 region 的统计快照。
+
+        English
+        --------
+        Statistics snapshots for every region that has been created.
+        """
+        return cls.get_manager().all_stats()
 
 
 __all__ = ["LocalCache"]
