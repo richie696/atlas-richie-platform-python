@@ -309,6 +309,24 @@ categories and Semantic Versioning.
 
 ### Changed
 
+- **Console-suite CI failures are now observable without a signed-in session**
+  (`.github/workflows/ci.yml`): the `sentinel-contracts` job runs the standalone
+  `sentinel-console` project (its own `pyproject.toml`, its own `uv.lock`, its own
+  virtual environment — it is not a workspace member), and GitHub only exposes a job
+  log to a signed-in session. Anonymous readers saw "Sign in to view logs", and the
+  step output is large enough that GitHub also collapses the log pane to "This step
+  has been truncated due to its large size". The step now tees the pytest output to
+  `${RUNNER_TEMP}/sentinel-console-pytest.log` and, when the suite fails,
+  republishes every `FAILED`/`ERROR` line as a workflow annotation
+  (`::error title=Sentinel Console pytest failure::`) plus a trailing summary
+  annotation. Annotations stay visible on the run page and through the REST API
+  without authentication, so a red console step no longer needs a login to triage.
+  The gate itself is unchanged: the step still exits with the pytest status
+  (`PIPESTATUS[0]`), and the annotation block is skipped on success. With the step
+  in this shape the job went green (run 44703731871, 2026-11-20: console suite
+  5m02s, exit 0) after six consecutive red runs whose failure detail had never been
+  observable.
+
 - **`sentinel-console` lockfile refreshed** (`components/sentinel/sentinel-console/uv.lock`):
   the `sentinel-contracts` job runs `uv run --locked --extra test python -m pytest -q`
   inside `components/sentinel/sentinel-console`, and that standalone project's lock had

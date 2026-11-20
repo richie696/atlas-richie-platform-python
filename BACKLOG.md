@@ -326,6 +326,15 @@
   （50000 层仍会 RecursionError，属阈值移动而非无限制接受）。console 套件当前只在 CI 的
   3.12 上跑，3.14 的行为差异未被覆盖。要么给 console 加显式深度上限，要么把该用例改成
   版本感知。
+- [ ] **console 套件在 CI 上曾连续红 6 轮，且失败详情不可见**（S）
+  `sentinel-contracts` job 自 2026-11-17 引入起从未成功过。前三轮根因已逐层剥离
+  （console 锁过期 → anycorn 守卫位置 → `/private/tmp` 硬编码），但 2026-11-20 的
+  `c4401b4a` 在三处都修完后仍红，而 GitHub Actions 的 job 日志需登录才可见、该步骤
+  输出过大又被 GitHub 折叠，匿名侧只拿到 "Process completed with exit code 1"。
+  已把 console 步骤改为把 pytest 的 `FAILED`/`ERROR` 清单用 `::error::` 写进
+  annotation（run 44703731871 起 console 步骤转绿，5m02s）。**确定性根因仍未定位**：
+  若后续 run 再次变红，annotation 会直接给出失败用例名，据此判定是环境性 flake 还是
+  真实回归。
 - [ ] **仓库根不支持一次性 pytest 收集（196 个收集错误）**（S）
   2026-11-20 更正：此前记为「sentinel-contracts 的全仓 pytest 恒失败」有误。CI 从不在
   仓库根跑 pytest——verify job 逐包调用（各包各自 rootdir），sentinel-contracts job 跑的是
