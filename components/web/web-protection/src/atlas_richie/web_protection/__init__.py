@@ -5,6 +5,7 @@ storage are adapter concerns; this package only decides allow/deny.
 
 `atlas_richie.web_protection.spi` —— 跨容器决策的统一编程面：请求上下文、决策事件、拦截器与拦截器链。
 `atlas_richie.web_protection.interceptors` —— 把各个 guard 包装成 SPI 拦截器的适配层。
+`atlas_richie.web_protection.tracing` —— trace ID 归一化（traceparent / X-Request-Id）。
 """
 
 import importlib.metadata
@@ -74,6 +75,7 @@ from .interceptors import (
     header_map_from_context,
     is_long_lived,
 )
+from .tracing import TraceIdInterceptor, TraceIdParser
 
 __version__ = importlib.metadata.version("atlas-richie-web-protection")
 
@@ -123,6 +125,8 @@ __all__ = [
     "SecretKeyProvider",
     "SignatureDecision",
     "SignatureInterceptor",
+    "TraceIdInterceptor",
+    "TraceIdParser",
     "WebDecisionSink",
     "WebFilterDecision",
     "WebInterceptor",

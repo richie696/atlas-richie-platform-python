@@ -28,6 +28,7 @@ polluted by adapter concerns.
   - [Scenario 3: Gateway bypass](#scenario-3-gateway-bypass)
   - [Scenario 4: Login attempt tracking](#scenario-4-login-attempt-tracking)
   - [Scenario 5: Distributed rate limiting](#scenario-5-distributed-rate-limiting)
+  - [Scenario 6: Trace normalisation](#scenario-6-trace-normalisation)
 - [⚙️ Differences from the Java Baseline](#-differences-from-the-java-baseline)
 - [🔧 Troubleshooting](#-troubleshooting)
 - [📎 ⏱️ Sequence Diagrams](#-sequence-diagrams)
@@ -76,18 +77,21 @@ order matches the previous inline implementation item by item.
 
 | # | Interceptor | Added when | Rejection |
 | --- | --- | --- | --- |
-| 1 | `IpBlacklistInterceptor` | `ip_blacklist` is not empty | 403 `ip_blacklisted` |
-| 2 | `GatewayBypassInterceptor` | `gateway_bypass_header` is not None | never rejects |
-| 3 | `LongLivedBypassInterceptor` | `long_lived_bypass` is not None | never rejects |
-| 4 | `BotUserAgentInterceptor` | `bot_matchers` is not empty | 403 `bot_detected` |
-| 5 | `RequestSizeInterceptor` | `size_guard` is set | 413 / 431 |
-| 6 | `LoginLockInterceptor` | `login_tracker` is set | 429 `account_locked` |
-| 7 | `IdempotencyInterceptor` | `idempotency_guard` is set | 409 `idempotent_replay` |
-| 8 | `RateLimitInterceptor` | `rate_limit_guard` is set | 429 / 401 |
-| 9 | `SignatureInterceptor` | `signature_verifier` is set | 401 + verifier reason |
+| 1 | `TraceIdInterceptor` | `enable_trace_id` is True (default) | never rejects |
+| 2 | `IpBlacklistInterceptor` | `ip_blacklist` is not empty | 403 `ip_blacklisted` |
+| 3 | `GatewayBypassInterceptor` | `gateway_bypass_header` is not None | never rejects |
+| 4 | `LongLivedBypassInterceptor` | `long_lived_bypass` is not None | never rejects |
+| 5 | `BotUserAgentInterceptor` | `bot_matchers` is not empty | 403 `bot_detected` |
+| 6 | `RequestSizeInterceptor` | `size_guard` is set | 413 / 431 |
+| 7 | `LoginLockInterceptor` | `login_tracker` is set | 429 `account_locked` |
+| 8 | `IdempotencyInterceptor` | `idempotency_guard` is set | 409 `idempotent_replay` |
+| 9 | `RateLimitInterceptor` | `rate_limit_guard` is set | 429 / 401 |
+| 10 | `SignatureInterceptor` | `signature_verifier` is set | 401 + verifier reason |
 
 The gateway identity layer is always present — it only sets attributes and
-never rejects, so the chain is never empty even with no guards configured.
+never rejects, so the chain is never empty even with no guards configured. The
+trace interceptor comes **first** (Java `ORDER = 50`), so every later
+interceptor can read `ctx.trace_id`.
 
 ## 🚀 Quick Start
 
@@ -137,6 +141,7 @@ Non-http scopes (including lifespan and websocket) pass straight through.
 | `deny_status_signature` | 401 | rejection status for signature failures |
 | `deny_status_locked` | 429 | rejection status for locked accounts |
 | `decision_sink` | None | object with `publish(decision)` receiving every rejection |
+| `enable_trace_id` | True | normalise the trace id and emit the `X-Trace-Id` response header |
 
 ### Public Helpers
 
@@ -228,6 +233,22 @@ Routes match exactly first, then Ant-style patterns (* no slash, ** any depth,
 the client key comes from `x-client-key` with IP fallback. Denials use the
 per-route status/code/message/headers with {key} replaced by the client key.
 
+### Scenario 6: Trace normalisation
+
+Every request gets one normalised 32-hex trace id, taken from the W3C
+`traceparent` header, else from `X-Request-Id`, else generated.
+
+```python
+middleware = ProtectionASGIMiddleware(app)   # trace normalisation is on by default
+```
+
+The response carries `X-Trace-Id` on **both** paths — the normal response and
+the short-circuit response. Set `enable_trace_id=False` to turn the whole
+thing off.
+
+The trace interceptor runs first (Java `ORDER = 50`), so `ctx.trace_id` is
+available to every later interceptor.
+
 ## ⚙️ Differences from the Java Baseline
 
 | Topic | Java | Python | Why |
@@ -239,6 +260,9 @@ per-route status/code/message/headers with {key} replaced by the client key.
 | Login outcome learning | `RequestLifecycleHookInterceptor` | adapter-level, observes the response | the hook bus is a separate BACKLOG item |
 | Rejection body | Java String | Python str in the context, bytes on the wire | the adapter re-encodes with surrogateescape, so custom bytes survive unchanged |
 | Duplicate headers | all values collected | all values collected | matches Java; the single-value `header_map()` keeps its own contract |
+| `X-Trace-Id` write-back | only on the short-circuit path; the normal path relies on the container-level `TraceIdInjectValve` | both paths | the ASGI middleware *is* the container layer here, so it must do the injection itself — otherwise the normal response never carries the trace id |
+| Platform vs application header | — | the platform wins on a name clash | the wire value of `X-Trace-Id` always equals `ctx.trace_id`; the two never diverge |
+| Trace interceptor | `OtelTracingInterceptor`, skipped when the observability starter is present | `TraceIdInterceptor`, always registered | Java's legacy web tracing must not sit beside the OTel trace boundary; the same rule applies once the Python observability component lands |
 
 ## 🔧 Troubleshooting
 

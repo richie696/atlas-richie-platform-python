@@ -27,6 +27,7 @@
   - [`WebFilterDecision`](#webfilterdecision)
   - [`WebInterceptor` 与拦截器链](#webinterceptor-与拦截器链)
   - [attribute 常量](#attribute-常量)
+  - [trace id 归一化](#trace-id-归一化)
 - [🔧 核心场景](#-核心场景)
   - [场景 1：每一次拒绝都有唯一决策事件](#场景-1每一次拒绝都有唯一决策事件)
   - [场景 2：接入自己的拦截器](#场景-2接入自己的拦截器)
@@ -65,6 +66,7 @@
 | SPI 契约 | atlas_richie.web_protection.spi | 仅标准库 | 上下文、决策事件、拦截器与链的协议 |
 | SPI 默认实现 | atlas_richie.web_protection.spi.support | 仅标准库 | `MutableWebRequestContext`、`DefaultWebInterceptorChain` |
 | guard 适配 | atlas_richie.web_protection.interceptors | 各 guard | 把每个 guard 包成拦截器 |
+| trace 归一 | atlas_richie.web_protection.tracing | 仅标准库 | `TraceIdParser` + `TraceIdInterceptor` —— trace id 归一化 |
 | guard | guards / rate_limit / idempotency / matchers / trackers | 仅标准库 | 纯 allow/deny 判定 |
 | 适配层 | atlas-richie-web-protection-adapter-asgi | 本包 | 把链接进具体框架 |
 
@@ -288,6 +290,32 @@ proceed 都是 no-op。链**非线程安全** —— 每请求一个实例。
 
 前四个取值与 Java 常量逐字一致。
 
+### trace id 归一化
+
+`TraceIdParser` 把上游传来的各种写法归一成同一个 32 位 hex trace id；
+`TraceIdInterceptor` 负责把它落到请求上下文上。
+
+| 输入 | 结果 |
+| --- | --- |
+| `traceparent: 00-<32-hex>-<16-hex>-<flags>` | 32-hex trace id，转小写 |
+| `traceparent` 版本不是 `00` | 忽略，继续看下一个来源 |
+| `X-Request-Id` 本身已是 32 位 hex | 原样返回（**保留原大小写**） |
+| `X-Request-Id` 短于 32 位 | 转小写，用**随机** hex 补到 32 位 |
+| `X-Request-Id` 长于 32 位 | 截断到 32 位，转小写 |
+| 两个头都没有 | 新生成 32-hex UUID v4 |
+
+```python
+from atlas_richie.web_protection import TraceIdInterceptor, TraceIdParser
+
+trace_id = TraceIdParser.resolve(traceparent, request_id)   # 永不为 None
+```
+
+拦截器把结果写进 `ctx.trace_id` 与响应头 `X-Trace-Id`，然后继续走链。它
+**排第一**（`ORDER = 50`，与 Java 的 `OtelTracingInterceptor` 一致），后面的
+拦截器才读得到 trace id。
+
+补位用的是**随机** hex 而不是补零 —— 上游 id 不是归一后 id 的可预测前缀。
+
 ## 🔧 核心场景
 
 ### 场景 1：每一次拒绝都有唯一决策事件
@@ -327,7 +355,11 @@ chain = DefaultWebInterceptorChain([
 | 网关旁路 | 硬编码、不可关 | 头名可配置（默认 `x-forwarded-from-gateway`） | 保留 Java 默认契约，同时保持可运维 |
 | 熔断 | `CircuitBreakerInterceptor` | 未移植 | 熔断状态机不属于请求级 guard |
 | 登录结果学习 | `RequestLifecycleHookInterceptor` | 仍在适配层 | hook bus 是 BACKLOG 的另一项 |
-| 重复 header | `getHeader()` 返回第一个值 | ctx.header() 返回第一个值；`header_map_from_context`() 返回最后一个 | 上下文对位 Java；单值 map 保留 ASGI 适配层既有的 `header_map()` 契约 |
+| 重复 header | `getHeader()` 返回第一个值 | `ctx.header()` 返回第一个值；`header_map_from_context()` 返回最后一个 | 上下文对位 Java；单值 map 保留 ASGI 适配层既有的 `header_map()` 契约 |
+| trace 拦截器命名 | `OtelTracingInterceptor` | `TraceIdInterceptor` | Java 那个名字带 OTel 前缀，但类里根本没碰 OTel SDK；本移植压根没有 OTel 依赖，名字直说其事 |
+| prefer-w3c 开关 | Java README 写了，**Java 源码里并不存在** | 同样不实现 | Java 代码永远优先 traceparent；本移植对位源码而非 README |
+| 空白裁剪 | `String.trim()` / `String.isBlank()` | 只裁 ASCII 空白 | 现实输入等价；仅 U+00A0 等异类空格有别 |
+| trace 拦截器装配 | observability starter 在场时不装配 | 始终可用 | Java 的旧 web tracing 不能与 OTel trace 边界并存；Python 的 observability 组件落地后需沿用同一条互斥规则 |
 
 IP 黑名单那条既有的**加固差异**保持不变：Java 的 `IpBlacklistEntry` 会通过 DNS
 解析主机名，把黑名单查询变成一次外发域名解析。本移植只接受 IP 字面量，主机名
@@ -338,7 +370,7 @@ IP 黑名单那条既有的**加固差异**保持不变：Java 的 `IpBlacklistE
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | 链从不拒绝任何东西 | guard 没被包装成拦截器 | 通过适配层装配链，或自己加拦截器 |
-| 拒绝后 ctx.attribute(`DECISION_ATTRIBUTE`) 是 None | 用的不是该拦截器，或读了别的 attribute 名 | 用导出的常量，别写字面量 |
+| 拒绝后 `ctx.attribute(DECISION_ATTRIBUTE)` 是 None | 用的不是该拦截器，或读了别的 attribute 名 | 用导出的常量，别写字面量 |
 | 长连接（SSE）路径仍被拒 | IP 黑名单排在长连接旁路之前 | 这是刻意为之 —— 黑名单对所有路径生效 |
 | 自定义 `deny_renderer` 的输出变了 | 渲染器必须返回 bytes | 适配层会按 UTF-8 重新编码 body；要逐字节一致就返回 bytes |
 | 拒绝被计数但没有上报 | 没配 sink | 给中间件传 `decision_sink`=... |

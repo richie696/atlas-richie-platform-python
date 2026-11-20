@@ -28,6 +28,7 @@ ASGI 中间件：把 atlas-richie-web-protection 的 guard 接进请求处理 �
   - [场景 3：网关身份旁路](#场景-3网关身份旁路)
   - [场景 4：登录失败跟踪](#场景-4登录失败跟踪)
   - [场景 5：分布式限流](#场景-5分布式限流)
+  - [场景 6：trace 归一](#场景-6trace-归一)
 - [⚙️ 与 Java 基准的差异](#-与-java-基准的差异)
 - [🔧 排障](#-排障)
 - [📎 ⏱️ 时序图](#-时序图)
@@ -72,18 +73,20 @@ graph TB
 
 | # | 拦截器 | 加入条件 | 拒绝语义 |
 | --- | --- | --- | --- |
-| 1 | `IpBlacklistInterceptor` | `ip_blacklist` 非空 | 403 `ip_blacklisted` |
-| 2 | `GatewayBypassInterceptor` | `gateway_bypass_header` 不为 None | 从不拒绝 |
-| 3 | `LongLivedBypassInterceptor` | `long_lived_bypass` 不为 None | 从不拒绝 |
-| 4 | `BotUserAgentInterceptor` | `bot_matchers` 非空 | 403 `bot_detected` |
-| 5 | `RequestSizeInterceptor` | 配了 `size_guard` | 413 / 431 |
-| 6 | `LoginLockInterceptor` | 配了 `login_tracker` | 429 `account_locked` |
-| 7 | `IdempotencyInterceptor` | 配了 `idempotency_guard` | 409 `idempotent_replay` |
-| 8 | `RateLimitInterceptor` | 配了 `rate_limit_guard` | 429 / 401 |
-| 9 | `SignatureInterceptor` | 配了 `signature_verifier` | 401 + 校验器原因 |
+| 1 | `TraceIdInterceptor` | `enable_trace_id` 为 True（默认） | 从不拒绝 |
+| 2 | `IpBlacklistInterceptor` | `ip_blacklist` 非空 | 403 `ip_blacklisted` |
+| 3 | `GatewayBypassInterceptor` | `gateway_bypass_header` 不为 None | 从不拒绝 |
+| 4 | `LongLivedBypassInterceptor` | `long_lived_bypass` 不为 None | 从不拒绝 |
+| 5 | `BotUserAgentInterceptor` | `bot_matchers` 非空 | 403 `bot_detected` |
+| 6 | `RequestSizeInterceptor` | 配了 `size_guard` | 413 / 431 |
+| 7 | `LoginLockInterceptor` | 配了 `login_tracker` | 429 `account_locked` |
+| 8 | `IdempotencyInterceptor` | 配了 `idempotency_guard` | 409 `idempotent_replay` |
+| 9 | `RateLimitInterceptor` | 配了 `rate_limit_guard` | 429 / 401 |
+| 10 | `SignatureInterceptor` | 配了 `signature_verifier` | 401 + 校验器原因 |
 
 网关身份层始终在链里 —— 它只写 attribute、从不拒绝，所以即使一个 guard 都没配，
-链也不会是空的。
+链也不会是空的。trace 拦截器**排第一**（Java 的 `ORDER = 50`），后面的拦截器
+才读得到 `ctx.trace_id`。
 
 ## 🚀 快速开始
 
@@ -133,6 +136,7 @@ app = ProtectionASGIMiddleware(
 | `deny_status_signature` | 401 | 签名失败的拒绝状态码 |
 | `deny_status_locked` | 429 | 账号锁定的拒绝状态码 |
 | `decision_sink` | None | 带 `publish(decision)` 的对象，接收每一次拒绝 |
+| `enable_trace_id` | True | 归一 trace id 并下发 `X-Trace-Id` 响应头 |
 
 ### 公共辅助函数
 
@@ -218,6 +222,21 @@ middleware = ProtectionASGIMiddleware(app, rate_limit_guard=guard)
 拒绝时用逐路由配置的状态码/code/message/headers，其中 {key} 会被替换成实际
 client key。
 
+### 场景 6：trace 归一
+
+每个请求都会拿到一个归一后的 32-hex trace id：先看 W3C `traceparent` 头，
+再看 `X-Request-Id`，都没有就自生成。
+
+```python
+middleware = ProtectionASGIMiddleware(app)   # trace 归一默认开启
+```
+
+响应在**正常路径与短路路径**都会带上 `X-Trace-Id`。传
+`enable_trace_id=False` 可整体关闭。
+
+trace 拦截器排第一（Java 的 `ORDER = 50`），所以 `ctx.trace_id` 对后面每个
+拦截器都可用。
+
 ## ⚙️ 与 Java 基准的差异
 
 | 主题 | Java | Python | 原因 |
@@ -229,6 +248,9 @@ client key。
 | 登录结果学习 | `RequestLifecycleHookInterceptor` | 适配层实现，观察响应 | hook bus 是 BACKLOG 的另一项 |
 | 拒绝 body | Java String | 上下文里是 Python str，落到线上是 bytes | 适配层用 surrogateescape 重新编码，自定义 bytes 逐字节不变 |
 | 重复 header | 收全部值 | 收全部值 | 对位 Java；单值 `header_map()` 保持自己的契约 |
+| `X-Trace-Id` 写回 | 只在短路路径写；正常路径靠容器层 `TraceIdInjectValve` | 两条路径都写 | ASGI 中间件**就是**容器层，注入得自己干 —— 否则正常响应永远带不上 trace id |
+| 平台头 vs 应用头 | — | 同名以平台为准 | 线上看到的 `X-Trace-Id` 永远等于 `ctx.trace_id`，两者不分叉 |
+| trace 拦截器 | `OtelTracingInterceptor`，有 observability starter 时不装配 | `TraceIdInterceptor`，始终装配 | Java 的旧 web tracing 不能与 OTel trace 边界并存；Python 的 observability 组件落地后需沿用同一条互斥规则 |
 
 ## 🔧 排障
 

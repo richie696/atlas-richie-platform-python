@@ -5,8 +5,11 @@
 `DefaultWebInterceptorChain`，短路则按 ctx 的状态 / 响应头 / body 写回。
 
 检查顺序（cheap → expensive）与改造前一致：
-IP 黑名单 → 网关身份 → 长连接旁路 → bot UA → 请求体积 → 登录锁定 →
-幂等 → 限流 → 签名 → app
+trace 归一 → IP 黑名单 → 网关身份 → 长连接旁路 → bot UA → 请求体积 →
+登录锁定 → 幂等 → 限流 → 签名 → app
+
+trace 归一在最前（对位 Java 的 `OtelTracingInterceptor`，ORDER=50），让
+`ctx.trace_id` 尽早可用；响应头 `X-Trace-Id` 在正常与短路两条路径都会写回。
 
 登录失败学习（下游 2xx / 401 / 403 记成功或失败）仍是**后置副作用**：Java 侧
 对应 Java 的 `RequestLifecycleHookInterceptor` —— 属 BACKLOG 的另一项，Python 侧暂留在适配层。
@@ -54,6 +57,7 @@ from atlas_richie.web_protection.spi import (
     WebDecisionSink,
     WebInterceptor,
 )
+from atlas_richie.web_protection.tracing import TraceIdInterceptor
 
 Message = dict[str, Any]
 Scope = dict[str, Any]
@@ -112,6 +116,41 @@ def default_deny_body(reason: str) -> bytes:
     return _default_deny_body_text(reason).encode("utf-8")
 
 
+def _merge_platform_headers(message: Message, ctx: MutableWebRequestContext) -> Message:
+    """把 ctx 上的平台响应头并入下游响应（同名以平台为准）。
+
+    Java 侧 ctx 响应头只在**短路**路径写回 servlet 响应，正常路径靠容器层的
+    `TraceIdInjectValve` 注入；Python 的 ASGI 中间件就是容器层，故在此补齐 ——
+    否则正常响应的 `X-Trace-Id` 永远到不了客户端。
+
+    同名以平台为准：线上看到的 `X-Trace-Id` 永远等于 `ctx.trace_id`，两者不
+    分叉。平台头只有 trace 归一等少数几个，不会碰到应用自己的 content-* 头。
+    """
+    platform_headers = ctx.response_headers()
+    if not platform_headers:
+        return message
+    headers = list(message.get("headers", []))
+    for name, value in platform_headers.items():
+        encoded_name = name.encode("latin-1", "replace")
+        encoded_value = str(value).encode("utf-8")
+        replaced = False
+        for index, (existing_name, _) in enumerate(headers):
+            decoded = (
+                existing_name.decode("latin-1")
+                if isinstance(existing_name, bytes)
+                else str(existing_name)
+            )
+            if decoded.lower() == name.lower():
+                headers[index] = (encoded_name, encoded_value)
+                replaced = True
+                break
+        if not replaced:
+            headers.append((encoded_name, encoded_value))
+    merged = dict(message)
+    merged["headers"] = headers
+    return merged
+
+
 def _as_text_renderer(renderer: Callable[[int, str], bytes]) -> Callable[[int, str], str]:
     """把适配层的 bytes 渲染器归一为 SPI 的 str 渲染器。
 
@@ -160,6 +199,7 @@ class ProtectionASGIMiddleware:
         deny_status_signature: int = 401,
         deny_status_locked: int = 429,
         decision_sink: WebDecisionSink | None = None,
+        enable_trace_id: bool = True,
     ) -> None:
         self.app = app
         self._ip_blacklist = tuple(ip_blacklist)
@@ -181,6 +221,7 @@ class ProtectionASGIMiddleware:
         self._deny_status_signature = deny_status_signature
         self._deny_status_locked = deny_status_locked
         self._decision_sink = decision_sink
+        self._enable_trace_id = enable_trace_id
         self._interceptors = self._build_interceptors()
 
     # ───────────────────────── 拦截器链装配 ─────────────────────────
@@ -193,6 +234,9 @@ class ProtectionASGIMiddleware:
         renderer = _as_text_renderer(self._deny_renderer)
         sink = self._decision_sink
         interceptors: list[WebInterceptor] = []
+        if self._enable_trace_id:
+            # Java ORDER=50：trace 归一必须最早，后续拦截器才能读到 ctx.trace_id
+            interceptors.append(TraceIdInterceptor())
         if self._ip_blacklist:
             interceptors.append(
                 IpBlacklistInterceptor(
@@ -298,21 +342,24 @@ class ProtectionASGIMiddleware:
         """调用下游 app，并按需记录登录成功 / 失败。"""
         tracker = self._login_tracker
         key = ctx.attribute(LOGIN_KEY_ATTRIBUTE) if tracker is not None else None
-        if tracker is None or key is None or path not in self._login_paths:
+        tracking = tracker is not None and key is not None and path in self._login_paths
+        if not tracking and not ctx.response_headers():
             await self.app(scope, receive, send)
             return
 
-        async def send_tracking(message: Message) -> None:
+        async def send_with_context(message: Message) -> None:
             if message.get("type") == "http.response.start":
                 status = int(message.get("status", 200))
                 ctx.set_response_status(status)
-                if 200 <= status < 300:
-                    tracker.record_success(key)
-                elif status in (401, 403):
-                    tracker.record_failure(key)
+                if tracking:
+                    if 200 <= status < 300:
+                        tracker.record_success(key)
+                    elif status in (401, 403):
+                        tracker.record_failure(key)
+                message = _merge_platform_headers(message, ctx)
             await send(message)
 
-        await self.app(scope, receive, send_tracking)
+        await self.app(scope, receive, send_with_context)
 
     async def _write_short_circuit(self, send: Send, ctx: MutableWebRequestContext) -> None:
         """把短路响应写回：状态码 / 响应头 / body。"""

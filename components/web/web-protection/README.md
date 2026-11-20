@@ -27,6 +27,7 @@ breaking; these are the request-level protections Python was missing.
   - [`WebFilterDecision`](#webfilterdecision)
   - [`WebInterceptor` and the Chain](#webinterceptor-and-the-chain)
   - [Attribute Names](#attribute-names)
+  - [Trace ID Normalisation](#trace-id-normalisation)
 - [🔧 Core Capabilities](#-core-capabilities)
   - [Scenario 1: One decision event for every rejection](#scenario-1-one-decision-event-for-every-rejection)
   - [Scenario 2: Adding your own interceptor](#scenario-2-adding-your-own-interceptor)
@@ -70,6 +71,7 @@ interceptor chain, one decision event.
 | SPI contract | atlas_richie.web_protection.spi | stdlib only | Context, decision event, interceptor and chain protocols |
 | SPI defaults | atlas_richie.web_protection.spi.support | stdlib only | `MutableWebRequestContext`, `DefaultWebInterceptorChain` |
 | Guard adapters | atlas_richie.web_protection.interceptors | guards | Wraps each guard as an interceptor |
+| Tracing | atlas_richie.web_protection.tracing | stdlib only | `TraceIdParser` + `TraceIdInterceptor` — trace id normalisation |
 | Guards | guards / rate_limit / idempotency / matchers / trackers | stdlib only | Pure allow/deny decisions |
 | Adapter | atlas-richie-web-protection-adapter-asgi | this package | Wires the chain into a framework |
 
@@ -260,7 +262,7 @@ Frozen, four fields, same order as the Java record.
 | interceptor | str | which interceptor decided (class name) |
 | key | str or None | the decision key (rate-limit key, login key, …) |
 | status | int | HTTP status of the rejection |
-| reason | str | machine-readable reason (`ip_blacklisted`, nonce_replay, …) |
+| reason | str | machine-readable reason (`ip_blacklisted`, `nonce_replay`, …) |
 
 `is_deny` is true when status is 400 or more. Two factory methods mirror the Java
 record: `WebFilterDecision`.rate_limit_deny(...) produces the reason
@@ -298,6 +300,34 @@ reached its end. The chain is **not thread-safe** — one instance per request.
 | `LOGIN_KEY_ATTRIBUTE` | `platform.web.login-key` | the adapter | `LoginLockInterceptor` |
 
 The first four names are byte-identical to the Java constants.
+
+### Trace ID Normalisation
+
+`TraceIdParser` normalises whatever the upstream sent into one 32-hex trace
+id. `TraceIdInterceptor` applies it to a request context.
+
+| Input | Result |
+| --- | --- |
+| `traceparent: 00-<32-hex>-<16-hex>-<flags>` | the 32-hex trace id, lower-cased |
+| `traceparent` with a version other than `00` | ignored, falls through to the next source |
+| `X-Request-Id` that is already 32 hex | returned verbatim (case preserved) |
+| `X-Request-Id` shorter than 32 | lower-cased, padded to 32 with **random** hex |
+| `X-Request-Id` longer than 32 | truncated to 32, lower-cased |
+| neither header | a freshly generated 32-hex UUID v4 |
+
+```python
+from atlas_richie.web_protection import TraceIdInterceptor, TraceIdParser
+
+trace_id = TraceIdParser.resolve(traceparent, request_id)   # never None
+```
+
+The interceptor writes the result to `ctx.trace_id` and to the `X-Trace-Id`
+response header, then continues the chain. It runs **first**
+(`ORDER = 50`, same as the Java `OtelTracingInterceptor`) so later
+interceptors can read the trace id.
+
+The padding uses **random** hex, not zeros — an upstream id is not a
+predictable prefix of the normalised id.
 
 ## 🔧 Core Capabilities
 
@@ -340,7 +370,11 @@ chain = DefaultWebInterceptorChain([
 | Gateway bypass | hard-coded, cannot be disabled | configurable header name (default `x-forwarded-from-gateway`) | keeps the Java default contract while staying operable |
 | Circuit breaker | `CircuitBreakerInterceptor` | not ported | the breaker state machine is not a request-level guard |
 | Login outcome learning | `RequestLifecycleHookInterceptor` | still in the adapter | the hook bus is a separate BACKLOG item |
-| Duplicate headers | `getHeader()` returns the first value | ctx.header() returns the first value; `header_map_from_context`() returns the last | the context follows Java; the single-value map keeps the ASGI adapter's existing `header_map()` contract |
+| Duplicate headers | `getHeader()` returns the first value | `ctx.header()` returns the first value; `header_map_from_context()` returns the last | the context follows Java; the single-value map keeps the ASGI adapter's existing `header_map()` contract |
+| Trace interceptor name | `OtelTracingInterceptor` | `TraceIdInterceptor` | the Java name promises OTel but the class never touches the OTel SDK; this port has no OTel dependency at all, so the name says what it does |
+| prefer-w3c switch | documented in the Java README, **not implemented in the Java source** | not implemented either | the Java code always prefers traceparent; this port follows the code, not the README |
+| Whitespace handling | `String.trim()` / `String.isBlank()` | ASCII whitespace only | identical for realistic input; only exotic spaces such as U+00A0 differ |
+| Trace interceptor registration | skipped when the observability starter is present | always available | Java's legacy web tracing must not sit beside the OTel trace boundary; the same rule applies once the Python observability component lands |
 
 The IP-blacklist hardening deviation from the Java side is unchanged:
 Java's `IpBlacklistEntry` resolves hostnames through DNS, which turns a
@@ -352,7 +386,7 @@ only, so a hostname never matches.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | The chain never rejects anything | guards were never wrapped into interceptors | build the chain through the adapter, or add the interceptor yourself |
-| ctx.attribute(`DECISION_ATTRIBUTE`) is None after a rejection | the interceptor was not used, or a different attribute name was read | use the exported constant, not a literal |
+| `ctx.attribute(DECISION_ATTRIBUTE)` is None after a rejection | the interceptor was not used, or a different attribute name was read | use the exported constant, not a literal |
 | A long-lived (SSE) path is still rejected | the IP blacklist runs before the long-lived bypass | that is intentional — the blacklist applies to every path |
 | A custom `deny_renderer` output changed | the renderer must return bytes | the adapter re-encodes the body as UTF-8; return bytes to keep them byte-identical |
 | Rejections are counted but never reported | no sink was configured | pass `decision_sink`=... to the middleware |

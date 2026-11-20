@@ -149,6 +149,7 @@ class TestChainAssembly:
         )
         names = [type(i).__name__ for i in middleware.interceptors]
         assert names == [
+            "TraceIdInterceptor",
             "IpBlacklistInterceptor",
             "GatewayBypassInterceptor",
             "LongLivedBypassInterceptor",
@@ -156,10 +157,10 @@ class TestChainAssembly:
             "RequestSizeInterceptor",
         ]
 
-    def test_no_guard_means_only_the_gateway_identity_layer(self) -> None:
-        """网关身份层是平台级基础设施，始终在链里（它只置标志，从不拒绝）。"""
+    def test_no_guard_means_only_the_platform_layers(self) -> None:
+        """trace 归一与网关身份是平台级基础设施，始终在链里（都只置标志，从不拒绝）。"""
         names = [type(i).__name__ for i in ProtectionASGIMiddleware(_App()).interceptors]
-        assert names == ["GatewayBypassInterceptor"]
+        assert names == ["TraceIdInterceptor", "GatewayBypassInterceptor"]
 
     def test_signature_interceptor_is_last(self) -> None:
         middleware = ProtectionASGIMiddleware(
@@ -309,7 +310,9 @@ class TestChainDrivenBehaviour:
     def test_interceptors_can_be_driven_manually(self) -> None:
         """装配出的拦截器可脱离 ASGI 单独驱动（白盒验证 ctx 装配）。"""
         middleware = ProtectionASGIMiddleware(_App(), size_guard=RequestSizeGuard(100, 10_000))
-        interceptor = middleware.interceptors[-1]
+        interceptor = next(
+            i for i in middleware.interceptors if type(i).__name__ == "RequestSizeInterceptor"
+        )
         ctx = MutableWebRequestContext("POST", "/", {"content-length": ["500"]})
         interceptor.intercept(ctx, DefaultWebInterceptorChain([]))
         assert ctx.is_short_circuited is True
@@ -317,7 +320,9 @@ class TestChainDrivenBehaviour:
 
     def test_gateway_interceptor_sets_the_bypass_flag_on_the_context(self) -> None:
         middleware = ProtectionASGIMiddleware(_App())
-        interceptor = middleware.interceptors[0]
+        interceptor = next(
+            i for i in middleware.interceptors if type(i).__name__ == "GatewayBypassInterceptor"
+        )
         ctx = MutableWebRequestContext("GET", "/", {"x-forwarded-from-gateway": "edge-1"})
         interceptor.intercept(ctx, DefaultWebInterceptorChain([]))
         assert ctx.attribute("platform.web.gateway-bypass") is True
