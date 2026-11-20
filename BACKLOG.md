@@ -321,12 +321,20 @@
   Java 侧也是死的，可清理或实现。
 - [ ] **若干过期 docstring**（S）
   statemachine-redis/README「persistence 尚不存在」已过期；cache 测试 ACCESSED 说明等。
-- [ ] **sentinel-contracts 的全仓 pytest 恒失败**（S）
-  该 job 跑 `uv run --locked --extra test python -m pytest -q`（全仓一次收集），恒有
-  196 个收集错误、0 个断言失败：174 个是 `atlas_richie.sentinel_console` 未安装
-  （独立应用，非 workspace 成员），7 个是跨包同名测试文件的 import file mismatch，
-  14 个是各 sentinel 包的 tests 子包/测试模块相对导入在根收集下解析不到，1 个是
-  anycorn 缺依赖。verify job 已用「逐包调用」绕开同名冲突，全仓一次收集没有这层保护。
+- [ ] **仓库根不支持一次性 pytest 收集（196 个收集错误）**（S）
+  2026-11-20 更正：此前记为「sentinel-contracts 的全仓 pytest 恒失败」有误。CI 从不在
+  仓库根跑 pytest——verify job 逐包调用（各包各自 rootdir），sentinel-contracts job 跑的是
+  sentinel-console 独立工程自己的套件；那个 job 真正的失败原因是 sentinel-console 的
+  uv.lock 过期（`components/http` 后来新增了 httpx-env 依赖与 test extra），`uv run
+  --locked` 在跑任何测试前就中止，已修复（见 CHANGELOG）。
+  但在仓库根跑 `pytest -q` 确实会失败：196 个收集错误、0 个断言失败——175 个在
+  sentinel-console（独立工程，未装进平台 workspace；其中 174 个是
+  `atlas_richie.sentinel_console` 未安装、1 个是 anycorn 缺依赖），7 个是跨包同名测试
+  文件的 import file mismatch，14 个是各 sentinel 包的 tests 子包相对导入被别的包的
+  同名 tests 顶掉。根因是各包测试目录都叫 `tests`，pytest 的 prepend 导入模式按顶层
+  包名解析。可选修法：根目录加收集守卫（直接提示「按包跑」）、给各包测试目录改唯一
+  包名、或把 sentinel-console 纳入 workspace（改动最大，且与 console「保持独立」的
+  裁决冲突）。
 
 ---
 

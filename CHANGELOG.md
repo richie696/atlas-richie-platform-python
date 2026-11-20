@@ -309,6 +309,16 @@ categories and Semantic Versioning.
 
 ### Changed
 
+- **`sentinel-console` lockfile refreshed** (`components/sentinel/sentinel-console/uv.lock`):
+  the `sentinel-contracts` job runs `uv run --locked --extra test python -m pytest -q`
+  inside `components/sentinel/sentinel-console`, and that standalone project's lock had
+  drifted — `components/http` gained an `atlas-richie-httpx-env` dependency and a `test`
+  extra after the lock was last written — so `uv run --locked` aborted with "The lockfile
+  at `uv.lock` needs to be updated" before a single test ran, failing the job on every
+  push. The lock is refreshed (+18/−1: adds `atlas-richie-httpx-env v0.2.0` and the stale
+  `atlas-richie-http` metadata). The suite now passes under the exact CI command:
+  1429 passed, 124 skipped.
+
 - **CI matrix restored to the declared Python support window**
   (`.github/workflows/ci.yml` + `components/secret/secret-tencent-ssm-kms`):
   `atlas-richie-secret-tencent-ssm-kms` pinned
