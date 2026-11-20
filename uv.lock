@@ -17,6 +17,7 @@ members = [
     "atlas-richie-coordination-core",
     "atlas-richie-coordination-redis",
     "atlas-richie-desensitize-core",
+    "atlas-richie-desensitize-logging",
     "atlas-richie-desensitize-pydantic",
     "atlas-richie-document-fetcher",
     "atlas-richie-document-parser",
@@ -618,6 +619,26 @@ test = [
 
 [package.metadata]
 requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" }]
+provides-extras = ["test"]
+
+[[package]]
+name = "atlas-richie-desensitize-logging"
+version = "0.2.0"
+source = { editable = "components/desensitize/desensitize-logging" }
+dependencies = [
+    { name = "atlas-richie-desensitize-core" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-richie-desensitize-core", editable = "components/desensitize/desensitize-core" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0,<9.0" },
+]
 provides-extras = ["test"]
 
 [[package]]
