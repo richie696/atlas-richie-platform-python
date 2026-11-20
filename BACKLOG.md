@@ -321,6 +321,12 @@
   Java 侧也是死的，可清理或实现。
 - [ ] **若干过期 docstring**（S）
   statemachine-redis/README「persistence 尚不存在」已过期；cache 测试 ACCESSED 说明等。
+- [ ] **sentinel-contracts 的全仓 pytest 恒失败**（S）
+  该 job 跑 `uv run --locked --extra test python -m pytest -q`（全仓一次收集），恒有
+  196 个收集错误、0 个断言失败：174 个是 `atlas_richie.sentinel_console` 未安装
+  （独立应用，非 workspace 成员），7 个是跨包同名测试文件的 import file mismatch，
+  14 个是各 sentinel 包的 tests 子包/测试模块相对导入在根收集下解析不到，1 个是
+  anycorn 缺依赖。verify job 已用「逐包调用」绕开同名冲突，全仓一次收集没有这层保护。
 
 ---
 

@@ -309,6 +309,22 @@ categories and Semantic Versioning.
 
 ### Changed
 
+- **CI matrix restored to the declared Python support window**
+  (`.github/workflows/ci.yml` + `components/secret/secret-tencent-ssm-kms`):
+  `atlas-richie-secret-tencent-ssm-kms` pinned
+  `requires-python = ">=3.12,<3.14"` — written that way when the package was
+  first added, with no dependency actually requiring `<3.14`. That one pin
+  capped the whole workspace lock at `requires-python = ">=3.12, <3.14"`, so
+  `uv sync` aborted on 3.14 and 3.15 before a single test ran and two matrix
+  legs stayed red on every push. The pin is widened to `>=3.12`; the lock
+  re-resolves to the same 232 packages with nothing added, removed or changed.
+  The matrix is back to `3.12`/`3.13`/`3.14`/`3.15`, with
+  `continue-on-error: ${{ matrix.python == '3.15' }}` marking 3.15 as the
+  allowed-failure compatibility probe `VERSIONING.md` describes — 3.12/3.13/3.14
+  gate the build, 3.15 reports without blocking. This restores agreement with
+  `VERSIONING.md`, `specs/platform-release.toml` and the root `stable-python` /
+  `next-python` fields.
+
 - **`desensitize-pydantic` Chinese README added**: the package shipped with a
   Chinese-only `README.md` — the mirror the rest of the platform pairs
   `README.md` / `README.zh.md` requires was missing. The Chinese body moved
