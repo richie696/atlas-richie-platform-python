@@ -84,5 +84,26 @@ jobs:
       - run: uv sync --all-packages --all-groups
       - run: uv run --locked --package atlas-richie-sentinel --extra test python -m pytest components/sentinel/sentinel/tests -q
       - run: uv run --locked --package atlas-richie-contracts --extra test python -m pytest foundation/contracts/tests -q
-      - run: uv run --locked --extra test python -m pytest -q
+      # The console suite runs the independent console project, so it needs its
+      # own lock file and cannot share the workspace environment. Publish the
+      # pytest failure list as workflow annotations: the job log is only
+      # readable after a signed-in session, but annotations stay visible to
+      # anyone watching the run.
+      - name: Run the Sentinel Console suite
         working-directory: components/sentinel/sentinel-console
+        run: |
+          set +e
+          log_file="${RUNNER_TEMP}/sentinel-console-pytest.log"
+          uv run --locked --extra test python -m pytest -q 2>&1 | tee "$log_file"
+          pytest_status="${PIPESTATUS[0]}"
+          set -e
+          if [[ "$pytest_status" -ne 0 ]]; then
+            grep -E '^(FAILED|ERROR) ' "$log_file" | head -9 | while IFS= read -r failure; do
+              escaped="$(printf '%s' "$failure" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')"
+              printf '::error title=Sentinel Console pytest failure::%s\n' "$escaped"
+            done
+            summary="$(tail -n 30 "$log_file" | tr '\n' ' ')"
+            escaped_summary="$(printf '%s' "$summary" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')"
+            printf '::error title=Sentinel Console pytest summary::%s\n' "$escaped_summary"
+          fi
+          exit "$pytest_status"
