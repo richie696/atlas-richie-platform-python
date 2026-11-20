@@ -20,8 +20,6 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from anycorn import serve
-from anycorn.config import Config
 from atlas_richie.contracts.incidents.v1 import (
     IncidentSeverity,
     ResourcePressureMetric,
@@ -156,7 +154,12 @@ from atlas_richie.sentinel_console.infrastructure.security.secret_cipher import 
     AesGcmSecretCipher,
 )
 
-pytest.importorskip("anycorn")
+# `anycorn` is an optional collector runtime dependency (the `collector` extra).
+# The guard has to run before the anycorn names are bound — importing them first
+# breaks collection with ModuleNotFoundError instead of skipping this module.
+_anycorn = pytest.importorskip("anycorn")
+serve = _anycorn.serve
+Config = _anycorn.Config
 
 
 class MetricsCollectorTlsAcceptanceTests(unittest.IsolatedAsyncioTestCase):
