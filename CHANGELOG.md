@@ -316,8 +316,9 @@ categories and Semantic Versioning.
   extra after the lock was last written — so `uv run --locked` aborted with "The lockfile
   at `uv.lock` needs to be updated" before a single test ran, failing the job on every
   push. The lock is refreshed (+18/−1: adds `atlas-richie-httpx-env v0.2.0` and the stale
-  `atlas-richie-http` metadata). The suite now passes under the exact CI command:
-  1429 passed, 124 skipped.
+  `atlas-richie-http` metadata). The lock alone was not enough — the collector acceptance
+  test also aborted collection without the optional `anycorn` runtime, fixed separately
+  below.
 
 - **CI matrix restored to the declared Python support window**
   (`.github/workflows/ci.yml` + `components/secret/secret-tencent-ssm-kms`):
@@ -410,6 +411,18 @@ categories and Semantic Versioning.
   manual `version` editing with one atomic edit + script run.
 
 ### Fixed
+
+- **`sentinel-console` collector acceptance test broke collection without `anycorn`**:
+  `tests/test_metrics_collector_tls_acceptance.py` imported `anycorn` at module level
+  while its `pytest.importorskip("anycorn")` guard sat *below* those imports, so the
+  guard could never take effect — a missing `anycorn` aborted collection with
+  `ModuleNotFoundError` instead of skipping the module. `anycorn` lives only in the
+  console's `collector` extra and the CI step installs `--extra test` alone, so every
+  push failed the `sentinel-contracts` job before a single test ran. The guard now runs
+  before the `anycorn` names are bound (`serve` and `Config` come from the skipped
+  module), so the file skips cleanly when the optional collector runtime is absent.
+  Verified in a clean `--extra test` environment on the job's Python 3.12:
+  1416 passed, 132 skipped.
 
 - **`AlembicMigrationRunner` could not migrate with a percent-encoded
   password**: Alembic stores main options in a `configparser` section and

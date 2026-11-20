@@ -321,6 +321,11 @@
   Java 侧也是死的，可清理或实现。
 - [ ] **若干过期 docstring**（S）
   statemachine-redis/README「persistence 尚不存在」已过期；cache 测试 ACCESSED 说明等。
+- [ ] **console 的 read_json_object 靠 json 递归深度上限拒绝超深嵌套（3.14 阈值上移）**（S）
+  CPython 3.12/3.13 在 12000 层嵌套就抛 RecursionError，3.14 把上限抬高，12000 层被放行
+  （50000 层仍会 RecursionError，属阈值移动而非无限制接受）。console 套件当前只在 CI 的
+  3.12 上跑，3.14 的行为差异未被覆盖。要么给 console 加显式深度上限，要么把该用例改成
+  版本感知。
 - [ ] **仓库根不支持一次性 pytest 收集（196 个收集错误）**（S）
   2026-11-20 更正：此前记为「sentinel-contracts 的全仓 pytest 恒失败」有误。CI 从不在
   仓库根跑 pytest——verify job 逐包调用（各包各自 rootdir），sentinel-contracts job 跑的是
