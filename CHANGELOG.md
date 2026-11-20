@@ -309,6 +309,17 @@ categories and Semantic Versioning.
 
 ### Changed
 
+- **`desensitize-pydantic` Chinese README added**: the package shipped with a
+  Chinese-only `README.md` — the mirror the rest of the platform pairs
+  `README.md` / `README.zh.md` requires was missing. The Chinese body moved
+  verbatim into `README.zh.md` (nothing dropped; only the previously missing
+  final newline was added), and `README.md` was rewritten as its faithful
+  English translation. The two files are line-for-line parallel — 71 lines
+  each, the same four headings, the same four code samples (byte-identical
+  apart from five translated inline comments), the same fourteen inline-code
+  identifiers on the same lines, the same two bold spans — and both carry
+  the `[English] | [简体中文]` switch line.
+
 - **`desensitize-core` Chinese README added**: the package shipped with an
   English README only, while the rest of the platform pairs
   `README.md` / `README.zh.md`. The Chinese version mirrors the English one
