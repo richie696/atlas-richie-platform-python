@@ -2,9 +2,10 @@
 
 Ported from `cn.richie696.component.desensitize.core.service` (Java).
 
-Not ported: `ObjectMaskingService` / `SafeLogSerializer` (reflection and JSON
-serialization adapters) and the static `DesensitizeUtils` global binding — the
-platform has no global runtime, so callers inject the service explicitly.
+Not ported: the static `DesensitizeUtils` global binding — the platform has no
+global runtime, so callers inject the service explicitly. The object-level
+adapters (`ObjectMaskingService` / `SafeLogSerializer` /
+`DefaultObjectMaskingService`) live in `serializer.py`.
 """
 
 from __future__ import annotations

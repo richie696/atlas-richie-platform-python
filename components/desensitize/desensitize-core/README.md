@@ -121,5 +121,8 @@ Ported: models, properties, the eight strategies, both registries, the permissio
 evaluator, `DefaultMaskingService` (string + recursive map masking), field markers,
 `SafeLogSerializer`, `DefaultObjectMaskingService` and `SensitiveLogArg`.
 
-Not ported: the Logback turbo filter and `desensitize-jackson` / `desensitize-logging`
-adapter modules (JVM-specific), and the log/exception regex fallbacks.
+Not ported: the log/exception regex fallbacks.
+
+Ported in sibling packages: `desensitize-jackson` is `desensitize-pydantic`;
+`desensitize-logging` is `desensitize-logging` (MDC context, the log-arg and
+MDC interception points, and the logging masking SPI).

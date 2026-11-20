@@ -2,9 +2,10 @@
 
 Ported from `cn.richie696.component.desensitize.core.registry` (Java).
 
-Not ported: annotation-driven field resolution (`@Sensitive` reflection), which
-belongs to the Jackson adapter module. Field types resolve from the explicit
-`properties.fields` mapping instead.
+Field-type resolution is split in two: this module resolves the explicit
+`properties.fields` mapping, while the annotation-driven path (Java's
+`@Sensitive` reflection) is ported as dataclass field metadata and lives in
+`support.py` + `serializer.py`.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ class MaskRuleRegistry:
         """Resolve a field's type from `properties.fields[class_fqn][field]`.
 
         `scene` is accepted for API parity; in Java it only filters the
-        annotation-driven path, which is not ported here.
+        annotation-driven path, which is ported elsewhere (see `support.py`).
         """
         if declaring_class is None or field_name is None:
             return None
