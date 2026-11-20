@@ -1,6 +1,6 @@
 # 未完成工作清单
 
-> 截至 2026-11-19。已完成 64 项任务、71 个登记包（69 个 workspace 成员）。本清单只列**未完成**项。
+> 截至 2026-11-20。已完成 65 项任务、72 个登记包（70 个 workspace 成员）。本清单只列**未完成**项。
 > 优先级：P0 需你决策（阻塞）· P1 高价值缺口 · P2 剩余 provider · P3 未移植组件 · P4 技术债。
 > 规模：S（<半天）· M（1–2 天）· L（>2 天，建议单独立项）。
 > 原则：纯算法/契约 core 零第三方依赖；驱动隔离在适配器包；非必要不耦合，必要时桥接。
@@ -208,8 +208,28 @@
   92 条新测试，web 套件 347 → 439。
 
 ### desensitize
-- [ ] **MDC / 日志记录拦截**（S）
+- [x] **MDC / 日志记录拦截**（S）
   JSON 消息脱敏已交付（#52）；MDC 上下文字段脱敏（SensitiveMdcTurboFilter 等价）未做。
+  → 已补齐：新增包 `atlas-richie-desensitize-logging`，1:1 对位 Java
+  `cn.richie696.component.desensitize.logging`（Java 侧是独立于 core 的第三个
+  Maven 模块，Python 侧同样是独立包，依赖 desensitize-core、零第三方依赖）。
+  落地：`MdcContext`（MDC 上下文）、`LoggingMaskingService` /
+  `DefaultLoggingMaskingService`（脱敏 SPI）、`SensitiveMdcFilter` /
+  `SensitiveLogArgFilter`（两个拦截点）、`MdcFormatter` + `mdc_of()`。
+  Python 侧补齐了 Java 由 Logback 提供的三块地基：MDC（ThreadLocal →
+  `contextvars.ContextVar`，asyncio 任务共用线程，ThreadLocal 会串味）、拦截点
+  （TurboFilter → 标准库 `logging.Filter`，同样在 `Formatter.format()` 之前）、
+  MDC 渲染（`includeMdc` → `MdcFormatter`）。
+  六处**刻意差异**：①默认**不改写上下文**（Java 把脱敏值写回 MDC 且不还原，同线程
+  后续日志永远是脱敏值），本移植默认只把脱敏快照挂到 `record.mdc`，
+  `in_place=True` 可复刻 Java 行为；②脱敏服务**注入**（Java 是静态全局 +
+  未初始化抛 `IllegalStateException`，Python 的 core 没有全局运行时）；
+  ③`maskMdc` 失败捕获范围更宽（捕获任何异常并回退原值，脱敏不得打断日志链路）；
+  ④`toMaskedMessage` 入参从 `ILoggingEvent` 换成 `logging.LogRecord`；
+  ⑤无自动装配（Java 有 `LoggingDesensitizeAutoConfiguration`）；
+  ⑥`SensitiveLogArgFilter` 是双保险（`SensitiveLogArg.__str__` 本身已脱敏），
+  其价值在于让 `record.args` 不再持有敏感对象。
+  38 条新测试，desensitize 套件 127 → 165。
 - [ ] **清理过期 docstring**（S）
   service.py / registry.py 头部声称未移植但实际已存在的功能。
 

@@ -11,6 +11,37 @@ categories and Semantic Versioning.
 
 ### Added
 
+- **MDC 拦截与脱敏 SPI** (`atlas_richie.desensitize_logging`): 新增包
+  `atlas-richie-desensitize-logging`，1:1 对位 Java
+  `cn.richie696.component.desensitize.logging`（BACKLOG desensitize 段第一项；
+  此前只交付了 core 模块与 JSON 消息脱敏 #52）。落地：`MdcContext`（MDC 上下文）、
+  `LoggingMaskingService` / `DefaultLoggingMaskingService`（脱敏 SPI）、
+  `SensitiveMdcFilter` / `SensitiveLogArgFilter`（两个拦截点）、`MdcFormatter`
+  （MDC 渲染）+ `mdc_of()`。依赖 desensitize-core，零第三方依赖。
+  Python 侧补齐了 Java 侧由 Logback 提供的三块地基：**MDC**（Java 的
+  `ThreadLocal` → Python 的 `contextvars.ContextVar`，因为 asyncio 任务共用一个
+  线程，ThreadLocal 会在任务之间串味）、**拦截点**（Logback `TurboFilter` →
+  标准库 `logging.Filter`，同样跑在 `Formatter.format()` 之前）、**MDC 渲染**
+  （Logback `includeMdc` → `MdcFormatter`）。
+  六处**刻意差异**：①**默认不改写上下文** —— Java 把脱敏值**写回 MDC 且不还原**
+  （同线程后续日志的该字段永远是脱敏值，业务代码再读到 `MdcContext.get("phone")`
+  也拿不到原值），本移植默认只把脱敏快照挂到 `record.mdc` 交给 formatter，
+  要 1:1 复刻传 `in_place=True`；②**脱敏服务注入** —— Java 依赖静态
+  `DesensitizeUtils` 全局绑定、未初始化抛 `IllegalStateException`，Python 的
+  core 明确没有全局运行时，故改为构造注入，不存在「未初始化」状态；③
+  `maskMdc` 的失败捕获范围更宽 —— Java 只捕获 `IllegalStateException`，Python
+  捕获任何异常并回退原值（脱敏是旁路，绝不能因它失败而打断日志链路）；
+  ④`toMaskedMessage` 的入参从 `ILoggingEvent` 换成 `logging.LogRecord`（携带
+  同样的模板与参数）；⑤**无自动装配** —— Java 的
+  `LoggingDesensitizeAutoConfiguration` 注册过滤器，Python 侧由使用方自行安装；
+  ⑥`SensitiveLogArgFilter` 是双保险 —— Python 的 `SensitiveLogArg.__str__`
+  本身就会脱敏，本过滤器的真正价值是让 `record.args` 里**不再持有敏感对象**
+  （否则自定义 formatter 读 `arg.raw_value` 就漏了）。
+  另补齐 stdlib 的 mapping 形态：Python 的 `logging` 把 `logger.info("msg %(k)s",
+  {...})` 的 args 拆成 dict（与 Java 的 `MessageFormatter.arrayFormat` 不同的
+  路径），脱敏与替换都按这个形态处理。
+  38 条新测试，desensitize 套件 127 → 165。
+
 - **降级策略 / 看门狗 / hook bus / 热更新注册表** (`atlas_richie.web_protection.degrade` +
   `atlas_richie.web_protection.hang` + `atlas_richie.web_protection.hook` +
   `atlas_richie.web_protection.reload`): web 段最后一项，四组**框架无关** SPI。
