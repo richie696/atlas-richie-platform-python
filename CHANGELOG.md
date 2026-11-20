@@ -11,6 +11,28 @@ categories and Semantic Versioning.
 
 ### Added
 
+- **trace 归一化** (`atlas_richie.web_protection.tracing`): 1:1 对位 Java
+  `cn.richie696.component.web.core.tracing`。新增 `TraceIdParser`（纯算法：
+  `traceparent` → `X-Request-Id` → 自生成 UUID v4，一律归一成 32 位 hex）与
+  `TraceIdInterceptor`（写 `ctx.trace_id` + 响应头 `X-Trace-Id`，`ORDER=50`
+  排链首，对位 Java `OtelTracingInterceptor`）。ASGI 中间件默认装配该拦截器，
+  `enable_trace_id=False` 可关。
+  四处**刻意差异**：①类名取 `TraceIdInterceptor` 而非 `OtelTracingInterceptor`
+  ——Java 那个名字带 OTel 前缀，类里却根本没碰 OTel SDK，本移植压根没有 OTel
+  依赖；②Java README 记录的 `tracing.prefer-w3c` 开关在 Java **源码里并不
+  存在**（永远优先 traceparent），本移植对位源码而非 README；③Java 的
+  `String.trim()` / `isBlank()` 换成 ASCII 空白裁剪（现实输入等价，仅 U+00A0
+  等异类空格有别）；④Java 的 ctx 响应头**只在短路路径**写回 servlet 响应，
+  正常路径靠容器层 `TraceIdInjectValve` 注入 —— Python 的 ASGI 中间件就是
+  容器层，故两条路径都写回，否则正常响应的 `X-Trace-Id` 永远到不了客户端；
+  同名头以平台为准（线上 `X-Trace-Id` 恒等于 `ctx.trace_id`，两者不分叉）。
+  另注：Java 的 web trace 拦截器是**旧路径** —— `TracingAutoConfiguration` 上有
+  `@ConditionalOnMissingClass(ObservabilityState)`，统一 observability starter
+  在场时不装配它，避免 `ctx.traceId` 与活动 OTel SpanContext 分叉；Python 仓
+  尚无 observability 组件，本轮按独立路径落地，该互斥规则届时需沿用。
+  46 条新测试（1:1 覆盖 Java `TraceIdParserTest` / `OtelTracingInterceptorTest`
+  全部用例 + 补位随机性、大小写保留等边界），web 套件 301 → 347。
+
 - **组合请求上下文 / 过滤决策 SPI** (`atlas-richie-web-protection.spi` +
   `atlas_richie.web_protection.interceptors` + ASGI 适配层): 对位 Java
   `cn.richie696.component.web.core.spi` 的跨容器决策契约——`WebRequestContext`

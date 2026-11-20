@@ -1,6 +1,6 @@
 # 未完成工作清单
 
-> 截至 2026-11-19。已完成 62 项任务、71 个登记包（69 个 workspace 成员）。本清单只列**未完成**项。
+> 截至 2026-11-19。已完成 63 项任务、71 个登记包（69 个 workspace 成员）。本清单只列**未完成**项。
 > 优先级：P0 需你决策（阻塞）· P1 高价值缺口 · P2 剩余 provider · P3 未移植组件 · P4 技术债。
 > 规模：S（<半天）· M（1–2 天）· L（>2 天，建议单独立项）。
 > 原则：纯算法/契约 core 零第三方依赖；驱动隔离在适配器包；非必要不耦合，必要时桥接。
@@ -154,8 +154,22 @@
   ④熔断拦截器未移植（状态机不属于请求级 guard）；⑤登录结果学习仍在适配层
   （Java 靠 `RequestLifecycleHookInterceptor`）。ASGI 拒绝字节与改造前逐字节一致；
   另修「header 单字符串值被按字符拆开」的静默坑。97 条新测试，web 套件 204 → 301。
-- [ ] **trace 归一化**（S）
+- [x] **trace 归一化**（S）
   TraceIdParser：traceparent / X-Request-Id 归一。
+  → 已补齐：新增 `web_protection.tracing` 模块，1:1 对位 Java `web.core.tracing`——
+  `TraceIdParser`（纯算法：`traceparent` → `X-Request-Id` → 自生成 UUID v4，
+  一律归一成 32 位 hex）与 `TraceIdInterceptor`（写 `ctx.trace_id` + 响应头
+  `X-Trace-Id`，`ORDER=50` 排链首，对位 Java `OtelTracingInterceptor`）。
+  ASGI 中间件默认装配该拦截器（`enable_trace_id=False` 可关），且响应头在
+  **正常与短路两条路径**都写回 —— Java 侧只在短路路径写 ctx 响应头、正常路径
+  靠容器层 `TraceIdInjectValve` 注入，而 Python 的 ASGI 中间件就是容器层。
+  四处**刻意差异**：①类名取 `TraceIdInterceptor`（Java 那个 `Otel...` 前缀名
+  不副实，本移植无 OTel 依赖）；②Java README 写的 `tracing.prefer-w3c` 开关在
+  Java **源码里并不存在**，本移植对位源码；③`String.trim()`/`isBlank()` 换成
+  ASCII 空白裁剪；④同名响应头以平台为准，线上 `X-Trace-Id` 恒等于
+  `ctx.trace_id`。另注 Java 的 web trace 拦截器是**旧路径**（有 observability
+  starter 时不装配），Python 仓尚无 observability 组件，该互斥规则届时沿用。
+  46 条新测试，web 套件 301 → 347。
 - [ ] **降级策略 / 看门狗 / hook bus / 热更新注册表**（M）
   degrade/watchdog/hook/reload 四组 SPI，纯算法。
 
