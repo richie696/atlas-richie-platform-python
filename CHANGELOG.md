@@ -11,6 +11,48 @@ categories and Semantic Versioning.
 
 ### Added
 
+- **降级策略 / 看门狗 / hook bus / 热更新注册表** (`atlas_richie.web_protection.degrade` +
+  `atlas_richie.web_protection.hang` + `atlas_richie.web_protection.hook` +
+  `atlas_richie.web_protection.reload`): web 段最后一项，四组**框架无关** SPI。
+  **degrade** 对位 Java `web.core.degrade`：`Trigger`（EXCEPTION / HIGH_LATENCY /
+  CUSTOM）、`DegradeStrategy`（name / triggers / order / matches / build）、
+  `DegradeResult`（状态码必须在 100–599，body 与策略名非空，headers 为空视为空表）、
+  `DegradeStrategyRegistry` + `DefaultDegradeStrategyRegistry`（按 order 升序、
+  同名按 name）、`DegradeConfig`（routes / route_rules / fallback，对位 Java
+  `DegradeProperties` 的纯 dataclass 版）、`DegradeEvaluator`（识别触发 → 选策略 →
+  生成响应）。**hang** 对位 Java `web.core.hang`：`HangEvent`（栈帧上限 50）、
+  `WatchdogScheduler`（3 守护工作线程 + 1 守护定时线程，`schedule()` 返回
+  `WatchHandle` 可取消，`shutdown()` 幂等）、`HangDetectionInterceptor`（三档
+  warn / dump / kill_switch，每档每次请求最多触发一次）。**hook** 对位 Java
+  `web.core.hook`：`HookEvent` 标记基类 + `RequestCompletedEvent` +
+  `HookBus` / `DefaultHookBus`（同步发布、异常隔离、**按事件精确类型**分发）。
+  **reload** 对位 Java `web.core.reload`：`Reloadable` + `ReloadEvent` +
+  `HotReloadRegistry` / `DefaultHotReloadRegistry`（reload 时
+  `current_state()` → `accept(state)`，带 bus 时发布 `ReloadEvent`）。
+  ASGI 适配层新增三个可选接线：`hook_bus`（请求结束时派发
+  `RequestCompletedEvent`，对位 Java `InterceptingFilter` 的 finally 块）、
+  `degrade_evaluator`（在下游调用前后求值）、`extra_interceptors`（把自建拦截器
+  拼进平台链尾，`HangDetectionInterceptor` 的天然位置）。
+  七处**刻意差异**：①**降级落点** —— Java 的 `DegradeInterceptor` 是链元素（链尾
+  就是业务执行），Python 的链在 app **之前**跑完、链内拦截器看不到业务结果，故
+  拆成框架无关的 `DegradeEvaluator`，由适配层在「包住 app 调用的位置」驱动；
+  代价是判定期间下游响应被**缓冲**，响应不再流式（SSE / 长轮询不要纳入降级范围）；
+  ②**降级 body** 形状与 Java 的 `ApiResult.error(code,msg).toJson()` 一致
+  （`{"success":false,"code":...,"msg":...}`），但不依赖 `ApiResult` 契约类；
+  ③**Bean 反射兜底**（`fallbackBean` / `fallbackMethod`）未移植 —— Python 没有
+  「按 bean 名反射」的惯例，改为注册一个 `DegradeStrategy`；④**全局兜底**在 Java
+  源码里走不到（没有路由命中时判定器提前返回，是死代码），本移植加
+  `require_route_match=False` 开关让它可用，**默认值仍与 Java 一致**；
+  ⑤**看门狗 kill 档**的 `Thread.interrupt()` 无对位 —— CPython 没有安全的线程
+  中断手段，改为可选 `kill_interrupter` 回调（默认关，只记录不中断）；
+  ⑥**看门狗栈捕获**修正了 Java 差一个线程的问题：Java 的 `HangEvent.of` 在看门狗
+  线程上取 `Thread.currentThread()`，拿到的是看门狗自己的栈，本移植显式捕获被
+  监控的业务线程栈；⑦**事件总线**默认不创建（Java 的 `InterceptingFilter` 总是
+  建一个），空 bus 每个请求也要查一次字典。另有 Ant `**` 零段匹配的补齐：
+  Java 的 `AntPathMatcher` 里 `/api/**` 能匹配 `/api`，仓内既有的
+  `ant_pattern_to_regex` 要求至少一个字符，本移植在降级路由匹配处单独放行。
+  92 条新测试，web 套件 347 → 439。
+
 - **trace 归一化** (`atlas_richie.web_protection.tracing`): 1:1 对位 Java
   `cn.richie696.component.web.core.tracing`。新增 `TraceIdParser`（纯算法：
   `traceparent` → `X-Request-Id` → 自生成 UUID v4，一律归一成 32 位 hex）与
