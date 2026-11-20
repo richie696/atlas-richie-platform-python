@@ -153,6 +153,8 @@ from atlas_richie.sentinel_console.infrastructure.persistence.runtime_database_l
 from atlas_richie.sentinel_console.infrastructure.security.secret_cipher import (
     AesGcmSecretCipher,
 )
+from support.temp_root import TEMP_ROOT
+
 
 # `anycorn` is an optional collector runtime dependency (the `collector` extra).
 # The guard has to run before the anycorn names are bound — importing them first
@@ -186,7 +188,7 @@ class MetricsCollectorTlsAcceptanceTests(unittest.IsolatedAsyncioTestCase):
             self.fail("Rust Consul acceptance requires its loopback disposable provider")
 
         with tempfile.TemporaryDirectory(
-            prefix="sentinel-rust-runtime-consul-collector-", dir="/private/tmp"
+            prefix="sentinel-rust-runtime-consul-collector-", dir=TEMP_ROOT
         ) as temporary:
             root = Path(temporary)
             ca_certificate, ca_key = _create_ca()
@@ -701,7 +703,7 @@ class MetricsCollectorTlsAcceptanceTests(unittest.IsolatedAsyncioTestCase):
         if shutil.which("docker") is None:
             self.skipTest("Rust cross-process acceptance requires Docker")
         with tempfile.TemporaryDirectory(
-            prefix="sentinel-rust-metrics-mtls-", dir="/private/tmp"
+            prefix="sentinel-rust-metrics-mtls-", dir=TEMP_ROOT
         ) as temporary:
             root = Path(temporary)
             ca_certificate, ca_key = _create_ca()
@@ -873,7 +875,7 @@ class MetricsCollectorTlsAcceptanceTests(unittest.IsolatedAsyncioTestCase):
         if shutil.which("docker") is None:
             self.skipTest("Rust cross-process acceptance requires Docker")
         with tempfile.TemporaryDirectory(
-            prefix="sentinel-rust-rule-reporting-", dir="/private/tmp"
+            prefix="sentinel-rust-rule-reporting-", dir=TEMP_ROOT
         ) as temporary:
             root = Path(temporary)
             ca_certificate, ca_key = _create_ca()
@@ -1139,7 +1141,7 @@ class MetricsCollectorTlsAcceptanceTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory(
-            prefix="sentinel-rule-load-mtls-", dir="/private/tmp"
+            prefix="sentinel-rule-load-mtls-", dir=TEMP_ROOT
         ) as temporary:
             root = Path(temporary)
             ca_certificate, ca_key = _create_ca()
@@ -1466,7 +1468,7 @@ class MetricsCollectorTlsAcceptanceTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory(
-            prefix="sentinel-receipt-mtls-", dir="/private/tmp"
+            prefix="sentinel-receipt-mtls-", dir=TEMP_ROOT
         ) as temporary:
             root = Path(temporary)
             ca_certificate, ca_key = _create_ca()
@@ -1796,7 +1798,7 @@ class MetricsCollectorTlsAcceptanceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_two_real_mtls_reporters_commit_rollup_and_query(self) -> None:
         with tempfile.TemporaryDirectory(
-            prefix="sentinel-metrics-mtls-", dir="/private/tmp"
+            prefix="sentinel-metrics-mtls-", dir=TEMP_ROOT
         ) as temporary:
             root = Path(temporary)
             ca_certificate, ca_key = _create_ca()

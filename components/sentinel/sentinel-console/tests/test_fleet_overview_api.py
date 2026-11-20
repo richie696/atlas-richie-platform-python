@@ -54,6 +54,8 @@ from atlas_richie.sentinel_console.infrastructure.persistence.metrics_history_re
 from atlas_richie.sentinel_console.infrastructure.persistence.migration_runner import (
     upgrade_database,
 )
+from support.temp_root import TEMP_ROOT
+
 
 _REQUEST_HEADERS = {"x-request-id": "fleet-overview-read-1"}
 _OPAQUE_COOKIE = "synthetic-session-token-for-fleet-read-0001"
@@ -396,7 +398,7 @@ class FleetOverviewApiTest(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory(
-            prefix="sentinel-fleet-api-", dir="/private/tmp"
+            prefix="sentinel-fleet-api-", dir=TEMP_ROOT
         ) as temporary_directory:
             engine = create_async_engine(
                 f"sqlite+aiosqlite:///{Path(temporary_directory) / 'console.db'}"

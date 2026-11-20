@@ -101,6 +101,8 @@ from atlas_richie.sentinel_console.infrastructure.security.password_hash import 
 from atlas_richie.sentinel_console.infrastructure.security.secret_cipher import (
     AesGcmSecretCipher,
 )
+from support.temp_root import TEMP_ROOT
+
 
 _OPERATOR_SESSION = "synthetic-database-acceptance-operator-session"
 _SECOND_OPERATOR_SESSION = "synthetic-database-acceptance-second-operator"
@@ -1646,7 +1648,7 @@ async def assert_first_run_http_persists_on_real_database(
         if not condition:
             raise AssertionError(message)
 
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+    with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
         directory = Path(temporary)
         configuration = _FirstRunSqlIdentityConfiguration(
             setup_window=_SetupWindowConfiguration(directory / "setup.json"),

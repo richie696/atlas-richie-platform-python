@@ -2,8 +2,13 @@
 set -Eeuo pipefail
 
 # Setup-window and runtime-locator stores reject symlinked parents; macOS
-# TMPDIR commonly resolves through /var/folders, so use /private/tmp directly.
-state_dir="$(mktemp -d /private/tmp/sentinel-t07-run.XXXXXX)"
+# TMPDIR commonly resolves through /var/folders, so prefer /private/tmp where it
+# exists and fall back to the system temp directory where it does not.
+temp_root="/private/tmp"
+if [[ ! -d "$temp_root" ]]; then
+  temp_root="${TMPDIR:-/tmp}"
+fi
+state_dir="$(mktemp -d "$temp_root/sentinel-t07-run.XXXXXX")"
 chmod 700 "$state_dir"
 repo_root="$(git -C "$(dirname "${BASH_SOURCE[0]}")/../../../.." rev-parse --show-toplevel)"
 console_root="$repo_root/components/sentinel/sentinel-console"

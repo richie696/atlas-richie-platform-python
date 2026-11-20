@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from atlas_richie.sentinel_console.cli import create_application, main
+from support.temp_root import TEMP_ROOT
 
 
 class SentinelConsoleCliTests(unittest.TestCase):
@@ -249,7 +250,7 @@ class SentinelConsoleCliTests(unittest.TestCase):
         self.assertEqual(output.getvalue().strip(), "reporter-not-found")
 
     def test_setup_window_is_closed_by_default_and_opens_with_remote_code(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             window_path = Path(temporary) / "setup-window.json"
             authority_path = Path(temporary) / "operator-authority.json"
             environment = {
@@ -297,7 +298,7 @@ class SentinelConsoleCliTests(unittest.TestCase):
     def test_setup_window_opens_without_operator_code_for_local_only_install(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             window_path = Path(temporary) / "setup-window.json"
             authority_path = Path(temporary) / "operator-authority.json"
             environment = {
@@ -324,7 +325,7 @@ class SentinelConsoleCliTests(unittest.TestCase):
             self.assertFalse(authority_path.exists())
 
     def test_setup_window_open_fails_closed_without_operator_credential(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             environment = {
                 "SENTINEL_CONSOLE_SETUP_WINDOW_PATH": str(
                     Path(temporary) / "setup-window.json"
@@ -492,7 +493,7 @@ class SentinelConsoleCliTests(unittest.TestCase):
         fake_anycorn.serve = fake_serve
         fake_config.Config = FakeConfig
 
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             certificate = Path(temporary) / "collector-cert.pem"
             private_key = Path(temporary) / "collector-key.pem"
             client_ca = Path(temporary) / "reporter-ca.pem"
@@ -545,7 +546,7 @@ class SentinelConsoleCliTests(unittest.TestCase):
         self.assertEqual(server_configuration.alpn_protocols, ["h2", "http/1.1"])
 
     def test_metrics_server_rejects_missing_client_ca_before_startup(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             certificate = Path(temporary) / "collector-cert.pem"
             private_key = Path(temporary) / "collector-key.pem"
             certificate.touch()

@@ -29,6 +29,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from atlas_richie.sentinel_console.infrastructure.persistence.models import (
     ConsoleGuardRecord,
 )
+from support.temp_root import TEMP_ROOT
+
 
 _PROJECT_DIRECTORY = Path(__file__).resolve().parents[1]
 _CONTRACTS_PROJECT_DIRECTORY = (
@@ -179,7 +181,7 @@ class InstalledCliBootstrapAcceptanceTests(unittest.TestCase):
         self.assertIsNotNone(uv, "uv is required to build and install the wheel")
 
         with tempfile.TemporaryDirectory(
-            prefix="sentinel-installed-cli-", dir="/private/tmp"
+            prefix="sentinel-installed-cli-", dir=TEMP_ROOT
         ) as raw:
             temporary_directory = Path(raw)
             wheel_directory = temporary_directory / "wheelhouse"
@@ -2027,7 +2029,7 @@ class InstalledCliConsulAclAcceptanceTests(unittest.IsolatedAsyncioTestCase):
         try:
             token = consul.create_source_probe_token()
             with tempfile.TemporaryDirectory(
-                prefix="sentinel-installed-consul-ca-", dir="/private/tmp"
+                prefix="sentinel-installed-consul-ca-", dir=TEMP_ROOT
             ) as raw:
                 ca_path = Path(raw) / "consul-test-ca.pem"
                 ca_path.write_text(consul.client_ca_pem, encoding="ascii")
@@ -2084,7 +2086,7 @@ class InstalledCliConsulAclAcceptanceTests(unittest.IsolatedAsyncioTestCase):
         try:
             token = consul.create_source_probe_token()
             with tempfile.TemporaryDirectory(
-                prefix="sentinel-installed-consul-ca-", dir="/private/tmp"
+                prefix="sentinel-installed-consul-ca-", dir=TEMP_ROOT
             ) as raw:
                 ca_path = Path(raw) / "consul-test-ca.pem"
                 ca_path.write_text(consul.client_ca_pem, encoding="ascii")

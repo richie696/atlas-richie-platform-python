@@ -84,6 +84,8 @@ from atlas_richie.sentinel_console.infrastructure.persistence.models import (
 from atlas_richie.sentinel_console.infrastructure.persistence.runtime_database_locator_configuration import (
     RuntimeDatabaseLocatorConfiguration,
 )
+from support.temp_root import TEMP_ROOT
+
 
 _DATABASE_URL_VARIABLES = (
     "SENTINEL_CONSOLE_TEST_POSTGRES_URL",
@@ -446,7 +448,7 @@ class MetricsHistoryDialectAcceptanceTest(unittest.IsolatedAsyncioTestCase):
             process_id=f"process-{uuid4()}",
         )
         with tempfile.TemporaryDirectory(
-            prefix="sentinel-metrics-cli-", dir="/private/tmp"
+            prefix="sentinel-metrics-cli-", dir=TEMP_ROOT
         ) as temporary:
             locator_path = Path(temporary) / "runtime-locator.json"
             key_id = "metrics-cli-test"

@@ -68,11 +68,12 @@ from atlas_richie.sentinel_console.infrastructure.security.registered_source_key
 from atlas_richie.sentinel_console.infrastructure.security.rule_command_keys import (
     RuleCommandKeyConfiguration,
 )
+from support.temp_root import TEMP_ROOT
 
 
 class FirstRunCompositionTests(unittest.TestCase):
     def test_composes_one_first_run_application_without_connecting(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             directory = Path(temporary)
             protocols_reader = object()
             connections_reader = object()
@@ -289,7 +290,7 @@ class FirstRunCompositionTests(unittest.TestCase):
             self.assertFalse((directory / "authorization.json").exists())
 
     def test_explicit_publication_worker_is_composed_without_provider_io(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             directory = Path(temporary)
             source_ssl_context = ssl.create_default_context()
             configuration = FirstRunSqlIdentityConfiguration(

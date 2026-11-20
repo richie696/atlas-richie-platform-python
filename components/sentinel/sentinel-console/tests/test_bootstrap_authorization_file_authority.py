@@ -31,6 +31,8 @@ from atlas_richie.sentinel_console.infrastructure.persistence import (
 from atlas_richie.sentinel_console.infrastructure.persistence import (
     setup_window_file_store as setup_store,
 )
+from support.temp_root import TEMP_ROOT
+
 
 _OPERATOR_CODE = "operator-code-with-at-least-32-characters"
 _FINGERPRINT_KEY = b"k" * 32
@@ -47,7 +49,7 @@ class _Clock:
 
 class BootstrapAuthorizationFileAuthorityTests(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self._temporary = tempfile.TemporaryDirectory(dir="/private/tmp")
+        self._temporary = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
         self.addCleanup(self._temporary.cleanup)
         self.root = Path(self._temporary.name)
         self.state_path = self.root / "bootstrap-authority.json"

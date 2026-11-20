@@ -14,11 +14,12 @@ from atlas_richie.sentinel_console.infrastructure.persistence.metrics_collector_
 from atlas_richie.sentinel_console.infrastructure.persistence.runtime_database_locator_configuration import (
     RuntimeDatabaseLocatorConfiguration,
 )
+from support.temp_root import TEMP_ROOT
 
 
 class MetricsCollectorCompositionTests(unittest.TestCase):
     def test_collector_mounts_only_reporter_ingress_routes(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             configuration = RuntimeDatabaseLocatorConfiguration(
                 Path(temporary) / "runtime-locator.json",
                 "metrics-test",
@@ -78,7 +79,7 @@ class MetricsCollectorCompositionTests(unittest.TestCase):
 
     def test_missing_runtime_locator_keeps_collector_fail_closed(self) -> None:
         async def exercise() -> None:
-            with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+            with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
                 configuration = RuntimeDatabaseLocatorConfiguration(
                     Path(temporary) / "runtime-locator.json",
                     "metrics-test",

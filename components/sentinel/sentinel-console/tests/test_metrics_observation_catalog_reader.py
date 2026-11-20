@@ -22,12 +22,13 @@ from atlas_richie.sentinel_console.infrastructure.persistence.models import (
     MetricsSnapshotRecord,
     MonitoringSourceRecord,
 )
+from support.temp_root import TEMP_ROOT
 
 
 class MetricsObservationCatalogReaderTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory(
-            prefix="sentinel-observation-catalog-", dir="/private/tmp"
+            prefix="sentinel-observation-catalog-", dir=TEMP_ROOT
         )
         database_url = (
             f"sqlite+aiosqlite:///{Path(self.temporary_directory.name) / 'console.db'}"

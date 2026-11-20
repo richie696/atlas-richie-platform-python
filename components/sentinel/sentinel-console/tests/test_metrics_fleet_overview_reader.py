@@ -32,12 +32,13 @@ from atlas_richie.sentinel_console.infrastructure.persistence.migration_runner i
 from atlas_richie.sentinel_console.infrastructure.persistence.models import (
     MetricsReporterBindingRecord,
 )
+from support.temp_root import TEMP_ROOT
 
 
 class SQLAlchemyMetricsFleetOverviewReaderTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory(
-            prefix="sentinel-fleet-overview-", dir="/private/tmp"
+            prefix="sentinel-fleet-overview-", dir=TEMP_ROOT
         )
         database_url = (
             f"sqlite+aiosqlite:///{Path(self.temporary_directory.name) / 'console.db'}"

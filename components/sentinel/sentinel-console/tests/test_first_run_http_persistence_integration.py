@@ -62,6 +62,8 @@ from atlas_richie.sentinel_console.infrastructure.security.client_identity_key i
 from atlas_richie.sentinel_console.infrastructure.security.registered_source_keys import (
     RegisteredSourceKeyConfiguration,
 )
+from support.temp_root import TEMP_ROOT
+
 
 _OPERATOR_CODE = "synthetic-first-run-operator-code-00000001"
 _ADMIN_PASSWORD = "Synthetic-Admin-Password-42!"
@@ -111,7 +113,7 @@ def _configuration(
 
 class FirstRunHttpPersistenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_authorized_initialization_persists_and_closes_setup(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             directory = Path(temporary)
             database_path = directory / "isolated-target.sqlite"
             sqlite_url = f"sqlite+aiosqlite:///{database_path}"
@@ -342,7 +344,7 @@ class FirstRunHttpPersistenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_sqlite_first_run_creates_database_and_reopens_from_locator(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             directory = Path(temporary)
             database_path = directory / "deployment-owned-console.sqlite3"
             configuration = _configuration(
