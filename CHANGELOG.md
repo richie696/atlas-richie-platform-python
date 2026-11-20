@@ -423,6 +423,16 @@ categories and Semantic Versioning.
   module), so the file skips cleanly when the optional collector runtime is absent.
   Verified in a clean `--extra test` environment on the job's Python 3.12:
   1416 passed, 132 skipped.
+- **`sentinel-console` test suite could not run on Linux**: 28 Python call sites and
+  one shell script hard-coded `/private/tmp` as the temp root. That path only exists
+  on macOS, so on an ubuntu runner every temp-dir test died with `FileNotFoundError`
+  — 52 failures — while the macOS host stayed green. The console now resolves the
+  temp root through `tests/support/temp_root.py` (`/private/tmp` when it exists,
+  otherwise the platform temp directory), and the T07 runner script falls back the
+  same way. macOS behaviour is unchanged: `/private/tmp` is still preferred because
+  Docker Desktop does not share `/var/folders`, which the container-backed acceptance
+  flows rely on. Verified on Linux (Debian bookworm, Python 3.12, with git and node
+  present as on the runner): 1416 passed, 132 skipped — identical to macOS.
 
 - **`AlembicMigrationRunner` could not migrate with a percent-encoded
   password**: Alembic stores main options in a `configparser` section and
