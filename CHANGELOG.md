@@ -309,6 +309,13 @@ categories and Semantic Versioning.
 
 ### Changed
 
+- **`desensitize-core` Chinese README added**: the package shipped with an
+  English README only, while the rest of the platform pairs
+  `README.md` / `README.zh.md`. The Chinese version mirrors the English one
+  section by section — same nine headings, the same nine-row defaults table,
+  the same two code samples (byte-identical except for one translated inline
+  comment) — and both files now carry the `[English] | [简体中文]` switch line.
+
 - **Stale docstrings cleaned up** (`desensitize-core`): three module/method
   docstrings still claimed capabilities were "not ported" that have been
   delivered — `service.py` said `ObjectMaskingService` / `SafeLogSerializer`
