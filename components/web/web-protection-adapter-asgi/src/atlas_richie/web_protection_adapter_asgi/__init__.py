@@ -14,10 +14,18 @@ trace 归一在最前（对位 Java 的 `OtelTracingInterceptor`，ORDER=50）�
 登录失败学习（下游 2xx / 401 / 403 记成功或失败）仍是**后置副作用**：Java 侧
 对应 Java 的 `RequestLifecycleHookInterceptor` —— 属 BACKLOG 的另一项，Python 侧暂留在适配层。
 
+可选接线：
+- `hook_bus`：请求结束（正常 / 短路 / 异常）时派发 `RequestCompletedEvent`
+  （对位 Java `InterceptingFilter` 的 finally 块）
+- `degrade_evaluator`：在「业务跑完、响应未发出」的窗口做降级判定
+- `extra_interceptors`：把自建拦截器（如 `HangDetectionInterceptor`）拼进平台链尾
+
 与 Java 的差异：
 - Java 的网关身份旁路硬编码不可关；Python 侧保留可配置（默认头名与 Java 契约一致）
 - Java 的决策经 HookBus 发布；Python 侧投递到可选的 `WebDecisionSink`
 - Java 的限流决策 reason 固定 `rate_limit.exceeded`；Python 侧保留 guard 的细分原因
+- Java 的降级拦截器站在链上；Python 的链在 app 之前跑完，故降级判定放在适配层
+  （并因此需要缓冲下游响应）
 """
 
 from __future__ import annotations
@@ -58,6 +66,12 @@ from atlas_richie.web_protection.spi import (
     WebInterceptor,
 )
 from atlas_richie.web_protection.tracing import TraceIdInterceptor
+from atlas_richie.web_protection.degrade import (
+    ATTR_EXCEPTION as DEGRADE_EXCEPTION_ATTRIBUTE,
+    ATTR_LATENCY_MS as DEGRADE_LATENCY_MS_ATTRIBUTE,
+    DegradeEvaluator,
+)
+from atlas_richie.web_protection.hook import HookBus, RequestCompletedEvent, now_nanos
 
 Message = dict[str, Any]
 Scope = dict[str, Any]
@@ -168,6 +182,26 @@ def _as_text_renderer(renderer: Callable[[int, str], bytes]) -> Callable[[int, s
     return _render
 
 
+class _BufferedResponse:
+    """缓冲下游响应。
+
+    降级判定需要「业务跑完、响应还没发出去」的窗口——Java 的
+    `DegradeInterceptor` 正是站在这个窗口里（它的链尾就是业务执行）。ASGI 的
+    响应是流式发出的，没有这个窗口就只能在异常路径降级，所以开了降级就缓冲。
+    """
+
+    def __init__(self) -> None:
+        self._messages: list[Message] = []
+
+    def append(self, message: Message) -> None:
+        self._messages.append(message)
+
+    async def flush(self, send: Send) -> None:
+        """把缓冲的响应原样发出去。"""
+        for message in self._messages:
+            await send(message)
+
+
 class ProtectionASGIMiddleware:
     """Wrap an ASGI app with the configured protections.
 
@@ -200,6 +234,9 @@ class ProtectionASGIMiddleware:
         deny_status_locked: int = 429,
         decision_sink: WebDecisionSink | None = None,
         enable_trace_id: bool = True,
+        hook_bus: HookBus | None = None,
+        degrade_evaluator: DegradeEvaluator | None = None,
+        extra_interceptors: Sequence[WebInterceptor] = (),
     ) -> None:
         self.app = app
         self._ip_blacklist = tuple(ip_blacklist)
@@ -222,6 +259,9 @@ class ProtectionASGIMiddleware:
         self._deny_status_locked = deny_status_locked
         self._decision_sink = decision_sink
         self._enable_trace_id = enable_trace_id
+        self._hook_bus = hook_bus
+        self._degrade_evaluator = degrade_evaluator
+        self._extra_interceptors = tuple(extra_interceptors)
         self._interceptors = self._build_interceptors()
 
     # ───────────────────────── 拦截器链装配 ─────────────────────────
@@ -291,6 +331,8 @@ class ProtectionASGIMiddleware:
                     body_renderer=renderer,
                 )
             )
+        # 自建拦截器排在平台防护之后（Java 靠 Ordered 排序，Python 是注册序）
+        interceptors.extend(self._extra_interceptors)
         return tuple(interceptors)
 
     @property
@@ -328,8 +370,13 @@ class ProtectionASGIMiddleware:
                 return
 
             await self._call_app(scope, receive, send, ctx, path)
+        except Exception as error:
+            # 对位 Java InterceptingFilter：异常记进 ctx 后继续向上抛
+            ctx.set_error(error)
+            raise
         finally:
             ctx.close()
+            self._publish_request_completed(ctx)
 
     async def _call_app(
         self,
@@ -339,27 +386,90 @@ class ProtectionASGIMiddleware:
         ctx: MutableWebRequestContext,
         path: str,
     ) -> None:
-        """调用下游 app，并按需记录登录成功 / 失败。"""
+        """调用下游 app，并按需记录登录成功 / 失败。
+
+        开了降级（`degrade_evaluator` 非空）时下游响应被**缓冲**：降级判定需要
+        「业务跑完、响应还没发出去」的窗口——Java 的 `DegradeInterceptor` 正站在
+        这个窗口里。代价是响应不再流式（SSE / 长轮询场景不要开降级）。
+        """
         tracker = self._login_tracker
         key = ctx.attribute(LOGIN_KEY_ATTRIBUTE) if tracker is not None else None
         tracking = tracker is not None and key is not None and path in self._login_paths
-        if not tracking and not ctx.response_headers():
-            await self.app(scope, receive, send)
+        evaluator = self._degrade_evaluator
+
+        if evaluator is None:
+            if not tracking and not ctx.response_headers():
+                await self.app(scope, receive, send)
+                return
+
+            async def send_with_context(message: Message) -> None:
+                message = self._capture_response_start(ctx, message, tracking, key, tracker)
+                await send(message)
+
+            await self.app(scope, receive, send_with_context)
             return
 
-        async def send_with_context(message: Message) -> None:
-            if message.get("type") == "http.response.start":
-                status = int(message.get("status", 200))
-                ctx.set_response_status(status)
-                if tracking:
-                    if 200 <= status < 300:
-                        tracker.record_success(key)
-                    elif status in (401, 403):
-                        tracker.record_failure(key)
-                message = _merge_platform_headers(message, ctx)
-            await send(message)
+        # ───────────────────────── 降级模式：缓冲响应 ─────────────────────────
+        buffer = _BufferedResponse()
 
-        await self.app(scope, receive, send_with_context)
+        async def capture(message: Message) -> None:
+            buffer.append(
+                self._capture_response_start(ctx, message, tracking, key, tracker)
+            )
+
+        start_nanos = now_nanos()
+        try:
+            await self.app(scope, receive, capture)
+        except Exception as error:
+            # 对位 Java DegradeInterceptor：异常记进 attribute（不是 ctx.error），
+            # 降级命中就吞掉异常，未命中则原样上抛。
+            ctx.set_attribute(DEGRADE_EXCEPTION_ATTRIBUTE, error)
+            if evaluator.evaluate(ctx) is not None:
+                await self._write_short_circuit(send, ctx)
+                return
+            raise
+
+        latency_ms = (now_nanos() - start_nanos) // 1_000_000
+        if ctx.attribute(DEGRADE_LATENCY_MS_ATTRIBUTE) is None:
+            ctx.set_attribute(DEGRADE_LATENCY_MS_ATTRIBUTE, latency_ms)
+        if evaluator.evaluate(ctx) is not None:
+            await self._write_short_circuit(send, ctx)
+            return
+        await buffer.flush(send)
+
+    def _capture_response_start(
+        self,
+        ctx: MutableWebRequestContext,
+        message: Message,
+        tracking: bool,
+        key: str | None,
+        tracker: LoginAttemptTracker | None,
+    ) -> Message:
+        """把 `http.response.start` 的状态码记进 ctx，并合并平台响应头。"""
+        if message.get("type") != "http.response.start":
+            return message
+        status = int(message.get("status", 200))
+        ctx.set_response_status(status)
+        if tracking and tracker is not None:
+            if 200 <= status < 300:
+                tracker.record_success(key)
+            elif status in (401, 403):
+                tracker.record_failure(key)
+        return _merge_platform_headers(message, ctx)
+
+    def _publish_request_completed(self, ctx: MutableWebRequestContext) -> None:
+        """请求结束时派发 `RequestCompletedEvent`。
+
+        对位 Java `InterceptingFilter` 的 finally 块：无论短路 / 异常 / 正常
+        完成都派发，且在 `ctx.close()` **之后**派发。
+        """
+        bus = self._hook_bus
+        if bus is None:
+            return
+        try:
+            bus.publish(RequestCompletedEvent.of(ctx, now_nanos()))
+        except Exception:  # noqa: BLE001 — 事件发布失败不得影响请求
+            return
 
     async def _write_short_circuit(self, send: Send, ctx: MutableWebRequestContext) -> None:
         """把短路响应写回：状态码 / 响应头 / body。"""

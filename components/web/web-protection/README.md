@@ -28,9 +28,14 @@ breaking; these are the request-level protections Python was missing.
   - [`WebInterceptor` and the Chain](#webinterceptor-and-the-chain)
   - [Attribute Names](#attribute-names)
   - [Trace ID Normalisation](#trace-id-normalisation)
+  - [Degradation Strategies](#degradation-strategies)
+  - [Watchdog](#watchdog)
+  - [Event Bus](#event-bus)
+  - [Hot Reload Registry](#hot-reload-registry)
 - [🔧 Core Capabilities](#-core-capabilities)
   - [Scenario 1: One decision event for every rejection](#scenario-1-one-decision-event-for-every-rejection)
   - [Scenario 2: Adding your own interceptor](#scenario-2-adding-your-own-interceptor)
+  - [Scenario 3: Degrade a failing endpoint](#scenario-3-degrade-a-failing-endpoint)
 - [⚙️ Differences from the Java Baseline](#-differences-from-the-java-baseline)
 - [🔧 Troubleshooting](#-troubleshooting)
 - [📎 ⏱️ Sequence Diagrams](#-sequence-diagrams)
@@ -72,6 +77,10 @@ interceptor chain, one decision event.
 | SPI defaults | atlas_richie.web_protection.spi.support | stdlib only | `MutableWebRequestContext`, `DefaultWebInterceptorChain` |
 | Guard adapters | atlas_richie.web_protection.interceptors | guards | Wraps each guard as an interceptor |
 | Tracing | atlas_richie.web_protection.tracing | stdlib only | `TraceIdParser` + `TraceIdInterceptor` — trace id normalisation |
+| Degradation | atlas_richie.web_protection.degrade | stdlib only | Trigger / strategy / registry / evaluator — fallback responses |
+| Watchdog | atlas_richie.web_protection.hang | stdlib only | Hang event, scheduler, detection interceptor |
+| Events | atlas_richie.web_protection.hook | stdlib only | Publish / subscribe bus for request and hang events |
+| Hot reload | atlas_richie.web_protection.reload | stdlib only | Registry of reloadable components |
 | Guards | guards / rate_limit / idempotency / matchers / trackers | stdlib only | Pure allow/deny decisions |
 | Adapter | atlas-richie-web-protection-adapter-asgi | this package | Wires the chain into a framework |
 
@@ -329,6 +338,188 @@ interceptors can read the trace id.
 The padding uses **random** hex, not zeros — an upstream id is not a
 predictable prefix of the normalised id.
 
+### Degradation Strategies
+
+A degradation strategy answers one question: **when this endpoint is in
+trouble, what should the client see instead?**
+
+| Type | Role |
+| --- | --- |
+| `Trigger` | `EXCEPTION` / `HIGH_LATENCY` / `CUSTOM` — what happened |
+| `DegradeStrategy` | the SPI you implement: `name` / `triggers` / `order` / `matches` / `build` |
+| `DegradeResult` | status + body + headers + the name of the strategy that produced it |
+| `DegradeStrategyRegistry` | holds the strategies and picks the first match by `order` |
+| `DegradeEvaluator` | the framework-free decision: detect trigger → select → build |
+
+```mermaid
+flowchart LR
+    A["request fails or runs slow"] --> B["DegradeEvaluator.evaluate(ctx)"]
+    B --> C{"degrade.skip?"}
+    C -->|"yes"| D["no degradation"]
+    C -->|"no"| E{"path has a route?"}
+    E -->|"no"| D
+    E -->|"yes"| F{"trigger detected?"}
+    F -->|"none"| D
+    F -->|"EXCEPTION / HIGH_LATENCY / CUSTOM"| G{"strategy matches?"}
+    G -->|"yes"| H["strategy.build(trigger, ctx)"]
+    G -->|"no"| I["route config or global fallback"]
+    H --> J["DegradeResult → mark_short_circuit"]
+    I --> J
+```
+
+Register a strategy and let it answer for the endpoints it knows about:
+
+```python
+from atlas_richie.web_protection import (
+    DegradeResult,
+    DefaultDegradeStrategyRegistry,
+    Trigger,
+)
+
+
+class CachedOrders:
+    def name(self) -> str:
+        return "cached-orders"
+
+    def triggers(self) -> frozenset[Trigger]:
+        return frozenset({Trigger.EXCEPTION})
+
+    def order(self) -> int:
+        return 0
+
+    def matches(self, trigger) -> bool:
+        return trigger is Trigger.EXCEPTION
+
+    def build(self, trigger, ctx) -> DegradeResult:
+        return DegradeResult.of(200, '{"cached":true}', "cached-orders")
+
+
+registry = DefaultDegradeStrategyRegistry()
+registry.register("cached-orders", CachedOrders())
+```
+
+**Scope matters**: degradation only applies to paths that have a **route
+configured** — the Java baseline treats degradation as a per-interface business
+decision, not a blanket safety net. Configure `routes` (or `route_rules`) for
+the endpoints you want protected; `require_route_match=False` makes every path
+eligible for the global fallback instead.
+
+The evaluator reads its inputs from the request context, so the adapter (or your
+own code) can drive it:
+
+| Attribute | Written by | Meaning |
+| --- | --- | --- |
+| `degrade.skip` | business code | `true` disables degradation for this request |
+| `degrade.exception` | the adapter | the exception that was raised |
+| `degrade.manual` | business code | `true` forces `Trigger.CUSTOM` |
+| `degrade.latencyMs` | the adapter | measured latency in milliseconds |
+| `degrade.hit_strategy` | the evaluator | the strategy (or route/fallback) that won |
+
+The response body has the same shape as the Java `ApiResult.error(code, msg)`
+serialisation — `{"success":false,"code":...,"msg":...}` — and the `{reason}`
+placeholder is replaced by the trigger name (`exception` / `high-latency` /
+`custom`).
+
+**Not the Sentinel breaker.** Sentinel's circuit breaker
+(`sentinel/slots/degrade.py`) is **flow control**: it raises
+`CircuitBlocked` and refuses the call. Web degradation is **fallback**: it
+answers the client with a usable response. The two do not overlap — one blocks,
+the other degrades.
+
+### Watchdog
+
+The watchdog answers: **is this request stuck, and for how long?**
+
+| Type | Role |
+| --- | --- |
+| `WatchdogScheduler` | shared scheduler: 3 daemon workers + 1 daemon timer thread |
+| `WatchHandle` | the cancel token returned by `schedule()` |
+| `HangEvent` | method / path / elapsed / threshold / client key / trace id / stack |
+| `HangDetectionInterceptor` | registers the three watchdogs around the chain |
+
+Three levels fire in order — `warn`, `dump`, `kill_switch` — and each level
+fires **at most once** per request, so the expensive thread snapshot runs at
+most once:
+
+| Level | Threshold | Effect |
+| --- | --- | --- |
+| `warn` | `warn_ms` | log a warning, publish `HangEvent` |
+| `dump` | `dump_ms` | log a warning plus a thread snapshot, publish `HangEvent` |
+| `kill_switch` | `kill_switch_ms` | same as `dump`, then call `kill_interrupter` |
+
+```python
+from atlas_richie.web_protection import HangDetectionInterceptor
+
+interceptor = HangDetectionInterceptor(
+    warn_ms=1_000,
+    dump_ms=3_000,
+    kill_switch_ms=10_000,
+    dump_enabled=True,
+    hook_bus=bus,
+)
+```
+
+Thresholds must satisfy `warn_ms <= dump_ms <= kill_switch_ms` and all be
+positive — the constructor rejects anything else, because an inverted ladder
+would fire the cheap level after the expensive one.
+
+Long-lived paths (SSE, WebSocket, streaming) are skipped: if the context
+carries `platform.web.long-lived`, no watchdog is registered at all.
+
+### Event Bus
+
+A small publish/subscribe bus for the events the platform produces.
+
+| Type | Role |
+| --- | --- |
+| `HookEvent` | the marker base class every event derives from |
+| `HookSubscriber` | the subscriber protocol: `on_event(event)` |
+| `HookBus` | the bus protocol: `subscribe` / `publish` / `diagnostic_view` |
+| `DefaultHookBus` | the default implementation |
+| `RequestCompletedEvent` | published when a request ends — normal, short-circuited or failed |
+
+```python
+from atlas_richie.web_protection import DefaultHookBus, RequestCompletedEvent
+
+bus = DefaultHookBus()
+subscription = bus.subscribe(RequestCompletedEvent, my_subscriber)
+bus.publish(RequestCompletedEvent.of(ctx, end_nanos))
+subscription.close()
+```
+
+Three guarantees:
+
+- **exact-type dispatch** — a subscriber of `HookEvent` does **not** receive a
+  `RequestCompletedEvent`; subscribe to the concrete type
+- **exception isolation** — a subscriber that raises does not stop the others
+- **no subscribers, no cost** — publishing an event nobody listens for is a
+  single dictionary lookup
+
+### Hot Reload Registry
+
+Swap a component's configuration without restarting the process.
+
+| Type | Role |
+| --- | --- |
+| `Reloadable` | the SPI: `current_state()` + `accept(new_state)` |
+| `ReloadEvent` | published after a successful reload |
+| `HotReloadRegistry` | the registry protocol |
+| `DefaultHotReloadRegistry` | the default implementation |
+
+```python
+from atlas_richie.web_protection import DefaultHotReloadRegistry
+
+registry = DefaultHotReloadRegistry(bus)
+registry.register("rate-limit", my_reloadable)
+registry.reload("rate-limit")     # current_state() → accept(state)
+registry.reload_all()
+```
+
+`reload` re-reads the component's own state and hands it back to it — the
+component decides what to do with it. `reload_all` sweeps every registered
+component and returns how many succeeded. The registry publishes a
+`ReloadEvent` when a bus was supplied, so audit trails need no extra wiring.
+
 ## 🔧 Core Capabilities
 
 ### Scenario 1: One decision event for every rejection
@@ -360,6 +551,40 @@ chain = DefaultWebInterceptorChain([
 ])
 ```
 
+### Scenario 3: Degrade a failing endpoint
+
+Register a strategy, hand the evaluator to the adapter, and the client gets a
+fallback instead of a 500.
+
+```python
+from atlas_richie.web_protection import (
+    DegradeConfig,
+    DegradeEvaluator,
+    DefaultDegradeStrategyRegistry,
+    RouteFallback,
+)
+from atlas_richie.web_protection_adapter_asgi import ProtectionASGIMiddleware
+
+registry = DefaultDegradeStrategyRegistry()
+registry.register("cached-orders", CachedOrders())
+
+evaluator = DegradeEvaluator(
+    registry,
+    DegradeConfig(routes={"/api/v1/orders": RouteFallback(pattern="/api/v1/orders")}),
+)
+
+middleware = ProtectionASGIMiddleware(app, degrade_evaluator=evaluator)
+```
+
+When the endpoint raises, the client receives the strategy's response and the
+exception never reaches it. With no strategy registered, the route
+configuration produces the fallback body instead — the same shape as the Java
+`ApiResult.error(code, msg)` serialisation.
+
+**What it costs**: the adapter buffers the downstream response while the
+decision is made, so the response is no longer streamed. Keep SSE and
+long-polling endpoints out of the degraded scope.
+
 ## ⚙️ Differences from the Java Baseline
 
 | Topic | Java | Python | Why |
@@ -375,6 +600,14 @@ chain = DefaultWebInterceptorChain([
 | prefer-w3c switch | documented in the Java README, **not implemented in the Java source** | not implemented either | the Java code always prefers traceparent; this port follows the code, not the README |
 | Whitespace handling | `String.trim()` / `String.isBlank()` | ASCII whitespace only | identical for realistic input; only exotic spaces such as U+00A0 differ |
 | Trace interceptor registration | skipped when the observability starter is present | always available | Java's legacy web tracing must not sit beside the OTel trace boundary; the same rule applies once the Python observability component lands |
+| Degrade placement | `DegradeInterceptor` sits on the chain; the chain tail is the business call | a framework-free `DegradeEvaluator`; the adapter calls it around the app invocation | the Python chain runs **before** the app, so a chain element cannot observe the business result |
+| Degrade body | `ApiResult.error(code, msg).toJson()` | the same JSON shape, without the `ApiResult` contract class | the Python platform has no `ApiResult` yet |
+| Bean fallback | `fallbackBean` / `fallbackMethod` reflect into a Spring bean | not ported — register a `DegradeStrategy` instead | Python has no "reflect into a bean by name" idiom |
+| Global fallback | unreachable in the Java source — the evaluator returns early when no route matches | reachable via `require_route_match=False` | the Java branch is dead code; the switch makes it usable without changing the default |
+| Hang kill switch | `Thread.interrupt()` on the business thread | optional `kill_interrupter` callback, off by default | CPython has no safe way to interrupt a running thread |
+| Hang stack capture | `Thread.currentThread()` inside the watchdog callback — the **watchdog's** stack | the monitored business thread's stack | the Java capture is off by one thread |
+| Event bus | `InterceptingFilter` always creates a bus | no bus unless one is passed | an empty bus costs a lookup per request |
+| Hot-reload name | `default String name()` → class name | optional `name()`, falls back to the class name | same semantics, but the name is not required |
 
 The IP-blacklist hardening deviation from the Java side is unchanged:
 Java's `IpBlacklistEntry` resolves hostnames through DNS, which turns a
@@ -390,6 +623,11 @@ only, so a hostname never matches.
 | A long-lived (SSE) path is still rejected | the IP blacklist runs before the long-lived bypass | that is intentional — the blacklist applies to every path |
 | A custom `deny_renderer` output changed | the renderer must return bytes | the adapter re-encodes the body as UTF-8; return bytes to keep them byte-identical |
 | Rejections are counted but never reported | no sink was configured | pass `decision_sink`=... to the middleware |
+| A degraded endpoint still returns 500 | the evaluator was never handed to the adapter | pass `degrade_evaluator=`... to the middleware |
+| Degradation never triggers | the path has no route configured, or no trigger was detected | configure `routes` (or set `require_route_match=False`) and inspect the `degrade.` attributes |
+| A slow endpoint is not degraded | the latency threshold applies to the whole downstream call | compare the measured time with `degrade.latencyMs` |
+| The SSE response arrives all at once | degradation buffers the downstream response | keep streaming endpoints out of the degraded scope |
+| The watchdog never fires | the request finished before the threshold, or the path is long-lived | long-lived paths skip the watchdog entirely |
 
 ## 📎 ⏱️ Sequence Diagrams
 
@@ -431,4 +669,25 @@ sequenceDiagram
     Chain-->>MW: chain exhausted, not short-circuited
     MW->>App: call the app
     App-->>Client: 200
+
+### Degrading a Failing Request
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant MW as ASGI middleware
+    participant App as Downstream app
+    participant E as DegradeEvaluator
+    participant S as Strategy
+
+    Client->>MW: GET /api/v1/orders
+    MW->>App: call the app (response buffered)
+    App-->>MW: RuntimeError
+    MW->>E: evaluate(ctx)
+    E->>E: detect trigger (EXCEPTION)
+    E->>S: matches(EXCEPTION)
+    S-->>E: DegradeResult(503, body)
+    E->>MW: mark_short_circuit(503, body)
+    MW-->>Client: 503 + fallback body
+```
 ```

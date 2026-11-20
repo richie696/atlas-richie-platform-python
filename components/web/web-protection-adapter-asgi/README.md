@@ -29,6 +29,9 @@ polluted by adapter concerns.
   - [Scenario 4: Login attempt tracking](#scenario-4-login-attempt-tracking)
   - [Scenario 5: Distributed rate limiting](#scenario-5-distributed-rate-limiting)
   - [Scenario 6: Trace normalisation](#scenario-6-trace-normalisation)
+  - [Scenario 7: Degrading a failing endpoint](#scenario-7-degrading-a-failing-endpoint)
+  - [Scenario 8: Request completion events](#scenario-8-request-completion-events)
+  - [Scenario 9: Extending the chain](#scenario-9-extending-the-chain)
 - [⚙️ Differences from the Java Baseline](#-differences-from-the-java-baseline)
 - [🔧 Troubleshooting](#-troubleshooting)
 - [📎 ⏱️ Sequence Diagrams](#-sequence-diagrams)
@@ -53,6 +56,10 @@ writes the rejection back from the context instead of calling the app.
   middleware holds no protection logic of its own
 - ✅ **Optional guards**: with none configured the middleware is a passthrough
 - ✅ **Non-http scopes**: lifespan and websocket scopes pass straight through
+- ✅ **Optional degradation**: pass `degrade_evaluator` and a failing endpoint
+  answers with a fallback response instead of a 500
+- ✅ **Optional event bus**: pass `hook_bus` and every request publishes a
+  `RequestCompletedEvent` when it ends — normal, short-circuited or failed
 
 ## 🏗️ Architecture Design
 
@@ -65,9 +72,13 @@ graph TB
     C --> D["DefaultWebInterceptorChain.proceed(ctx)"]
     D --> E{"ctx.is_short_circuited?"}
     E -->|yes| F["write status + headers + body"]
-    E -->|no| G["call the downstream app"]
-    F --> H["ctx.close()"]
-    G --> H
+    E -->|no| G["call the downstream app<br/>(buffered when degrading)"]
+    G --> H{"degrade hit?"}
+    H -->|yes| I["write the fallback response"]
+    H -->|no| J["stream the buffered response"]
+    F --> K["ctx.close() + publish RequestCompletedEvent"]
+    I --> K
+    J --> K
 ```
 
 ### Chain Assembly Order
@@ -92,6 +103,11 @@ The gateway identity layer is always present — it only sets attributes and
 never rejects, so the chain is never empty even with no guards configured. The
 trace interceptor comes **first** (Java `ORDER = 50`), so every later
 interceptor can read `ctx.trace_id`.
+
+Anything passed as `extra_interceptors` is appended **after** the platform
+guards. Java sorts the chain by `Ordered` (degrade = 350, hang = 500); this
+chain is registration-ordered, so the order of the extra interceptors is the
+order you pass them in.
 
 ## 🚀 Quick Start
 
@@ -142,6 +158,9 @@ Non-http scopes (including lifespan and websocket) pass straight through.
 | `deny_status_locked` | 429 | rejection status for locked accounts |
 | `decision_sink` | None | object with `publish(decision)` receiving every rejection |
 | `enable_trace_id` | True | normalise the trace id and emit the `X-Trace-Id` response header |
+| `hook_bus` | None | bus receiving a `RequestCompletedEvent` when each request ends |
+| `degrade_evaluator` | None | degradation evaluator consulted around the downstream call |
+| `extra_interceptors` | () | interceptors appended after the platform guards |
 
 ### Public Helpers
 
@@ -249,6 +268,72 @@ thing off.
 The trace interceptor runs first (Java `ORDER = 50`), so `ctx.trace_id` is
 available to every later interceptor.
 
+### Scenario 7: Degrading a failing endpoint
+
+Pass a `DegradeEvaluator` and the middleware evaluates degradation around
+the downstream call: an exception or an over-threshold latency turns into a
+fallback response, and the exception never reaches the client.
+
+```python
+from atlas_richie.web_protection import (
+    DegradeConfig, DegradeEvaluator, DefaultDegradeStrategyRegistry, RouteFallback,
+)
+
+evaluator = DegradeEvaluator(
+    DefaultDegradeStrategyRegistry(),
+    DegradeConfig(routes={"/api/v1/orders": RouteFallback(pattern="/api/v1/orders")}),
+)
+middleware = ProtectionASGIMiddleware(app, degrade_evaluator=evaluator)
+```
+
+The middleware measures the downstream call and hands the outcome to the
+evaluator: on failure it writes `degrade.exception`, on success it writes
+`degrade.latencyMs`. The evaluator then picks a strategy (or the route
+configuration) and short-circuits the context.
+
+**What it costs**: while the decision is pending the downstream response is
+**buffered**, so the response is no longer streamed. Keep SSE and long-polling
+endpoints out of the degraded scope. Without an evaluator the middleware behaves
+exactly as before — the downstream response is streamed straight through.
+
+### Scenario 8: Request completion events
+
+Pass a `HookBus` and every request publishes a `RequestCompletedEvent`
+when it ends — normal, short-circuited or failed.
+
+```python
+from atlas_richie.web_protection import DefaultHookBus, RequestCompletedEvent
+
+bus = DefaultHookBus()
+bus.subscribe(RequestCompletedEvent, my_subscriber)
+middleware = ProtectionASGIMiddleware(app, hook_bus=bus)
+```
+
+The event carries the method, path, response status, start and end timestamps,
+the short-circuit flag, the error flag, the client key and the trace id. It is
+published **after** `ctx.close()`, like the Java `InterceptingFilter`
+does. A degraded request reports no error — the degradation consumed the
+exception, exactly like the Java side.
+
+### Scenario 9: Extending the chain
+
+`extra_interceptors` appends your own interceptors after the platform
+guards — the natural place for a `HangDetectionInterceptor`.
+
+```python
+from atlas_richie.web_protection import HangDetectionInterceptor
+
+middleware = ProtectionASGIMiddleware(
+    app,
+    hook_bus=bus,
+    extra_interceptors=[HangDetectionInterceptor(1_000, 3_000, 10_000, hook_bus=bus)],
+)
+```
+
+The order is the order you pass them in: the Python chain is
+registration-ordered, while Java sorts by `Ordered`. Put the watchdog
+last — it wraps everything that runs inside the request.
+
 ## ⚙️ Differences from the Java Baseline
 
 | Topic | Java | Python | Why |
@@ -263,6 +348,10 @@ available to every later interceptor.
 | `X-Trace-Id` write-back | only on the short-circuit path; the normal path relies on the container-level `TraceIdInjectValve` | both paths | the ASGI middleware *is* the container layer here, so it must do the injection itself — otherwise the normal response never carries the trace id |
 | Platform vs application header | — | the platform wins on a name clash | the wire value of `X-Trace-Id` always equals `ctx.trace_id`; the two never diverge |
 | Trace interceptor | `OtelTracingInterceptor`, skipped when the observability starter is present | `TraceIdInterceptor`, always registered | Java's legacy web tracing must not sit beside the OTel trace boundary; the same rule applies once the Python observability component lands |
+| Degrade placement | `DegradeInterceptor` sits on the chain; the chain tail is the business call | a framework-free `DegradeEvaluator`, consulted around the downstream call | the Python chain runs **before** the app, so a chain element cannot observe the business result |
+| Degrade response streaming | the servlet container writes one response | the downstream response is buffered while the decision is pending | the decision has to happen before anything is written; keep streaming endpoints out of the degraded scope |
+| Request completion event | `InterceptingFilter` publishes it in a finally block | optional `hook_bus`; without one, nothing is published | an empty bus would cost a lookup on every request |
+| Interceptor order | sorted by `Ordered` (degrade 350, hang 500) | registration order; extras are appended last | the Python chain has no ordering key — pass them in the order you want |
 
 ## 🔧 Troubleshooting
 
@@ -273,6 +362,10 @@ available to every later interceptor.
 | A long-lived path is still rejected | the IP blacklist runs before the long-lived bypass | intentional — the blacklist applies to every path |
 | A custom `deny_renderer` output changed | the renderer must return bytes | the adapter re-encodes the body as UTF-8 |
 | The login tracker never records | the path is not in `login_paths` | add it, or pass `login_paths`=... |
+| A failing endpoint still returns 500 | no evaluator was configured | pass `degrade_evaluator`=... to the middleware |
+| Degradation never triggers | the path has no route configured, or no trigger was detected | configure `routes` in the `DegradeConfig`, or set `require_route_match=False` |
+| An SSE response arrives all at once | degradation buffers the downstream response | keep streaming endpoints out of the degraded scope |
+| No completion event arrives | no bus was configured | pass `hook_bus`=... |
 
 ## 📎 ⏱️ Sequence Diagrams
 
@@ -299,4 +392,23 @@ sequenceDiagram
     Chain-->>MW: returns
     MW-->>Client: 429 + body + Retry-After
     MW->>X: ctx.close()
+
+### Degrading a Failing Endpoint
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant MW as ProtectionASGIMiddleware
+    participant App as Downstream app
+    participant E as DegradeEvaluator
+
+    Client->>MW: GET /api/v1/orders
+    MW->>App: call the app (response buffered)
+    App-->>MW: RuntimeError
+    MW->>E: evaluate(ctx) with degrade.exception set
+    E-->>MW: DegradeResult(503, body)
+    MW-->>Client: 503 + fallback body
+    MW->>X: ctx.close()
+    MW->>X: publish RequestCompletedEvent
+```
 ```

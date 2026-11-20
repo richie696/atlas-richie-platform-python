@@ -29,6 +29,9 @@ ASGI 中间件：把 atlas-richie-web-protection 的 guard 接进请求处理 �
   - [场景 4：登录失败跟踪](#场景-4登录失败跟踪)
   - [场景 5：分布式限流](#场景-5分布式限流)
   - [场景 6：trace 归一](#场景-6trace-归一)
+  - [场景 7：给故障接口做降级](#场景-7给故障接口做降级)
+  - [场景 8：请求完成事件](#场景-8请求完成事件)
+  - [场景 9：扩展拦截器链](#场景-9扩展拦截器链)
 - [⚙️ 与 Java 基准的差异](#-与-java-基准的差异)
 - [🔧 排障](#-排障)
 - [📎 ⏱️ 时序图](#-时序图)
@@ -50,6 +53,9 @@ ASGI 中间件：把 atlas-richie-web-protection 的 guard 接进请求处理 �
 - ✅ **框架无关**：链可以被任何适配层复用；中间件本身不含任何防护逻辑
 - ✅ **guard 全可选**：一个都不配时中间件就是透传
 - ✅ **非 http scope**：lifespan 与 websocket 直接放行
+- ✅ **降级可选**：传 `degrade_evaluator`，故障接口返回兜底响应而不是 500
+- ✅ **事件总线可选**：传 `hook_bus`，每个请求结束时发布一条
+  `RequestCompletedEvent` —— 正常、短路、失败都发
 
 ## 🏗️ 架构设计
 
@@ -62,9 +68,13 @@ graph TB
     C --> D["DefaultWebInterceptorChain.proceed(ctx)"]
     D --> E{"ctx.is_short_circuited?"}
     E -->|是| F["写回 status + headers + body"]
-    E -->|否| G["调用下游应用"]
-    F --> H["ctx.close()"]
-    G --> H
+    E -->|否| G["调用下游应用<br/>（降级开启时先缓冲）"]
+    G --> H{"命中降级?"}
+    H -->|是| I["写回兜底响应"]
+    H -->|否| J["下发缓冲的响应"]
+    F --> K["ctx.close() + 发布 RequestCompletedEvent"]
+    I --> K
+    J --> K
 ```
 
 ### 链装配顺序
@@ -137,6 +147,9 @@ app = ProtectionASGIMiddleware(
 | `deny_status_locked` | 429 | 账号锁定的拒绝状态码 |
 | `decision_sink` | None | 带 `publish(decision)` 的对象，接收每一次拒绝 |
 | `enable_trace_id` | True | 归一 trace id 并下发 `X-Trace-Id` 响应头 |
+| `hook_bus` | None | 接收每个请求结束时 `RequestCompletedEvent` 的总线 |
+| `degrade_evaluator` | None | 在下游调用前后做降级判定的判定器 |
+| `extra_interceptors` | () | 追加在平台防护之后的拦截器 |
 
 ### 公共辅助函数
 
@@ -237,6 +250,65 @@ middleware = ProtectionASGIMiddleware(app)   # trace 归一默认开启
 trace 拦截器排第一（Java 的 `ORDER = 50`），所以 `ctx.trace_id` 对后面每个
 拦截器都可用。
 
+### 场景 7：给故障接口做降级
+
+传一个 `DegradeEvaluator`，中间件就在下游调用前后做降级判定：抛异常或耗时
+超阈值都会变成兜底响应，异常不再走到客户端。
+
+```python
+from atlas_richie.web_protection import (
+    DegradeConfig, DegradeEvaluator, DefaultDegradeStrategyRegistry, RouteFallback,
+)
+
+evaluator = DegradeEvaluator(
+    DefaultDegradeStrategyRegistry(),
+    DegradeConfig(routes={"/api/v1/orders": RouteFallback(pattern="/api/v1/orders")}),
+)
+middleware = ProtectionASGIMiddleware(app, degrade_evaluator=evaluator)
+```
+
+中间件测量下游调用耗时并把结果交给判定器：失败时写 `degrade.exception`，
+成功时写 `degrade.latencyMs`。判定器随后挑策略（或用路由配置）并短路上下文。
+
+**代价**：判定期间下游响应会被**缓冲**，响应不再流式下发。SSE 与长轮询接口不要
+纳入降级范围。不传判定器时，中间件行为与从前完全一致 —— 下游响应直接流式下发。
+
+### 场景 8：请求完成事件
+
+传一个 `HookBus`，每个请求结束时都会发布一条 `RequestCompletedEvent`
+—— 正常、短路、失败都发。
+
+```python
+from atlas_richie.web_protection import DefaultHookBus, RequestCompletedEvent
+
+bus = DefaultHookBus()
+bus.subscribe(RequestCompletedEvent, my_subscriber)
+middleware = ProtectionASGIMiddleware(app, hook_bus=bus)
+```
+
+事件带方法、路径、响应状态码、起止时间戳、短路标志、错误标志、client key 与
+trace id。它在 `ctx.close()` **之后**发布，与 Java 的
+`InterceptingFilter` 一致。被降级掉的请求不报错误 —— 异常已被降级消费，
+与 Java 侧同语义。
+
+### 场景 9：扩展拦截器链
+
+`extra_interceptors` 把你自己的拦截器追加在平台防护之后 —— 放
+`HangDetectionInterceptor` 的天然位置。
+
+```python
+from atlas_richie.web_protection import HangDetectionInterceptor
+
+middleware = ProtectionASGIMiddleware(
+    app,
+    hook_bus=bus,
+    extra_interceptors=[HangDetectionInterceptor(1_000, 3_000, 10_000, hook_bus=bus)],
+)
+```
+
+顺序就是传入顺序：Python 的链按注册序，Java 靠 `Ordered` 排序。看门狗放最后
+—— 它要包住请求内发生的所有事。
+
 ## ⚙️ 与 Java 基准的差异
 
 | 主题 | Java | Python | 原因 |
@@ -251,6 +323,10 @@ trace 拦截器排第一（Java 的 `ORDER = 50`），所以 `ctx.trace_id` 对�
 | `X-Trace-Id` 写回 | 只在短路路径写；正常路径靠容器层 `TraceIdInjectValve` | 两条路径都写 | ASGI 中间件**就是**容器层，注入得自己干 —— 否则正常响应永远带不上 trace id |
 | 平台头 vs 应用头 | — | 同名以平台为准 | 线上看到的 `X-Trace-Id` 永远等于 `ctx.trace_id`，两者不分叉 |
 | trace 拦截器 | `OtelTracingInterceptor`，有 observability starter 时不装配 | `TraceIdInterceptor`，始终装配 | Java 的旧 web tracing 不能与 OTel trace 边界并存；Python 的 observability 组件落地后需沿用同一条互斥规则 |
+| 降级落点 | `DegradeInterceptor` 挂在链上，链尾就是业务调用 | 框架无关的 `DegradeEvaluator`，在下游调用前后求值 | Python 的链在 app **之前**就跑完，链内拦截器看不到业务结果 |
+| 降级时的响应下发 | servlet 容器只写一次响应 | 判定期间下游响应被缓冲 | 判定必须发生在任何字节写出去之前；流式接口不要纳入降级范围 |
+| 请求完成事件 | `InterceptingFilter` 在 finally 里发布 | 可选 `hook_bus`；不传就不发 | 空 bus 每个请求也要查一次字典 |
+| 拦截器顺序 | 按 `Ordered` 排序（degrade 350、hang 500） | 注册序；额外的追加在最后 | Python 的链没有排序键 —— 按你想要的顺序传 |
 
 ## 🔧 排障
 
@@ -261,6 +337,10 @@ trace 拦截器排第一（Java 的 `ORDER = 50`），所以 `ctx.trace_id` 对�
 | 长连接路径仍被拒 | IP 黑名单排在长连接旁路之前 | 刻意为之 —— 黑名单对所有路径生效 |
 | 自定义 `deny_renderer` 的输出变了 | 渲染器必须返回 bytes | 适配层会按 UTF-8 重新编码 body |
 | 登录跟踪一直没有记录 | 路径不在 `login_paths` 里 | 加上，或传 `login_paths`=... |
+| 故障接口还是返回 500 | 没配判定器 | 给中间件传 `degrade_evaluator`=... |
+| 降级一直不触发 | path 没配路由，或没识别到触发条件 | 在 `DegradeConfig` 里配 `routes`，或设 `require_route_match=False` |
+| SSE 响应一次性到达 | 降级会缓冲下游响应 | 流式接口不要纳入降级范围 |
+| 没收到请求完成事件 | 没配总线 | 传 `hook_bus`=... |
 
 ## 📎 ⏱️ 时序图
 
@@ -287,4 +367,23 @@ sequenceDiagram
     Chain-->>MW: 返回
     MW-->>Client: 429 + body + Retry-After
     MW->>X: ctx.close()
+
+### 降级一个故障请求
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant MW as ProtectionASGIMiddleware
+    participant App as 下游应用
+    participant E as DegradeEvaluator
+
+    Client->>MW: GET /api/v1/orders
+    MW->>App: 调用应用（响应被缓冲）
+    App-->>MW: RuntimeError
+    MW->>E: evaluate(ctx)（已写 degrade.exception）
+    E-->>MW: DegradeResult(503, body)
+    MW-->>Client: 503 + 兜底 body
+    MW->>X: ctx.close()
+    MW->>X: 发布 RequestCompletedEvent
+```
 ```

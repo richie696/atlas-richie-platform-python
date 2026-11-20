@@ -28,9 +28,14 @@
   - [`WebInterceptor` 与拦截器链](#webinterceptor-与拦截器链)
   - [attribute 常量](#attribute-常量)
   - [trace id 归一化](#trace-id-归一化)
+  - [降级策略](#降级策略)
+  - [看门狗](#看门狗)
+  - [事件总线](#事件总线)
+  - [热更新注册表](#热更新注册表)
 - [🔧 核心场景](#-核心场景)
   - [场景 1：每一次拒绝都有唯一决策事件](#场景-1每一次拒绝都有唯一决策事件)
   - [场景 2：接入自己的拦截器](#场景-2接入自己的拦截器)
+  - [场景 3：给故障接口做降级](#场景-3给故障接口做降级)
 - [⚙️ 与 Java 基准的差异](#-与-java-基准的差异)
 - [🔧 排障](#-排障)
 - [📎 ⏱️ 时序图](#-时序图)
@@ -67,6 +72,10 @@
 | SPI 默认实现 | atlas_richie.web_protection.spi.support | 仅标准库 | `MutableWebRequestContext`、`DefaultWebInterceptorChain` |
 | guard 适配 | atlas_richie.web_protection.interceptors | 各 guard | 把每个 guard 包成拦截器 |
 | trace 归一 | atlas_richie.web_protection.tracing | 仅标准库 | `TraceIdParser` + `TraceIdInterceptor` —— trace id 归一化 |
+| 降级 | atlas_richie.web_protection.degrade | 仅标准库 | 触发条件 / 策略 / 注册表 / 判定器 —— 兜底响应 |
+| 看门狗 | atlas_richie.web_protection.hang | 仅标准库 | hang 事件、调度器、检测拦截器 |
+| 事件 | atlas_richie.web_protection.hook | 仅标准库 | 请求事件与 hang 事件的发布 / 订阅总线 |
+| 热更新 | atlas_richie.web_protection.reload | 仅标准库 | 可热替换组件的注册表 |
 | guard | guards / rate_limit / idempotency / matchers / trackers | 仅标准库 | 纯 allow/deny 判定 |
 | 适配层 | atlas-richie-web-protection-adapter-asgi | 本包 | 把链接进具体框架 |
 
@@ -316,6 +325,167 @@ trace_id = TraceIdParser.resolve(traceparent, request_id)   # 永不为 None
 
 补位用的是**随机** hex 而不是补零 —— 上游 id 不是归一后 id 的可预测前缀。
 
+### 降级策略
+
+降级策略回答一个问题：**这个接口出问题时，客户端该看到什么？**
+
+| 类型 | 职责 |
+| --- | --- |
+| `Trigger` | `EXCEPTION` / `HIGH_LATENCY` / `CUSTOM` —— 发生了什么 |
+| `DegradeStrategy` | 你实现的 SPI：`name` / `triggers` / `order` / `matches` / `build` |
+| `DegradeResult` | 状态码 + body + 附加头 + 产出它的策略名 |
+| `DegradeStrategyRegistry` | 持有策略，按 `order` 选出第一个匹配的 |
+| `DegradeEvaluator` | 框架无关的判定：识别触发 → 选策略 → 生成响应 |
+
+```mermaid
+flowchart LR
+    A["请求抛异常或跑得慢"] --> B["DegradeEvaluator.evaluate(ctx)"]
+    B --> C{"degrade.skip?"}
+    C -->|"是"| D["不降级"]
+    C -->|"否"| E{"path 配了路由?"}
+    E -->|"否"| D
+    E -->|"是"| F{"识别到触发条件?"}
+    F -->|"没有"| D
+    F -->|"EXCEPTION / HIGH_LATENCY / CUSTOM"| G{"策略匹配?"}
+    G -->|"是"| H["strategy.build(trigger, ctx)"]
+    G -->|"否"| I["路由配置或全局兜底"]
+    H --> J["DegradeResult → mark_short_circuit"]
+    I --> J
+```
+
+注册一个策略，让它替自己认领的接口作答：
+
+```python
+from atlas_richie.web_protection import (
+    DegradeResult,
+    DefaultDegradeStrategyRegistry,
+    Trigger,
+)
+
+
+class CachedOrders:
+    def name(self) -> str:
+        return "cached-orders"
+
+    def triggers(self) -> frozenset[Trigger]:
+        return frozenset({Trigger.EXCEPTION})
+
+    def order(self) -> int:
+        return 0
+
+    def matches(self, trigger) -> bool:
+        return trigger is Trigger.EXCEPTION
+
+    def build(self, trigger, ctx) -> DegradeResult:
+        return DegradeResult.of(200, '{"cached":true}', "cached-orders")
+
+
+registry = DefaultDegradeStrategyRegistry()
+registry.register("cached-orders", CachedOrders())
+```
+
+**作用范围很关键**：降级只作用于**配置了路由**的 path —— Java 基准把降级当作
+「按接口粒度的业务决策」，而不是一张无差别的兜底安全网。给要保护的接口配
+`routes`（或 `route_rules`）；`require_route_match=False` 则让所有
+path 都能落到全局兜底。
+
+判定器的输入全部来自请求上下文，驱动它的是适配层（或你自己的代码）：
+
+| attribute | 写入方 | 含义 |
+| --- | --- | --- |
+| `degrade.skip` | 业务代码 | `true` 表示本次请求不降级 |
+| `degrade.exception` | 适配层 | 抛出的那个异常 |
+| `degrade.manual` | 业务代码 | `true` 强制走 `Trigger.CUSTOM` |
+| `degrade.latencyMs` | 适配层 | 实测耗时（毫秒） |
+| `degrade.hit_strategy` | 判定器 | 最终生效的策略（route / fallback 也会记进去） |
+
+响应体形状与 Java 的 `ApiResult.error(code, msg)` 序列化一致 ——
+`{"success":false,"code":...,"msg":...}`；`{reason}` 占位符替换成触发
+条件名（`exception` / `high-latency` / `custom`）。
+
+**与 Sentinel 熔断不是一回事。** Sentinel 的熔断
+（`sentinel/slots/degrade.py`）是**流控**：抛 `CircuitBlocked` 直接拒绝
+调用；web 降级是**兜底**：给客户端一个可用的响应。两者语义不重叠 —— 一个拒绝，
+一个降级。
+
+### 看门狗
+
+看门狗回答：**这个请求是不是卡住了，卡了多久？**
+
+| 类型 | 职责 |
+| --- | --- |
+| `WatchdogScheduler` | 共享调度器：3 个守护工作线程 + 1 个守护定时线程 |
+| `WatchHandle` | `schedule()` 返回的取消 token |
+| `HangEvent` | 方法 / 路径 / 已耗时 / 阈值 / client key / trace id / 线程栈 |
+| `HangDetectionInterceptor` | 在链外注册三档看门狗 |
+
+三档依次触发 —— `warn` / `dump` / `kill_switch`，**每档每次请求
+最多触发一次**，所以最贵的线程快照最多跑一次：
+
+| 档位 | 阈值 | 动作 |
+| --- | --- | --- |
+| `warn` | `warn_ms` | 记警告日志，发布 `HangEvent` |
+| `dump` | `dump_ms` | 记警告日志 + 线程快照，发布 `HangEvent` |
+| `kill_switch` | `kill_switch_ms` | 同 `dump`，再调 `kill_interrupter` |
+
+阈值必须满足 `warn_ms <= dump_ms <= kill_switch_ms` 且都大于 0 —— 构造器
+直接拒绝非法值，否则「便宜的档」会晚于「贵的档」触发。
+
+长连接路径（SSE / WebSocket / 流式）直接跳过：上下文带
+`platform.web.long-lived` 时根本不注册看门狗。
+
+### 事件总线
+
+平台自己产生的事件，走一套发布 / 订阅。
+
+| 类型 | 职责 |
+| --- | --- |
+| `HookEvent` | 所有事件的标记基类 |
+| `HookSubscriber` | 订阅者协议：`on_event(event)` |
+| `HookBus` | 总线协议：`subscribe` / `publish` / `diagnostic_view` |
+| `DefaultHookBus` | 默认实现 |
+| `RequestCompletedEvent` | 请求结束时发布 —— 正常、短路、失败都发 |
+
+```python
+from atlas_richie.web_protection import DefaultHookBus, RequestCompletedEvent
+
+bus = DefaultHookBus()
+subscription = bus.subscribe(RequestCompletedEvent, my_subscriber)
+bus.publish(RequestCompletedEvent.of(ctx, end_nanos))
+subscription.close()
+```
+
+三条保证：
+
+- **精确类型分发** —— 订阅 `HookEvent` **不会**收到 `RequestCompletedEvent`，
+  要订阅具体类型
+- **异常隔离** —— 某个订阅者抛异常不影响其他订阅者
+- **无订阅者零成本** —— 发一个没人听的事件只是一次字典查找
+
+### 热更新注册表
+
+不重启进程就换掉组件的配置。
+
+| 类型 | 职责 |
+| --- | --- |
+| `Reloadable` | SPI：`current_state()` + `accept(new_state)` |
+| `ReloadEvent` | 重载成功后发布 |
+| `HotReloadRegistry` | 注册表协议 |
+| `DefaultHotReloadRegistry` | 默认实现 |
+
+```python
+from atlas_richie.web_protection import DefaultHotReloadRegistry
+
+registry = DefaultHotReloadRegistry(bus)
+registry.register("rate-limit", my_reloadable)
+registry.reload("rate-limit")     # current_state() → accept(state)
+registry.reload_all()
+```
+
+`reload` 把组件自己的当前状态读出来再交还给它 —— 具体怎么处理由组件决定。
+`reload_all` 扫一遍全部已注册组件并返回成功个数。注册表带 bus 时会发布
+`ReloadEvent`，审计链路无需另接。
+
 ## 🔧 核心场景
 
 ### 场景 1：每一次拒绝都有唯一决策事件
@@ -345,6 +515,36 @@ chain = DefaultWebInterceptorChain([
 ])
 ```
 
+### 场景 3：给故障接口做降级
+
+注册策略、把判定器交给适配层，客户端拿到兜底响应而不是 500。
+
+```python
+from atlas_richie.web_protection import (
+    DegradeConfig,
+    DegradeEvaluator,
+    DefaultDegradeStrategyRegistry,
+    RouteFallback,
+)
+from atlas_richie.web_protection_adapter_asgi import ProtectionASGIMiddleware
+
+registry = DefaultDegradeStrategyRegistry()
+registry.register("cached-orders", CachedOrders())
+
+evaluator = DegradeEvaluator(
+    registry,
+    DegradeConfig(routes={"/api/v1/orders": RouteFallback(pattern="/api/v1/orders")}),
+)
+
+middleware = ProtectionASGIMiddleware(app, degrade_evaluator=evaluator)
+```
+
+接口抛异常时，客户端拿到策略给的响应，异常不再往外冒。没注册策略时，由路由
+配置产出兜底 body —— 与 Java 的 `ApiResult.error(code, msg)` 序列化形状一致。
+
+**代价**：适配层在判定期间会缓冲下游响应，响应不再流式下发。SSE 与长轮询接口
+不要纳入降级范围。
+
 ## ⚙️ 与 Java 基准的差异
 
 | 主题 | Java | Python | 原因 |
@@ -360,6 +560,14 @@ chain = DefaultWebInterceptorChain([
 | prefer-w3c 开关 | Java README 写了，**Java 源码里并不存在** | 同样不实现 | Java 代码永远优先 traceparent；本移植对位源码而非 README |
 | 空白裁剪 | `String.trim()` / `String.isBlank()` | 只裁 ASCII 空白 | 现实输入等价；仅 U+00A0 等异类空格有别 |
 | trace 拦截器装配 | observability starter 在场时不装配 | 始终可用 | Java 的旧 web tracing 不能与 OTel trace 边界并存；Python 的 observability 组件落地后需沿用同一条互斥规则 |
+| 降级落点 | `DegradeInterceptor` 挂在链上，链尾就是业务调用 | 框架无关的 `DegradeEvaluator`，由适配层在包住 app 调用的位置驱动 | Python 的链在 app **之前**就跑完，链内拦截器看不到业务结果 |
+| 降级 body | `ApiResult.error(code, msg).toJson()` | 同样的 JSON 形状，不依赖 `ApiResult` 契约类 | Python 平台尚无 `ApiResult` |
+| Bean 兜底 | `fallbackBean` / `fallbackMethod` 反射调 Spring Bean | 未移植 —— 改为注册一个 `DegradeStrategy` | Python 没有「按 bean 名反射」的惯例 |
+| 全局兜底 | Java 源码里走不到 —— 没有路由命中时判定器提前返回 | `require_route_match=False` 可走到 | Java 那条分支是死代码；开关让它可用，默认值不变 |
+| 看门狗 kill 档 | 对业务线程调 `Thread.interrupt()` | 可选 `kill_interrupter` 回调，默认关 | CPython 没有安全的线程中断手段 |
+| 看门狗栈捕获 | 回调里的 `Thread.currentThread()` —— 拿到的是**看门狗自己**的栈 | 被监控业务线程的栈 | Java 那次捕获差了一个线程 |
+| 事件总线 | `InterceptingFilter` 总是建一个 bus | 不传就没有 bus | 空 bus 每个请求也要查一次字典 |
+| 热更名 | `default String name()` → 类名 | `name()` 可选，缺省回落类名 | 语义相同，但名字不再是必填项 |
 
 IP 黑名单那条既有的**加固差异**保持不变：Java 的 `IpBlacklistEntry` 会通过 DNS
 解析主机名，把黑名单查询变成一次外发域名解析。本移植只接受 IP 字面量，主机名
@@ -374,6 +582,11 @@ IP 黑名单那条既有的**加固差异**保持不变：Java 的 `IpBlacklistE
 | 长连接（SSE）路径仍被拒 | IP 黑名单排在长连接旁路之前 | 这是刻意为之 —— 黑名单对所有路径生效 |
 | 自定义 `deny_renderer` 的输出变了 | 渲染器必须返回 bytes | 适配层会按 UTF-8 重新编码 body；要逐字节一致就返回 bytes |
 | 拒绝被计数但没有上报 | 没配 sink | 给中间件传 `decision_sink`=... |
+| 明明配了降级还是 500 | 判定器没交给适配层 | 给中间件传 `degrade_evaluator`=... |
+| 降级一直不触发 | path 没配路由，或没识别到触发条件 | 配 `routes`（或设 `require_route_match=False`），并检查 `degrade.*` attribute |
+| 慢接口没被降级 | 延迟阈值算的是整个下游调用耗时 | 对照 `degrade.latencyMs` 看实测值 |
+| SSE 响应一次性到达 | 降级会缓冲下游响应 | 流式接口不要纳入降级范围 |
+| 看门狗一直不触发 | 请求在阈值前就结束了，或路径是长连接 | 长连接路径根本不注册看门狗 |
 
 ## 📎 ⏱️ 时序图
 
@@ -415,4 +628,25 @@ sequenceDiagram
     Chain-->>MW: 链走完，未短路
     MW->>App: 调用应用
     App-->>Client: 200
+
+### 降级一个故障请求
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant MW as ASGI 中间件
+    participant App as 下游应用
+    participant E as DegradeEvaluator
+    participant S as 降级策略
+
+    Client->>MW: GET /api/v1/orders
+    MW->>App: 调用应用（响应被缓冲）
+    App-->>MW: RuntimeError
+    MW->>E: evaluate(ctx)
+    E->>E: 识别触发条件（EXCEPTION）
+    E->>S: matches(EXCEPTION)
+    S-->>E: DegradeResult(503, body)
+    E->>MW: mark_short_circuit(503, body)
+    MW-->>Client: 503 + 兜底 body
+```
 ```
