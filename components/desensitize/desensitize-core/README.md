@@ -5,6 +5,8 @@ and plaintext-role permissions. Ported from the Java `atlas-richie-desensitize-c
 
 **Zero runtime dependencies.**
 
+[English](./README.md) | [简体中文](./README.zh.md)
+
 ## Usage
 
 ```python
