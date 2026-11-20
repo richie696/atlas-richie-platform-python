@@ -1,6 +1,6 @@
 # 未完成工作清单
 
-> 截至 2026-11-20。已完成 65 项任务、72 个登记包（70 个 workspace 成员）。本清单只列**未完成**项。
+> 截至 2026-11-20。已完成 66 项任务、72 个登记包（70 个 workspace 成员）。本清单只列**未完成**项。
 > 优先级：P0 需你决策（阻塞）· P1 高价值缺口 · P2 剩余 provider · P3 未移植组件 · P4 技术债。
 > 规模：S（<半天）· M（1–2 天）· L（>2 天，建议单独立项）。
 > 原则：纯算法/契约 core 零第三方依赖；驱动隔离在适配器包；非必要不耦合，必要时桥接。
@@ -230,8 +230,18 @@
   ⑥`SensitiveLogArgFilter` 是双保险（`SensitiveLogArg.__str__` 本身已脱敏），
   其价值在于让 `record.args` 不再持有敏感对象。
   38 条新测试，desensitize 套件 127 → 165。
-- [ ] **清理过期 docstring**（S）
+- [x] **清理过期 docstring**（S）
   service.py / registry.py 头部声称未移植但实际已存在的功能。
+  → 已补齐：清掉 4 处过期声明——`desensitize-core/service.py` 的模块 docstring
+  说 `ObjectMaskingService` / `SafeLogSerializer` 未移植（两者都在
+  `serializer.py` 且已从包导出）；`desensitize-core/registry.py` 的模块
+  docstring 与 `resolve_field_type` docstring 说「注解驱动的字段解析未移植」
+  （实际以 dataclass field metadata 形态落在 `support.py` + `serializer.py`，
+  registry 只负责 `properties.fields` 显式映射那条路径）；
+  `desensitize-core/README.md` 的 Scope 段仍把 logging 适配模块列为未移植
+  （本轮已交付 `atlas-richie-desensitize-logging`）。真正仍未移植的只剩
+  静态 `DesensitizeUtils` 全局绑定与 log/exception 的正则兜底——文档里保留
+  了这条声明。
 
 ### document-parser
 - [ ] **ParserProperties 配置面**（S）

@@ -309,6 +309,17 @@ categories and Semantic Versioning.
 
 ### Changed
 
+- **Stale docstrings cleaned up** (`desensitize-core`): three module/method
+  docstrings still claimed capabilities were "not ported" that have been
+  delivered — `service.py` said `ObjectMaskingService` / `SafeLogSerializer`
+  were missing (they live in `serializer.py` and are exported from the
+  package), `registry.py` said annotation-driven field resolution was missing
+  (it is ported as dataclass field metadata in `support.py` +
+  `serializer.py`), and the core README still listed the logging adapter
+  module as not ported (it is `atlas-richie-desensitize-logging`). Only the
+  static `DesensitizeUtils` global binding and the log/exception regex
+  fallbacks remain genuinely unported.
+
 - **Anti-avalanche jitter is now wired** (`cache-core` + `cache-redis`):
   `CacheFunction.get_random_extra_millis()` was implemented but had zero
   callers — each Redis manager carried its own copy of the offset logic, and
