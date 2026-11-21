@@ -309,6 +309,17 @@ categories and Semantic Versioning.
 
 ### Changed
 
+- **`desensitize` `CUSTOM` / `custom_strategy` is now a stated contract instead of an
+  implicit dead field**: `MaskType.CUSTOM` has no built-in strategy (the default registry
+  raises `RuntimeError`), and `MaskRule.custom_strategy` carries the name of a
+  caller-supplied strategy. That matches the Java source: Java's `MaskRule.customStrategy`
+  is carried the same way and Java's own lookup chain is planned for V2 — both sides route
+  `CUSTOM` by type and read the parameter from the rule, so the field is live on both
+  sides. What was missing in Python was the documentation and the test. `MaskRule` now
+  documents the parameter, a new case proves a registered extension strategy takes over
+  `CUSTOM` rules and receives the parameter, and the English and Chinese READMEs spell
+  out the extension recipe.
+
 - **Console-suite CI failures are now observable without a signed-in session**
   (`.github/workflows/ci.yml`): the `sentinel-contracts` job runs the standalone
   `sentinel-console` project (its own `pyproject.toml`, its own `uv.lock`, its own
@@ -429,6 +440,42 @@ categories and Semantic Versioning.
   manual `version` editing with one atomic edit + script run.
 
 ### Fixed
+
+- **`sentinel-console` request bodies had no explicit JSON depth bound**:
+  `read_json_object` refused an over-nested payload only because CPython's `json` module
+  raised `RecursionError` while parsing it — a ceiling that moves between releases
+  (3.12 and 3.13 refuse roughly 12000 nested levels, 3.14 accepts the same body). The
+  Console API therefore accepted or rejected the same request depending on the
+  interpreter. The bound is now explicit (`_MAX_JSON_DEPTH = 64`) and checked on the raw
+  bytes before parsing, so the outcome is identical on every supported interpreter and the
+  parser never sees a body that could exhaust the stack. Braces inside strings and
+  escaped quotes do not count towards the depth. Two new cases pin the limit (64 levels
+  accepted, 65 refused) beside the existing 12000-level case.
+
+- **A repository-wide pytest run now fails with instructions instead of 196 collection
+  errors**: every package ships a `tests` directory, and `sentinel-console` is an
+  independent project that is not installed into the platform workspace, so `pytest` at
+  the repository root could not collect anything (196 collection errors, no assertion
+  failures, exit 2). The root `conftest.py` now refuses that invocation with a usage
+  error naming the per-package commands (exit 4). Per-package runs are untouched: the
+  guard fires only when the collection target is the repository root, and the root
+  `conftest.py` stays the active configuration for invocations such as
+  `pytest components/cache`, whose rootdir is the repository root. The root
+  `conftest.py` usage section, which advertised `pytest -m unit` at the repository root,
+  was corrected to the per-package form.
+
+- **Stale documentation about cache expiry semantics and statemachine persistence**: the
+  `ExpiryPolicy` enum still described the pre-JSR-107 approximation (`CREATED` /
+  `MODIFIED` / `TOUCHED` "fall back to `ACCESSED` semantics") and its `ACCESSED` member
+  claimed the deadline is refreshed "on read or write", while `LocalCacheManager` has
+  implemented all five JSR-107 triggers with a per-key deadline for a while (a write
+  under `CREATED` / `ACCESSED` keeps the existing deadline; only a read refreshes it).
+  The enum documentation now states the implemented semantics. The `statemachine-redis`
+  README also claimed that relational persistence "would need a platform persistence
+  component, which does not exist yet" — the platform now ships
+  `atlas-richie-persistence-core` and `atlas-richie-persistence-sqlalchemy`, so the
+  missing component is no longer the blocker (this package does not wire to them, and
+  state still lives in Redis only).
 
 - **`sentinel-console` collector acceptance test broke collection without `anycorn`**:
   `tests/test_metrics_collector_tls_acceptance.py` imported `anycorn` at module level

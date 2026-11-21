@@ -1,6 +1,6 @@
 # 未完成工作清单
 
-> 截至 2026-11-20。已完成 66 项任务、72 个登记包（70 个 workspace 成员）。本清单只列**未完成**项。
+> 截至 2026-11-21。已完成 70 项任务、72 个登记包（70 个 workspace 成员）。本清单只列**未完成**项。
 > 优先级：P0 需你决策（阻塞）· P1 高价值缺口 · P2 剩余 provider · P3 未移植组件 · P4 技术债。
 > 规模：S（<半天）· M（1–2 天）· L（>2 天，建议单独立项）。
 > 原则：纯算法/契约 core 零第三方依赖；驱动隔离在适配器包；非必要不耦合，必要时桥接。
@@ -317,15 +317,30 @@
   README 标注刻意延后；backlog() 是唯一存活面。
 - [ ] **document-fetcher DNS rebinding 窗口**（M，安全加固）
   校验与建连之间解析可能不同；彻底消除需把连接钉在校验过的 IP（自定义 transport）。
-- [ ] **desensitize CUSTOM/customStrategy 死字段**（S）
-  Java 侧也是死的，可清理或实现。
-- [ ] **若干过期 docstring**（S）
-  statemachine-redis/README「persistence 尚不存在」已过期；cache 测试 ACCESSED 说明等。
-- [ ] **console 的 read_json_object 靠 json 递归深度上限拒绝超深嵌套（3.14 阈值上移）**（S）
-  CPython 3.12/3.13 在 12000 层嵌套就抛 RecursionError，3.14 把上限抬高，12000 层被放行
-  （50000 层仍会 RecursionError，属阈值移动而非无限制接受）。console 套件当前只在 CI 的
-  3.12 上跑，3.14 的行为差异未被覆盖。要么给 console 加显式深度上限，要么把该用例改成
-  版本感知。
+- [x] **desensitize CUSTOM/customStrategy 死字段**（S）
+  2026-11-21 结项：逐行核对 Java 源码后确认**不是死字段**——Java 的
+  `MaskRule.customStrategy` 同样只承载参数（Java 自己的查找链也标注 planned in V2），
+  两侧都是**按类型索引派发**：注册一个 `supports(MaskType.CUSTOM)` 为真的
+  `MaskingStrategy`，它就接管所有 CUSTOM 规则，并在 `mask(raw, rule)` 里读到
+  `rule.custom_strategy`。此前真正缺的是 Python 侧既没写也没测这个扩展点。已补：
+  `MaskRule` 字段语义说明、一条证明扩展策略接管 CUSTOM 的用例、中英 README 的扩展
+  配方（示例代码实跑验证）。**未**按 Java V2 的计划去实现「按名字查找」——那是 Java
+  侧尚未落地的能力，不做超前实现。
+- [x] **若干过期 docstring**（S）
+  2026-11-21 结项：`ExpiryPolicy` 枚举的模块文档仍在描述 JSR-107 之前的近似实现
+  （「CREATED / MODIFIED / TOUCHED 退化为 ACCESSED 语义」），`ACCESSED` 成员注释也写着
+  「read or write 刷新」；而 `LocalCacheManager` 早已按 JSR-107 全量实现（写操作在
+  CREATED / ACCESSED 下保留原期限，只有读刷新）。两处已改为实际语义。
+  `statemachine-redis` README 的「Relational persistence would need a platform
+  persistence component, which does not exist yet」同样过期——平台已有
+  `atlas-richie-persistence-core` 与 `atlas-richie-persistence-sqlalchemy`，真正的阻塞
+  已变成「该包尚未接入」（状态仍只在 Redis）。另修正根 `conftest.py` 的 Usage 段落：
+  它原本教用户在仓库根跑 `pytest -m unit`，而那正是会炸的调用。
+- [x] **console 的 read_json_object 靠 json 递归深度上限拒绝超深嵌套（3.14 阈值上移）**（S）
+  2026-11-21 结项：选了「加显式深度上限」这条（比版本感知更稳，行为不随解释器漂移）。
+  `read_json_object` 现在在解析前先按字节扫描嵌套深度，超过 `_MAX_JSON_DEPTH = 64` 直接
+  拒绝——不再依赖 `json` 的递归天花板，字符串里的花括号与转义引号不计入深度。原来的
+  12000 层用例保留，另加两条版本无关用例（64 层放行、65 层拒绝）。
 - [ ] **console 套件在 CI 上曾连续红 6 轮，且失败详情不可见**（S）
   `sentinel-contracts` job 自 2026-11-17 引入起从未成功过。前三轮根因已逐层剥离
   （console 锁过期 → anycorn 守卫位置 → `/private/tmp` 硬编码），但 2026-11-20 的
@@ -335,7 +350,13 @@
   annotation（run 44703731871 起 console 步骤转绿，5m02s）。**确定性根因仍未定位**：
   若后续 run 再次变红，annotation 会直接给出失败用例名，据此判定是环境性 flake 还是
   真实回归。
-- [ ] **仓库根不支持一次性 pytest 收集（196 个收集错误）**（S）
+- [x] **仓库根不支持一次性 pytest 收集（196 个收集错误）**（S）
+  2026-11-21 结项（取「根目录加收集守卫」这条）：根 `conftest.py` 现在拒绝整仓收集，
+  仓库根运行从 exit 2 + 196 个看不懂的收集错误，变成 exit 4 + 一条指明逐包命令的提示。
+  守卫只在「收集目标就是仓库根」时触发，逐包运行不受影响——`pytest components/cache`
+  这类 rootdir 落在仓库根的调用照常工作，根 conftest 的 marker 注册仍是它的生效配置。
+  结构原因仍在（console 是独立工程、未装进 workspace；各包测试目录同名，prepend 导入
+  模式会撞名），所以「一次跑完整仓」依旧不可行——变的只是失败方式。
   2026-11-20 更正：此前记为「sentinel-contracts 的全仓 pytest 恒失败」有误。CI 从不在
   仓库根跑 pytest——verify job 逐包调用（各包各自 rootdir），sentinel-contracts job 跑的是
   sentinel-console 独立工程自己的套件；那个 job 真正的失败原因是 sentinel-console 的
