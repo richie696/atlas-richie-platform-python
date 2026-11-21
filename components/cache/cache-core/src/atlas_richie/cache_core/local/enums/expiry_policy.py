@@ -7,16 +7,20 @@ English
 Local-cache expiry policy enum (JSR-107 semantics, Python-native).
 
 Mirrors `cn.richie696.component.cache.local.enums.ExpiryPolicy`. JSR-107
-defines five expiry triggers; the Python translation implements the
-two that map cleanly to `cachetools`:
+defines five expiry triggers, and `LocalCacheManager` implements all five
+with a per-key deadline kept beside the cached value:
 
-- `ACCESSED` → `cachetools.TTLCache` (auto-expire on read/write).
-- `ETERNAL` → `cachetools.LRUCache` (evict by LRU when full, no TTL).
-- `CREATED` / `MODIFIED` / `TOUCHED` → fall back to `ACCESSED` semantics
-  with a `@deprecated` warning in code paths that opt in. A future
-  revision may track per-key timestamps for strict JSR-107 semantics;
-  today this would duplicate complexity the user explicitly does not
-  want (per locked decision: "用 cachetools 不用 Spring/JSR-107").
+- `CREATED` — the deadline is set on create and never refreshed.
+- `ACCESSED` — the deadline is set on create and refreshed by a read.
+- `MODIFIED` — the deadline is set on create and refreshed by a write.
+- `TOUCHED` — the deadline is refreshed by both reads and writes.
+- `ETERNAL` — no deadline at all; entries leave only on eviction.
+
+A write under `CREATED` / `ACCESSED` keeps the existing deadline, matching
+JSR-107's `CreatedExpiryPolicy` / `AccessedExpiryPolicy`, whose
+`getExpiryForUpdate` leaves expiry unchanged. `contains_key` is not an access
+event. The deadline lives beside the value rather than inside `cachetools`,
+so a per-key TTL override survives an expiry refresh.
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ class ExpiryPolicy(StrEnum):
     Local cache expiry policy enum.
     """
 
-    #: Entry expires on read or write (last-accessed timestamp).
+    #: Entry expires a fixed duration after the last read.
     ACCESSED = "accessed"
 
     #: Entry expires a fixed duration after first insert.

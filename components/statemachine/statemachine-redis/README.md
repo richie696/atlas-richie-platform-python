@@ -53,8 +53,10 @@ History is returned newest-first, as in Java.
 
 `AsyncThreadStorageManager` (817 lines), `StateSyncStreamConsumer` (404),
 `StateCleanupScheduler` (220), `StateDbPersistenceService` (173) and the YAML config
-loader. Relational persistence would need a platform persistence component, which
-does not exist yet — `sentinel-console`'s SQLAlchemy layer is app-local by decision.
+loader. The missing platform component is no longer the blocker: the platform now ships
+`atlas-richie-persistence-core` and `atlas-richie-persistence-sqlalchemy`, but this
+package does not wire to them, so state still lives in Redis only. `sentinel-console`'s
+SQLAlchemy layer stays app-local by decision.
 
 ## Tests
 
