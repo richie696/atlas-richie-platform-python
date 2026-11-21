@@ -73,6 +73,16 @@ def default_mask_length(mask_type: MaskType) -> int | None:
 
 @dataclass(frozen=True, slots=True)
 class MaskRule:
+    """One masking rule, mirroring Java's `MaskRule` record.
+
+    `custom_strategy` mirrors Java's `MaskRule.customStrategy`: it carries the
+    name of a caller-supplied strategy for `MaskType.CUSTOM`. The parameter is
+    carried, not resolved — Java routes `CUSTOM` by type as well and reads the
+    parameter from the rule (its own lookup chain is planned for V2), so the
+    Python side does the same: register a `MaskingStrategy` whose `supports`
+    returns True for `MaskType.CUSTOM` and it masks every `CUSTOM` rule.
+    """
+
     type: MaskType
     keep_left: int
     keep_right: int

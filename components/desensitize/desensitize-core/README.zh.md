@@ -48,6 +48,32 @@ service.mask_map({"phone": "13812345678", "nested": {"email": "a@b.com"}}, MaskS
   的 `\s`。
 - `AUDIT` 继承 **LOG** 场景的敏感键覆盖（Java 的一个怪癖）。
 
+## 用 `CUSTOM` 扩展
+
+`MaskType.CUSTOM` **没有内置策略** —— 默认注册表对它抛 `RuntimeError`。它是扩展点，
+与 Java 一致：实现 `MaskingStrategy`、注册进去，它就接管所有 `CUSTOM` 规则。
+
+```python
+from atlas_richie.desensitize_core import MaskRule, MaskType, MaskingStrategyRegistry
+
+
+class HashedStrategy:
+    def supports(self, mask_type: MaskType) -> bool:
+        return mask_type is MaskType.CUSTOM
+
+    def mask(self, raw: str | None, rule: MaskRule) -> str | None:
+        return f"hashed:{rule.custom_strategy}" if raw is not None else None
+
+
+registry = MaskingStrategyRegistry([HashedStrategy()])
+rule = MaskRule(MaskType.CUSTOM, 0, 0, "*", "sha256")
+registry.require(MaskType.CUSTOM).mask("secret", rule)
+```
+
+`MaskRule.custom_strategy` 对位 Java 的 `MaskRule.customStrategy`：它**承载**调用方
+自定义策略的名字，并原样传到 `mask()`。两侧都不按这个名字解析 —— Java 同样按类型
+路由 `CUSTOM`，从规则里读这个参数（它自己的查找链计划在 V2）。
+
 ## 开关与权限
 
 `DesensitizeProperties.enabled` 与逐场景开关会短路成明文。

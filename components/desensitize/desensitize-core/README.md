@@ -50,6 +50,34 @@ service.mask_map({"phone": "13812345678", "nested": {"email": "a@b.com"}}, MaskS
   Unicode-aware `\s`.
 - `AUDIT` inherits the **LOG** scene's sensitive-key overrides (a Java quirk).
 
+## Extending with `CUSTOM`
+
+`MaskType.CUSTOM` has **no built-in strategy** — the default registry raises
+`RuntimeError` for it. It is the extension point, exactly as in Java: implement
+`MaskingStrategy`, register it, and it takes over every `CUSTOM` rule.
+
+```python
+from atlas_richie.desensitize_core import MaskRule, MaskType, MaskingStrategyRegistry
+
+
+class HashedStrategy:
+    def supports(self, mask_type: MaskType) -> bool:
+        return mask_type is MaskType.CUSTOM
+
+    def mask(self, raw: str | None, rule: MaskRule) -> str | None:
+        return f"hashed:{rule.custom_strategy}" if raw is not None else None
+
+
+registry = MaskingStrategyRegistry([HashedStrategy()])
+rule = MaskRule(MaskType.CUSTOM, 0, 0, "*", "sha256")
+registry.require(MaskType.CUSTOM).mask("secret", rule)
+```
+
+`MaskRule.custom_strategy` mirrors Java's `MaskRule.customStrategy`: it **carries**
+the name of the caller-supplied strategy and reaches `mask()` untouched. Neither
+side resolves that name — Java routes `CUSTOM` by type as well and reads the
+parameter from the rule (its own lookup chain is planned for V2).
+
 ## Switches and permissions
 
 `DesensitizeProperties.enabled` and per-scene switches short-circuit to plaintext.

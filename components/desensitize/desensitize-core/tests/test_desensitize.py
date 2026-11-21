@@ -130,6 +130,19 @@ class TestStrategyRegistry:
         with pytest.raises(RuntimeError, match="CUSTOM"):
             MaskingStrategyRegistry().require(MaskType.CUSTOM)
 
+    def test_custom_type_is_served_by_a_registered_extension_strategy(self) -> None:
+        class _Extension:
+            def supports(self, mask_type: MaskType) -> bool:
+                return mask_type is MaskType.CUSTOM
+
+            def mask(self, raw, rule):
+                return f"<{rule.custom_strategy}>"
+
+        registry = MaskingStrategyRegistry([_Extension()])
+        rule = MaskRule(MaskType.CUSTOM, 0, 0, "*", "beanName")
+
+        assert registry.require(MaskType.CUSTOM).mask("payload", rule) == "<beanName>"
+
     def test_first_registration_wins(self) -> None:
         class _Override:
             def supports(self, mask_type: MaskType) -> bool:
