@@ -13,6 +13,13 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+#: Maximum JSON nesting depth accepted from a request body.
+#:
+#: The bound is explicit rather than inherited from the interpreter recursion
+#: ceiling: CPython 3.12 and 3.13 raise `RecursionError` at roughly 12000
+#: nested levels while 3.14 accepts the same payload, so leaning on the
+#: ceiling would make the API contract depend on the interpreter version.
+_MAX_JSON_DEPTH: Final[int] = 64
 ERROR_STATUS_BY_CODE: Final[Mapping[str, int]] = MappingProxyType(
     {
         "invalid_request": 400,
@@ -81,7 +88,12 @@ def cookie_count(request: Request, cookie_name: str) -> int:
 async def read_json_object(
     request: Request, maximum_bytes: int
 ) -> dict[str, object] | None:
-    """Read one bounded JSON object, rejecting duplicate keys and bad framing."""
+    """Read one bounded JSON object, rejecting duplicate keys and bad framing.
+
+    The body is bounded in bytes and in JSON nesting depth. The depth bound
+    is explicit (`_MAX_JSON_DEPTH`), so a rejection never depends on the
+    interpreter recursion ceiling.
+    """
     content_types = request.headers.getlist("content-type")
     if (
         len(content_types) != 1
@@ -115,9 +127,12 @@ async def read_json_object(
         return None
     if declared_length is not None and body_size != declared_length:
         return None
+    payload = b"".join(chunks)
+    if _exceeds_json_depth(payload, _MAX_JSON_DEPTH):
+        return None
     try:
         body = json.loads(
-            b"".join(chunks),
+            payload,
             object_pairs_hook=_object_without_duplicate_keys,
             parse_constant=_reject_non_json_constant,
         )
@@ -126,6 +141,37 @@ async def read_json_object(
     if not isinstance(body, dict) or not _has_only_unicode_scalar_values(body):
         return None
     return body
+
+
+def _exceeds_json_depth(payload: bytes, maximum_depth: int) -> bool:
+    """Report whether raw JSON bytes nest deeper than `maximum_depth`.
+
+    The scan runs before parsing: handing an over-nested body to `json.loads`
+    would make the rejection depend on the interpreter recursion ceiling
+    instead of on the documented limit. Braces inside strings do not count
+    towards the depth, and an escaped quote does not end the string.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in payload:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:  # backslash
+                escaped = True
+            elif byte == 0x22:  # double quote
+                in_string = False
+            continue
+        if byte == 0x22:
+            in_string = True
+        elif byte in (0x7B, 0x5B):  # opening brace / bracket
+            depth += 1
+            if depth > maximum_depth:
+                return True
+        elif byte in (0x7D, 0x5D):  # closing brace / bracket
+            depth -= 1
+    return False
 
 
 def _has_only_unicode_scalar_values(value: object) -> bool:

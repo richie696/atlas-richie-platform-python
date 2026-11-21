@@ -142,3 +142,19 @@ class ReadJsonObjectTest(unittest.IsolatedAsyncioTestCase):
         parsed = await read_json_object(_request(nested), 1_048_576)
         if parsed is not None:
             self.fail("excessively nested JSON must be rejected")
+
+    async def test_json_depth_limit_is_explicit_and_version_independent(self) -> None:
+        at_limit = b'{"value":' * 64 + b"null" + b"}" * 64
+        over_limit = b'{"value":' * 65 + b"null" + b"}" * 65
+
+        self.assertIsNotNone(await read_json_object(_request(at_limit), 1_048_576))
+        self.assertIsNone(await read_json_object(_request(over_limit), 1_048_576))
+
+    async def test_braces_and_escapes_inside_strings_do_not_count_towards_depth(
+        self,
+    ) -> None:
+        braces = b'{"value":"' + b"{" * 200 + b'"}'
+        escaped_quote = b'{"value":"\\"' + b"{" * 200 + b'"}'
+
+        self.assertIsNotNone(await read_json_object(_request(braces), 1_048_576))
+        self.assertIsNotNone(await read_json_object(_request(escaped_quote), 1_048_576))
