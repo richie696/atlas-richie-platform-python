@@ -309,6 +309,24 @@ categories and Semantic Versioning.
 
 ### Changed
 
+- **`sentinel-contracts` is green and its failures stay diagnosable**: the job
+  had never passed since it was introduced on 2026-11-17 and had failed six runs in a
+  row. It has now been green for three consecutive runs (`44703731871`,
+  `44705579982`, `44861696357` — the last one 5m20s for the job and 22m33s for the run,
+  with all five jobs green), so the console suite is no longer tracked as an open
+  technical debt. The deterministic root cause was never read out of a log — three
+  candidate causes were eliminated one by one (expired console lock → misplaced
+  `anycorn` guard → hardcoded `/private/tmp`) — but the job is now both green and
+  diagnosable: the console step republishes every pytest `FAILED`/`ERROR` line as a
+  workflow annotation, and annotations stay readable without a signed-in session.
+  Step-level status is readable anonymously too, from the `commit/<sha>/checks` and
+  `actions/runs/<run_id>/job/<job_id>` pages, whose `check-step` tags carry each
+  step's conclusion and timings. One operational fact is recorded with it: the 3.15
+  prerelease probe has no prebuilt wheels, so `prepare_wheelhouse.py` builds all 72
+  packages from source (17m03s for that step, 22m30s for the job) while the stable
+  3.12/3.13/3.14 jobs take 5–6 minutes — a long 3.15 job is expected, not a
+  regression.
+
 - **`desensitize` `CUSTOM` / `custom_strategy` is now a stated contract instead of an
   implicit dead field**: `MaskType.CUSTOM` has no built-in strategy (the default registry
   raises `RuntimeError`), and `MaskRule.custom_strategy` carries the name of a

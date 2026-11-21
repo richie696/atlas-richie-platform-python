@@ -23,6 +23,8 @@ FastAPI、Django、Flask、CLI、Worker 或无框架脚本中显式装配所需�
 基线为 Python 3.12；支持窗口与版本策略见
 [VERSIONING.md](VERSIONING.md)。`uv.lock` 是可提交的开发/CI 解析记录。
 GitHub Actions 会在 Python 3.12–3.15 运行同一受控验证；带 `v*` tag 的受保护发布流程使用 PyPI trusted publishing。
+其中 3.15 是允许失败的预发布探针：它还没有预编译 wheel，wheelhouse 需现场从源码构建，
+单个 job 约 22 分钟（3.12/3.13/3.14 为 5–6 分钟），耗时偏长属正常而非回归。
 
 ## MCP 最小使用方式
 
