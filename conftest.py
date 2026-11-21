@@ -19,20 +19,30 @@ so the test markers below are registered for the whole workspace.
   + real client call, mcp stdio + real tool invocation, oauth
   full flow.
 
+## Repository-wide collection guard
+
+`pytest` invoked at the repository root (no path argument) is refused with a
+usage error that names the per-package invocations. A repository-wide run
+cannot collect: `sentinel-console` is an independent project (own lock file,
+own virtual environment) and is not installed into the platform workspace, and
+several packages ship a `tests` directory that pytest prepend import mode
+resolves to one top-level module name. Every per-package run is untouched.
+
 ## Usage
 
+Each package is its own pytest rootdir, so run the suites **per package**:
+
 ```bash
-# Run only unit tests (fast, default for CI on PRs).
+# From the repository root, target one package.
+uv run python -m pytest components/http/tests -q
+uv run python -m pytest components/cache -q
+
+# From inside a package directory.
+cd components/http && uv run python -m pytest -q
+
+# Marker filters work the same way, per package.
 pytest -m unit
-
-# Run unit + integration (skip e2e).
 pytest -m "not e2e"
-
-# Run only e2e.
-pytest -m e2e
-
-# Run all (default = no marker filter).
-pytest
 ```
 
 ## Workspace-level fixtures
@@ -45,7 +55,38 @@ packages; otherwise colocate with the consumer tests.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
+
+_REPOSITORY_ROOT = Path(__file__).resolve().parent
+
+
+def _collection_root(arguments: list[str]) -> Path:
+    """Return the directory a pytest invocation would collect from."""
+    if not arguments:
+        return Path.cwd().resolve()
+    resolved = [Path(argument).resolve() for argument in arguments]
+    return Path(os.path.commonpath([str(path) for path in resolved]))
+
+
+def pytest_collection(session: pytest.Session) -> None:
+    """Refuse a whole-repository collection and say how to run the suites."""
+    if _collection_root(list(session.config.args)) != _REPOSITORY_ROOT:
+        return
+    raise pytest.UsageError(
+        "Collecting the whole repository in one pytest run is not supported: "
+        "sentinel-console is an independent project (own lock file, own virtual "
+        "environment) and is not installed into the platform workspace, and "
+        "several packages ship a `tests` directory that pytest prepend import "
+        "mode resolves to one top-level module name. Run one package or "
+        "project at a time, for example:\n"
+        "  uv run python -m pytest components/http/tests -q\n"
+        "  uv run python -m pytest foundation/testing/tests -q\n"
+        "  (cd components/sentinel/sentinel-console && uv run --locked "
+        "--extra test python -m pytest -q)"
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
